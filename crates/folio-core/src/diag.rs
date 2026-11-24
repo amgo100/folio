@@ -2,8 +2,8 @@
 //! front end shows (SPEC §4.3, §7.9, §12.1, §12.3).
 //!
 //! A [`Diagnostic`] has a severity, an optional lint code (such as
-//! `override-literal`), a message, a primary span, secondary spans with
-//! their own messages ([`Label`]), hints, and quick fixes ([`Fix`]) that a
+//! `override-literal`), a message, a primary span, related spans with their
+//! own messages ([`Related`]), hints, and quick fixes ([`Fix`]) that a
 //! language server or the editor can apply.
 //!
 //! Spans are [`DiagSpan`]s: a span number in a file, which stays the same
@@ -66,7 +66,7 @@ pub struct Diagnostic {
     /// What is wrong.
     pub message: EcoString,
     /// Other source that explains it, each with a message.
-    pub labels: EcoVec<Label>,
+    pub related: EcoVec<Related>,
     /// How to fix it.
     pub hints: EcoVec<EcoString>,
     /// Edits that fix it.
@@ -74,7 +74,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    /// A diagnostic with no code, labels, hints or fixes.
+    /// A diagnostic with no code, related spans, hints or fixes.
     pub fn new(
         severity: Severity,
         span: impl Into<DiagSpan>,
@@ -85,7 +85,7 @@ impl Diagnostic {
             code: None,
             span: span.into(),
             message: message.into(),
-            labels: EcoVec::new(),
+            related: EcoVec::new(),
             hints: EcoVec::new(),
             fixes: EcoVec::new(),
         }
@@ -107,9 +107,13 @@ impl Diagnostic {
         self
     }
 
-    /// Adds a secondary span with a message.
-    pub fn with_label(mut self, span: impl Into<DiagSpan>, message: impl Into<EcoString>) -> Self {
-        self.labels.push(Label {
+    /// Adds a related span with a message.
+    pub fn with_related(
+        mut self,
+        span: impl Into<DiagSpan>,
+        message: impl Into<EcoString>,
+    ) -> Self {
+        self.related.push(Related {
             span: span.into(),
             message: message.into(),
         });
@@ -150,10 +154,12 @@ impl Display for Diagnostic {
     }
 }
 
-/// A secondary span of a diagnostic: source that explains it, such as the
-/// declaration of a field whose value has the wrong type.
+/// A related span of a diagnostic: source that explains it, such as the
+/// declaration of a field whose value has the wrong type. Terminals show it
+/// as a secondary label of the excerpt; a language server, as related
+/// information.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct Label {
+pub struct Related {
     /// The source.
     pub span: DiagSpan,
     /// What it has to do with the diagnostic.
@@ -208,8 +214,8 @@ pub struct Edit {
     pub replacement: EcoString,
 }
 
-/// Hints that point at part of the source become labels; the others stay
-/// hints.
+/// Hints that point at part of the source become related spans, shown where
+/// they apply; the others stay hints.
 impl From<SyntaxDiagnostic> for Diagnostic {
     fn from(diag: SyntaxDiagnostic) -> Self {
         let severity = if diag.is_error {
@@ -222,7 +228,7 @@ impl From<SyntaxDiagnostic> for Diagnostic {
             out = if hint.span.is_detached() {
                 out.with_hint(hint.v)
             } else {
-                out.with_label(hint.span, hint.v)
+                out.with_related(hint.span, hint.v)
             };
         }
         out

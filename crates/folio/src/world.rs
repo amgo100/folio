@@ -182,6 +182,11 @@ impl World {
     /// Replaces the manifest with the text of `folio.toml`. Fails with every
     /// error in it and keeps the old manifest. A manifest equal to the
     /// current one changes nothing.
+    ///
+    /// The errors point into the new text by byte range, which the world
+    /// does not keep: resolve them against a
+    /// [`TextFiles`](crate::diag::TextFiles) that holds it under
+    /// [`World::MANIFEST`], not against the world.
     pub fn set_manifest(&mut self, text: &str) -> Result<(), Vec<ProjectError>> {
         let manifest = Manifest::parse(text, Self::MANIFEST)?;
         if self.manifest_text.text() != text {
@@ -198,6 +203,11 @@ impl World {
 
     /// Replaces the lockfile with the text of `folio.lock`, or removes it.
     /// Fails with every error in it and keeps the old lockfile.
+    ///
+    /// The errors point into the new text by byte range, which the world
+    /// does not keep: resolve them against a
+    /// [`TextFiles`](crate::diag::TextFiles) that holds it under
+    /// [`World::LOCKFILE`], not against the world.
     pub fn set_lockfile(&mut self, text: Option<&str>) -> Result<(), Vec<ProjectError>> {
         let lockfile = parse_lockfile(text)?;
         self.lockfile_text = text.map(|text| Lines::new(text.to_owned()));

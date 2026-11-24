@@ -156,7 +156,7 @@ pub fn locate(files: &dyn Files, span: DiagSpan) -> Option<Location> {
 }
 
 /// A diagnostic with its spans resolved, as front ends other than the
-/// terminal receive it. Labels and fixes whose spans do not resolve are left
+/// terminal receive it. Related spans and fixes that do not resolve are left
 /// out; so is a fix with any such edit, since applying the rest would be
 /// wrong.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize)]
@@ -170,16 +170,16 @@ pub struct Resolved {
     /// The source it is about, or `None` when it has none.
     pub location: Option<Location>,
     /// Other source that explains it.
-    pub labels: Vec<ResolvedLabel>,
+    pub related: Vec<ResolvedRelated>,
     /// How to fix it.
     pub hints: Vec<EcoString>,
     /// Edits that fix it.
     pub fixes: Vec<ResolvedFix>,
 }
 
-/// A secondary span of a [`Resolved`] diagnostic.
+/// A related span of a [`Resolved`] diagnostic.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize)]
-pub struct ResolvedLabel {
+pub struct ResolvedRelated {
     /// The source.
     pub location: Location,
     /// What it has to do with the diagnostic.
@@ -211,13 +211,13 @@ pub fn resolve(files: &dyn Files, diagnostic: &Diagnostic) -> Resolved {
         code: diagnostic.code.clone(),
         message: diagnostic.message.clone(),
         location: locate(files, diagnostic.span),
-        labels: diagnostic
-            .labels
+        related: diagnostic
+            .related
             .iter()
-            .filter_map(|label| {
-                Some(ResolvedLabel {
-                    location: locate(files, label.span)?,
-                    message: label.message.clone(),
+            .filter_map(|related| {
+                Some(ResolvedRelated {
+                    location: locate(files, related.span)?,
+                    message: related.message.clone(),
                 })
             })
             .collect(),
@@ -262,15 +262,22 @@ pub fn render(files: &dyn Files, diagnostics: &[Diagnostic], color: bool) -> Str
     let config = term::Config::default();
     let mut ansi = term::termcolor::Buffer::ansi();
     let mut plain = String::new();
+    let mut emit = |diagnostic: &cs::Diagnostic<FileId>| {
+        if color {
+            term::emit_to_write_style(&mut ansi, &config, &resolved, diagnostic)
+        } else {
+            term::emit_to_string(&mut plain, &config, &resolved, diagnostic)
+        }
+    };
     for diagnostic in diagnostics {
         let diagnostic = to_codespan(&resolved, files, diagnostic);
-        let result = if color {
-            term::emit_to_write_style(&mut ansi, &config, &resolved, &diagnostic)
-        } else {
-            term::emit_to_string(&mut plain, &config, &resolved, &diagnostic)
-        };
-        // Every label's range was checked against its file's lines.
-        result.expect("resolved spans render");
+        // Every label's range was checked against its file's lines, so this
+        // should not fail; if it does, the message and notes still show.
+        if emit(&diagnostic).is_err() {
+            let mut bare = diagnostic;
+            bare.labels.clear();
+            emit(&bare).expect("a diagnostic without labels renders");
+        }
     }
     if color {
         String::from_utf8(ansi.into_inner()).expect("rendered diagnostics are UTF-8")
@@ -300,7 +307,7 @@ fn to_codespan(
     };
     let mut labels = Vec::new();
     labels.extend(label(cs::LabelStyle::Primary, diagnostic.span, ""));
-    for secondary in &diagnostic.labels {
+    for secondary in &diagnostic.related {
         labels.extend(label(
             cs::LabelStyle::Secondary,
             secondary.span,

@@ -88,7 +88,7 @@ fn parse_errors_serialise_to_json() {
         "column": 6
       }
     },
-    "labels": [],
+    "related": [],
     "hints": [],
     "fixes": []
   }
@@ -102,7 +102,7 @@ fn type_error(world: &World) -> Diagnostic {
     let value = find(world, "main.fol", "\"three\"");
     let declared = find(world, "main.fol", "int");
     Diagnostic::error(value, "expected `int`, found `str`")
-        .with_label(declared, "the field `marks` is declared as `int` here")
+        .with_related(declared, "the field `marks` is declared as `int` here")
         .with_hint("marks are whole numbers")
         .with_fix(Fix::replace("Write the marks as a number", value, "3"))
 }
@@ -137,7 +137,7 @@ error: expected `int`, found `str`
 }
 
 #[test]
-fn a_type_error_serialises_with_labels_and_fixes() {
+fn a_type_error_serialises_with_related_spans_and_fixes() {
     let world = world(TYPED);
     let resolved = diag::resolve(&world, &type_error(&world));
     let location = resolved.location.as_ref().unwrap();
@@ -149,9 +149,9 @@ fn a_type_error_serialises_with_labels_and_fixes() {
             column: 18
         }
     );
-    assert_eq!(resolved.labels.len(), 1);
+    assert_eq!(resolved.related.len(), 1);
     assert_eq!(
-        &TYPED[resolved.labels[0].location.bytes.clone()],
+        &TYPED[resolved.related[0].location.bytes.clone()],
         "int",
         "{resolved:?}"
     );
@@ -164,9 +164,9 @@ fn a_type_error_serialises_with_labels_and_fixes() {
     assert_eq!(diag["severity"], "error");
     assert_eq!(diag["location"]["path"], "main.fol");
     assert_eq!(diag["location"]["start"]["column"], 18);
-    assert_eq!(diag["labels"][0]["location"]["start"]["line"], 1);
+    assert_eq!(diag["related"][0]["location"]["start"]["line"], 1);
     assert_eq!(
-        diag["labels"][0]["message"],
+        diag["related"][0]["message"],
         "the field `marks` is declared as `int` here"
     );
     assert_eq!(diag["hints"][0], "marks are whole numbers");
@@ -194,7 +194,7 @@ fn a_lint_shows_its_code() {
         "warning[override-literal]: a colour literal in content"
     );
 
-    let text = diag::render(&world, &[lint.clone()], false);
+    let text = diag::render(&world, std::slice::from_ref(&lint), false);
     assert!(
         text.starts_with("warning[override-literal]: a colour literal in content\n"),
         "{text}"
@@ -221,7 +221,7 @@ fn unresolvable_spans_are_left_out() {
     let world = world(TYPED);
     let value = find(&world, "main.fol", "\"three\"");
     let diagnostic = Diagnostic::error(DiagSpan::detached(), "no source")
-        .with_label(DiagSpan::detached(), "nowhere")
+        .with_related(DiagSpan::detached(), "nowhere")
         .with_fix(
             Fix::new("Half a fix")
                 .with_edit(value, "3")
@@ -229,7 +229,7 @@ fn unresolvable_spans_are_left_out() {
         );
     let resolved = diag::resolve(&world, &diagnostic);
     assert_eq!(resolved.location, None);
-    assert!(resolved.labels.is_empty());
+    assert!(resolved.related.is_empty());
     assert!(resolved.fixes.is_empty());
     assert_eq!(
         diag::render(&world, &[diagnostic], false),
