@@ -35,6 +35,8 @@ fontdb = { version = "0.24.0", default-features = false, features = ["std", "fs"
 indexmap = "2.14.2"
 # Maps files of the immutable font cache (SPEC §2.3, §14.2).
 memmap2 = "0.9.12"
+# Property tests (SPEC §14.2), without forking test processes.
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 rayon = "1.12.0"
 salsa = "0.28.6"
 semver = "1.0.28"

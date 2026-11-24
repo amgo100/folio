@@ -68,6 +68,11 @@ pub trait Db: salsa::Database {
     /// paragraph, so the cache holds no state that queries could observe
     /// besides its results.
     fn text_cache(&self) -> &crate::text::Cache;
+
+    /// The memoised line breaks of paragraphs that every handle of the
+    /// database shares (SPEC §2.3). Like shaping, breaking is a pure
+    /// function of its key.
+    fn layout_cache(&self) -> &crate::layout::Cache;
 }
 
 /// What a build reads besides source text, one field per kind of input.
@@ -395,7 +400,7 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     check_document(db, project, build.variant(db).clone());
     check_styles(db, build);
     crate::fonts::check_fonts(db, build);
-    check_text(db, build);
+    check_lines(db, build);
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),
@@ -419,12 +424,12 @@ fn check_styles(db: &dyn Db, build: Build<'_>) {
     crate::style::styles(db, build);
 }
 
-/// Shapes the paragraphs of a build for its diagnostics. Like
-/// [`check_document`], it stands in for the layout stage, which will read
-/// the shaped text.
+/// Shapes the paragraphs of a build and breaks them into lines for their
+/// diagnostics. Like [`check_document`], it stands in for the page
+/// builder, which will read the lines.
 #[salsa::tracked]
-fn check_text(db: &dyn Db, build: Build<'_>) {
-    crate::text::text(db, build);
+fn check_lines(db: &dyn Db, build: Build<'_>) {
+    crate::layout::lines(db, build);
 }
 
 /// Compiles one build: runs [`build_output`] and collects the diagnostics

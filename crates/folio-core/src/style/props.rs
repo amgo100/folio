@@ -359,6 +359,8 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     );
     prop("justify", Bool, Value::Bool(true), Layout);
     prop("hyphenate", any_of([Auto, Bool]), Value::Auto, Layout);
+    // SPEC §7.2: punctuation and hyphens hang into the margin.
+    prop("protrusion", Bool, Value::Bool(false), Layout);
     prop("widows", Int, Value::Int(2), Layout);
     prop("orphans", Int, Value::Int(2), Layout);
     prop("grid-snap", Bool, Value::Bool(true), Layout);

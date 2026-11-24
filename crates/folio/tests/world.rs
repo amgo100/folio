@@ -85,9 +85,11 @@ impl Logged {
 /// match memoised and returns the same, so the build's check of the styles
 /// is cut off too. The check of the fonts the text is set in reads the text
 /// itself, so it runs again whenever the document changes, and so does the
-/// text stage with its check: its paragraphs record the spans of their
-/// text, which the reparse renumbered (their shaping is memoised apart).
-const EVAL: &str = "eval_file evaluate document check_document styles check_fonts text check_text";
+/// text stage: its paragraphs record the spans of their text, which the
+/// reparse renumbered (their shaping is memoised apart). Line breaking reads
+/// the text, and runs again too, but its lines hold no spans, so it returns
+/// the same lines and the build's check of them is cut off.
+const EVAL: &str = "eval_file evaluate document check_document styles check_fonts text lines";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {
@@ -148,8 +150,10 @@ fn early_cutoff_on_a_whitespace_edit() {
             "dependencies",
             "check_source",
             "source_file",
-            // Evaluation fails, so there is no document to style.
+            // Evaluation fails, so there is no document to style or break
+            // into lines.
             "check_styles",
+            "check_lines",
             EVAL
         ])
     );
@@ -194,10 +198,17 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         "{:?}",
         compiled.diagnostics
     );
-    // The document is gone, so the build's check of the styles re-runs.
+    // The document is gone, so the build's checks of the styles and the
+    // lines re-run.
     assert_eq!(
         logged.take(),
-        set(&["dependencies", "check_source", "check_styles", EVAL])
+        set(&[
+            "dependencies",
+            "check_source",
+            "check_styles",
+            "check_lines",
+            EVAL
+        ])
     );
 
     // Fixing it removes the diagnostic, again without re-running the build.
@@ -210,7 +221,13 @@ fn diagnostics_change_while_the_build_is_cut_off() {
     );
     assert_eq!(
         logged.take(),
-        set(&["dependencies", "check_source", "check_styles", EVAL])
+        set(&[
+            "dependencies",
+            "check_source",
+            "check_styles",
+            "check_lines",
+            EVAL
+        ])
     );
 
     // A diagnostic of a file that two builds share is reported by one

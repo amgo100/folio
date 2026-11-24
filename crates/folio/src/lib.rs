@@ -34,12 +34,14 @@ use std::panic::AssertUnwindSafe;
 
 use rayon::prelude::*;
 
-pub use folio_component::{Name, Registry, Target};
+pub use folio_component::{Abs, Name, Ratio, Registry, Target};
 pub use folio_core::db::{BuildMode, Bytes, Compiled};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::eval;
 pub use folio_core::eval::Limits;
 pub use folio_core::fonts::{Face, FontRun, Fonts, Pin};
+pub use folio_core::layout;
+pub use folio_core::layout::{Line, Lines, ParagraphLayout};
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 pub use folio_core::style;
@@ -151,6 +153,29 @@ pub fn text(
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         folio_core::text::text(db, build).clone()
+    })
+}
+
+/// Breaks the paragraphs of a variant of the world's document into lines
+/// for a target (SPEC §7.2), by Knuth–Plass total fit at the width of the
+/// default page master's body; or `None` when the document could not be
+/// styled. The variant is `None` only for a project that declares no
+/// variants.
+///
+/// Paragraphs whose content, style and widths are equal to ones broken
+/// before in this world share their lines, so after an edit only the
+/// changed paragraphs are broken again. Overfull and underfull lines are
+/// diagnostics that [`compile`] reports. Fails only when an edit to the
+/// world cancels it.
+pub fn lines(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+) -> Result<Option<Lines>, Cancelled> {
+    catch(|| {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        layout::lines(db, build).clone()
     })
 }
 
