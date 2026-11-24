@@ -1,14 +1,16 @@
 //! The interpreter: evaluates markup, expressions and patterns in a scope.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{Abs, Em, Name, QualifiedName, Ratio, Scalar};
+use folio_component::{Abs, BODY, Body, Em, Name, QualifiedName, Ratio, Scalar, UNIVERSAL_FIELDS};
 use folio_syntax::Span;
 use folio_syntax::ast::{self, AstNode, Unit};
 
 use super::captures::captures;
-use super::content::{Content, Element, Node};
+use super::content::{Content, Node};
+use super::element;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::library;
 use super::ops::{self, a_type};
@@ -300,12 +302,12 @@ impl<'a> Vm<'a> {
             ast::Expr::Strong(s) => {
                 self.step(span)?;
                 let body = self.markup(s.body())?;
-                builtin("strong", [("body", body.into())], span)
+                self.builtin("strong", [("body", body.into())], span)?
             }
             ast::Expr::Emph(e) => {
                 self.step(span)?;
                 let body = self.markup(e.body())?;
-                builtin("emph", [("body", body.into())], span)
+                self.builtin("emph", [("body", body.into())], span)?
             }
             ast::Expr::Raw(raw) => {
                 self.step(span)?;
@@ -317,37 +319,40 @@ impl<'a> Vm<'a> {
                 if let Some(lang) = raw.lang() {
                     fields.push(("lang", Value::Str(lang.get().clone())));
                 }
-                builtin("raw", fields, span)
+                self.builtin("raw", fields, span)?
             }
             ast::Expr::Link(link) => {
                 self.step(span)?;
-                builtin("link", [("dest", Value::Str(link.get().clone()))], span)
+                self.builtin("link", [("dest", Value::Str(link.get().clone()))], span)?
             }
             ast::Expr::Ref(r) => {
                 self.step(span)?;
-                let mut fields = vec![("target", Value::Str(r.target().into()))];
+                let mut fields = vec![("target", Value::Label(r.target().into()))];
                 if let Some(supplement) = r.supplement() {
                     fields.push(("supplement", self.markup(supplement.body())?.into()));
                 }
-                builtin("ref", fields, span)
+                self.builtin("ref", fields, span)?
             }
             ast::Expr::Heading(heading) => {
                 self.step(span)?;
                 let (body, label) = self.markup_labelled(heading.body())?;
                 let level = i64::try_from(heading.depth().get()).unwrap_or(i64::MAX);
                 labelled(
-                    builtin(
+                    self.builtin(
                         "heading",
                         [("level", Value::Int(level)), ("body", body.into())],
                         span,
-                    ),
+                    )?,
                     label,
                 )
             }
             ast::Expr::ListItem(item) => {
                 self.step(span)?;
                 let (body, label) = self.markup_labelled(item.body())?;
-                labelled(builtin("list-item", [("body", body.into())], span), label)
+                labelled(
+                    self.builtin("list-item", [("body", body.into())], span)?,
+                    label,
+                )
             }
             ast::Expr::EnumItem(item) => {
                 self.step(span)?;
@@ -360,18 +365,18 @@ impl<'a> Vm<'a> {
                     ));
                 }
                 fields.push(("body", body.into()));
-                labelled(builtin("enum-item", fields, span), label)
+                labelled(self.builtin("enum-item", fields, span)?, label)
             }
             ast::Expr::TermItem(item) => {
                 self.step(span)?;
                 let term = self.markup(item.term())?;
                 let (description, label) = self.markup_labelled(item.description())?;
                 labelled(
-                    builtin(
+                    self.builtin(
                         "terms-item",
-                        [("term", term.into()), ("description", description.into())],
+                        [("term", term.into()), ("body", description.into())],
                         span,
-                    ),
+                    )?,
                     label,
                 )
             }
@@ -379,26 +384,26 @@ impl<'a> Vm<'a> {
             ast::Expr::Equation(eq) => {
                 self.step(span)?;
                 let body = eq.body().to_untyped().full_text();
-                builtin(
+                self.builtin(
                     "math",
                     [
+                        ("text", Value::Str(body.trim().into())),
                         ("block", Value::Bool(eq.block())),
-                        ("body", Value::Str(body.trim().into())),
                     ],
                     span,
-                )
+                )?
             }
             ast::Expr::TexEquation(eq) => {
                 self.step(span)?;
-                builtin(
+                self.builtin(
                     "math",
                     [
+                        ("text", Value::Str(eq.body().trim().into())),
                         ("block", Value::Bool(eq.block())),
                         ("tex", Value::Str(eq.mode().into())),
-                        ("body", Value::Str(eq.body().trim().into())),
                     ],
                     span,
-                )
+                )?
             }
             _ => {
                 let value = self.expr(expr)?;
@@ -520,7 +525,7 @@ impl<'a> Vm<'a> {
             ast::Expr::Binary(binary) => self.binary(binary),
             ast::Expr::FieldAccess(access) => {
                 let target = self.expr(access.target())?;
-                field(target, access.field().get(), access.field().span())
+                self.field(target, access.field().get(), access.field().span())
             }
             ast::Expr::FuncCall(call) => self.func_call(call),
             ast::Expr::Closure(closure) => self.closure(closure),
@@ -824,7 +829,7 @@ impl<'a> Vm<'a> {
                 if access.field().get() != "at" {
                     bail!(span, "cannot change the result of a call");
                 }
-                let mut args = self.args(call.args(), span)?;
+                let mut args = self.args(call.args(), span, false)?;
                 let key: Value = args.expect("index or key")?;
                 args.finish()?;
                 match self.access(access.target(), false)? {
@@ -865,7 +870,7 @@ impl<'a> Vm<'a> {
                 _ => false,
             };
             if mutates && library::is_mutating_method(name) {
-                let args = self.args(call.args(), span)?;
+                let args = self.args(call.args(), span, false)?;
                 self.alloc(16, span)?;
                 let target = self.access(access.target(), false)?;
                 return library::call_mutating(target, name, args, span);
@@ -885,18 +890,51 @@ impl<'a> Vm<'a> {
                 },
                 _ => None,
             };
-            let args = self.args(call.args(), span)?;
+            // `element.with(..)` takes an element's arguments.
+            let callee = match (&func, &target) {
+                (None, Value::Func(_)) if name == "with" => Some(&target),
+                _ => func.as_ref(),
+            };
+            let args = self.call_args(callee, call.args(), span)?;
             return match func {
                 Some(func) => self.call_value(func, args, span),
                 None => library::call_method(self, target, name, args, span),
             };
         }
         let callee = self.expr(call.callee())?;
-        let args = self.args(call.args(), span)?;
+        let args = self.call_args(Some(&callee), call.args(), span)?;
         self.call_value(callee, args, span)
     }
 
-    fn args(&mut self, args: ast::Args<'_>, span: Span) -> EvalResult<Args> {
+    /// Evaluates the arguments of a call. For a call of an element, or of
+    /// an element with arguments applied, a bare identifier that names no
+    /// variable is a keyword for the fields that take one (`placement:
+    /// wrap`), and the element's slots are defined as functions that make
+    /// their sub-blocks (`#statement[..]`).
+    fn call_args(
+        &mut self,
+        callee: Option<&Value>,
+        args: ast::Args<'_>,
+        span: Span,
+    ) -> EvalResult<Args> {
+        let Some(name) = callee.and_then(element_of) else {
+            return self.args(args, span, false);
+        };
+        let slots = match crate::model::schema(self.db, self.project, name).map(|s| &s.body) {
+            Some(Body::Slots(slots)) => slots.clone(),
+            _ => return self.args(args, span, true),
+        };
+        self.enter();
+        for slot in &slots {
+            let func = Func::Slot(Arc::new((name.clone(), slot.name.clone())));
+            self.define(slot.name.as_str().into(), Value::Func(func));
+        }
+        let result = self.args(args, span, true);
+        self.exit();
+        result
+    }
+
+    fn args(&mut self, args: ast::Args<'_>, span: Span, element: bool) -> EvalResult<Args> {
         let mut items = EcoVec::new();
         for arg in args.items() {
             match arg {
@@ -906,12 +944,27 @@ impl<'a> Vm<'a> {
                     scope: None,
                     value: self.expr(expr)?,
                 }),
-                ast::Arg::Named(named) => items.push(Arg {
-                    span: named.span(),
-                    name: Some(named.name().get().clone()),
-                    scope: named.scope().map(|s| s.get().clone()),
-                    value: self.expr(named.expr())?,
-                }),
+                ast::Arg::Named(named) => {
+                    let name = named.name().get().clone();
+                    let value = match named.expr() {
+                        ast::Expr::Ident(word)
+                            if element
+                                && element::KEYWORD_FIELDS.contains(&name.as_str())
+                                && self.scopes.get(word.get()).is_none()
+                                && self.globals.get(word.get()).is_none() =>
+                        {
+                            self.step(word.span())?;
+                            Value::Str(word.get().clone())
+                        }
+                        expr => self.expr(expr)?,
+                    };
+                    items.push(Arg {
+                        span: named.span(),
+                        name: Some(name),
+                        scope: named.scope().map(|s| s.get().clone()),
+                        value,
+                    });
+                }
                 ast::Arg::Spread(spread) => match self.expr(spread.expr())? {
                     Value::None => {}
                     Value::Array(values) => {
@@ -959,7 +1012,8 @@ impl<'a> Vm<'a> {
                 Ok(value)
             }
             Func::Closure(closure) => self.call_closure(closure, args, span),
-            Func::Element(name) => element(&name, args, span),
+            Func::Element(name) => self.instantiate(&name, args, span).map(Value::Content),
+            Func::Slot(slot) => self.slot(&slot.0, &slot.1, args, span),
             Func::With(with) => {
                 let (func, applied) = &*with;
                 let mut all = applied.clone();
@@ -1363,19 +1417,19 @@ impl<'a> Vm<'a> {
     }
 }
 
-/// Builds a built-in element produced by markup.
-fn builtin<'f>(
-    name: &str,
-    fields: impl IntoIterator<Item = (&'f str, Value)>,
-    span: Span,
-) -> Content {
-    let name = QualifiedName::unqualified(Name::new(name).expect("built-in names are identifiers"));
-    Content::node(Node::Element(Element {
-        name,
-        fields: fields.into_iter().map(|(k, v)| (k.into(), v)).collect(),
-        label: None,
-        span,
-    }))
+/// The element a function makes, directly or with arguments applied.
+fn element_of(value: &Value) -> Option<&QualifiedName> {
+    fn func(f: &Func) -> Option<&QualifiedName> {
+        match f {
+            Func::Element(name) => Some(name),
+            Func::With(with) => func(&with.0),
+            _ => None,
+        }
+    }
+    match value {
+        Value::Func(f) => func(f),
+        _ => None,
+    }
 }
 
 /// Attaches the label that a heading's or list item's body ended with.
@@ -1384,55 +1438,6 @@ fn labelled(mut content: Content, label: Option<ast::Label<'_>>) -> Content {
         element.label = Some(label.get().into());
     }
     content
-}
-
-/// Makes an element instance from a call (SPEC §4.2). Named arguments are
-/// fields; the positional argument, usually a trailing content block, is
-/// the `body`. The document model checks them against the schema.
-fn element(name: &QualifiedName, args: Args, span: Span) -> EvalResult<Value> {
-    let mut fields = Dict::new();
-    let mut body = None;
-    for arg in args.items {
-        match arg.name {
-            Some(field) => {
-                let key = match &arg.scope {
-                    Some(scope) => eco_format!("{field}@{scope}"),
-                    None => field,
-                };
-                if fields.get(&key).is_some() {
-                    bail!(arg.span, "duplicate field `{key}`");
-                }
-                fields.insert(key, arg.value);
-            }
-            None if body.is_none() => body = Some(arg.value),
-            None => {
-                return Err(EvalError::new(arg.span, "unexpected argument")
-                    .with_hint(eco_format!(
-                        "`{name}` takes one body; give other fields by name"
-                    ))
-                    .into());
-            }
-        }
-    }
-    if let Some(body) = body {
-        if fields.get("body").is_some() {
-            bail!(
-                span,
-                "duplicate field `body`: it is given by name and as the body"
-            );
-        }
-        let body = match body {
-            Value::Str(text) => Value::Content(Content::node(Node::Text { text, span })),
-            other => other,
-        };
-        fields.insert("body".into(), body);
-    }
-    Ok(Value::Content(Content::node(Node::Element(Element {
-        name: name.clone(),
-        fields,
-        label: None,
-        span,
-    }))))
 }
 
 /// A value shown in markup: content as is, strings as text, `none` as
@@ -1449,7 +1454,53 @@ fn display(value: Value, span: Span) -> Content {
     }
 }
 
-/// A field of a value: `dict.key`, `module.name`, `heading.level`.
+impl Vm<'_> {
+    /// Builds a built-in element that markup produces, checked against its
+    /// schema like a call.
+    fn builtin<'f>(
+        &mut self,
+        name: &str,
+        fields: impl IntoIterator<Item = (&'f str, Value)>,
+        span: Span,
+    ) -> EvalResult<Content> {
+        let name =
+            QualifiedName::unqualified(Name::new(name).expect("built-in names are identifiers"));
+        let items = fields
+            .into_iter()
+            .map(|(field, value)| Arg {
+                span,
+                name: Some(field.into()),
+                scope: None,
+                value,
+            })
+            .collect();
+        self.instantiate(&name, Args { span, items }, span)
+    }
+
+    /// A field of a value: `dict.key`, `module.name`, `heading.level`. A
+    /// field of an element that its schema declares, or a universal one,
+    /// is `none` when it was not given.
+    fn field(&self, target: Value, name: &str, span: Span) -> EvalResult<Value> {
+        if let Value::Content(content) = &target
+            && let Some(element) = content.as_element()
+            && element.field(name).is_none()
+            && name != "label"
+            && let Some(schema) = crate::model::schema(self.db, self.project, &element.name)
+            && (schema.field(name).is_some()
+                || schema.slot(name).is_some()
+                || (name == BODY && schema.body != Body::None)
+                || UNIVERSAL_FIELDS.contains(&name))
+        {
+            return Ok(match name {
+                "id" => element.label.clone().map_or(Value::None, Value::Label),
+                _ => Value::None,
+            });
+        }
+        field(target, name, span)
+    }
+}
+
+/// A field of a value, as it is stored.
 fn field(target: Value, name: &str, span: Span) -> EvalResult<Value> {
     match &target {
         Value::Dict(dict) => match dict.get(name) {

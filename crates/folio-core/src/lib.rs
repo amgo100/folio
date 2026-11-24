@@ -14,4 +14,5 @@ pub mod component;
 pub mod db;
 pub mod diag;
 pub mod eval;
+pub mod model;
 pub mod project;

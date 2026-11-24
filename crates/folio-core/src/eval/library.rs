@@ -1,5 +1,6 @@
 //! The standard library: global functions, the `calc` module, methods of
-//! values, data loading, and the elements of the project's components.
+//! values, data loading, the built-in elements content can call, and the
+//! elements of the project's components.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -16,9 +17,9 @@ use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
 use crate::db::{Bytes, data_file, source_file};
 
-/// The global scope: the library, and the elements of the components in
-/// use, unqualified where the name resolves and in their namespace
-/// (`exam.question`).
+/// The global scope: the library, the built-in elements content can call,
+/// and the elements of the components in use, unqualified where the name
+/// resolves and in their namespace (`exam.question`).
 pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
     let mut scope = BTreeMap::new();
     for &(name, func) in GLOBALS {
@@ -34,6 +35,15 @@ pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
         "calc".into(),
         Value::Module(Module::new("calc", calc.into(), Content::new())),
     );
+
+    // The built-in elements come before components' elements: a component
+    // element named like one is reached only qualified (`exam.figure`).
+    for builtin in crate::model::builtins().iter().filter(|b| b.callable) {
+        let name = &builtin.schema.name;
+        scope.entry(name.as_str().into()).or_insert_with(|| {
+            Value::Func(Func::Element(QualifiedName::unqualified(name.clone())))
+        });
+    }
 
     let Some(host) = host else {
         return scope.into();

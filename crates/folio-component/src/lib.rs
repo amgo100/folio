@@ -48,8 +48,8 @@ pub use self::draw::{
     Color, Dash, FillRule, LineCap, LineJoin, Paint, Path, PathItem, Shape, Stroke,
 };
 pub use self::element::{
-    Body, ContentKind, CounterDecl, ElementKind, ElementSchema, FieldDecl, LocaleString, SlotDecl,
-    UNIVERSAL_FIELDS, Within,
+    BODY, Body, ContentKind, CounterDecl, ElementKind, ElementSchema, FieldDecl, LAYOUT_HINTS,
+    LocaleString, SlotDecl, UNIVERSAL_FIELDS, Within,
 };
 pub use self::fragment::{BaselineGrid, Fragment, FragmentItem, Regions};
 pub use self::geom::{Abs, Em, Point, Ratio, Rect, Scalar, Size};

@@ -1,17 +1,19 @@
 //! The content tree: what evaluating markup produces (SPEC §2.1).
 //!
 //! Content is a sequence of [`Node`]s: text, spaces and breaks, and
-//! [`Element`] instances with typed fields. Markup produces elements with
-//! the names of SPEC §4.2 (`heading`, `strong`, `raw`, `list-item`…);
-//! element calls produce instances of component elements. Checking fields
-//! against schemas, grouping list items into lists and paragraphs, and
-//! opening sections at headings belong to the document model, which reads
-//! this tree.
+//! [`Element`] instances with typed fields. Markup produces built-in
+//! elements with the names of SPEC §4.2 (`heading`, `strong`, `raw`,
+//! `list-item`…); element calls produce instances of built-in or component
+//! elements. Either way the instance is checked against its schema when it
+//! is made, so its fields have their declared types and defaults. Grouping
+//! inline content into paragraphs and list items into lists, and opening
+//! sections at headings, belong to the document model
+//! ([`crate::model`]), which reads this tree.
 
 use std::fmt::Write;
 
 use ecow::{EcoString, EcoVec};
-use folio_component::QualifiedName;
+use folio_component::{ElementKind, Name, QualifiedName};
 use folio_syntax::{Span, SyntaxNode};
 
 use super::value::{Dict, Value};
@@ -104,6 +106,7 @@ impl Content {
                         }
                     }
                 }
+                Node::Slot(slot) => slot.body.write_plain(out),
                 Node::Rule(_) => {}
             }
         }
@@ -136,6 +139,9 @@ impl Content {
                     if let Some(label) = &element.label {
                         write!(out, " <{label}>").unwrap();
                     }
+                }
+                Node::Slot(slot) => {
+                    write!(out, "slot {}({})", slot.name, slot.body.repr()).unwrap()
                 }
                 Node::Rule(_) => out.push_str("rule"),
             }
@@ -174,20 +180,45 @@ pub enum Node {
     },
     /// An element instance.
     Element(Element),
+    /// A slot's sub-block, `#statement[..]`, on its way into the body of
+    /// the element that declares the slot (SPEC §4.3). That element stores
+    /// it as a field, so it occurs in no finished element.
+    Slot(Slot),
     /// A scoped rule (`#rule question { .. }`, SPEC §5.4), kept as syntax
     /// for the style stage. It applies to the enclosing element.
     Rule(SyntaxNode),
 }
 
-/// An element instance: a name, typed fields and an optional label.
+/// A slot's sub-block: `#solution[..]` in the body of `#example[..]`.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Slot {
+    /// The element whose slot it fills.
+    pub parent: QualifiedName,
+    /// The slot.
+    pub name: Name,
+    /// Its content.
+    pub body: Content,
+    /// Where it was made.
+    pub span: Span,
+}
+
+/// An element instance: a name, a kind, typed fields and an optional
+/// label.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Element {
     /// The element: a built-in name such as `heading`, or a component
     /// element, qualified with its component's namespace (`exam.question`).
     pub name: QualifiedName,
-    /// The fields, in the order they were given. The body of an element
-    /// call is the field `body`. A field limited to a variant or target is
-    /// stored under its name and scope: `override@markscheme`.
+    /// How layout treats this instance: its schema's kind, except that
+    /// `raw` and `math` are blocks when their `block` field is true.
+    pub kind: ElementKind,
+    /// The fields given, in the order they were given, then the defaults of
+    /// the declared fields that were not given and do not default to
+    /// `none`. The body is the field `body`, and the content of each slot a
+    /// field of the slot's name. A field limited to a variant or target is
+    /// stored under its name and scope: `override@markscheme`. Universal
+    /// fields are stored only when given; `class` as an array of names, and
+    /// `id` as the label.
     pub fields: Dict,
     /// The label written after it: `fig:ball` for `<fig:ball>`.
     pub label: Option<EcoString>,

@@ -39,6 +39,7 @@ pub use folio_core::db::{Bytes, Compiled, FontFile};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::eval;
 pub use folio_core::eval::Limits;
+pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 pub use folio_syntax::{FileId, Source};
 
@@ -74,6 +75,20 @@ pub fn compile(
 /// variant shares it. Fails only when an edit to the world cancels it.
 pub fn evaluate(world: &World, variant: Option<&Name>) -> Result<Option<eval::Content>, Cancelled> {
     catch(|| eval::evaluate(world.db(), world.project(), variant.cloned()).clone())
+}
+
+/// Builds the document tree of a variant of the world's document (SPEC
+/// §4.2), or `None` when it could not be evaluated. The variant is `None`
+/// only for a project that declares no variants.
+///
+/// The problems found are the diagnostics that [`compile`] reports for the
+/// variant. Like evaluation, it does not depend on the target. Fails only
+/// when an edit to the world cancels it.
+pub fn document(
+    world: &World,
+    variant: Option<&Name>,
+) -> Result<Option<model::Document>, Cancelled> {
+    catch(|| model::document(world.db(), world.project(), variant.cloned()).clone())
 }
 
 /// Compiles every variant and target the manifest declares

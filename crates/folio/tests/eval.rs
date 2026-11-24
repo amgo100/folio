@@ -274,16 +274,16 @@ fn markup_becomes_a_content_tree() {
         repr("= Forces <sec:forces>\n\nA *ball* is _thrown_. See @sec:forces.\n"),
         "[heading(level: 1, body: [\"Forces\"]) <sec:forces>, parbreak, \"A\", space, \
          strong(body: [\"ball\"]), space, \"is\", space, emph(body: [\"thrown\"]), \". See\", \
-         space, ref(target: \"sec:forces\"), \".\", space]"
+         space, ref(target: <sec:forces>), \".\", space]"
     );
     assert_eq!(
         repr("- one\n+ two\n/ Term: desc\n"),
         "[list-item(body: [\"one\"]), space, enum-item(body: [\"two\"]), space, \
-         terms-item(term: [\"Term\"], description: [\"desc\"]), space]"
+         terms-item(term: [\"Term\"], body: [\"desc\"]), space]"
     );
     assert_eq!(
         repr("`code` $x^2$\n```rust\nfn main() {}\n```"),
-        "[raw(text: \"code\", block: false), space, math(block: false, body: \"x^2\"), \
+        "[raw(text: \"code\", block: false), space, math(text: \"x^2\", block: false), \
          space, raw(text: \"fn main() {}\", block: true, lang: \"rust\")]"
     );
     // Values in markup show as text; content blocks and functions join.
@@ -770,15 +770,15 @@ fn component_elements_make_instances() {
         MANIFEST,
         &[(
             "main.fol",
-            "#question(marks: 3, override@markscheme: (space-before: 24pt))[Find $v$.] <q:1>\n\
+            "#question(marks: 3, override@pptx: (space-before: 24pt))[Find $v$.] <q:1>\n\
              #exam.question(marks: 1)[Why?]\n",
         )],
     );
     let content = logged.content(None);
     assert_eq!(
         content.repr(),
-        "[exam.question(marks: 3, override@markscheme: (space-before: 24.0pt), \
-         body: [\"Find\", space, math(block: false, body: \"v\"), \".\"]) <q:1>, space, \
+        "[exam.question(marks: 3, override@pptx: (space-before: 24.0pt), \
+         body: [\"Find\", space, math(text: \"v\", block: false), \".\"]) <q:1>, space, \
          exam.question(marks: 1, body: [\"Why?\"]), space]"
     );
     let element = content.nodes()[0].clone();

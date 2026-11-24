@@ -9,7 +9,7 @@ use ecow::{EcoString, eco_format};
 use crate::component::{
     Component, ComponentManifest, Declarations, INTERFACE_VERSION, SUPPORTED_INTERFACES,
 };
-use crate::element::{Body, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
+use crate::element::{BODY, Body, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
 use crate::names::{ComponentName, Name};
 use crate::property::PropertyDecl;
 use crate::template::TemplateDecl;
@@ -256,6 +256,11 @@ fn check_element(cx: &mut Checker, element: &ElementSchema, strings: &[LocaleStr
                 "element `{name}` declares field `{field_name}`, which every element already has"
             ));
         }
+        if field_name.as_str() == BODY {
+            cx.error(eco_format!(
+                "element `{name}` declares field `body`, which names the body"
+            ));
+        }
         if let FieldType::Choice(options) = &field.ty {
             if options.is_empty() {
                 cx.error(eco_format!(
@@ -307,6 +312,30 @@ fn check_element(cx: &mut Checker, element: &ElementSchema, strings: &[LocaleStr
         check_unique(cx, &slot_names, |s| {
             eco_format!("element `{name}` declares slot `{s}` more than once")
         });
+        for slot in slots {
+            let slot = slot.name.as_str();
+            if slot == BODY || UNIVERSAL_FIELDS.contains(&slot) || element.field(slot).is_some() {
+                cx.error(eco_format!(
+                    "slot `{slot}` of element `{name}` has the name of a field; \
+                     an instance stores the slot's content under that name"
+                ));
+            }
+        }
+    }
+
+    check_unique(cx, &element.positional, |p| {
+        eco_format!("element `{name}` lists positional field `{p}` more than once")
+    });
+    for positional in &element.positional {
+        let ok = match positional.as_str() {
+            BODY => element.body != Body::None,
+            field => element.field(field).is_some(),
+        };
+        if !ok {
+            cx.error(eco_format!(
+                "element `{name}` lists `{positional}` as positional, but has no such field"
+            ));
+        }
     }
 
     if let Some(key) = &element.ref_key
@@ -541,6 +570,13 @@ mod tests {
             Value::Bool(true),
         ));
         element.ref_key = Some(name("sample"));
+        element
+            .fields
+            .push(FieldDecl::required(name("body"), FieldType::Content));
+        element
+            .fields
+            .push(FieldDecl::required(name("statement"), FieldType::Content));
+        element.positional = EcoVec::from([name("title"), name("caption"), name("title")]);
         element.fields.push(FieldDecl::with_default(
             name("level"),
             FieldType::Choice(EcoVec::from(["a".into(), "a".into(), "".into()])),
@@ -583,8 +619,13 @@ mod tests {
                  but only lengths and colours can be",
                 "the default of field `count` of element `example` has type `bool`, \
                  but the field has type `int`",
+                "element `example` declares field `body`, which names the body",
                 "field `level` of element `example` has an empty option",
                 "field `level` of element `example` lists option \"a\" more than once",
+                "slot `statement` of element `example` has the name of a field; \
+                 an instance stores the slot's content under that name",
+                "element `example` lists positional field `title` more than once",
+                "element `example` lists `caption` as positional, but has no such field",
                 "element `example` has the reference key `sample`, \
                  but no English locale string for it",
                 "the initial value of property `example-gap` has type `int`, \
