@@ -190,6 +190,9 @@ pub enum PropertyType {
     Keyword(EcoVec<Name>),
     /// A list of values of one type.
     List(Box<PropertyType>),
+    /// A keyword with arguments, one of a fixed set of names:
+    /// `placeholder("..")`.
+    Call(EcoVec<Name>),
     /// A value of any of several types: `auto | int`.
     AnyOf(EcoVec<PropertyType>),
     /// Any value. For compound values whose grammar the stage that reads
@@ -220,6 +223,7 @@ impl PropertyType {
             (Self::Any, _) => true,
             (Self::Template, Value::None | Value::Auto) => true,
             (Self::List(item), Value::Array(items)) => items.iter().all(|v| item.accepts(v)),
+            (Self::Call(names), Value::Call(name, _)) => names.contains(name),
             (Self::AnyOf(types), value) => types.iter().any(|ty| ty.accepts(value)),
             _ => false,
         }
@@ -242,6 +246,7 @@ impl Display for PropertyType {
             Self::Str => f.write_str("str"),
             Self::Keyword(words) => join(f, words.iter()),
             Self::List(item) => write!(f, "list({item})"),
+            Self::Call(names) => join(f, names.iter().map(|n| format!("{n}(..)"))),
             Self::AnyOf(types) => join(f, types.iter()),
             Self::Any => f.write_str("any"),
             Self::Template => f.write_str("template"),

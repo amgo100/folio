@@ -108,29 +108,46 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
 }
 
 /// Coerces a computed value to a property's type where it is written in
-/// another form: a zero without a unit is a length (`indent: 0`), and content
-/// writes a keyword as a string, so hints such as `placement: wrap` evaluate
-/// to the string `"wrap"` (SPEC §4.2).
-pub fn coerce(value: Value, ty: &PropertyType) -> Value {
+/// another form: a zero without a unit is a length (`indent: 0`), and a
+/// single item of a property that takes a list is a list of one
+/// (`font: "Source Serif 4"`). With `content`, a string is also a keyword:
+/// content writes hints such as `placement: wrap` as strings (SPEC §4.2),
+/// while stylesheets write keywords bare.
+pub fn coerce(value: Value, ty: &PropertyType, content: bool) -> Value {
     if ty.accepts(&value) {
         return value;
     }
-    let other = match &value {
-        Value::Int(0) => Value::Length(Abs::zero()),
-        Value::Number(n) if n.get() == 0.0 => Value::Length(Abs::zero()),
-        Value::Str(text) => match Name::new(text) {
-            Some(word) => Value::Keyword(word),
-            None => return value,
-        },
-        _ => return value,
-    };
-    if ty.accepts(&other) { other } else { value }
+    let mut candidates = Vec::new();
+    match &value {
+        Value::Int(0) => candidates.push(Value::Length(Abs::zero())),
+        Value::Number(n) if n.get() == 0.0 => candidates.push(Value::Length(Abs::zero())),
+        Value::Str(text) if content => {
+            if let Some(word) = Name::new(text) {
+                candidates.push(Value::Keyword(word));
+            }
+        }
+        _ => {}
+    }
+    if !matches!(value, Value::Array(_)) {
+        let single = candidates.first().cloned().unwrap_or_else(|| value.clone());
+        candidates.push(Value::Array(EcoVec::from([value.clone()])));
+        candidates.push(Value::Array(EcoVec::from([single])));
+    }
+    candidates
+        .into_iter()
+        .find(|c| ty.accepts(c))
+        .unwrap_or(value)
 }
 
 /// Checks a declared value against a property's type, computed at a
-/// nominal font size: only the kind of a length matters.
-pub(super) fn check(value: &Declared, ty: &PropertyType) -> Result<Value, EcoString> {
-    let computed = coerce(compute(value, Abs::pt(10.0))?, ty);
+/// nominal font size: only the kind of a length matters. `content` says
+/// whether the value comes from content (see [`coerce`]).
+pub(super) fn check(
+    value: &Declared,
+    ty: &PropertyType,
+    content: bool,
+) -> Result<Value, EcoString> {
+    let computed = coerce(compute(value, Abs::pt(10.0))?, ty, content);
     if ty.accepts(&computed) {
         Ok(computed)
     } else {
@@ -623,14 +640,28 @@ mod tests {
     fn coercion_and_checks() {
         let placement = PropertyType::Keyword(EcoVec::from([Name::new("wrap").unwrap()]));
         assert_eq!(
-            coerce(Value::Str("wrap".into()), &placement),
+            coerce(Value::Str("wrap".into()), &placement, true),
             Value::Keyword(Name::new("wrap").unwrap())
         );
         let numbering = PropertyType::AnyOf(EcoVec::from([PropertyType::None, PropertyType::Str]));
         let decimal = Declared::Keyword(Name::new("decimal").unwrap());
         assert_eq!(
-            check(&decimal, &numbering).unwrap_err(),
+            check(&decimal, &numbering, false).unwrap_err(),
             "expected none | str, found keyword `decimal`"
+        );
+        // Stylesheets write keywords bare.
+        assert!(
+            check(
+                &Declared::Value(eval::Value::Str("wrap".into())),
+                &placement,
+                false
+            )
+            .is_err()
+        );
+        let font = PropertyType::List(Box::new(PropertyType::Str));
+        assert_eq!(
+            coerce(Value::Str("A".into()), &font, false),
+            Value::Array(EcoVec::from([Value::Str("A".into())]))
         );
         let em = Declared::Value(eval::Value::Length(eval::Length::em(
             folio_component::Em::new(2.0),

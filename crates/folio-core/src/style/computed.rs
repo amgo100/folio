@@ -222,6 +222,8 @@ pub(super) struct Styler<'a> {
     groups: HashSet<Arc<PropertyGroup>>,
     styles: HashSet<ComputedStyle>,
     initial: ComputedStyle,
+    /// The font size `initial` resolves `em` lengths at.
+    initial_size: Abs,
     font_size: PropId,
 }
 
@@ -233,12 +235,14 @@ impl<'a> Styler<'a> {
             groups: HashSet::new(),
             styles: HashSet::new(),
             initial: ComputedStyle::new(Vec::new()),
+            initial_size: Abs::pt(11.0),
             font_size,
         };
         let size = match &props.get(font_size).initial {
             Value::Length(size) => *size,
             _ => Abs::pt(11.0),
         };
+        this.initial_size = size;
         let groups = (0..props.group_count())
             .map(|g| {
                 let group = GroupId(g as u16);
@@ -307,11 +311,19 @@ impl<'a> Styler<'a> {
             let touched = members.iter().any(|id| cascaded.contains_key(id));
             let all_inherit = members.iter().all(|&id| props.get(id).inherited);
             let none_inherit = members.iter().all(|&id| !props.get(id).inherited);
-            if !touched && (all_inherit || parent.is_none()) {
+            // An initial value in `em` is relative to the node's own font
+            // size, so a group that falls back to one cannot be shared
+            // when the size differs from the initial style's.
+            let em_initial = size != self.initial_size
+                && members.iter().any(|&id| {
+                    let prop = props.get(id);
+                    has_em(&prop.initial) && (!prop.inherited || parent.is_none())
+                });
+            if !touched && !em_initial && (all_inherit || parent.is_none()) {
                 groups.push(base.group(group).clone());
                 continue;
             }
-            if !touched && none_inherit {
+            if !touched && !em_initial && none_inherit {
                 groups.push(self.initial.group(group).clone());
                 continue;
             }
@@ -326,12 +338,12 @@ impl<'a> Styler<'a> {
                             Computed::Value(Value::Length(size))
                         }
                         Some(DeclValue::Value(value)) => match compute_value(value, size) {
-                            Ok(v) if prop.ty.accepts(&coerce(v.clone(), &prop.ty)) => {
-                                Computed::Value(coerce(v, &prop.ty))
+                            Ok(v) if prop.ty.accepts(&coerce(v.clone(), &prop.ty, true)) => {
+                                Computed::Value(coerce(v, &prop.ty, true))
                             }
-                            _ => self.fallback(id, &base),
+                            _ => self.fallback(id, parent, size),
                         },
-                        None => self.fallback(id, &base),
+                        None => self.fallback(id, parent, size),
                     }
                 })
                 .collect();
@@ -341,13 +353,26 @@ impl<'a> Styler<'a> {
     }
 
     /// The value of a property that no declaration sets: the parent's if
-    /// it inherits, the initial value otherwise.
-    fn fallback(&self, id: PropId, parent: &ComputedStyle) -> Computed {
-        if self.props.get(id).inherited {
-            parent.get(self.props, id).clone()
-        } else {
-            self.initial.get(self.props, id).clone()
+    /// it inherits and there is a parent, the initial value otherwise, with
+    /// `em` lengths relative to the node's font size.
+    fn fallback(&self, id: PropId, parent: Option<&ComputedStyle>, size: Abs) -> Computed {
+        let prop = self.props.get(id);
+        match parent {
+            Some(parent) if prop.inherited => parent.get(self.props, id).clone(),
+            _ if size != self.initial_size && has_em(&prop.initial) => {
+                Computed::Value(resolve_em(&prop.initial, size))
+            }
+            _ => self.initial.get(self.props, id).clone(),
         }
+    }
+}
+
+/// Whether a value holds `em` lengths.
+fn has_em(value: &Value) -> bool {
+    match value {
+        Value::Em(_) => true,
+        Value::Array(items) => items.iter().any(has_em),
+        _ => false,
     }
 }
 

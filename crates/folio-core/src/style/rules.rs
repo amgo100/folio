@@ -575,7 +575,7 @@ impl<'a> Compiler<'a> {
                 let Some(value) = values.declaration(decl) else {
                     continue;
                 };
-                if let Err(message) = check(&value, &property.ty) {
+                if let Err(message) = check(&value, &property.ty, false) {
                     let mut diagnostic = Diagnostic::error(
                         span,
                         eco_format!("wrong value for `{}`: {message}", property.name),
@@ -732,7 +732,14 @@ impl<'a> Compiler<'a> {
                         "first" => out.pseudos.push(Pseudo::First),
                         "last" => out.pseudos.push(Pseudo::Last),
                         "nth" => out.pseudos.push(Pseudo::Nth(position("nth")?)),
-                        "nth-col" => out.pseudos.push(Pseudo::NthCol(position("nth-col")?)),
+                        "nth-col" => {
+                            out.pseudos.push(Pseudo::NthCol(position("nth-col")?));
+                            self.warn(
+                                span,
+                                "`:nth-col(n)` styles table cells, and there are no tables yet; \
+                                 the rule matches nothing",
+                            );
+                        }
                         "has" => {
                             let Some(inner) = pseudo.has() else {
                                 self.error(

@@ -313,7 +313,7 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
         |name: &str, ty, initial, effect| add(name, ty, initial, effect, group, inherited);
     prop(
         "font",
-        any_of([Str, list(Str)]),
+        list(Str),
         Value::Array(EcoVec::from([Value::Str("New Computer Modern".into())])),
         Layout,
     );
@@ -333,7 +333,7 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     prop("tracking", Length, pt(0.0), Layout);
     prop(
         "features",
-        any_of([PropertyType::None, Str, list(Str)]),
+        any_of([PropertyType::None, list(Str)]),
         Value::None,
         Layout,
     );
@@ -426,7 +426,8 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
         any_of([
             Auto,
             kw(&["block", "inline", "none", "hidden", "answer-space"]),
-            Any,
+            // SPEC §6.3: `placeholder("Solution in the mark scheme")`.
+            PropertyType::Call(EcoVec::from([n("placeholder")])),
         ]),
         Value::Auto,
         Layout,
@@ -534,7 +535,8 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     group = GroupId::SLIDES;
     let mut prop =
         |name: &str, ty, initial, effect| add(name, ty, initial, effect, group, inherited);
-    prop("reveal", any_of([Bool, Any]), Value::Bool(false), Layout);
+    // SPEC §10.1: `reveal: true` shows a list's items one per step.
+    prop("reveal", Bool, Value::Bool(false), Layout);
     prop("animation", Any, Value::None, Layout);
     for name in [
         "live-static",

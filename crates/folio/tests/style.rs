@@ -456,13 +456,15 @@ fn scoped_rules_apply_inside_their_element() {
 #[test]
 fn step_rules_are_collected_not_applied() {
     let world = world(
-        "Text.\n",
+        "#rule paragraph:step(3) { color: rgb(\"00ff00\"); }\nText.\n",
         &[(
             "styles/main.fsty",
             "paragraph:step(2-) { color: #ff0000; }\n",
         )],
     );
     let styled = styled(&world, "exam", Target::Pdf);
+    assert_eq!(styled.step_rules.len(), 1);
+    assert_eq!(styled.step_rules[0].steps.as_slice(), [(Some(3), Some(3))]);
     assert_eq!(
         get(&styled, first(&styled, "paragraph"), "color"),
         Value::Color(Color::BLACK)
@@ -479,7 +481,9 @@ fn errors() {
              paragraph:frist { indent: 1pt; }\n\
              $accent: #000;\n\
              @variant solutions { paragraph { indent: 1pt; } }\n\
-             paragraph { space-before: 3; font-size: 1pt 2pt; }\n",
+             paragraph { space-before: 3; font-size: 1pt 2pt; }\n\
+             paragraph { display: blok; font-style: \"italic\"; display: placeholder(\"x\"); }\n\
+             paragraph:nth-col(2) { indent: 1pt; }\n",
         )],
     );
     assert_eq!(
@@ -494,7 +498,56 @@ fn errors() {
             "unknown pseudo-class `:frist`; the rule is ignored",
             "wrong value for `space-before`: expected length, found int",
             "wrong value for `font-size`: expected length, found a list (length, length)",
+            "wrong value for `display`: expected auto | block | inline | none | hidden | answer-space | placeholder(..), found keyword `blok`",
+            // Stylesheets write keywords bare.
+            "wrong value for `font-style`: expected normal | italic | oblique, found string",
+            "`:nth-col(n)` styles table cells, and there are no tables yet; the rule matches nothing",
         ]
+    );
+}
+
+#[test]
+fn stylesheet_errors_are_reported_when_content_fails() {
+    let world = world(
+        "#nope()\n",
+        &[("styles/main.fsty", "paragraph { colour: #000; }\n")],
+    );
+    let messages = messages(&world);
+    assert!(
+        messages.contains(&"unknown property `colour`".to_string()),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn override_errors_name_their_field() {
+    let world = world("#figure(override: (space-before: \"wide\"))[]\n", &[]);
+    assert_eq!(
+        messages(&world),
+        ["wrong value for `space-before` in `override`: expected length, found string"]
+    );
+}
+
+#[test]
+fn em_initial_values_follow_the_font_size() {
+    let world = world(
+        "Text.\n",
+        &[(
+            "styles/main.fsty",
+            "doc { font-size: 20pt; font: \"Source Serif 4\"; }\n",
+        )],
+    );
+    let styled = styled(&world, "exam", Target::Pdf);
+    // `leading` is 0.65em initially: of the root's own font size.
+    assert_eq!(get(&styled, first(&styled, "doc"), "leading"), pt(13.0));
+    assert_eq!(
+        get(&styled, first(&styled, "paragraph"), "leading"),
+        pt(13.0)
+    );
+    // A property that takes a list takes a single item as a list of one.
+    assert_eq!(
+        get(&styled, first(&styled, "paragraph"), "font"),
+        Value::Array(EcoVec::from([Value::Str("Source Serif 4".into())]))
     );
 }
 

@@ -19,13 +19,14 @@ use folio_syntax::{Span, SyntaxNode};
 
 use super::computed::{ComputedStyle, Styler};
 use super::props::Properties;
-use super::rules::{Cascade, Compiler, Decl, DeclValue, Origin, Rule, cascade};
+use super::rules::{Cascade, Compiler, Decl, DeclValue, Origin, Rule, StepRule, cascade};
 use super::selector::{Attr, Need, Needs, NodeName, NodeView, Position, Subject};
 use super::value::{Declared, Values, check};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Content, Element, Node, Value};
 use crate::model::document;
+use crate::project::ProjectPath;
 
 /// The styled document of a build: a computed style for every node of its
 /// document tree, and for the page.
@@ -37,6 +38,10 @@ pub struct Styled {
     pub page: ComputedStyle,
     /// The `doc` element.
     pub root: StyledNode,
+    /// The `:step` rules of scoped rules in content, which apply in the
+    /// variant and target, collected for step styling like those of the
+    /// cascade ([`Cascade::step_rules`]).
+    pub step_rules: EcoVec<StepRule>,
 }
 
 /// A node of the document tree with its computed style.
@@ -127,19 +132,20 @@ fn match_node<'db>(db: &'db dyn Db, key: MatchKey<'db>) -> EcoVec<u32> {
 #[salsa::tracked(returns(ref))]
 pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
     let project = build.project(db);
-    let doc = document(db, project, build.variant(db).clone()).as_ref()?;
+    // The rules first, so that their errors are reported even when the
+    // document cannot be built.
     let cascade = cascade(db, build);
+    let doc = document(db, project, build.variant(db).clone()).as_ref()?;
     let tokens = cascade.tokens();
     let compiler = Compiler::for_cascade(db, project, cascade, &tokens);
-    let entry = project.manifest(db).project.entry.v.clone();
-    let values = Values::new(compiler.values, entry);
 
     let mut walker = Walker {
         db,
         build,
         cascade,
         compiler: &compiler,
-        values: &values,
+        compiled: HashMap::new(),
+        step_rules: EcoVec::new(),
         styler: Styler::new(&cascade.properties),
         memo: HashMap::new(),
         scoped: Vec::new(),
@@ -156,12 +162,8 @@ pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
     let mut found = Vec::new();
     collect_rules(&doc.root, &mut found);
     walker.has_scoped = !found.is_empty();
-    for node in &found {
-        if let Some(rule) = node.cast::<ast::ScopedRule<'_>>() {
-            for (_, compiled) in walker.compile_scoped(rule) {
-                walker.scoped_needs.add(&compiled.selector);
-            }
-        }
+    for node in found {
+        walker.compile_scoped(node);
     }
 
     let page = {
@@ -185,6 +187,7 @@ pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
         properties: cascade.properties.clone(),
         page,
         root,
+        step_rules: walker.step_rules,
     })
 }
 
@@ -272,7 +275,11 @@ struct Walker<'a> {
     build: Build<'a>,
     cascade: &'a Cascade,
     compiler: &'a Compiler<'a>,
-    values: &'a Values<'a>,
+    /// The scoped rules of the document that apply to the build, by the
+    /// span of the scoped rule they were compiled from.
+    compiled: HashMap<Span, Vec<Rule>>,
+    /// The `:step` rules among them.
+    step_rules: EcoVec<StepRule>,
     styler: Styler<'a>,
     /// Computed styles by parent style and declarations.
     memo: HashMap<MemoKey, ComputedStyle>,
@@ -314,14 +321,8 @@ impl<'a> Walker<'a> {
         let mark = self.scoped.len();
         if let Child::Element(element) = child {
             for node in own_rules(element) {
-                if let Some(rule) = node.cast::<ast::ScopedRule<'_>>() {
-                    let rules: Vec<Rule> = self
-                        .compile_scoped(rule)
-                        .into_iter()
-                        .filter(|(applies, _)| *applies)
-                        .map(|(_, r)| r)
-                        .collect();
-                    self.scoped.extend(rules);
+                if let Some(rules) = self.compiled.get(&node.span()) {
+                    self.scoped.extend(rules.iter().cloned());
                 }
             }
         }
@@ -393,8 +394,13 @@ impl<'a> Walker<'a> {
         style
     }
 
-    /// Compiles a scoped rule, with whether it applies to the build.
-    fn compile_scoped(&mut self, rule: ast::ScopedRule<'_>) -> Vec<(bool, Rule)> {
+    /// Compiles a scoped rule, in document order, once: its errors are
+    /// reported whether or not it applies to the build, and the rules that
+    /// apply are kept for the walk.
+    fn compile_scoped(&mut self, node: &SyntaxNode) {
+        let Some(rule) = node.cast::<ast::ScopedRule<'_>>() else {
+            return;
+        };
         let applies = rule.scopes().all(|scope| {
             let mut names = scope.names().map(|n| n.get().clone());
             match scope.kind() {
@@ -403,16 +409,41 @@ impl<'a> Walker<'a> {
                 _ => false,
             }
         });
+        // Values are evaluated in the file that holds the rule, which
+        // function calls see as theirs.
+        let file = self.file_of(node.span());
+        let values = Values::new(self.compiler.values, file);
         self.order += 1;
         let compiled = self.compiler.rule(
-            self.values,
+            &values,
             rule.selectors(),
             rule.declarations(),
             Origin::Local,
             self.order,
             rule.span(),
         );
-        compiled.rules.into_iter().map(|r| (applies, r)).collect()
+        if !applies {
+            return;
+        }
+        for rule in &compiled.rules {
+            self.scoped_needs.add(&rule.selector);
+        }
+        self.step_rules.extend(compiled.steps);
+        self.compiled.insert(node.span(), compiled.rules);
+    }
+
+    /// The path of the file a span is in, or the entry file's.
+    fn file_of(&self, span: Span) -> ProjectPath {
+        let project = self.build.project(self.db);
+        span.id()
+            .and_then(|id| {
+                project
+                    .sources(self.db)
+                    .iter()
+                    .find(|(_, file)| file.source(self.db).id() == id)
+                    .map(|(path, _)| path.clone())
+            })
+            .unwrap_or_else(|| project.manifest(self.db).project.entry.v.clone())
     }
 
     /// The declarations an element makes for itself: its `override`
@@ -435,13 +466,13 @@ impl<'a> Walker<'a> {
             if field == "override" {
                 if let Value::Dict(dict) = value {
                     for (name, v) in dict.iter() {
-                        if let Some(decl) = self.inline_decl(name, v, element.span) {
+                        if let Some(decl) = self.inline_decl(key, name, v, element.span) {
                             out.push(decl);
                         }
                     }
                 }
             } else if LAYOUT_HINTS.contains(&field)
-                && let Some(decl) = self.inline_decl(field, value, element.span)
+                && let Some(decl) = self.inline_decl(key, field, value, element.span)
             {
                 out.push(decl);
             }
@@ -449,16 +480,19 @@ impl<'a> Walker<'a> {
         out
     }
 
-    fn inline_decl(&self, name: &str, value: &Value, span: Span) -> Option<Decl> {
+    /// A declaration of the field `key`: `override` or a hint. The span is
+    /// the element's, since instances do not keep the spans of their
+    /// arguments.
+    fn inline_decl(&self, key: &str, name: &str, value: &Value, span: Span) -> Option<Decl> {
         let prop = self.compiler.property_named(name, span)?;
         let property = self.cascade.properties.get(prop);
         let declared = Declared::Value(value.clone());
-        if let Err(message) = check(&declared, &property.ty) {
+        if let Err(message) = check(&declared, &property.ty, true) {
             diag::report(
                 self.db,
                 Diagnostic::error(
                     span,
-                    eco_format!("wrong value for `{}`: {message}", property.name),
+                    eco_format!("wrong value for `{}` in `{key}`: {message}", property.name),
                 ),
             );
             return None;
