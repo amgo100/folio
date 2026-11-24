@@ -216,11 +216,13 @@ pub fn data_file(db: &dyn Db, project: Project, path: ProjectPath) -> Option<Dat
 
 /// The files a source names literally: string paths of `#import` and
 /// `#include` in content, and of `@import` in stylesheets. Paths computed by
-/// scripts are found when the file is evaluated.
+/// scripts are found when the file is evaluated, and packages (`@scope/name`)
+/// through the lockfile.
 ///
-/// Spans are numbers in the syntax tree, not offsets, so an edit that does
-/// not change the imports (such as one in whitespace or text) gives an equal
-/// result, and the queries that depend on it are not re-run.
+/// Spans are numbers in the syntax tree, not offsets, and an incremental
+/// reparse renumbers only the block it reparses. An edit outside the blocks
+/// that hold imports therefore gives an equal result, and the queries that
+/// depend on it are not re-run.
 #[salsa::tracked(returns(ref))]
 pub fn dependencies(db: &dyn Db, file: SourceFile) -> EcoVec<Dependency> {
     let path = file.path(db);
@@ -265,7 +267,11 @@ fn for_each_import(node: &SyntaxNode, f: &mut impl FnMut(&str, Span)) {
         _ => None,
     };
     if let Some(ast::Expr::Str(path)) = source {
-        f(&path.get(), path.span());
+        // `@scope/name` is a package, which the lockfile resolves.
+        let text = path.get();
+        if !text.starts_with('@') {
+            f(&text, path.span());
+        }
         return;
     }
     for child in node.children() {

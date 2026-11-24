@@ -77,6 +77,9 @@ impl WorldBuilder {
     }
 
     /// Calls `hook` on every [`Event`], on the thread where it happens.
+    ///
+    /// The hook runs inside the database, during a query or an edit, so it
+    /// must not compile or edit the world itself: that deadlocks.
     pub fn on_event(mut self, hook: impl Fn(&Event) + Send + Sync + 'static) -> Self {
         self.hook = Some(Arc::new(hook));
         self
@@ -261,6 +264,9 @@ impl World {
         {
             return Err(WorldError::InvalidRange(range));
         }
+        if &text[range.clone()] == with {
+            return Ok(range);
+        }
         let reparsed = source.edit(range, with);
         set_source(&mut self.db, file, source);
         Ok(reparsed)
@@ -291,8 +297,12 @@ impl World {
     }
 
     /// Sets the contents of an image or data file, adding it if it is new.
+    /// Sources (`.fol` and `.fsty`) go through [`Self::set_source`].
     pub fn set_file(&mut self, path: &str, bytes: impl Into<Bytes>) -> Result<(), WorldError> {
         let path = project_path(path)?;
+        if matches!(path.extension(), Some("fol" | "fsty")) {
+            return Err(WorldError::IsSource(path));
+        }
         let bytes = bytes.into();
         if let Some(file) = self.project.files(&self.db).get(&path).copied() {
             if file.bytes(&self.db) != &bytes {
@@ -416,6 +426,8 @@ pub enum WorldError {
     NotSource(ProjectPath),
     /// There is no source at the path.
     NotFound(ProjectPath),
+    /// A source was given as a data file.
+    IsSource(ProjectPath),
     /// The range is reversed, outside the text, or splits a character.
     InvalidRange(Range<usize>),
     /// Every file id has been given out.
@@ -433,6 +445,9 @@ impl Display for WorldError {
                 )
             }
             Self::NotFound(path) => write!(f, "there is no source `{path}`"),
+            Self::IsSource(path) => {
+                write!(f, "`{path}` is a source: set it with `set_source`")
+            }
             Self::InvalidRange(range) => {
                 write!(
                     f,

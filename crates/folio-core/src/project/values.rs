@@ -183,8 +183,12 @@ impl ProjectPath {
 
     /// Resolves a path written in this file, as an import or include does:
     /// relative to this file's directory, or to the project directory when
-    /// it starts with `/`. `None` if the result is not a project path.
+    /// it starts with `/`. `None` if the result is not a project path, or
+    /// if the path is empty or names a directory.
     pub fn join(&self, path: &str) -> Option<Self> {
+        if path.is_empty() || path.ends_with('/') {
+            return None;
+        }
         if let Some(rooted) = path.strip_prefix('/') {
             return Self::new(rooted);
         }
@@ -449,6 +453,8 @@ mod tests {
         );
         assert_eq!(join("../../outside.fol"), None);
         assert_eq!(join("/"), None);
+        assert_eq!(join(""), None);
+        assert_eq!(join("sub/"), None);
         let top = ProjectPath::new("main.fol").unwrap();
         assert_eq!(top.join("./a.fol").unwrap().as_str(), "a.fol");
         assert_eq!(ProjectPath::new("a\\b"), None);

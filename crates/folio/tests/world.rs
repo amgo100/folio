@@ -291,7 +291,10 @@ fn diagnostics() {
     // Syntax errors and imports that leave the project point at the source.
     let id = logged
         .world
-        .set_source("main.fol", "#include \"../../secret.fol\"\n#(\n")
+        .set_source(
+            "main.fol",
+            "#import \"@school/house\": box\n#include \"../../secret.fol\"\n#(\n",
+        )
         .unwrap();
     let exam = logged.compile("exam");
     let messages: Vec<_> = exam
@@ -300,6 +303,11 @@ fn diagnostics() {
         .map(|d| d.message.as_str())
         .collect();
     assert!(messages.contains(&"`../../secret.fol` is not a path in the project"));
+    // A package is not a project file.
+    assert!(
+        !messages.iter().any(|m| m.contains("house")),
+        "{messages:?}"
+    );
     assert!(exam.diagnostics.len() >= 2);
     for diag in &exam.diagnostics {
         assert!(
@@ -375,6 +383,13 @@ fn files_and_ids() {
         err(world.edit_source("main.fol", 3..99, "")),
         "3..99 is not a range of the text"
     );
+
+    assert_eq!(
+        err(world.set_file("main.fol", b"x".to_vec())),
+        "`main.fol` is a source: set it with `set_source`"
+    );
+    // An edit that changes nothing starts no revision.
+    assert_eq!(world.edit_source("main.fol", 4..4, "").unwrap(), 4..4);
 
     world
         .set_file("data/points.csv", b"x,y\n".to_vec())
