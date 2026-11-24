@@ -1,0 +1,50 @@
+#! folio
+= Heading one <h:one>
+== Heading two
+=== Heading three
+
+A paragraph with _emphasis_, *strong text*, `inline raw`, a link
+https://example.org/path?q=1, a line break \
+and an escape \#, \u{1F600}, a shorthand -- and ~ and ... and 'quotes' "here".
+
+Another paragraph after a blank line.
+
+- A bullet
+  - Nested bullet
+- Second bullet
++ Numbered
++ Numbered again
+1. Explicit number
+/ Velocity: the rate of change of displacement.
+/ Term with `raw`: description.
+
+```rust
+fn main() {}
+```
+
+```c++ int x;```
+
+References: @sec:kin, @fig:ball: it shows, @fig:ball-, @fig:ball. And @fig:ball[Figure].
+An email-like a@b, a lone @ and @- are text.
+Labels: <a> <a-b_c:d> <x1:y2:z3> <_private>.
+
+/* A block comment
+   /* nested */ */
+Text // line comment
+
+#let x = 1
+#let f(a, b: 2) = a + b
+#if x > 0 [positive] else [negative]
+#for i in range(3) [#i]
+#while false { break }
+#{
+  let y = (a: 1, "b c": 2)
+  y.a
+}
+#[content *block*]
+#include "chapter.fol"
+#import "@school/house:1.2.0": theme
+#(1pt + 2mm, 50%, 90deg, 2em, 1fr, 0.5s, 250ms, 2min)
+#set text(red)
+#show heading: it => it
+#context 1

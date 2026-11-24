@@ -1,0 +1,19 @@
+#element example(
+  title: content = none,
+  numbered: bool = true,
+  difficulty: choice("core", "extension") = "core",
+) {
+  kind: block                         // block | inline | float | note | slide
+  body: slots(statement: blocks, solution: blocks)
+  counter: within heading(level: 1)
+  ref-key: "example"                  // word looked up in locale files
+}
+
+#import "lib/blocks.fol": example
+
+#example(title: [Projectile on a slope], difficulty: "extension")[
+  #statement[A particle is projected ...]
+  #solution[Resolve along the slope ...]
+] <ex:slope>
+
+As @ex:slope shows, the range is greatest at $theta = 45 degree$.

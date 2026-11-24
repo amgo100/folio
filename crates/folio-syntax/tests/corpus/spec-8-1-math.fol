@@ -1,0 +1,19 @@
+= Math input
+
+Native: $v^2 = u^2 + 2 a s$, $F = (m v - m u) / t$, $sum_(i=1)^n x_i$,
+$vec(F)$ and $integral_0^T P(t) dif t$.
+
+LaTeX: $:tex \frac{1}{2} m v^2$ and the price is \$5, not math.
+
+$:tex
+  \begin{align}
+    v &= u + a t \\
+    s &= u t + \tfrac{1}{2} a t^2 \$
+  \end{align}
+$ <eq:suvat>
+
+Display:
+$ E_k = 1/2 m v^2 $
+
+#let ke = $:tex \frac{1}{2} m v^2$
+Quantities: $qty(9.81, "m s^-2")$, $qty(2.31, "m", pm: 0.02)$, $num(6.02e23)$.

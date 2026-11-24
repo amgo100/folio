@@ -1,0 +1,20 @@
+#slide[
+  = Projectile motion
+  - The horizontal velocity is constant. #pause
+  - The vertical velocity changes by $g$ each second.
+  #only("2-4")[Air resistance is ignored.]
+  #uncover("+-")[First reveal.]
+  #alert("4")[Watch the sign of $v_y$.]
+  #countdown(duration: 5min, start: on-step(2), warn-at: 1min) <timer:task>
+  #animate(from: 0s, to: 2.4s, duration: 4s, start: on-step(2), t => [
+    #draw(unit: 1cm)[#circle(radius: 0.2)]
+  ])
+]
+
+#slide[
+  #slider("angle", label: [Launch angle], min: 10, max: 80, step: 1, value: 45, unit: "deg")
+  #live(reserve: (6cm, 2cm), bind: (left: <timer:task>.remaining), left => [
+    Time left: #left
+  ])
+  #button(on: on(<btn:next>), delay: 250ms)[Next] <btn:next>
+]
