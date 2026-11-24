@@ -16,9 +16,11 @@ Typst code updates its entry, and refreshes third_party/typst/ if it imports
 from another release.
 
 * `crates/folio-syntax`: a fork of the `typst-syntax` crate, imported from
-  v0.15.1. Its `src/` files other than `file.rs` derive from typst-syntax's
-  files of the same name; `utils.rs` takes a few helpers from `typst-utils`
-  v0.15.1. Typst's `package.rs` and `path.rs` were not imported.
+  v0.15.1. Its files directly in `src/`, other than `file.rs`, derive from
+  typst-syntax's files of the same name; `utils.rs` takes a few helpers from
+  `typst-utils` v0.15.1. The stylesheet modules `src/parser/style.rs` and
+  `src/ast/style.rs` are Folio's own. Typst's `package.rs` and `path.rs` were
+  not imported.
 * `crates/folio-math`: adapted from Typst's math layout (planned for M1).
 
 The upstream NOTICE file, which these derived works must carry, is reproduced

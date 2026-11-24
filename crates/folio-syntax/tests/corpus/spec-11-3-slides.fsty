@@ -1,0 +1,21 @@
+@variant slides, handout {
+  document         { slide-break: heading[level=2], slide; }
+  heading[level=1] { slide-layout: "Section Header"; }
+  heading[level=2] { slide-role: title; }
+  figure           { slide-role: picture; }
+  sidenote         { slide-role: notes; }          // speaker notes
+}
+
+slide-master "Akademeia" {
+  slide-size: 16:9; background: $paper;
+  title  { font: "Source Sans 3"; font-size: 32pt; color: $accent; }
+  body   { font: "Source Sans 3"; font-size: 20pt; bullet-levels: 3; }
+  footer { content: field(doc.title) " · " slide-number(); }
+}
+slide-layout "Title and Content" { title: area(5%, 5%, 90%, 15%); body: area(5%, 22%, 90%, 70%); }
+
+@export theme { accent1: $accent; major-font: $heading-font; }
+
+@target pptx {
+  slide { slide-fit-margin: 5%; slide-overflow: shrink; pptx-template: "school.potx"; }
+}

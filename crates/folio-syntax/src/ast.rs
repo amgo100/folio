@@ -51,6 +51,10 @@ otherwise the parser wouldn't have produced this node.
 
 ## The AST is rooted in the [`Markup`] node
 
+(A stylesheet's AST is rooted in the [`Stylesheet`] node instead, whose
+[`Stylesheet::items`] are rules, at-rules and templates; expressions occur in
+their values.)
+
 The AST is rooted in the [`Markup`] node, which provides only one method:
 [`Markup::exprs`]. This returns an iterator of the main [`Expr`] enum. [`Expr`]
 is important because it contains the majority of expressions that Folio will
@@ -334,6 +338,20 @@ pub enum Expr<'a> {
     Numeric(Numeric<'a>),
     /// A quoted string: `"..."`.
     Str(Str<'a>),
+    /// A token name in a stylesheet: `$accent`.
+    TokenName(TokenName<'a>),
+    /// A colour in a stylesheet: `#1f5fa8`.
+    Color(Color<'a>),
+    /// An aspect ratio in a stylesheet: `16:9`.
+    Ratio(Ratio<'a>),
+    /// A selector in a stylesheet value: `heading[level=2]`.
+    CompoundSelector(CompoundSelector<'a>),
+    /// A block of template items: `{ ": " field(title) }`.
+    TemplateBlock(TemplateBlock<'a>),
+    /// Several template items in one argument: `term() " " counter()`.
+    Sequence(Sequence<'a>),
+    /// A template item with a condition: `badge(..) if field(x) == "y"`.
+    Guarded(Guarded<'a>),
     /// A code block: `{ let x = 1; x + 2 }`.
     CodeBlock(CodeBlock<'a>),
     /// A content block: `[*Hi* there!]`.
@@ -431,6 +449,13 @@ impl<'a> AstNode<'a> for Expr<'a> {
             SyntaxKind::Float => Some(Self::Float(Float(node))),
             SyntaxKind::Numeric => Some(Self::Numeric(Numeric(node))),
             SyntaxKind::Str => Some(Self::Str(Str(node))),
+            SyntaxKind::TokenName => node.cast().map(Self::TokenName),
+            SyntaxKind::Color => node.cast().map(Self::Color),
+            SyntaxKind::Ratio => node.cast().map(Self::Ratio),
+            SyntaxKind::CompoundSelector => node.cast().map(Self::CompoundSelector),
+            SyntaxKind::TemplateBlock => node.cast().map(Self::TemplateBlock),
+            SyntaxKind::Sequence => node.cast().map(Self::Sequence),
+            SyntaxKind::Guarded => node.cast().map(Self::Guarded),
             SyntaxKind::CodeBlock => Some(Self::CodeBlock(CodeBlock(node))),
             SyntaxKind::ContentBlock => Some(Self::ContentBlock(ContentBlock(node))),
             SyntaxKind::Parenthesized => Some(Self::Parenthesized(Parenthesized(node))),
@@ -500,6 +525,13 @@ impl<'a> AstNode<'a> for Expr<'a> {
             Self::Float(v) => v.to_untyped(),
             Self::Numeric(v) => v.to_untyped(),
             Self::Str(v) => v.to_untyped(),
+            Self::TokenName(v) => v.to_untyped(),
+            Self::Color(v) => v.to_untyped(),
+            Self::Ratio(v) => v.to_untyped(),
+            Self::CompoundSelector(v) => v.to_untyped(),
+            Self::TemplateBlock(v) => v.to_untyped(),
+            Self::Sequence(v) => v.to_untyped(),
+            Self::Guarded(v) => v.to_untyped(),
             Self::CodeBlock(v) => v.to_untyped(),
             Self::ContentBlock(v) => v.to_untyped(),
             Self::Array(v) => v.to_untyped(),
@@ -575,6 +607,8 @@ impl Expr<'_> {
                 | Self::Float(_)
                 | Self::Numeric(_)
                 | Self::Str(_)
+                | Self::Color(_)
+                | Self::Ratio(_)
         )
     }
 }
@@ -2447,8 +2481,8 @@ impl<'a> ScopedRule<'a> {
         self.0.children().filter_map(SyntaxNode::cast)
     }
 
-    /// The selector.
-    pub fn selector(self) -> Selector<'a> {
+    /// The selectors.
+    pub fn selectors(self) -> SelectorList<'a> {
         self.0.cast_first()
     }
 
@@ -2457,13 +2491,13 @@ impl<'a> ScopedRule<'a> {
         self.0
             .try_cast_first::<RuleBlock<'a>>()
             .into_iter()
-            .flat_map(|block| block.0.children().filter_map(SyntaxNode::cast))
+            .flat_map(RuleBlock::declarations)
     }
 }
 
 node! {
-    /// A variant or target scope of a scoped rule: `@target pptx`,
-    /// `@variant slides, handout`.
+    /// A variant or target scope of a scoped rule or an overlay:
+    /// `@target pptx`, `@variant slides, handout`.
     struct RuleScope
 }
 
@@ -2477,44 +2511,6 @@ impl<'a> RuleScope<'a> {
     /// The variants or targets.
     pub fn names(self) -> impl Iterator<Item = Ident<'a>> {
         self.0.children().skip(2).filter_map(SyntaxNode::cast)
-    }
-}
-
-node! {
-    /// The selector of a scoped rule, kept as a sequence of tokens:
-    /// `heading[level=1]`.
-    struct Selector
-}
-
-impl Selector<'_> {
-    /// The source text of the selector.
-    pub fn text(self) -> EcoString {
-        self.0.full_text()
-    }
-}
-
-node! {
-    /// The declaration block of a scoped rule: `{ numbering: "(a)"; }`.
-    struct RuleBlock
-}
-
-node! {
-    /// A declaration in a scoped rule: `numbering: "(a)";`.
-    struct Declaration
-}
-
-impl<'a> Declaration<'a> {
-    /// The property: `numbering`, `space-before`.
-    pub fn property(self) -> Ident<'a> {
-        self.0.cast_first()
-    }
-
-    /// The expressions of the value, in order: `outer`, `width`, `32mm`.
-    pub fn values(self) -> impl Iterator<Item = Expr<'a>> {
-        self.0
-            .children()
-            .skip_while(|node| node.kind() != SyntaxKind::Colon)
-            .filter_map(SyntaxNode::cast)
     }
 }
 
@@ -2806,6 +2802,10 @@ impl<'a> FuncReturn<'a> {
         self.0.try_cast_last()
     }
 }
+
+mod style;
+
+pub use self::style::*;
 
 #[cfg(test)]
 mod tests {

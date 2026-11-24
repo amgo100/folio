@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Folio is a typesetting system, written in Rust, that compiles one semantic source into PDF, DOCX, PPTX and live presentations. Its primary use is teaching material: exams with mark schemes, notes, handouts and lesson slides from shared sources.
 
-The repository is at **M0 "Skeleton"** (SPEC §15): `docs/SPEC.md` holds the design, and a Cargo workspace with the starting crate set of §2.2 exists. `folio-syntax` parses content markup (forked from `typst-syntax` v0.15.1); the other crates are still empty.
+The repository is at **M0 "Skeleton"** (SPEC §15): `docs/SPEC.md` holds the design, and a Cargo workspace with the starting crate set of §2.2 exists. `folio-syntax` parses content markup and stylesheets (forked from `typst-syntax` v0.15.1); the other crates are still empty.
 
 ## Build, lint and test
 

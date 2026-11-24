@@ -1,0 +1,28 @@
+slide                { transition: fade 300ms; }
+list > item          { entrance: fade 250ms; }
+figure.reveal        { entrance: wipe(from-left) 400ms; }
+alert                { emphasis-effect: color($accent); }
+arrow.force:step(3-) { stroke-color: $accent; }
+arrow.force:step(1,3-4) { stroke-width: 1.5pt; }
+label:step(-2), label:step(2-4) { opacity: 50%; }
+slide.handout { animation: flatten; }
+
+countdown          { font: $mono; font-size: 48pt; reserve: "00:00"; }
+countdown:warning  { color: $warn; }
+countdown:expired  { color: $alert; state-effect: pulse 1s; }
+@target pdf, pptx, docx { countdown { fallback: text("5 minutes"); } }
+
+slider            { width: 60%; track-color: $rule; thumb-color: $accent; label-position: before; }
+slider:dragging   { thumb-color: $accent-strong; }
+@target pdf, pptx, docx { slider { fallback: caption; } }   // "Launch angle: 45°"
+
+plot            { width: 100%; aspect: 3/2; font-size: 9pt; axis-style: left-bottom; }
+plot gridline   { stroke: 0.3pt $rule; display: none; }
+series          { stroke-width: 1pt; palette: $series-palette; }
+series.measured { stroke: none; symbol: cross 3pt; }
+fit             { stroke: 0.8pt dashed $series-2; show-equation: true; }
+
+@variant exam {
+  series.answer, fit { display: none; }    // students draw the line themselves
+  plot gridline      { display: block; }   // graph paper on the exam only
+}

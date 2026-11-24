@@ -13,6 +13,11 @@ use crate::set::{SyntaxSet, syntax_set};
 use crate::utils::{default_math_class, defer};
 use crate::{Lexer, SyntaxKind, SyntaxMode, SyntaxNode, ast, set};
 
+mod style;
+
+pub use self::style::parse_stylesheet;
+pub(super) use self::style::{reparse_style_block, reparse_stylesheet_items};
+
 // Picked by gut feeling.
 const MAX_DEPTH: u32 = 256;
 
@@ -647,6 +652,17 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
     }
 
     loop {
+        // In a stylesheet value, a name directly followed by an attribute
+        // test is a selector: `slide-break: heading[level=2], slide;`.
+        if p.style_values
+            && p.directly_at(SyntaxKind::LeftBracket)
+            && p.nodes.len() == m.0 + 1
+            && p.nodes[m.0].kind() == SyntaxKind::Ident
+        {
+            style::value_selector(p, m);
+            return;
+        }
+
         if p.directly_at(SyntaxKind::LeftParen) || p.directly_at(SyntaxKind::LeftBracket) {
             args(p);
             p.wrap(m, SyntaxKind::FuncCall);
@@ -664,6 +680,16 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
             p.expect(SyntaxKind::Ident);
             p.wrap(m, SyntaxKind::FieldAccess);
             continue;
+        }
+
+        // In a stylesheet value, a sign after a space and directly before its
+        // operand starts a new item, as in CSS: `margin: 0 -1mm`.
+        if p.style_values
+            && p.at_set(syntax_set!(Plus, Minus))
+            && p.had_trivia()
+            && !p.lexer.clone().next().0.is_trivia()
+        {
+            break;
         }
 
         let binop = if p.at_set(set::BINARY_OP) {
@@ -730,6 +756,7 @@ fn code_primary(p: &mut Parser<'_>, atomic: bool) {
             }
         }
 
+        SyntaxKind::LeftBrace if p.style_values => style::template_block(p),
         SyntaxKind::LeftBrace => code_block(p),
         SyntaxKind::LeftBracket => content_block(p),
         SyntaxKind::LeftParen => expr_with_paren(p, atomic),
@@ -756,7 +783,10 @@ fn code_primary(p: &mut Parser<'_>, atomic: bool) {
         | SyntaxKind::Bool
         | SyntaxKind::Numeric
         | SyntaxKind::Str
-        | SyntaxKind::Label => p.eat(),
+        | SyntaxKind::Label
+        | SyntaxKind::TokenName
+        | SyntaxKind::Color
+        | SyntaxKind::Ratio => p.eat(),
 
         // Consume erroneous tokens for things like `#12p`, `#]`, or `#"abc\"`.
         _ if atomic => p.unexpected(),
@@ -784,24 +814,32 @@ fn block(p: &mut Parser<'_>) {
 }
 
 /// Parses a code block: `{ let x = 1; x + 2 }`.
+///
+/// Code and content blocks hold script and markup, so inside them a
+/// stylesheet's own syntax (token names, colours, template items) does not
+/// apply.
 fn code_block(p: &mut Parser<'_>) {
     let m = p.marker();
-    p.enter_modes(SyntaxMode::Code, AtNewline::Continue, |p| {
+    let values = mem::replace(&mut p.style_values, false);
+    p.enter_lexer(SyntaxMode::Code, false, AtNewline::Continue, |p| {
         p.assert(SyntaxKind::LeftBrace);
         code(p, syntax_set!(RightBrace, RightBracket, RightParen, End));
         p.expect_closing_delimiter(m, SyntaxKind::RightBrace);
     });
+    p.style_values = values;
     p.wrap(m, SyntaxKind::CodeBlock);
 }
 
 /// Parses a content block: `[*Hi* there!]`.
 fn content_block(p: &mut Parser<'_>) {
     let m = p.marker();
-    p.enter_modes(SyntaxMode::Markup, AtNewline::Continue, |p| {
+    let values = mem::replace(&mut p.style_values, false);
+    p.enter_lexer(SyntaxMode::Markup, false, AtNewline::Continue, |p| {
         p.assert(SyntaxKind::LeftBracket);
         markup(p, true, true, syntax_set!(RightBracket, End));
         p.expect_closing_delimiter(m, SyntaxKind::RightBracket);
     });
+    p.style_values = values;
     p.wrap(m, SyntaxKind::ContentBlock);
 }
 
@@ -974,28 +1012,21 @@ fn schema_entry(p: &mut Parser<'_>) {
 }
 
 /// Parses a scoped rule (SPEC §5.4): `rule question { numbering: "(a)"; }`,
-/// `rule @target pptx figure { .. }`.
-///
-/// The selector (`question`, `.hard`, `:first`, `#{fig:ball}`, `@target pptx
-/// figure`) is kept as a token sequence and the values as expressions;
-/// their full grammar is that of stylesheets.
+/// `rule @target pptx figure { .. }`. The selectors and declarations are
+/// those of stylesheets (SPEC §5.1); token names and colours are written
+/// `tok.accent` and `rgb("1f5fa8")` in content.
 fn scoped_rule(p: &mut Parser<'_>) {
     let m = p.marker();
     p.assert(SyntaxKind::Rule);
     while p.at(SyntaxKind::At) {
         rule_scope(p);
     }
-    selector(p);
-    if p.at(SyntaxKind::LeftBrace) {
-        rule_block(p);
-    } else {
-        p.expected("declaration block");
-    }
+    style::scoped_rule_body(p);
     p.wrap(m, SyntaxKind::ScopedRule);
 }
 
-/// Parses a variant or target scope of a scoped rule: `@target pptx`,
-/// `@variant slides, handout`.
+/// Parses a variant or target scope of a scoped rule or an overlay:
+/// `@target pptx`, `@variant slides, handout`.
 fn rule_scope(p: &mut Parser<'_>) {
     let m = p.marker();
     p.assert(SyntaxKind::At);
@@ -1017,97 +1048,6 @@ fn rule_scope(p: &mut Parser<'_>) {
         p.expected("`variant` or `target`");
     }
     p.wrap(m, SyntaxKind::RuleScope);
-}
-
-/// Parses the selector of a scoped rule as a flat sequence of tokens up to the
-/// declaration block, keeping brackets and parentheses balanced.
-fn selector(p: &mut Parser<'_>) {
-    let m = p.marker();
-    let mut depth: usize = 0;
-    while !p.end() {
-        // An id selector: `#{fig:ball}`. In code, `#` lexes as an error.
-        if p.current_text() == "#" && p.text[p.current_end()..].starts_with('{') {
-            p.token.node = SyntaxNode::leaf(SyntaxKind::Hash, "#");
-            p.eat();
-            depth += 1;
-            p.eat();
-            continue;
-        }
-        match p.current() {
-            SyntaxKind::LeftBrace | SyntaxKind::Semicolon if depth == 0 => break,
-            SyntaxKind::LeftBrace | SyntaxKind::LeftBracket | SyntaxKind::LeftParen => {
-                depth += 1;
-            }
-            SyntaxKind::RightBrace | SyntaxKind::RightBracket | SyntaxKind::RightParen => {
-                if depth == 0 {
-                    break;
-                }
-                depth -= 1;
-            }
-            _ => {}
-        }
-        p.eat();
-    }
-    if depth > 0 {
-        p.balanced = false;
-    }
-    if p.marker() == m {
-        p.expected("selector");
-    } else {
-        p.wrap(m, SyntaxKind::Selector);
-    }
-}
-
-/// Parses the declaration block of a scoped rule: `{ numbering: "(a)"; }`.
-fn rule_block(p: &mut Parser<'_>) {
-    let m = p.marker();
-    p.enter_modes(SyntaxMode::Code, AtNewline::Continue, |p| {
-        p.assert(SyntaxKind::LeftBrace);
-        while !p.at_set(syntax_set!(RightBrace, RightBracket, RightParen, End)) {
-            if p.at(SyntaxKind::Ident) {
-                declaration(p);
-            } else if !p.eat_if(SyntaxKind::Semicolon) {
-                p.unexpected();
-            }
-        }
-        p.expect_closing_delimiter(m, SyntaxKind::RightBrace);
-    });
-    p.wrap(m, SyntaxKind::RuleBlock);
-}
-
-/// Parses a declaration in a scoped rule: `space-before: 24pt;`. The value is
-/// a sequence of expressions, optionally separated by commas:
-/// `margin-column: outer, width 32mm, gap 6mm`.
-fn declaration(p: &mut Parser<'_>) {
-    let m = p.marker();
-    p.assert(SyntaxKind::Ident);
-    if p.expect(SyntaxKind::Colon) {
-        let m_value = p.marker();
-        while !p.at_set(syntax_set!(
-            Semicolon,
-            RightBrace,
-            RightBracket,
-            RightParen,
-            End
-        )) {
-            // A new line that starts with `name:` is the next declaration,
-            // with the semicolon missing.
-            if p.had_newline() && p.at(SyntaxKind::Ident) && p.peek() == Some(SyntaxKind::Colon) {
-                p.expected("semicolon");
-                break;
-            }
-            if p.at_set(set::CODE_EXPR) {
-                code_expr(p);
-            } else if !p.eat_if(SyntaxKind::Comma) {
-                p.unexpected();
-            }
-        }
-        if p.marker() == m_value {
-            p.expected("value");
-        }
-    }
-    p.eat_if(SyntaxKind::Semicolon);
-    p.wrap(m, SyntaxKind::Declaration);
 }
 
 /// Parses an if-else conditional: `if x { y } else { z }`.
@@ -1459,12 +1399,19 @@ fn args(p: &mut Parser<'_>) {
 
             let mut seen = FxHashSet::default();
             while !p.current().is_terminator() {
-                if !p.at_set(set::ARG) {
-                    p.unexpected();
-                    continue;
+                if p.style_values {
+                    if !p.at_set(style::ARG_START) {
+                        p.unexpected();
+                        continue;
+                    }
+                    style::template_arg(p, &mut seen);
+                } else {
+                    if !p.at_set(set::ARG) {
+                        p.unexpected();
+                        continue;
+                    }
+                    arg(p, &mut seen);
                 }
-
-                arg(p, &mut seen);
 
                 if !p.current().is_terminator() {
                     p.expect(SyntaxKind::Comma);
@@ -1792,6 +1739,10 @@ struct Parser<'s> {
     memo: MemoArena,
     /// The current expression nesting depth.
     depth: u32,
+    /// Whether the parser is in a stylesheet value or render template, where
+    /// a function argument can be several items, braces hold template items
+    /// and a name followed by an attribute test is a selector.
+    style_values: bool,
 }
 
 /// A single token returned from the lexer with a cached [`SyntaxKind`] and a
@@ -1888,7 +1839,14 @@ impl IndexMut<Marker> for Parser<'_> {
 impl<'s> Parser<'s> {
     /// Create a new parser starting from the given text offset and syntax mode.
     fn new(text: &'s str, offset: usize, mode: SyntaxMode) -> Self {
+        Self::new_in(text, offset, mode, false)
+    }
+
+    /// Create a new parser starting from the given text offset and syntax
+    /// mode, for a stylesheet if `style` is set.
+    fn new_in(text: &'s str, offset: usize, mode: SyntaxMode, style: bool) -> Self {
         let mut lexer = Lexer::new(text, mode);
+        lexer.set_style(style);
         lexer.jump(offset);
         let nl_mode = AtNewline::Continue;
         let mut nodes = vec![];
@@ -1902,6 +1860,7 @@ impl<'s> Parser<'s> {
             nodes,
             memo: Default::default(),
             depth: 0,
+            style_values: false,
         }
     }
 
@@ -2119,15 +2078,41 @@ impl<'s> Parser<'s> {
         stop: AtNewline,
         func: impl FnOnce(&mut Parser<'s>),
     ) {
+        let style = self.lexer.style();
+        self.enter_lexer(mode, style, stop, func);
+    }
+
+    /// Like [`Self::enter_modes`], but also sets whether code is lexed as in
+    /// a stylesheet.
+    fn enter_lexer(
+        &mut self,
+        mode: SyntaxMode,
+        style: bool,
+        stop: AtNewline,
+        func: impl FnOnce(&mut Parser<'s>),
+    ) {
         let previous = self.lexer.mode();
+        let previous_style = self.lexer.style();
         self.lexer.set_mode(mode);
+        self.lexer.set_style(style);
         self.with_nl_mode(stop, func);
-        if mode != previous {
+        if mode != previous || style != previous_style {
             self.lexer.set_mode(previous);
+            self.lexer.set_style(previous_style);
             self.lexer.jump(self.token.prev_end);
             self.nodes.truncate(self.nodes.len() - self.token.n_trivia);
             self.token = Self::lex(&mut self.nodes, &mut self.lexer, self.nl_mode);
         }
+    }
+
+    /// Lex the current token, a `#` before `{` in content code, as an id
+    /// selector: `#{fig:ball}`.
+    fn relex_id_selector(&mut self) {
+        let start = self.token.start;
+        self.lexer.jump(start + 1);
+        let (kind, node) = self.lexer.id_selector(start);
+        self.token.kind = kind;
+        self.token.node = node;
     }
 
     /// Parse within the [`AtNewline`] mode for subsequent tokens (does not

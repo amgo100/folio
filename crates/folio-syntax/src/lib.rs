@@ -8,16 +8,42 @@
 //!
 //! The crate started as a fork of `typst-syntax` v0.15.1 (Apache-2.0); files
 //! derived from Typst keep an attribution header (see `NOTICE` at the
-//! repository root). It currently parses content markup (SPEC §4.2):
+//! repository root).
 //!
-//! - [`parse`] turns source text into a lossless, error-tolerant concrete
-//!   syntax tree of [`SyntaxNode`]s. Printing the tree
-//!   ([`SyntaxNode::full_text`]) gives back the source byte for byte, and a
-//!   broken construct becomes an error node while the rest of the file still
-//!   parses.
+//! - [`parse`] turns content markup (SPEC §4.2) into a lossless,
+//!   error-tolerant concrete syntax tree of [`SyntaxNode`]s, and
+//!   [`parse_stylesheet`] does the same for stylesheets (SPEC §5.1). Printing
+//!   the tree ([`SyntaxNode::full_text`]) gives back the source byte for
+//!   byte, and a broken construct becomes an error node while the rest of the
+//!   file still parses.
 //! - [`ast`] is a typed view over that tree.
 //! - [`Source`] holds one file's text and tree and reparses only the smallest
 //!   enclosing block after an edit, reusing untouched nodes (SPEC §2.3).
+//!   [`Source::stylesheet`] makes a source that is reparsed as a stylesheet.
+//!
+//! Stylesheets follow design C of SPEC Appendix A: rule structure (selectors,
+//! at-rules, blocks, property names) is fixed syntax, and expressions appear
+//! only in property values and render templates. Values use the expression
+//! grammar of scripts, where in addition:
+//!
+//! - `$accent` is a token, `#1f5fa8` a colour and `16:9` a ratio; `<` is
+//!   always an operator, since stylesheets write labels as `#{fig:ball}`.
+//! - An argument can be several items written one after another
+//!   (`strong(term() " " counter())`), braces hold such items
+//!   (`if field(title) { ": " field(title) }`), and an item can be guarded by
+//!   a condition (`badge(..) if field(difficulty) == "extension"`).
+//! - A name directly followed by an attribute test is a selector
+//!   (`slide-break: heading[level=2], slide;`).
+//! - Code and content blocks (`[..]`) hold script and markup as in content
+//!   files, without the additions above.
+//!
+//! `render`, `slide-master` and `slide-layout` start a render template, a
+//! slide master or a slide layout only when a name or a string follows, so
+//! elements with those names can still be selected (`render.x { .. }`).
+//!
+//! Scoped rules in content (`#rule question:first { .. }`) use the same
+//! selectors and declarations, with tokens and colours written as code
+//! (`tok.accent`, `rgb("1f5fa8")`).
 //!
 //! Where Folio differs from Typst's markup:
 //!
@@ -63,14 +89,14 @@ pub use self::lexer::{
 };
 pub use self::lines::Lines;
 pub use self::node::{Diagnosis, LinkedChildren, LinkedNode, Side, SyntaxDiagnostic, SyntaxNode};
-pub use self::parser::{parse, parse_code, parse_math};
+pub use self::parser::{parse, parse_code, parse_math, parse_stylesheet};
 pub use self::source::Source;
 pub use self::span::{
     DiagSpan, DiagSpanKind, RangeMapper, Span, SpanKind, SpanNumber, Spanned, SubRange,
 };
 
 use self::lexer::Lexer;
-use self::parser::{reparse_block, reparse_markup};
+use self::parser::{reparse_block, reparse_markup, reparse_style_block, reparse_stylesheet_items};
 
 /// The syntax mode of a portion of Folio source.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]

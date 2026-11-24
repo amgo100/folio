@@ -24,6 +24,10 @@ pub(super) struct Lexer<'s> {
     mode: SyntaxMode,
     /// Whether the last token contained a newline.
     newline: bool,
+    /// Whether the text is a stylesheet, where code also has colours
+    /// (`#1f5fa8`), id selectors (`#{fig:ball}`), token names (`$accent`)
+    /// and ratios (`16:9`).
+    style: bool,
     /// An error plus hints for the current token being produced. This is always
     /// `None` between calls to [`Lexer::next`].
     error: Option<(EcoString, EcoVec<EcoString>)>,
@@ -37,8 +41,20 @@ impl<'s> Lexer<'s> {
             s: Scanner::new(text),
             mode,
             newline: false,
+            style: false,
             error: None,
         }
+    }
+
+    /// Whether code is lexed as in a stylesheet.
+    pub(crate) fn style(&self) -> bool {
+        self.style
+    }
+
+    /// Lex a stylesheet: in code, `#` starts a colour or an id selector, `$`
+    /// a token name, and two integers joined by `:` form a ratio.
+    pub(crate) fn set_style(&mut self, style: bool) {
+        self.style = style;
     }
 
     /// Get the current lexing mode.
@@ -120,6 +136,9 @@ impl Lexer<'_> {
             Some('`') if self.mode != SyntaxMode::Math => return self.raw(),
             Some('$') if self.mode != SyntaxMode::Math && self.at_math_mode() => {
                 return self.tex_equation(start);
+            }
+            Some('#') if self.style && self.mode == SyntaxMode::Code && self.s.at('{') => {
+                return self.id_selector(start);
             }
             Some(c) => match self.mode {
                 SyntaxMode::Markup => self.markup(start, c),
@@ -865,7 +884,14 @@ impl Lexer<'_> {
 impl Lexer<'_> {
     fn code(&mut self, start: usize, c: char) -> SyntaxKind {
         match c {
-            '<' if self.s.at(is_label_start) => self.label(),
+            // Stylesheets write labels as id selectors (`#{fig:ball}`), so
+            // `<` is always an operator there: `[marks<2]`.
+            '<' if !self.style && self.s.at(is_label_start) => self.label(),
+            '#' if self.style => self.color(),
+            '$' if self.style && self.s.at(is_id_start) => {
+                self.s.eat_while(is_id_continue);
+                SyntaxKind::TokenName
+            }
             '0'..='9' => self.number(start, c),
             '.' if self.s.at(char::is_ascii_digit) => self.number(start, c),
             '"' => self.string(),
@@ -1017,6 +1043,27 @@ impl Lexer<'_> {
             }
         }
 
+        // A ratio in a stylesheet: `16:9`, `2.39:1`.
+        if self.style
+            && base == 10
+            && self.s.at(':')
+            && self.s.scout(1).is_some_and(|c| c.is_ascii_digit())
+        {
+            self.s.eat_if(':');
+            self.s.eat_while(char::is_ascii_digit);
+            if self.s.at('.') && self.s.scout(1).is_some_and(|c| c.is_ascii_digit()) {
+                self.s.eat_if('.');
+                self.s.eat_while(char::is_ascii_digit);
+            }
+            let suffix = self
+                .s
+                .eat_while(|c: char| c.is_ascii_alphanumeric() || c == '%');
+            if !suffix.is_empty() {
+                return self.error(eco_format!("a ratio cannot have a suffix: `{suffix}`"));
+            }
+            return SyntaxKind::Ratio;
+        }
+
         let number = self.s.from(start);
         let suffix = self
             .s
@@ -1088,6 +1135,81 @@ impl Lexer<'_> {
             }
             (Ok(()), Err(msg)) | (Err(msg), Ok(_)) => self.error(msg),
         }
+    }
+
+    /// Lex a colour in a stylesheet after its `#`: `#1f5fa8`, `#fff`, or
+    /// with alpha `#1f5fa880`, `#fff8`.
+    fn color(&mut self) -> SyntaxKind {
+        let digits = self.s.eat_while(|c: char| c.is_ascii_alphanumeric());
+        if digits.is_empty() {
+            let error = self.error("expected a colour or an id selector after `#`");
+            self.hint("a colour is written `#1f5fa8` and an id selector `#{fig:ball}`");
+            return error;
+        }
+        if !digits.chars().all(|c| c.is_ascii_hexdigit()) || ![3, 4, 6, 8].contains(&digits.len()) {
+            let error = self.error(eco_format!("invalid colour: `#{digits}`"));
+            self.hint("a colour has 3, 4, 6 or 8 hexadecimal digits: `#1f5fa8`");
+            return error;
+        }
+        SyntaxKind::Color
+    }
+
+    /// Lex an id selector after its `#`, which is followed by `{`:
+    /// `#{fig:ball}`. Braces are needed because labels may contain `:`.
+    ///
+    /// The parser also calls this for scoped rules in content, where `#` is
+    /// not otherwise a token in code.
+    pub(crate) fn id_selector(&mut self, start: usize) -> (SyntaxKind, SyntaxNode) {
+        let hash = SyntaxNode::leaf(SyntaxKind::Hash, self.s.from(start));
+        let brace_start = self.s.cursor();
+        self.s.eat_if('{');
+        let brace = self.s.from(brace_start);
+
+        let name_start = self.s.cursor();
+        self.s.eat_while(is_valid_in_label_literal);
+        // Take everything up to a closing brace on the same line into the
+        // name, so that a broken label does not unbalance the braces.
+        let mut s = self.s;
+        s.eat_until(|c: char| c == '}' || c == '{' || c == ';' || is_newline(c));
+        if s.at('}') {
+            self.s = s;
+        }
+        let name = self.s.from(name_start);
+
+        let mut nodes = vec![hash];
+        let closed = self.s.at('}');
+        nodes.push(if closed {
+            SyntaxNode::leaf(SyntaxKind::LeftBrace, brace)
+        } else {
+            SyntaxNode::error("unclosed delimiter", brace)
+        });
+        if name.is_empty() {
+            if closed {
+                nodes.push(SyntaxNode::error("expected label", ""));
+            }
+        } else if is_valid_label_literal_id(name) {
+            nodes.push(SyntaxNode::leaf(SyntaxKind::LabelName, name));
+        } else {
+            let message = if name.contains('.') {
+                "labels cannot contain `.`".into()
+            } else if let Some(last @ (':' | '-')) = name.chars().next_back() {
+                eco_format!("labels cannot end with `{last}`")
+            } else {
+                eco_format!("invalid label: `{name}`")
+            };
+            nodes.push(
+                SyntaxNode::error(message, name)
+                    .with_hints(["a label consists of letters, digits, `-`, `_` and `:`".into()]),
+            );
+        }
+        if self.s.eat_if('}') {
+            nodes.push(SyntaxNode::leaf(SyntaxKind::RightBrace, "}"));
+        }
+
+        (
+            SyntaxKind::IdSelector,
+            SyntaxNode::inner(SyntaxKind::IdSelector, nodes),
+        )
     }
 
     fn string(&mut self) -> SyntaxKind {
