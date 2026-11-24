@@ -16,26 +16,40 @@ publish = false
 folio-syntax = { path = "crates/folio-syntax" }
 folio-component = { path = "crates/folio-component" }
 folio-core = { path = "crates/folio-core" }
+folio-fonts = { path = "crates/folio-fonts" }
 folio-pdf = { path = "crates/folio-pdf" }
 folio = { path = "crates/folio" }
 codespan-reporting = "0.13.1"
 ecow = "0.2.6"
+# System font discovery; `memmap` is off, so it reads files instead of
+# mapping them (SPEC §2.3).
+fontdb = { version = "0.24.0", default-features = false, features = ["std", "fs", "fontconfig"] }
 indexmap = "2.14.2"
+# Maps files of the immutable font cache (SPEC §2.3, §14.2).
+memmap2 = "0.9.12"
 rayon = "1.12.0"
 salsa = "0.28.6"
 semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.154"
+# Font parsing (fontations): maintained, and shared with the shaper and PDF
+# writer of SPEC §2.2.
+skrifa = "0.50.0"
+# Font files are locked by their SHA-256 hash (SPEC §2.4).
+sha2 = "0.11.1"
 # Grows the evaluator's stack on deep recursion (SPEC §14.3).
 stacker = "0.1.25"
+tempfile = "3.27.0"
 # The span-preserving parser only: the manifest and lockfile readers report
 # errors on keys and values themselves, so serde is not needed.
-unicode-ident = "1.0"
 toml = { version = "1.2.2", default-features = false, features = ["std", "parse"] }
+unicode-ident = "1.0"
+unicode-script = "0.5"
 
 [workspace.lints.rust]
-# SPEC §14.2. `folio-node` and font memory-mapping will be the only exceptions;
-# they declare their own `[lints]` table instead of inheriting this one.
+# SPEC §14.2. `folio-node` and font memory-mapping (`folio-fonts`) are the only
+# exceptions; they declare their own `[lints]` table instead of inheriting
+# this one.
 unsafe_code = "forbid"
 missing_docs = "warn"
 missing_debug_implementations = "warn"

@@ -2,15 +2,18 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::io;
 use std::num::NonZeroU16;
 use std::ops::Range;
+use std::path::Path;
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{Name, Registry, Target};
-use folio_core::db::{Bytes, DataFile, Durability, FontFile, Project, SourceFile};
+use folio_core::db::{BuildMode, Bytes, DataFile, Durability, Project, SourceFile};
 use folio_core::eval::Limits;
 use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
+use folio_fonts::{FontCache, FontFile, FontHash, SystemFont};
 use folio_syntax::{FileId, Lines, Source};
 use salsa::Setter;
 
@@ -62,13 +65,27 @@ pub enum Event {
 type Hook = Arc<dyn Fn(&Event) + Send + Sync>;
 
 /// Sets up a [`World`]: the components and fonts that come with the
-/// compiler, and an event hook.
-#[derive(Default)]
+/// compiler, how it builds, and an event hook.
 pub struct WorldBuilder {
     components: Registry,
     bundled_fonts: EcoVec<FontFile>,
+    mode: BuildMode,
     limits: Limits,
     hook: Option<Hook>,
+}
+
+/// No components, the bundled fonts ([`folio_fonts::bundled`]), a build
+/// that writes output, and the default limits.
+impl Default for WorldBuilder {
+    fn default() -> Self {
+        Self {
+            components: Registry::default(),
+            bundled_fonts: folio_fonts::bundled(),
+            mode: BuildMode::default(),
+            limits: Limits::default(),
+            hook: None,
+        }
+    }
 }
 
 impl WorldBuilder {
@@ -78,9 +95,18 @@ impl WorldBuilder {
         self
     }
 
-    /// The fonts bundled with the compiler. Marked as rarely changing.
+    /// The fonts bundled with the compiler, in place of the families that
+    /// come with it ([`folio_fonts::bundled`]). Marked as rarely changing.
     pub fn bundled_fonts(mut self, fonts: impl IntoIterator<Item = FontFile>) -> Self {
         self.bundled_fonts = fonts.into_iter().collect();
+        self
+    }
+
+    /// How the world builds: in watch mode, a build that writes output (the
+    /// default), or a CI build. It decides whether an unpinned system font
+    /// is allowed, a warning or an error (SPEC §2.4).
+    pub fn mode(mut self, mode: BuildMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -131,6 +157,8 @@ impl WorldBuilder {
             BTreeMap::new(),
             self.bundled_fonts,
             EcoVec::new(),
+            EcoVec::new(),
+            self.mode,
             self.components,
             None,
             self.limits,
@@ -141,6 +169,8 @@ impl WorldBuilder {
         .files_durability(Durability::LOW)
         .bundled_fonts_durability(Durability::HIGH)
         .fonts_durability(Durability::MEDIUM)
+        .system_fonts_durability(Durability::MEDIUM)
+        .mode_durability(Durability::MEDIUM)
         .components_durability(Durability::HIGH)
         .today_durability(Durability::MEDIUM)
         .limits_durability(Durability::HIGH)
@@ -160,6 +190,7 @@ impl Debug for WorldBuilder {
         f.debug_struct("WorldBuilder")
             .field("components", &self.components)
             .field("bundled_fonts", &self.bundled_fonts)
+            .field("mode", &self.mode)
             .field("limits", &self.limits)
             .field("hook", &self.hook.is_some())
             .finish()
@@ -178,7 +209,7 @@ impl World {
         WorldBuilder::default()
     }
 
-    /// A world with no components, no bundled fonts and no lockfile, from
+    /// A world with no components, the bundled fonts and no lockfile, from
     /// the text of `folio.toml`.
     pub fn new(manifest: &str) -> Result<Self, Vec<ProjectError>> {
         Self::builder().build(manifest, None)
@@ -247,7 +278,9 @@ impl World {
         }
     }
 
-    /// Replaces the project, locked and system fonts.
+    /// Replaces the font files besides the bundled ones: those of the
+    /// project's font directory, and those the font cache has for
+    /// `folio.lock`. [`Self::load_fonts`] finds both.
     pub fn set_fonts(&mut self, fonts: impl IntoIterator<Item = FontFile>) {
         let fonts: EcoVec<FontFile> = fonts.into_iter().collect();
         if &fonts != self.project.fonts(&self.db) {
@@ -255,6 +288,51 @@ impl World {
                 .set_fonts(&mut self.db)
                 .with_durability(Durability::MEDIUM)
                 .to(fonts);
+        }
+    }
+
+    /// Reads the fonts of the project's font directory (`fonts/` next to
+    /// `folio.toml`, which is in `root`) and takes the fonts that
+    /// `folio.lock` locks from the font cache, if one is given, and sets
+    /// them as [`Self::set_fonts`] does. A locked font that neither has is
+    /// reported when compiling.
+    pub fn load_fonts(&mut self, root: &Path, cache: Option<&FontCache>) -> io::Result<()> {
+        let mut fonts = folio_fonts::project_fonts(root)?;
+        if let Some(cache) = cache {
+            for locked in &self.lockfile().fonts {
+                let hash = FontHash(locked.hash.v.0);
+                if fonts.iter().any(|f| f.hash() == hash) {
+                    continue;
+                }
+                if let Some(file) = cache.get(hash)? {
+                    fonts.push(file);
+                }
+            }
+        }
+        self.set_fonts(fonts);
+        Ok(())
+    }
+
+    /// Replaces the faces installed on the machine, as
+    /// [`folio_fonts::system_fonts`] finds them. Their files are read only
+    /// when a document uses them.
+    pub fn set_system_fonts(&mut self, fonts: impl IntoIterator<Item = SystemFont>) {
+        let fonts: EcoVec<SystemFont> = fonts.into_iter().collect();
+        if &fonts != self.project.system_fonts(&self.db) {
+            self.project
+                .set_system_fonts(&mut self.db)
+                .with_durability(Durability::MEDIUM)
+                .to(fonts);
+        }
+    }
+
+    /// Sets how the world builds (SPEC §2.4); see [`WorldBuilder::mode`].
+    pub fn set_mode(&mut self, mode: BuildMode) {
+        if *self.project.mode(&self.db) != mode {
+            self.project
+                .set_mode(&mut self.db)
+                .with_durability(Durability::MEDIUM)
+                .to(mode);
         }
     }
 

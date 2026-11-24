@@ -191,6 +191,49 @@ pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
     })
 }
 
+/// Calls `f` with every run of text of a document and the computed style it
+/// is set in, in document order: the style of the element whose body holds
+/// it, or of the part (a content field other than the body) that does.
+/// `styled` is the styled tree of `root` ([`Styled::root`]).
+pub(crate) fn for_each_text(
+    root: &Element,
+    styled: &StyledNode,
+    f: &mut impl FnMut(&ComputedStyle, &str, Span),
+) {
+    fn texts(
+        content: &Content,
+        style: &ComputedStyle,
+        f: &mut impl FnMut(&ComputedStyle, &str, Span),
+    ) {
+        for node in content.nodes() {
+            match node {
+                Node::Text { text, span } => f(style, text, *span),
+                Node::Slot(slot) => texts(&slot.body, style, f),
+                _ => {}
+            }
+        }
+    }
+
+    fn walk(element: &Element, node: &StyledNode, f: &mut impl FnMut(&ComputedStyle, &str, Span)) {
+        if let Some(Value::Content(body)) = element.fields.get(BODY) {
+            texts(body, &node.style, f);
+        }
+        for (child, styled) in element_children(element).into_iter().zip(&node.children) {
+            match child {
+                Child::Element(e) => walk(e, styled, f),
+                Child::Part(_, content) => {
+                    texts(content, &styled.style, f);
+                    for (e, styled) in content_elements(content).zip(&styled.children) {
+                        walk(e, styled, f);
+                    }
+                }
+            }
+        }
+    }
+
+    walk(root, styled, f);
+}
+
 /// A child of a node: an element of its body, or a part.
 #[derive(Copy, Clone)]
 enum Child<'a> {

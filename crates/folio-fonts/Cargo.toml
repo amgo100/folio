@@ -1,0 +1,42 @@
+[package]
+name = "folio-fonts"
+description = "Font discovery, loading and metrics for Folio, with the bundled font families"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+# The fonts in `bundled/` are under their own licences (bundled/README.md).
+include = ["src/**", "bundled/**", "Cargo.toml"]
+
+[dependencies]
+ecow.workspace = true
+# Discovery of system fonts only. Without `memmap`, fontdb reads the files it
+# indexes instead of mapping them: only the immutable font cache is mapped
+# (SPEC §2.3).
+fontdb = { workspace = true }
+memmap2.workspace = true
+sha2.workspace = true
+skrifa.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# The workspace lints, except that `unsafe_code` is denied rather than
+# forbidden: memory-mapping the immutable font cache (src/cache.rs) is the
+# one audited exception (SPEC §14.2). Keep the rest in step with
+# `[workspace.lints]` in the root Cargo.toml.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+undocumented_unsafe_blocks = "warn"

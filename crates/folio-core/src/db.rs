@@ -11,11 +11,12 @@
 //!
 //! - A [`Project`] holds what a build reads besides source text: the manifest
 //!   and lockfile, the map from paths to files, fonts and the component
-//!   registry. Each field is tracked on its own, with a durability that says
-//!   how often it changes: bundled fonts and the components compiled into the
-//!   binary (the first-party ones, SPEC §2.2) are [`Durability::HIGH`], so
-//!   after an edit the queries that depend only on them are validated without
-//!   walking their dependencies; the manifest, lockfile and project fonts are
+//!   registry, and how the build runs ([`BuildMode`]). Each field is tracked
+//!   on its own, with a durability that says how often it changes: bundled
+//!   fonts and the components compiled into the binary (the first-party
+//!   ones, SPEC §2.2) are [`Durability::HIGH`], so after an edit the queries
+//!   that depend only on them are validated without walking their
+//!   dependencies; the manifest, lockfile, project and system fonts are
 //!   [`Durability::MEDIUM`]; sources and data files are [`Durability::LOW`].
 //! - A [`SourceFile`] holds one `.fol` or `.fsty` file as a parsed
 //!   [`Source`]. The host edits it in place ([`Source::edit`]), which reparses
@@ -55,6 +56,7 @@ use crate::component::ComponentHost;
 use crate::diag::{self, Diagnostic, Reported};
 use crate::eval::Limits;
 use crate::project::{Date, Lockfile, Manifest, Name, ProjectPath, Spanned};
+pub use folio_fonts::{FontFile, SystemFont};
 
 /// The database that the compile queries run in. The `folio` crate provides
 /// the implementation; each stage extends it when it moves into its own
@@ -83,9 +85,16 @@ pub struct Project {
     /// The fonts bundled with the compiler. [`Durability::HIGH`].
     #[returns(ref)]
     pub bundled_fonts: EcoVec<FontFile>,
-    /// Project, locked and system fonts. [`Durability::MEDIUM`].
+    /// The fonts of the project's font directory and those the font cache
+    /// has for `folio.lock`. [`Durability::MEDIUM`].
     #[returns(ref)]
     pub fonts: EcoVec<FontFile>,
+    /// The faces installed on the machine, which are read only when a
+    /// document uses them. [`Durability::MEDIUM`].
+    #[returns(ref)]
+    pub system_fonts: EcoVec<SystemFont>,
+    /// How the build runs. [`Durability::MEDIUM`].
+    pub mode: BuildMode,
     /// The components the compiler hosts. [`Durability::HIGH`].
     #[returns(ref)]
     pub components: Registry,
@@ -161,15 +170,19 @@ impl Debug for Bytes {
     }
 }
 
-/// A font file the host supplies. The font stage parses and indexes it
-/// (SPEC §2.5); the database tracks it as an input.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct FontFile {
-    /// Where it was found, for diagnostics: a project path, a system path,
-    /// or the name of a bundled family.
-    pub origin: EcoString,
-    /// The file's contents.
-    pub data: Bytes,
+/// How the host runs a build, which decides what an unpinned input costs:
+/// a system font that `folio.lock` does not lock is allowed while
+/// watching, a warning in a build, and an error in a CI build or with
+/// strict formatting (SPEC §2.4).
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub enum BuildMode {
+    /// Watch mode and previews: output is not kept.
+    Watch,
+    /// A build that writes output.
+    #[default]
+    Build,
+    /// A build on a CI server, which must be reproducible.
+    Ci,
 }
 
 /// A file that a source names literally, by an import, an include or a
@@ -375,6 +388,7 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     component_host(db, project);
     check_document(db, project, build.variant(db).clone());
     check_styles(db, build);
+    crate::fonts::check_fonts(db, build);
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),

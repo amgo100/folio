@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 folio-component.workspace = true
 folio-core.workspace = true
+folio-fonts.workspace = true
 folio-pdf.workspace = true
 folio-syntax.workspace = true
 codespan-reporting.workspace = true
@@ -21,6 +22,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 semver.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
