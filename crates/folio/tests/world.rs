@@ -78,8 +78,18 @@ impl Logged {
     }
 }
 
+/// The queries that evaluate a variant whose entry file changed, written as
+/// one name for [`set`]: the file's evaluation, the variant's, and the
+/// build's check of it, which returns the same and so cuts the build off.
+const EVAL: &str = "eval_file evaluate check_evaluation";
+
+/// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {
-    names.iter().map(|s| s.to_string()).collect()
+    names
+        .iter()
+        .flat_map(|s| s.split(' '))
+        .map(|s| s.to_string())
+        .collect()
 }
 
 #[test]
@@ -110,22 +120,30 @@ fn early_cutoff_on_a_whitespace_edit() {
 
     // Whitespace in a paragraph: the file is reparsed and its two
     // per-file queries re-run, but return what they returned before, so the
-    // file set of the build and the build itself are not re-run.
+    // file set of the build and the build itself are not re-run. The file is
+    // evaluated again, because its text spans changed.
     let edited = MAIN.replace("ball is", "ball   is");
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(after, before);
-    assert_eq!(logged.take(), set(&["dependencies", "check_source"]));
+    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
 
     // An edit that changes the imports re-runs the file set. The file it
     // adds does not exist, so the set is the same and the build is cut off,
-    // but the missing file is reported.
+    // but the missing file is reported, once, though both the file set and
+    // evaluation find it.
     let edited = format!("{edited}#include \"questions/q2.fol\"\n");
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(
         logged.take(),
-        set(&["build_files", "dependencies", "check_source", "source_file"])
+        set(&[
+            "build_files",
+            "dependencies",
+            "check_source",
+            "source_file",
+            EVAL
+        ])
     );
     assert_eq!(after.diagnostics.len(), 1);
     assert_eq!(
@@ -154,12 +172,21 @@ fn diagnostics_change_while_the_build_is_cut_off() {
 
     // An unclosed call in a paragraph: the file's check reports it, but its
     // imports are the same, so the build query is not re-run, and the
-    // diagnostic is still collected.
+    // diagnostic is still collected. Evaluation stops at the syntax error
+    // without adding errors of its own.
     let broken = MAIN.replace("A ball", "#box( A ball");
     logged.world.set_source("main.fol", &broken).unwrap();
     let compiled = logged.compile("exam");
-    assert!(compiled.has_errors(), "{:?}", compiled.diagnostics);
-    assert_eq!(logged.take(), set(&["dependencies", "check_source"]));
+    let syntax = logged.world.source("main.fol").unwrap();
+    let (syntax_errors, _) = syntax.root().errors_and_warnings();
+    assert!(!syntax_errors.is_empty());
+    assert_eq!(
+        compiled.diagnostics.len(),
+        syntax_errors.len(),
+        "{:?}",
+        compiled.diagnostics
+    );
+    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
 
     // Fixing it removes the diagnostic, again without re-running the build.
     logged.world.set_source("main.fol", MAIN).unwrap();
@@ -169,7 +196,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         "{:?}",
         compiled.diagnostics
     );
-    assert_eq!(logged.take(), set(&["dependencies", "check_source"]));
+    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
 
     // A diagnostic of a file that two builds share is reported by one
     // query, and each build collects it once.

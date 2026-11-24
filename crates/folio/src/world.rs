@@ -9,7 +9,8 @@ use std::sync::Arc;
 use ecow::{EcoString, EcoVec};
 use folio_component::{Name, Registry, Target};
 use folio_core::db::{Bytes, DataFile, Durability, FontFile, Project, SourceFile};
-use folio_core::project::{Lockfile, Manifest, ProjectError, ProjectPath};
+use folio_core::eval::Limits;
+use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 use folio_syntax::{FileId, Lines, Source};
 use salsa::Setter;
 
@@ -66,6 +67,7 @@ type Hook = Arc<dyn Fn(&Event) + Send + Sync>;
 pub struct WorldBuilder {
     components: Registry,
     bundled_fonts: EcoVec<FontFile>,
+    limits: Limits,
     hook: Option<Hook>,
 }
 
@@ -79,6 +81,14 @@ impl WorldBuilder {
     /// The fonts bundled with the compiler. Marked as rarely changing.
     pub fn bundled_fonts(mut self, fonts: impl IntoIterator<Item = FontFile>) -> Self {
         self.bundled_fonts = fonts.into_iter().collect();
+        self
+    }
+
+    /// The limits of evaluation: steps, memory and call depth (SPEC §4.4).
+    /// The defaults suit any document; a host that runs scripts it does not
+    /// trust as far, or a test, can lower them.
+    pub fn limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
         self
     }
 
@@ -122,6 +132,8 @@ impl WorldBuilder {
             self.bundled_fonts,
             EcoVec::new(),
             self.components,
+            None,
+            self.limits,
         )
         .manifest_durability(Durability::MEDIUM)
         .lockfile_durability(Durability::MEDIUM)
@@ -130,6 +142,8 @@ impl WorldBuilder {
         .bundled_fonts_durability(Durability::HIGH)
         .fonts_durability(Durability::MEDIUM)
         .components_durability(Durability::HIGH)
+        .today_durability(Durability::MEDIUM)
+        .limits_durability(Durability::HIGH)
         .new(&db);
         Ok(World {
             db,
@@ -146,6 +160,7 @@ impl Debug for WorldBuilder {
         f.debug_struct("WorldBuilder")
             .field("components", &self.components)
             .field("bundled_fonts", &self.bundled_fonts)
+            .field("limits", &self.limits)
             .field("hook", &self.hook.is_some())
             .finish()
     }
@@ -218,6 +233,18 @@ impl World {
                 .to(lockfile);
         }
         Ok(())
+    }
+
+    /// Sets the date scripts see as `today`, as `folio build --today` does,
+    /// or removes it, so that the manifest's `project.today` applies. With
+    /// neither, reading `today` is an error: there is no clock (SPEC §4.4).
+    pub fn set_today(&mut self, today: Option<Date>) {
+        if *self.project.today(&self.db) != today {
+            self.project
+                .set_today(&mut self.db)
+                .with_durability(Durability::MEDIUM)
+                .to(today);
+        }
     }
 
     /// Replaces the project, locked and system fonts.
