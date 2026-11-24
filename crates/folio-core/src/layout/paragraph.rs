@@ -532,6 +532,15 @@ fn protrusion(c: char) -> (f64, f64) {
 
 /// The advance of a hyphen in a segment's font and size, with tracking.
 fn hyphen_advance(segment: &Segment, metrics: &SegmentMetrics) -> Option<f64> {
+    let (glyphs, units_per_em) = hyphen_glyphs(segment)?;
+    let units: i64 = glyphs.iter().map(|g| i64::from(g.x_advance)).sum();
+    Some(units as f64 * metrics.size.to_pt() / f64::from(units_per_em) + metrics.tracking.to_pt())
+}
+
+/// The glyphs of a hyphen in a segment's font and features, in font units
+/// of the units per em it returns with them. `None` for a segment without
+/// a font.
+pub(super) fn hyphen_glyphs(segment: &Segment) -> Option<(EcoVec<folio_text::Glyph>, u16)> {
     let SegmentKind::Text {
         font: Some(font),
         features,
@@ -560,6 +569,5 @@ fn hyphen_advance(segment: &Segment, metrics: &SegmentMetrics) -> Option<f64> {
     else {
         return None;
     };
-    let units: i64 = glyphs.iter().map(|g| i64::from(g.x_advance)).sum();
-    Some(units as f64 * metrics.size.to_pt() / f64::from(*units_per_em) + metrics.tracking.to_pt())
+    Some((glyphs.clone(), *units_per_em))
 }

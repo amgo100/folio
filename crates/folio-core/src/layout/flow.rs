@@ -1,0 +1,674 @@
+//! The flow of a build (SPEC §7.1): its blocks and lines flattened into
+//! what the page builder breaks.
+//!
+//! The flow is a sequence of *leaves*, the things a page holds whole (the
+//! lines of paragraphs, and empty blocks), with a *boundary* before each
+//! and one after the last. A boundary says what lies between two leaves:
+//! the leading between lines, and where blocks end and start, their
+//! padding, borders and spaces. It also says what a page break there costs.
+//! Pages break only at boundaries, so a line is never split, and the page
+//! builder decides by these costs alone.
+//!
+//! **Spaces.** `space-after` and `space-before` meet at a boundary and
+//! collapse to the largest of the spaces that meet, unless padding or a
+//! border separates them; a block's space lies outside its box. Half the
+//! leading of a paragraph lies above its first line and below its last,
+//! inside its block, so consecutive paragraphs are a leading apart where
+//! no space separates them. At a page break the spaces and the leading of
+//! the boundary are dropped, the padding and borders of the blocks that
+//! end there stay on the page, and those of the blocks that start there
+//! move to the next. The decoration of a block broken across pages is
+//! sliced: its top border is drawn where it starts, its bottom border where
+//! it ends.
+//!
+//! **Costs.** A break between the lines of a paragraph that leaves fewer
+//! than `orphans` lines on the page or fewer than `widows` on the next
+//! costs [`WIDOW`]; a break directly after a block with `keep-with-next`,
+//! or inside one with `keep-together`, costs [`KEEP`]; inside a block with
+//! `breakable: false`, [`UNBREAKABLE`]. A block with `break-before` forces
+//! a break before it. Costs add up, and they are costs, not rules: the page
+//! builder takes the cheapest break and reports the constraints it had to
+//! relax (SPEC §7.2).
+
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::ops::Range;
+use std::sync::Arc;
+
+use ecow::EcoVec;
+use folio_component::{Abs, Color, Em, Paint, SourceRef, Value};
+use folio_syntax::Span;
+use folio_text::{Glyph, ItemKind, Shaped};
+
+use super::master::BlockBox;
+use super::paragraph::{LineSlot, ParagraphLayout, hyphen_glyphs};
+use super::{FaceMetrics, input_with, paragraph_style};
+use crate::fonts::Fonts;
+use crate::style::{ComputedStyle, Properties};
+use crate::text::{Text, TextBlock, TextFlow};
+
+/// The cost of a break that leaves a widow or an orphan (TeX's
+/// `\widowpenalty` and `\clubpenalty`).
+pub const WIDOW: f64 = 150.0;
+/// The cost of a break that separates a block with `keep-with-next` from
+/// the next, or breaks one with `keep-together`: more than any page fill
+/// costs.
+pub const KEEP: f64 = 10_000.0;
+/// The cost of a break inside a block with `breakable: false`.
+pub const UNBREAKABLE: f64 = 100_000.0;
+
+/// The width and offset of every paragraph's lines: the content width of
+/// the block whose content it is, from the left of the body.
+pub(super) fn slots(
+    root: &TextBlock,
+    props: &Properties,
+    width: Abs,
+    count: usize,
+) -> Vec<LineSlot> {
+    fn walk(block: &TextBlock, boxed: &BlockBox, props: &Properties, out: &mut [LineSlot]) {
+        let (offset, width) = boxed.content();
+        for child in &block.children {
+            match child {
+                TextFlow::Paragraph(i) => {
+                    if let Some(slot) = out.get_mut(*i) {
+                        *slot = LineSlot { offset, width };
+                    }
+                }
+                TextFlow::Block(b) => walk(b, &boxed.child(&b.style, props, b.span), props, out),
+            }
+        }
+    }
+    let mut out = vec![
+        LineSlot {
+            offset: Abs::zero(),
+            width,
+        };
+        count
+    ];
+    let root_box = BlockBox::of(&root.style, props, root.span, Abs::zero(), width);
+    walk(root, &root_box, props, &mut out);
+    out
+}
+
+/// A paragraph broken into lines, with what setting its lines needs.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct ParagraphInfo {
+    /// The paragraph shaped.
+    pub shaped: Arc<Shaped>,
+    /// Its lines.
+    pub layout: Arc<ParagraphLayout>,
+    /// The slot its lines are placed in, from the left of the body.
+    pub slot: LineSlot,
+    /// The space between one line's descent and the next line's ascent.
+    pub leading: Abs,
+    /// The indent of the first line.
+    pub indent: Abs,
+    /// The fewest lines that may start a page.
+    pub widows: usize,
+    /// The fewest lines that may end a page.
+    pub orphans: usize,
+    /// How each segment of the paragraph is painted.
+    pub segments: EcoVec<SegmentPaint>,
+    /// Ranges of the text that are the text of a source node, with the
+    /// node, in order.
+    pub sources: EcoVec<(Range<usize>, SourceRef)>,
+    /// The element whose content the paragraph is.
+    pub span: Span,
+}
+
+/// How a segment of a paragraph is set.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct SegmentPaint {
+    /// Its face, as an index into [`Fonts::faces`].
+    pub face: Option<u32>,
+    /// Its font size.
+    pub size: Abs,
+    /// The space added after every character.
+    pub tracking: Abs,
+    /// The paint of its glyphs.
+    pub fill: Paint,
+    /// The glyphs of a hyphen in its font, if a line needs one, in font
+    /// units of `units_per_em`.
+    pub hyphen: Option<(EcoVec<Glyph>, u16)>,
+}
+
+impl ParagraphInfo {
+    /// The source reference and the offset within its node of the text at
+    /// a byte of the paragraph: the node the byte comes from, or the
+    /// paragraph's element.
+    pub(super) fn source(&self, at: usize) -> (SourceRef, u32) {
+        let i = self.sources.partition_point(|(r, _)| r.end <= at);
+        match self.sources.get(i) {
+            Some((range, source)) if range.start <= at => {
+                (*source, u32::try_from(at - range.start).unwrap_or(u32::MAX))
+            }
+            _ => (source_ref(self.span), 0),
+        }
+    }
+}
+
+/// The reference of a source node in fragments.
+pub(super) fn source_ref(span: Span) -> SourceRef {
+    if span.is_detached() {
+        SourceRef::DETACHED
+    } else {
+        SourceRef(span.into_raw().get())
+    }
+}
+
+/// What a page holds whole.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) enum Leaf {
+    /// A line of a paragraph.
+    Line {
+        /// The paragraph.
+        paragraph: Arc<ParagraphInfo>,
+        /// The index of the line.
+        line: usize,
+    },
+    /// A block without lines, which is as tall as its padding and borders.
+    Empty,
+}
+
+impl Leaf {
+    /// How tall it is: a line from its ascent to its descent.
+    pub(super) fn height(&self) -> Abs {
+        match self {
+            Self::Line { paragraph, line } => {
+                let line = &paragraph.layout.lines[*line];
+                line.ascent + line.descent
+            }
+            Self::Empty => Abs::zero(),
+        }
+    }
+
+    /// A cheap fingerprint for looking it up: equal leaves of the same
+    /// shared paragraph have equal ones.
+    pub(super) fn fingerprint(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        match self {
+            Self::Line { paragraph, line } => {
+                (Arc::as_ptr(&paragraph.layout) as usize).hash(&mut hasher);
+                (Arc::as_ptr(&paragraph.shaped) as usize).hash(&mut hasher);
+                line.hash(&mut hasher);
+            }
+            Self::Empty => 0u8.hash(&mut hasher),
+        }
+        hasher.finish()
+    }
+}
+
+/// One step of what lies between two leaves.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) enum Part {
+    /// Leading: kept between leaves, dropped at a page break.
+    Lead(Abs),
+    /// A block's space: it collapses with the spaces it meets and is
+    /// dropped at a page break.
+    Space(Abs),
+    /// Padding and borders: always kept.
+    Solid(Abs),
+    /// The innermost open block ends.
+    Close,
+    /// A block starts.
+    Open(Arc<BlockBox>),
+}
+
+/// A constraint that a page break goes against.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub(super) enum Constraint {
+    /// It leaves fewer than `widows` lines of a paragraph on the next page.
+    Widow(Span),
+    /// It leaves fewer than `orphans` lines of a paragraph on the page.
+    Orphan(Span),
+    /// It separates a block with `keep-with-next` from the next.
+    KeepWithNext(Span),
+    /// It breaks a block with `keep-together`.
+    KeepTogether(Span),
+    /// It breaks a block with `breakable: false`.
+    Unbreakable(Span),
+}
+
+/// What lies before a leaf, or after the last, and what a page break there
+/// costs.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(super) struct Boundary {
+    /// What lies there, in order: the blocks that end, innermost first,
+    /// then the blocks that start, outermost first.
+    pub parts: EcoVec<Part>,
+    /// The cost of a break here.
+    pub penalty: f64,
+    /// Whether a break here is forced.
+    pub forced: bool,
+    /// The constraints a break here goes against.
+    pub constraints: EcoVec<Constraint>,
+}
+
+impl Hash for Boundary {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.parts.hash(state);
+        self.penalty.to_bits().hash(state);
+        self.forced.hash(state);
+        self.constraints.hash(state);
+    }
+}
+
+// Penalties are finite sums of the constants above, never NaN.
+impl Eq for Boundary {}
+
+/// How tall a run of parts is: kept, or at a page break.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub(super) enum Walk {
+    /// Between two leaves on one page: everything.
+    Through,
+    /// At the bottom of a page: the padding and borders of the blocks
+    /// that end.
+    Bottom,
+    /// At the top of the next page: the padding and borders of the blocks
+    /// that start.
+    Top,
+}
+
+impl Boundary {
+    /// Walks the parts as they lie on a page, calling `f` with each block
+    /// that ends (`Close`, at the bottom of its box) or starts (`Open`, at
+    /// the top of its box), and returns the height they take. Collapsed
+    /// spaces lie outside the boxes they meet.
+    pub(super) fn walk(&self, how: Walk, mut f: impl FnMut(&Part, Abs)) -> Abs {
+        let mut y = Abs::zero();
+        let mut pending = Abs::zero();
+        // Blocks that start and wait for the spaces before their tops to
+        // be settled.
+        let mut opening: Vec<&Part> = Vec::new();
+        let first_open = self
+            .parts
+            .iter()
+            .position(|p| matches!(p, Part::Open(_)))
+            .unwrap_or(self.parts.len());
+        let parts = match how {
+            Walk::Through => &self.parts[..],
+            Walk::Bottom => &self.parts[..first_open],
+            Walk::Top => &self.parts[first_open..],
+        };
+        let settle = |y: &mut Abs,
+                      pending: &mut Abs,
+                      opening: &mut Vec<&Part>,
+                      f: &mut dyn FnMut(&Part, Abs)| {
+            *y += *pending;
+            *pending = Abs::zero();
+            for part in opening.drain(..) {
+                f(part, *y);
+            }
+        };
+        for part in parts {
+            match part {
+                Part::Space(s) => {
+                    if how == Walk::Through {
+                        pending = pending.max(*s);
+                    }
+                }
+                Part::Lead(h) => {
+                    if how == Walk::Through && *h != Abs::zero() {
+                        settle(&mut y, &mut pending, &mut opening, &mut f);
+                        y += *h;
+                    }
+                }
+                Part::Solid(h) => {
+                    if *h != Abs::zero() {
+                        settle(&mut y, &mut pending, &mut opening, &mut f);
+                        y += *h;
+                    }
+                }
+                Part::Close => f(part, y),
+                Part::Open(_) => opening.push(part),
+            }
+        }
+        settle(&mut y, &mut pending, &mut opening, &mut f);
+        y
+    }
+
+    /// The height between the leaves on one page.
+    pub(super) fn gap(&self) -> Abs {
+        self.walk(Walk::Through, |_, _| {})
+    }
+
+    /// How many blocks start here.
+    pub(super) fn opens(&self) -> usize {
+        self.parts
+            .iter()
+            .filter(|p| matches!(p, Part::Open(_)))
+            .count()
+    }
+}
+
+/// A leaf, with the boundary before it and the blocks it is in.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct Item {
+    /// What lies before it.
+    pub before: Boundary,
+    /// The leaf.
+    pub leaf: Leaf,
+    /// The blocks it is in, outermost first.
+    pub stack: EcoVec<Arc<BlockBox>>,
+}
+
+/// Where a leaf comes from, for the pages' line lists.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub(super) enum Origin {
+    /// Line `line` of paragraph `paragraph` of the build's text.
+    Line {
+        /// The paragraph.
+        paragraph: usize,
+        /// The line.
+        line: usize,
+    },
+    /// An empty block.
+    Empty,
+}
+
+/// The flow of a build.
+#[derive(Debug, Clone)]
+pub(super) struct Flow {
+    /// The leaves, with what lies before each; at least one.
+    pub items: Vec<Item>,
+    /// What lies after the last leaf.
+    pub end: Boundary,
+    /// Where each leaf comes from.
+    pub origins: Vec<Origin>,
+}
+
+impl Flow {
+    /// Flattens a build's blocks and lines. `layouts` and `slots` hold the
+    /// lines and line slots of each paragraph of `text`.
+    pub(super) fn new(
+        text: &Text,
+        layouts: &[Arc<ParagraphLayout>],
+        slots: &[LineSlot],
+        props: &Properties,
+        fonts: &Fonts,
+        width: Abs,
+    ) -> Self {
+        let mut builder = Builder {
+            text,
+            layouts,
+            slots,
+            props,
+            metrics: FaceMetrics::new(fonts),
+            stack: EcoVec::new(),
+            pending: Vec::new(),
+            prev: None,
+            items: Vec::new(),
+            origins: Vec::new(),
+        };
+        let root = &text.root;
+        let root_box = Arc::new(BlockBox::of(
+            &root.style,
+            props,
+            root.span,
+            Abs::zero(),
+            width,
+        ));
+        builder.block(root, root_box);
+        let end = builder.boundary(None);
+        Flow {
+            items: builder.items,
+            end,
+            origins: builder.origins,
+        }
+    }
+
+    /// The boundary before leaf `i`, or after the last for `i == len`.
+    pub(super) fn boundary(&self, i: usize) -> &Boundary {
+        self.items.get(i).map_or(&self.end, |item| &item.before)
+    }
+}
+
+/// What the boundary being built has seen since the last leaf.
+enum Event {
+    Close(Arc<BlockBox>),
+    Open(Arc<BlockBox>),
+}
+
+struct Builder<'a> {
+    text: &'a Text,
+    layouts: &'a [Arc<ParagraphLayout>],
+    slots: &'a [LineSlot],
+    props: &'a Properties,
+    metrics: FaceMetrics<'a>,
+    /// The blocks open, outermost first.
+    stack: EcoVec<Arc<BlockBox>>,
+    /// The blocks that closed and opened since the last leaf.
+    pending: Vec<Event>,
+    /// The last leaf.
+    prev: Option<Leaf>,
+    items: Vec<Item>,
+    origins: Vec<Origin>,
+}
+
+impl Builder<'_> {
+    fn block(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) {
+        self.stack.push(boxed.clone());
+        self.pending.push(Event::Open(boxed.clone()));
+        let before = self.items.len();
+        for child in &block.children {
+            match child {
+                TextFlow::Paragraph(i) => self.paragraph(*i),
+                TextFlow::Block(b) => {
+                    let child = boxed.child(&b.style, self.props, b.span);
+                    self.block(b, child);
+                }
+            }
+        }
+        if self.items.len() == before {
+            self.leaf(Leaf::Empty, Origin::Empty);
+        }
+        self.stack.pop();
+        self.pending.push(Event::Close(boxed));
+    }
+
+    fn paragraph(&mut self, index: usize) {
+        let text = self.text;
+        let paragraph = &text.paragraphs[index];
+        let layout = self.layouts[index].clone();
+        if layout.lines.is_empty() {
+            return;
+        }
+        let input = input_with(paragraph, self.props, &mut self.metrics);
+        let style = paragraph_style(&paragraph.style, self.props);
+        let count = |name: &str| match paragraph.style.value(self.props, self.props.builtin(name)) {
+            Some(Value::Int(n)) => usize::try_from(*n).unwrap_or(0),
+            _ => 0,
+        };
+        // A hyphen in the segment of each line end that needs one.
+        let segments = &paragraph.shaped.paragraph.segments;
+        let mut needs = vec![false; segments.len()];
+        let segment_at = |offset: usize| {
+            segments
+                .partition_point(|s| s.range.end < offset)
+                .min(segments.len().saturating_sub(1))
+        };
+        for line in &layout.lines {
+            if line.hyphen {
+                needs[segment_at(line.content_end)] = true;
+            }
+            if line.repeated_hyphen {
+                needs[segment_at(line.range.start)] = true;
+            }
+        }
+        let paints = paragraph
+            .segments
+            .iter()
+            .zip(&input.segments)
+            .enumerate()
+            .map(|(i, (seg, metrics))| SegmentPaint {
+                face: seg.face.and_then(|f| u32::try_from(f).ok()),
+                size: metrics.size,
+                tracking: metrics.tracking,
+                fill: fill(&seg.style, self.props),
+                hyphen: if needs.get(i).copied().unwrap_or(false) {
+                    segments.get(i).and_then(hyphen_glyphs)
+                } else {
+                    None
+                },
+            })
+            .collect();
+        let info = Arc::new(ParagraphInfo {
+            shaped: paragraph.shaped.clone(),
+            layout: layout.clone(),
+            slot: self.slots[index],
+            leading: style.leading,
+            indent: style.indent,
+            widows: count("widows"),
+            orphans: count("orphans"),
+            segments: paints,
+            sources: paragraph
+                .sources
+                .iter()
+                .map(|s| (s.range.clone(), source_ref(s.span)))
+                .collect(),
+            span: paragraph.span,
+        });
+        for line in 0..layout.lines.len() {
+            self.leaf(
+                Leaf::Line {
+                    paragraph: info.clone(),
+                    line,
+                },
+                Origin::Line {
+                    paragraph: index,
+                    line,
+                },
+            );
+        }
+    }
+
+    fn leaf(&mut self, leaf: Leaf, origin: Origin) {
+        let before = self.boundary(Some(&leaf));
+        self.items.push(Item {
+            before,
+            leaf: leaf.clone(),
+            stack: self.stack.clone(),
+        });
+        self.origins.push(origin);
+        self.prev = Some(leaf);
+    }
+
+    /// The boundary between the last leaf and `next`: what closed and
+    /// opened since, and its cost.
+    fn boundary(&mut self, next: Option<&Leaf>) -> Boundary {
+        let events = std::mem::take(&mut self.pending);
+        let mut out = Boundary::default();
+        let prev = self.prev.as_ref();
+
+        // Two lines of one paragraph.
+        if let (
+            Some(Leaf::Line {
+                paragraph: a,
+                line: i,
+            }),
+            Some(Leaf::Line {
+                paragraph: b,
+                line: j,
+            }),
+        ) = (prev, next)
+            && Arc::ptr_eq(a, b)
+            && events.is_empty()
+        {
+            let lines = &a.layout.lines;
+            let (above, below) = (&lines[*i], &lines[*j]);
+            let lead = below.baseline - above.baseline - above.descent - below.ascent;
+            out.parts.push(Part::Lead(lead.max(Abs::zero())));
+            let before = *j;
+            let after = lines.len() - *j;
+            if before < a.orphans {
+                out.penalty += WIDOW;
+                out.constraints.push(Constraint::Orphan(a.span));
+            }
+            if after < a.widows {
+                out.penalty += WIDOW;
+                out.constraints.push(Constraint::Widow(a.span));
+            }
+            self.keeps(&mut out);
+            return out;
+        }
+
+        if let Some(Leaf::Line { paragraph, .. }) = prev {
+            out.parts.push(Part::Lead(paragraph.leading / 2.0));
+        }
+        for event in &events {
+            match event {
+                Event::Close(b) => {
+                    out.parts.push(Part::Solid(b.inset().bottom));
+                    out.parts.push(Part::Close);
+                    out.parts.push(Part::Space(b.space_after));
+                    if b.keep_with_next && next.is_some() {
+                        out.penalty += KEEP;
+                        out.constraints.push(Constraint::KeepWithNext(b.span));
+                    }
+                }
+                Event::Open(b) => {
+                    out.parts.push(Part::Space(b.space_before));
+                    out.parts.push(Part::Open(b.clone()));
+                    out.parts.push(Part::Solid(b.inset().top));
+                    if b.break_before && prev.is_some() {
+                        out.forced = true;
+                    }
+                }
+            }
+        }
+        if let Some(Leaf::Line { paragraph, .. }) = next {
+            out.parts.push(Part::Lead(paragraph.leading / 2.0));
+        }
+        if prev.is_some() && next.is_some() {
+            self.keeps(&mut out);
+        }
+        out
+    }
+
+    /// Adds the cost of breaking the blocks that stay open across a
+    /// boundary: those open both before and after it. `self.stack` holds
+    /// the blocks open after it; the ones that opened at it are not yet
+    /// part of the stack of a leaf before it.
+    fn keeps(&self, out: &mut Boundary) {
+        let opened = out.opens();
+        let across = self.stack.len().saturating_sub(opened);
+        let Some(prev) = self.items.last() else {
+            return;
+        };
+        for (a, b) in prev.stack.iter().zip(&self.stack[..across]) {
+            if !Arc::ptr_eq(a, b) {
+                break;
+            }
+            if !b.breakable {
+                out.penalty += UNBREAKABLE;
+                out.constraints.push(Constraint::Unbreakable(b.span));
+            } else if b.keep_together {
+                out.penalty += KEEP;
+                out.constraints.push(Constraint::KeepTogether(b.span));
+            }
+        }
+    }
+}
+
+/// The paint of text in a style: its `color`.
+fn fill(style: &ComputedStyle, props: &Properties) -> Paint {
+    match style.value(props, props.builtin("color")) {
+        Some(Value::Color(color)) => Paint::Solid(*color),
+        _ => Paint::Solid(Color::BLACK),
+    }
+}
+
+/// A length in font units of a face at a size, as ems.
+pub(super) fn em(units: i32, units_per_em: u16) -> Em {
+    Em::new(f64::from(units) / f64::from(units_per_em.max(1)))
+}
+
+/// Whether an item of a shaped paragraph holds glyphs.
+pub(super) fn glyphs(kind: &ItemKind) -> Option<(&EcoVec<Glyph>, u16)> {
+    match kind {
+        ItemKind::Glyphs {
+            glyphs,
+            units_per_em,
+        } => Some((glyphs, *units_per_em)),
+        _ => None,
+    }
+}

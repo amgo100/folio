@@ -1,5 +1,6 @@
-//! The layout stage (SPEC §7): so far, the paragraph builder of §7.2, which
-//! breaks shaped paragraphs into lines.
+//! The layout stage (SPEC §7): the paragraph builder of §7.2, which breaks
+//! shaped paragraphs into lines, and the page builder of §7.1, which breaks
+//! a build's blocks and lines into pages of fragments.
 //!
 //! - **Line breaking** ([`linebreak`]): Knuth–Plass total fit over each
 //!   paragraph's break opportunities, with a width per line index (the last
@@ -21,17 +22,43 @@
 //! - **Diagnostics**: overfull and underfull lines, at the source of the
 //!   text they end with (§7.9).
 //!
-//! The [`lines()`] query breaks a build's paragraphs at the width of the
-//! default page master's body. The page builder (§7.1) will break them in
-//! its regions' widths instead. The query breaks by total fit, without a
+//! The [`lines()`] query breaks each of a build's paragraphs at the content
+//! width of its block: the default page master's body less the padding and
+//! borders of the blocks around it. It breaks by total fit, without a
 //! deadline, so that its result is deterministic (§2.4).
+//!
+//! The page builder ([`pages()`]) works on one master with one body
+//! region, and places figures in the flow where they stand:
+//!
+//! - **The flow**: the build's blocks and lines flattened into leaves
+//!   (lines, and blocks without lines) and the boundaries between them,
+//!   which hold the leading, the blocks' spaces, padding and borders, and
+//!   the cost of a page break there. Spaces collapse where they meet and
+//!   are dropped at a page break; a block broken across pages is sliced.
+//! - **Breaking**: strictly forward, each page at its cheapest break, where
+//!   a break costs how empty it leaves the page plus the penalties of the
+//!   widow, orphan and keep constraints it goes against ([`WIDOW`],
+//!   [`KEEP`], [`UNBREAKABLE`]); `break-before` forces one. Constraints are
+//!   costs, not rules: the least-bad page wins, and the constraints it
+//!   relaxes are warnings (§7.2).
+//! - **Fragments**: each page a [`Fragment`](folio_component::Fragment)
+//!   of the master's size, holding its body, which holds a fragment for
+//!   each block with its background, borders, glyph runs, baselines and
+//!   keep data.
+//! - **The page cache** ([`PageCache`]): each page, keyed on the master and
+//!   the leaves and boundaries its builder read, so an edit re-breaks only
+//!   the pages whose content it changed (§2.3).
 //!
 //! This is the stage that becomes `folio-layout` (SPEC §2.2) once its
 //! interface settles.
 
 mod cache;
+mod flow;
 pub mod linebreak;
+mod master;
+mod page;
 mod paragraph;
+mod set;
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -43,6 +70,9 @@ use folio_component::{Abs, Value};
 use folio_syntax::{DiagSpan, SubRange};
 
 pub use self::cache::{Cache, Stats};
+pub use self::flow::{KEEP, UNBREAKABLE, WIDOW};
+pub use self::master::{BlockBox, PageMaster, Sides};
+pub use self::page::{FILL, LineRef, Page, PageCache, PageStats, Pages, pages};
 pub use self::paragraph::{
     Align, Line, LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
     layout_paragraph,
@@ -64,12 +94,16 @@ pub const TYPING_BUDGET: Duration = Duration::from_millis(5);
 /// The paragraphs of a build broken into lines, in document order.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Lines {
-    /// The width of the lines: that of the default page master's body.
+    /// The width of the default page master's body.
     pub width: Abs,
     /// The paragraphs, in the order of the build's [`Text`](crate::text::Text),
     /// each shared with every build and revision that breaks an equal
     /// paragraph in the same width.
     pub paragraphs: EcoVec<Arc<ParagraphLayout>>,
+    /// The slot of each paragraph's lines: the content width of the block
+    /// whose content it is, and where that starts from the left of the
+    /// body. A line's `x` is relative to its slot.
+    pub slots: EcoVec<LineSlot>,
 }
 
 /// The paragraphs of a build broken into lines of the body's width, or
@@ -82,11 +116,19 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
 
-    let width = body_width(&styled.page, props);
-    let slots = [LineSlot {
-        offset: Abs::zero(),
-        width,
-    }];
+    let width = PageMaster::of(&styled.page, props).body.size.width;
+    let slots: EcoVec<LineSlot> =
+        flow::slots(&text.root, props, width, text.paragraphs.len()).into();
+    // The paragraph builder places lines relative to their slots.
+    let widths: Vec<[LineSlot; 1]> = slots
+        .iter()
+        .map(|s| {
+            [LineSlot {
+                offset: Abs::zero(),
+                width: s.width,
+            }]
+        })
+        .collect();
     let mut metrics = FaceMetrics::new(fonts);
     let inputs: Vec<ParagraphInput<'_>> = text
         .paragraphs
@@ -95,7 +137,8 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         .collect();
     let jobs: Vec<(ParagraphInput<'_>, &[LineSlot])> = inputs
         .into_iter()
-        .map(|input| (input, &slots[..]))
+        .zip(&widths)
+        .map(|(input, slot)| (input, &slot[..]))
         .collect();
     let paragraphs: EcoVec<Arc<ParagraphLayout>> =
         db.layout_cache().layout_all(&jobs).into_iter().collect();
@@ -103,7 +146,11 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     for (paragraph, layout) in text.paragraphs.iter().zip(&paragraphs) {
         report_lines(db, build.project(db), paragraph, layout);
     }
-    Some(Lines { width, paragraphs })
+    Some(Lines {
+        width,
+        paragraphs,
+        slots,
+    })
 }
 
 /// What the paragraph builder reads of a paragraph of the text stage: its
@@ -193,33 +240,7 @@ fn paragraph_style(style: &ComputedStyle, props: &Properties) -> ParagraphStyle 
     }
 }
 
-/// The value of a length property, or zero.
-fn length(style: &ComputedStyle, props: &Properties, name: &str) -> Abs {
-    match style.value(props, props.builtin(name)) {
-        Some(Value::Length(abs)) => *abs,
-        _ => Abs::zero(),
-    }
-}
-
-/// The width of the default page master's body: the page's width without
-/// its inner and outer margins, at least a point.
-fn body_width(page: &ComputedStyle, props: &Properties) -> Abs {
-    let size = match page.value(props, props.builtin("page-size")) {
-        Some(Value::Keyword(k)) => match k.as_str() {
-            "A3" => Abs::mm(297.0),
-            "A5" => Abs::mm(148.0),
-            "letter" | "legal" => Abs::inches(8.5),
-            _ => Abs::mm(210.0),
-        },
-        Some(Value::Array(items)) => match items.first() {
-            Some(Value::Length(width)) => *width,
-            _ => Abs::mm(210.0),
-        },
-        _ => Abs::mm(210.0),
-    };
-    let width = size - length(page, props, "margin-inner") - length(page, props, "margin-outer");
-    width.max(Abs::pt(1.0))
-}
+use self::master::length;
 
 /// Reports a paragraph's overfull and underfull lines (SPEC §7.9).
 fn report_lines(

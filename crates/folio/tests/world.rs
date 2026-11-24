@@ -89,7 +89,7 @@ impl Logged {
 /// reparse renumbered (their shaping is memoised apart). Line breaking reads
 /// the text, and runs again too, but its lines hold no spans, so it returns
 /// the same lines and the build's check of them is cut off.
-const EVAL: &str = "eval_file evaluate document check_document styles check_fonts text lines";
+const EVAL: &str = "eval_file evaluate document check_document styles check_fonts text lines pages";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {
@@ -129,12 +129,16 @@ fn early_cutoff_on_a_whitespace_edit() {
     // Whitespace in a paragraph: the file is reparsed and its two
     // per-file queries re-run, but return what they returned before, so the
     // file set of the build and the build itself are not re-run. The file is
-    // evaluated again, because its text spans changed.
+    // evaluated again, because its text spans changed, and so are the
+    // pages, whose glyphs point at those spans.
     let edited = MAIN.replace("ball is", "ball   is");
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(after, before);
-    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
+    assert_eq!(
+        logged.take(),
+        set(&["dependencies", "check_source", "check_pages", EVAL])
+    );
 
     // An edit that changes the imports re-runs the file set. The file it
     // adds does not exist, so the set is the same and the build is cut off,
@@ -150,10 +154,10 @@ fn early_cutoff_on_a_whitespace_edit() {
             "dependencies",
             "check_source",
             "source_file",
-            // Evaluation fails, so there is no document to style or break
-            // into lines.
+            // Evaluation fails, so there is no document to style or lay
+            // out.
             "check_styles",
-            "check_lines",
+            "check_pages",
             EVAL
         ])
     );
@@ -199,14 +203,14 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         compiled.diagnostics
     );
     // The document is gone, so the build's checks of the styles and the
-    // lines re-run.
+    // pages re-run.
     assert_eq!(
         logged.take(),
         set(&[
             "dependencies",
             "check_source",
             "check_styles",
-            "check_lines",
+            "check_pages",
             EVAL
         ])
     );
@@ -225,7 +229,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
             "dependencies",
             "check_source",
             "check_styles",
-            "check_lines",
+            "check_pages",
             EVAL
         ])
     );
