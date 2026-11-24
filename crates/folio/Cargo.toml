@@ -12,9 +12,12 @@ folio-component.workspace = true
 folio-core.workspace = true
 folio-pdf.workspace = true
 folio-syntax.workspace = true
-ecow.workspace = true
+codespan-reporting.workspace = true
+ecow = { workspace = true, features = ["serde"] }
 rayon.workspace = true
 salsa.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

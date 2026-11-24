@@ -106,7 +106,7 @@ fn compiles_a_project() {
 fn early_cutoff_on_a_whitespace_edit() {
     let mut logged = Logged::new();
     let before = logged.compile("exam");
-    assert!(logged.take().contains("compile"));
+    assert!(logged.take().contains("build_output"));
 
     // Whitespace in a paragraph: the file is reparsed and its two
     // per-file queries re-run, but return what they returned before, so the
@@ -115,21 +115,17 @@ fn early_cutoff_on_a_whitespace_edit() {
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(after, before);
-    assert_eq!(logged.take(), set(&["dependencies", "file_diagnostics"]));
+    assert_eq!(logged.take(), set(&["dependencies", "check_source"]));
 
-    // An edit that changes the imports does reach the build.
+    // An edit that changes the imports re-runs the file set. The file it
+    // adds does not exist, so the set is the same and the build is cut off,
+    // but the missing file is reported.
     let edited = format!("{edited}#include \"questions/q2.fol\"\n");
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(
         logged.take(),
-        set(&[
-            "build_files",
-            "compile",
-            "dependencies",
-            "file_diagnostics",
-            "source_file"
-        ])
+        set(&["build_files", "dependencies", "check_source", "source_file"])
     );
     assert_eq!(after.diagnostics.len(), 1);
     assert_eq!(
@@ -146,7 +142,51 @@ fn early_cutoff_on_a_whitespace_edit() {
     assert!(!logged.compile("exam").has_errors());
     let executed = logged.take();
     assert!(executed.contains("source_file"));
+    assert!(executed.contains("build_output"));
     assert!(!executed.contains("component_host"));
+}
+
+#[test]
+fn diagnostics_change_while_the_build_is_cut_off() {
+    let mut logged = Logged::new();
+    assert!(!logged.compile("exam").has_errors());
+    logged.take();
+
+    // An unclosed call in a paragraph: the file's check reports it, but its
+    // imports are the same, so the build query is not re-run, and the
+    // diagnostic is still collected.
+    let broken = MAIN.replace("A ball", "#box( A ball");
+    logged.world.set_source("main.fol", &broken).unwrap();
+    let compiled = logged.compile("exam");
+    assert!(compiled.has_errors(), "{:?}", compiled.diagnostics);
+    assert_eq!(logged.take(), set(&["dependencies", "check_source"]));
+
+    // Fixing it removes the diagnostic, again without re-running the build.
+    logged.world.set_source("main.fol", MAIN).unwrap();
+    let compiled = logged.compile("exam");
+    assert!(
+        compiled.diagnostics.is_empty(),
+        "{:?}",
+        compiled.diagnostics
+    );
+    assert_eq!(logged.take(), set(&["dependencies", "check_source"]));
+
+    // A diagnostic of a file that two builds share is reported by one
+    // query, and each build collects it once.
+    logged
+        .world
+        .set_source("styles/base.fsty", "paragraph { indent: ; }\n")
+        .unwrap();
+    for variant in ["exam", "markscheme"] {
+        let compiled = logged.compile(variant);
+        let base = logged.world.id("styles/base.fsty");
+        let count = compiled
+            .diagnostics
+            .iter()
+            .filter(|d| d.span.id() == base)
+            .count();
+        assert_eq!(count, 1, "{variant}: {:?}", compiled.diagnostics);
+    }
 }
 
 #[test]
@@ -161,10 +201,10 @@ fn variants_share_queries_that_do_not_read_them() {
     logged.compile("markscheme");
     let log = std::mem::take(&mut *logged.log.lock().unwrap());
     let count = |query: &str| log.iter().filter(|q| *q == query).count();
-    assert_eq!(count("compile"), 1);
+    assert_eq!(count("build_output"), 1);
     assert_eq!(count("build_files"), 1);
     assert_eq!(count("dependencies"), 1);
-    assert_eq!(count("file_diagnostics"), 1);
+    assert_eq!(count("check_source"), 1);
     assert_eq!(count("component_host"), 0);
 
     // Compiling a build again runs nothing.
@@ -209,7 +249,7 @@ fn an_edit_cancels_a_running_compilation() {
             match event {
                 // The build has started on the worker: tell the test, then
                 // wait until the edit has asked running queries to stop.
-                Event::Execute { query } if query == "compile" => {
+                Event::Execute { query } if query == "build_output" => {
                     started_tx.send(()).unwrap();
                     resume_rx.lock().unwrap().recv().unwrap();
                 }
@@ -266,7 +306,7 @@ fn compiles_all_builds_in_parallel() {
     );
     // Each file's queries ran once, whichever thread got there first.
     let log = logged.log.lock().unwrap();
-    assert_eq!(log.iter().filter(|q| *q == "compile").count(), 3);
+    assert_eq!(log.iter().filter(|q| *q == "build_output").count(), 3);
     assert_eq!(log.iter().filter(|q| *q == "dependencies").count(), 5);
 
     let plain =
