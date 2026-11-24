@@ -255,7 +255,7 @@ mod tests {
         assert!(columns.accepts(&Value::Int(2)));
         assert!(!columns.accepts(&Value::None));
         assert_eq!(columns.to_string(), "auto | int");
-        let fill = PropertyType::Keyword(EcoVec::from([name("balance"), name("auto")]));
+        let fill = PropertyType::Keyword(EcoVec::from([name("balance"), name("fill")]));
         assert!(fill.accepts(&Value::Keyword(name("balance"))));
         assert!(!fill.accepts(&Value::Keyword(name("even"))));
     }

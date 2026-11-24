@@ -281,7 +281,14 @@ impl Display for ResolveError {
                     "unknown {kind} `{name}`: no component in use has the namespace `{namespace}`"
                 )
             }
-            Reason::NotInNamespace => write!(f, "unknown {kind} `{name}`"),
+            Reason::NotInNamespace => {
+                let namespace = name.namespace.as_ref().map_or("", Name::as_str);
+                write!(
+                    f,
+                    "unknown {kind} `{name}`: namespace `{namespace}` has no {kind} `{}`",
+                    name.name
+                )
+            }
             Reason::Unknown => write!(f, "unknown {kind} `{name}`"),
             Reason::Ambiguous(components) => {
                 write!(f, "{kind} `{name}` is ambiguous: ")?;

@@ -428,6 +428,33 @@ mod tests {
 
     #[test]
     fn names() {
+        // folio-component checks names with its own copy of the lexer's
+        // identifier rule; the two must agree.
+        for text in [
+            "a",
+            "_",
+            "_a-1",
+            "a-",
+            "zadanie-\u{17c}",
+            "\u{17c}",
+            "x\u{b7}y",
+            "\u{b7}x",
+            "1a",
+            "-a",
+            "a b",
+            "a.b",
+            "a/b",
+            "\u{301}a",
+            "a\u{301}",
+            "\u{1f600}",
+            "",
+        ] {
+            assert_eq!(
+                folio_component::is_ident(text),
+                folio_syntax::is_ident(text),
+                "{text:?}"
+            );
+        }
         assert!(parse_name("markscheme").is_ok());
         assert!(parse_name("part-b_2").is_ok());
         assert!(parse_name("2nd").is_err());

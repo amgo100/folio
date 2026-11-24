@@ -171,6 +171,12 @@ fn unknown_names() {
     let reason = |text| host.element(&qualified(text)).unwrap_err().reason;
     assert_eq!(reason("plot.question"), Reason::UnknownNamespace);
     assert_eq!(reason("exam.part"), Reason::NotInNamespace);
+    assert_eq!(
+        host.element(&qualified("exam.part"))
+            .unwrap_err()
+            .to_string(),
+        "unknown element `exam.part`: namespace `exam` has no element `part`"
+    );
     assert_eq!(reason("part"), Reason::Unknown);
     let error = host.property(&qualified("columns")).unwrap_err();
     assert_eq!(error.kind, Kind::Property);

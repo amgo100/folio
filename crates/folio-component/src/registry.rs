@@ -10,7 +10,7 @@ use crate::component::{
     Component, ComponentManifest, Declarations, INTERFACE_VERSION, SUPPORTED_INTERFACES,
 };
 use crate::element::{Body, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
-use crate::names::ComponentName;
+use crate::names::{ComponentName, Name};
 use crate::property::PropertyDecl;
 use crate::template::TemplateDecl;
 use crate::value::{FieldType, PropertyType};
@@ -256,12 +256,22 @@ fn check_element(cx: &mut Checker, element: &ElementSchema, strings: &[LocaleStr
                 "element `{name}` declares field `{field_name}`, which every element already has"
             ));
         }
-        if let FieldType::Choice(options) = &field.ty
-            && options.is_empty()
-        {
-            cx.error(eco_format!(
-                "field `{field_name}` of element `{name}` is a choice without options"
-            ));
+        if let FieldType::Choice(options) = &field.ty {
+            if options.is_empty() {
+                cx.error(eco_format!(
+                    "field `{field_name}` of element `{name}` is a choice without options"
+                ));
+            }
+            if options.iter().any(|o| o.is_empty()) {
+                cx.error(eco_format!(
+                    "field `{field_name}` of element `{name}` has an empty option"
+                ));
+            }
+            check_unique(cx, options, |o| {
+                eco_format!(
+                    "field `{field_name}` of element `{name}` lists option {o:?} more than once"
+                )
+            });
         }
         if field.ty.is_presentational() && !field.layout_data {
             cx.error(eco_format!(
@@ -322,6 +332,13 @@ fn check_properties(cx: &mut Checker, properties: &[PropertyDecl]) {
                 property.name
             ));
         }
+        if let Some(word) = reserved_keyword(&property.ty) {
+            cx.error(eco_format!(
+                "property `{}` lists `{word}` as a keyword, but stylesheets write it as a value; \
+                 use its own type instead",
+                property.name
+            ));
+        }
         if !property.ty.accepts(&property.initial) {
             cx.error(eco_format!(
                 "the initial value of property `{}` has type `{}`, but the property takes `{}`",
@@ -339,6 +356,19 @@ fn has_empty_keywords(ty: &PropertyType) -> bool {
         PropertyType::List(item) => has_empty_keywords(item),
         PropertyType::AnyOf(types) => types.is_empty() || types.iter().any(has_empty_keywords),
         _ => false,
+    }
+}
+
+/// Words that stylesheets read as values, so a keyword of that name could
+/// never be written.
+const RESERVED_WORDS: &[&str] = &["none", "auto", "true", "false"];
+
+fn reserved_keyword(ty: &PropertyType) -> Option<&Name> {
+    match ty {
+        PropertyType::Keyword(words) => words.iter().find(|w| RESERVED_WORDS.contains(&w.as_str())),
+        PropertyType::List(item) => reserved_keyword(item),
+        PropertyType::AnyOf(types) => types.iter().find_map(reserved_keyword),
+        _ => None,
     }
 }
 
@@ -376,7 +406,6 @@ mod tests {
     use super::*;
     use crate::element::{ContentKind, ElementKind, FieldDecl, SlotDecl};
     use crate::geom::Abs;
-    use crate::names::Name;
     use crate::names::Target;
     use crate::property::Effect;
     use crate::value::Value;
@@ -512,7 +541,19 @@ mod tests {
             Value::Bool(true),
         ));
         element.ref_key = Some(name("sample"));
+        element.fields.push(FieldDecl::with_default(
+            name("level"),
+            FieldType::Choice(EcoVec::from(["a".into(), "a".into(), "".into()])),
+            Value::None,
+        ));
         decls.properties.make_mut()[0].initial = Value::Int(1);
+        decls.properties.push(PropertyDecl {
+            name: name("example-fill"),
+            ty: PropertyType::Keyword(EcoVec::from([name("balance"), name("auto")])),
+            initial: Value::Keyword(name("balance")),
+            inherited: false,
+            effect: Effect::Layout,
+        });
         decls.templates.push(TemplateDecl {
             element: name("figure"),
             name: Some(name("wide")),
@@ -542,10 +583,14 @@ mod tests {
                  but only lengths and colours can be",
                 "the default of field `count` of element `example` has type `bool`, \
                  but the field has type `int`",
+                "field `level` of element `example` has an empty option",
+                "field `level` of element `example` lists option \"a\" more than once",
                 "element `example` has the reference key `sample`, \
                  but no English locale string for it",
                 "the initial value of property `example-gap` has type `int`, \
                  but the property takes `length`",
+                "property `example-fill` lists `auto` as a keyword, but stylesheets write it \
+                 as a value; use its own type instead",
                 "template `figure as wide` renders `figure`, \
                  which is not an element of this component",
                 "template `figure as wide` has no parts",
