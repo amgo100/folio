@@ -8,6 +8,14 @@ Folio is a typesetting system, to be written in Rust, that compiles one semantic
 
 The repository is at the **specification stage**: it contains only `README.md` and `docs/SPEC.md`. There is no code, Cargo workspace, build, lint or test setup yet. Implementation follows the roadmap in SPEC §15 (M0 "Skeleton" first). When code is added, update this file with the real commands.
 
+## Pull requests
+
+Every pull request is reviewed with the `/code-review` skill (it runs the review in reviewer subagents):
+
+- Before opening a PR, and before every later push to one, run `/code-review` on the branch's diff against `main`. Fix confirmed findings, or say in the PR why one does not apply, before pushing.
+- When asked to review or check someone else's PR, use `/code-review <PR number>` rather than reviewing by hand; add `--comment` only when asked to post the findings on GitHub.
+- This applies to spec-only and documentation changes too.
+
 ## Working on the specification
 
 `docs/SPEC.md` is the single source of truth for the design. When editing it:
