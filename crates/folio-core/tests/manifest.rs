@@ -270,6 +270,34 @@ fn today_and_output() {
 }
 
 #[test]
+fn review_edge_cases() {
+    // Braces in a substituted value are not placeholders.
+    let m = parse(&PROJECT.replace("main.fol", "{variant}.fol"));
+    let stem = m.project.entry.v.stem();
+    assert_eq!(
+        m.output.path.v.resolve(stem, "exam", "pdf"),
+        "out/{variant}-exam.pdf"
+    );
+    // A colon is not a drive letter unless a separator or the end follows.
+    assert_eq!(
+        parse(&format!("{PROJECT}styles = [\"a:b.fsty\"]\n"))
+            .project
+            .styles
+            .len(),
+        1
+    );
+    assert!(errors("styles = [\"C:/x.fsty\"]\n").contains("absolute path"));
+    assert_eq!(
+        errors("\n[components]\ndisabel = [\"plot\"]\n"),
+        "`disabel` must be a table, not an array @ [\"plot\"]\n  hint: did you mean `disable`?\n"
+    );
+    assert_eq!(
+        errors("\n[formatting]\nmode = \"strcit\"\nstrict-paths = [\"q/**\"]\n"),
+        "unknown formatting mode `strcit` @ \"strcit\"\n  hint: the modes are `local` and `strict`\n"
+    );
+}
+
+#[test]
 fn unknown_keys() {
     assert_eq!(
         errors("[projcet]\nentry = \"main.fol\"\n"),

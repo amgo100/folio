@@ -15,6 +15,8 @@ pub(super) struct Cx {
     /// The ranges of TOML syntax errors. The parser recovers with a
     /// placeholder value, and errors about that value would only repeat them.
     syntax: Vec<Range<usize>>,
+    /// How many errors at the start of `errors` are syntax errors.
+    syntax_errors: usize,
 }
 
 impl Cx {
@@ -23,6 +25,7 @@ impl Cx {
             file,
             errors: Vec::new(),
             syntax: Vec::new(),
+            syntax_errors: 0,
         }
     }
 
@@ -34,8 +37,11 @@ impl Cx {
         for error in errors {
             let range = error.span().unwrap_or(0..0);
             self.error(range.clone(), error.message().trim_end().to_owned());
-            self.syntax.push(range);
+            if error.span().is_some() {
+                self.syntax.push(range);
+            }
         }
+        self.syntax_errors = self.errors.len();
         Document(root.into_inner())
     }
 
@@ -91,13 +97,14 @@ impl Cx {
             _ => 0..0,
         };
         let syntax = self.syntax;
+        let syntax_errors = self.syntax_errors;
         let mut errors: Vec<ProjectError> = self
             .errors
             .into_iter()
             .enumerate()
             .filter(|(i, error)| {
                 let r = range(error);
-                *i < syntax.len() || !syntax.iter().any(|s| r.start <= s.end && s.start <= r.end)
+                *i < syntax_errors || !syntax.iter().any(|s| s.start <= r.start && r.end <= s.end)
             })
             .map(|(_, error)| error)
             .collect();

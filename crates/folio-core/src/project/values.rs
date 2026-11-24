@@ -396,8 +396,11 @@ fn segments<'t>(text: &'t str, what: &str) -> Result<Vec<&'t str>, Invalid> {
         return Err(Invalid::new(eco_format!("`{text}` contains `\\`"))
             .with_hint(eco_format!("separate directories with `/`: `{fixed}`")));
     }
-    let drive =
-        text.len() >= 2 && text.as_bytes()[0].is_ascii_alphabetic() && text.as_bytes()[1] == b':';
+    let bytes = text.as_bytes();
+    let drive = bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && bytes.get(2).is_none_or(|b| *b == b'/');
     if text.starts_with('/') || drive {
         return Err(Invalid::new(eco_format!("`{text}` is an absolute {what}")).with_hint(
             "write it relative to the directory that holds `folio.toml`, so the project can move",

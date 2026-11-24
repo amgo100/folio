@@ -186,10 +186,22 @@ impl OutputPattern {
 
     /// The path of one output file.
     pub fn resolve(&self, stem: &str, variant: &str, ext: &str) -> EcoString {
-        self.0
-            .replace("{stem}", stem)
-            .replace("{variant}", variant)
-            .replace("{ext}", ext)
+        // One pass, so braces in a substituted value are left alone.
+        let mut out = EcoString::new();
+        let mut rest = self.0.as_str();
+        while let Some(open) = rest.find('{') {
+            out.push_str(&rest[..open]);
+            let close = rest[open..].find('}').map_or(rest.len(), |c| open + c);
+            out.push_str(match &rest[open + 1..close] {
+                "stem" => stem,
+                "variant" => variant,
+                "ext" => ext,
+                other => other,
+            });
+            rest = rest.get(close + 1..).unwrap_or_default();
+        }
+        out.push_str(rest);
+        out
     }
 
     fn parse(text: &str) -> Result<Self, Invalid> {
@@ -428,6 +440,9 @@ fn read_components(cx: &mut Cx, table: &Table<'_>) -> Components {
         }
 
         let Some(entry) = value.table(cx, eco_format!("component `{name}`")) else {
+            if suggest(key.name, &["disable"]).is_some() {
+                cx.hint("did you mean `disable`?");
+            }
             continue;
         };
         entry.check_keys(cx, &["path", "version"]);
@@ -601,19 +616,22 @@ fn read_formatting(cx: &mut Cx, table: &Table<'_>) -> Formatting {
         ],
     );
     let mut formatting = Formatting::default();
-    if let Some(mode) = table.get("mode").and_then(|v| {
+    let mode = table.get("mode").map(|v| {
         v.parse(cx, |s| match s {
             "local" => Ok(FormattingMode::Local),
             "strict" => Ok(FormattingMode::Strict),
             _ => Err(Invalid::new(eco_format!("unknown formatting mode `{s}`"))
                 .with_hint("the modes are `local` and `strict`")),
         })
-    }) {
+    });
+    // An invalid mode is reported once, without errors that depend on it.
+    let mode_valid = !matches!(mode, Some(None));
+    if let Some(Some(mode)) = mode {
         formatting.mode = mode;
     }
     if let Some(v) = table.get("strict-paths") {
         formatting.strict_paths = v.parse_list(cx, PathPattern::parse);
-        if formatting.mode.v == FormattingMode::Local {
+        if mode_valid && formatting.mode.v == FormattingMode::Local {
             cx.error(v.span.clone(), "`strict-paths` applies only in strict mode")
                 .hint("set `mode = \"strict\"` to make these paths strict");
         }
