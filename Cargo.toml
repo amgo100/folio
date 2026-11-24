@@ -18,6 +18,12 @@ folio-component = { path = "crates/folio-component" }
 folio-core = { path = "crates/folio-core" }
 folio-pdf = { path = "crates/folio-pdf" }
 folio = { path = "crates/folio" }
+ecow = "0.2.6"
+salsa = "0.28.6"
+semver = "1.0.28"
+# The span-preserving parser only: the manifest and lockfile readers report
+# errors on keys and values themselves, so serde is not needed.
+toml = { version = "1.2.2", default-features = false, features = ["std", "parse"] }
 
 [workspace.lints.rust]
 # SPEC §14.2. `folio-node` and font memory-mapping will be the only exceptions;

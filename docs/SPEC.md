@@ -321,6 +321,46 @@ styles = ["styles/markscheme.fsty"]
 mode = "local"          # or "strict" (§5.5)
 ```
 
+| Key | Meaning | When omitted |
+| --- | --- | --- |
+| `project.entry` | The content file that compilation starts from | Required |
+| `project.edition` | The language edition (§2.4); `"2027"` is the first | Required |
+| `project.compiler` | The exact compiler version that fixes output (§2.4) | Required |
+| `project.lang` | The document language as a BCP 47 tag; it chooses locale strings (§4.5) | `"en"` |
+| `project.styles` | Project stylesheets, applied in order to every variant | None |
+| `project.today` | The date that scripts see as `today`, a TOML date such as `2026-11-24` (§4.4) | From the command line |
+| `[components]` | Components by path or version, and `disable` (§3.6) | First-party components only |
+| `[variants.<name>]` | `targets` (one or more of `pdf`, `docx`, `pptx`, `live`) and overlay `styles` (§6.1) | No variants |
+| `[numbering-groups.<name>]` | `variants` and `shared-counters` (§6.1) | No groups |
+| `[formatting]` | `mode`, `strict-paths`, `overrides-sheet`, `allow-overrides-sheet` (default `true`) and `allow-local-packages` (default `false`) (§5.5) | `mode = "local"` |
+| `[output]` | `path` of each output file, with the placeholders `{stem}` (the entry file's name), `{variant}` and `{ext}` (§6.4) | `"out/{stem}-{variant}.{ext}"` |
+
+- Paths are relative to the directory that holds `folio.toml` and use `/` as separator. The entry file, stylesheets, the overrides sheet, `strict-paths` and the output path stay inside the project; only a component path may leave it.
+- Unknown keys are errors. Every error points at the key or value at fault, and all errors in the file are reported together.
+- `strict-paths` is an error unless `mode = "strict"`. An output path that would give two outputs the same file is an error.
+
+Folio writes `folio.lock`; it is not edited by hand:
+
+```toml
+version = 1             # the lockfile format
+
+[[font]]
+family = "Source Serif 4"
+postscript-name = "SourceSerif4-Regular"
+hash = "sha256:7ed03dbffad50d535f26744437f8675ae06a442c9314e87bbbe56f0f3cb74be4"
+
+[[component]]
+name = "circuits"
+version = "0.3.2"
+hash = "sha256:e5895263db42699c3f2fcc16368c140c48e05d2b7617880e0c78e5c994081e68"
+
+[bindings.elements]
+question = "exam"
+circuit = "circuits"
+```
+
+`[[font]]` locks a font face by the SHA-256 hash of its file. `[[component]]` and `[[package]]` record the exact version and content hash of each declared component and of each imported package. `[bindings.elements]` and `[bindings.properties]` record the component that each unqualified name resolves to (§3.6); a binding names a first-party component or a locked one.
+
 ### 4.2 Content markup
 
 The markup is lightweight, so plain prose reads as prose:
@@ -575,7 +615,7 @@ variants = ["exam", "markscheme"]
 shared-counters = ["question", "part", "figure", "equation"]
 ```
 
-A **numbering group** names variants that must agree on numbering. Its shared counters are resolved on the group's *common tree*: the union of the nodes visible in each of its variants, styled with variant overlays but without target overlays, so that format-specific rules cannot change shared numbering. Other counters, and variants outside any group, number their own visible content. When a variant has no target overlays, the common-tree pass reuses its normal Style and Select results, so the extra cost arises only where target overlays exist. Sections 2.1, 4.5 and 6.4 rely on this rule.
+A **numbering group** names variants that must agree on numbering; a variant belongs to at most one. Its shared counters are resolved on the group's *common tree*: the union of the nodes visible in each of its variants, styled with variant overlays but without target overlays, so that format-specific rules cannot change shared numbering. Other counters, and variants outside any group, number their own visible content. When a variant has no target overlays, the common-tree pass reuses its normal Style and Select results, so the extra cost arises only where target overlays exist. Sections 2.1, 4.5 and 6.4 rely on this rule.
 
 ### 6.2 Selecting content
 
@@ -615,7 +655,7 @@ mark   { display: none; }
 - **No answer leakage**: content removed or replaced in a variant never reaches that variant's outputs in any form: text, PDF tags, alt text, bookmarks, metadata, hidden Word runs, comments, speaker notes, animation steps, data embedded in graphics, or data sent to live clients (animation time functions and display lists).
 - **Leak check by provenance**: every emitted glyph, tag, OOXML run and display-list item carries the id of its source node, and `folio check --leaks` fails if any of them comes from a node removed in the variant. A text search is the second line of defence: text is extracted as a reader would see it (ToUnicode maps in PDF, the OOXML text model with runs joined), normalised, and searched for word sequences of at least six words or 30 characters from hidden nodes, with a project allowlist. The check runs by default in strict and CI builds and covers every target.
 - **Shuffled versions**: `#shuffle(seed: "B")` reorders questions during evaluation, so each version is numbered in printed order; each version and its mark scheme form their own numbering group.
-- **Output naming**: `out/{stem}-{variant}.{ext}` by default, configurable in the manifest.
+- **Output naming**: `out/{stem}-{variant}.{ext}` by default, configurable with `[output] path` in the manifest (§4.1).
 
 ## 7. Layout engine
 

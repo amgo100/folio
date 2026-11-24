@@ -10,6 +10,14 @@ publish.workspace = true
 [dependencies]
 folio-component.workspace = true
 folio-syntax.workspace = true
+ecow.workspace = true
+salsa.workspace = true
+semver.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+semver.workspace = true
+salsa.workspace = true
 
 [lints]
 workspace = true
