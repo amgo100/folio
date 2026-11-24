@@ -8,12 +8,11 @@
 //! stages can point back into the manifest (a missing entry file, a locked
 //! version that is not available).
 //!
-//! Both models are salsa inputs ([`ManifestInput`], [`LockfileInput`]): the
-//! host parses the files and sets the results, and queries that read them
-//! re-run only when they change (SPEC §2.3).
+//! Both models are fields of the [`Project`](crate::db::Project) input of the
+//! query database: the host parses the files and sets the results, and
+//! queries that read them re-run only when they change (SPEC §2.3).
 
 mod de;
-mod inputs;
 mod lock;
 mod manifest;
 mod values;
@@ -23,7 +22,6 @@ use std::fmt::{self, Display, Formatter};
 use ecow::{EcoString, EcoVec};
 use folio_syntax::DiagSpan;
 
-pub use self::inputs::{LockfileInput, ManifestInput};
 pub use self::lock::{Binding, Bindings, LockedFont, LockedPackage, Lockfile};
 pub use self::manifest::{
     ComponentDecl, ComponentSource, Components, Formatting, FormattingMode, Manifest,

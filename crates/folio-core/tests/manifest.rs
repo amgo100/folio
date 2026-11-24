@@ -5,11 +5,9 @@
 use std::num::NonZeroU16;
 
 use folio_core::project::{
-    ComponentSource, FormattingMode, Lockfile, LockfileInput, Manifest, ManifestInput,
-    ProjectError, Target,
+    ComponentSource, FormattingMode, Lockfile, Manifest, ProjectError, Target,
 };
 use folio_syntax::{DiagSpanKind, FileId};
-use salsa::Setter;
 
 fn file() -> FileId {
     FileId::from_raw(NonZeroU16::new(1).unwrap())
@@ -626,19 +624,4 @@ fn invalid_lockfiles() {
         lock_errors("version = 1\n[[fonts]]\nfamily = \"A\"\n"),
         "unknown key `fonts` in the top level @ fonts\n  hint: did you mean `font`?\n"
     );
-}
-
-#[test]
-fn salsa_inputs() {
-    let mut db = salsa::DatabaseImpl::new();
-    let manifest = parse(PROJECT);
-    let input = ManifestInput::new(&db, manifest.clone());
-    assert_eq!(input.manifest(&db), &manifest);
-
-    let changed = parse(&format!("{PROJECT}lang = \"pl\"\n"));
-    input.set_manifest(&mut db).to(changed);
-    assert_eq!(input.manifest(&db).project.lang.v.as_str(), "pl");
-
-    let lock = LockfileInput::new(&db, Lockfile::default());
-    assert!(lock.lockfile(&db).fonts.is_empty());
 }

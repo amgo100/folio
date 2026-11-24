@@ -12,6 +12,9 @@ folio-component.workspace = true
 folio-core.workspace = true
 folio-pdf.workspace = true
 folio-syntax.workspace = true
+ecow.workspace = true
+rayon.workspace = true
+salsa.workspace = true
 
 [lints]
 workspace = true

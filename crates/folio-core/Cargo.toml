@@ -18,7 +18,6 @@ toml.workspace = true
 [dev-dependencies]
 ecow.workspace = true
 semver.workspace = true
-salsa.workspace = true
 
 [lints]
 workspace = true

@@ -19,6 +19,7 @@ folio-core = { path = "crates/folio-core" }
 folio-pdf = { path = "crates/folio-pdf" }
 folio = { path = "crates/folio" }
 ecow = "0.2.6"
+rayon = "1.12.0"
 salsa = "0.28.6"
 semver = "1.0.28"
 # The span-preserving parser only: the manifest and lockfile readers report

@@ -173,6 +173,27 @@ impl Display for Date {
 pub struct ProjectPath(EcoString);
 
 impl ProjectPath {
+    /// A project path from text written relative to the project directory,
+    /// as `folio.toml` writes paths: `styles/../main.fol` is `main.fol`.
+    /// `None` if the text is empty, absolute, contains `\` or a control
+    /// character, or leaves the project.
+    pub fn new(text: &str) -> Option<Self> {
+        Self::parse(text).ok()
+    }
+
+    /// Resolves a path written in this file, as an import or include does:
+    /// relative to this file's directory, or to the project directory when
+    /// it starts with `/`. `None` if the result is not a project path.
+    pub fn join(&self, path: &str) -> Option<Self> {
+        if let Some(rooted) = path.strip_prefix('/') {
+            return Self::new(rooted);
+        }
+        match self.0.rsplit_once('/') {
+            Some((dir, _)) => Self::new(&format!("{dir}/{path}")),
+            None => Self::new(path),
+        }
+    }
+
     /// The normalised path.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -414,6 +435,23 @@ mod tests {
         assert_eq!((p.extension(), p.stem()), (None, "Makefile"));
         let p = ProjectPath::parse(".fol").unwrap();
         assert_eq!((p.extension(), p.stem()), (None, ".fol"));
+    }
+
+    #[test]
+    fn joined_paths() {
+        let file = ProjectPath::new("questions/q1.fol").unwrap();
+        let join = |p| file.join(p).map(|p| p.as_str().to_owned());
+        assert_eq!(join("q2.fol").as_deref(), Some("questions/q2.fol"));
+        assert_eq!(join("../data/a.csv").as_deref(), Some("data/a.csv"));
+        assert_eq!(
+            join("/styles/exam.fsty").as_deref(),
+            Some("styles/exam.fsty")
+        );
+        assert_eq!(join("../../outside.fol"), None);
+        assert_eq!(join("/"), None);
+        let top = ProjectPath::new("main.fol").unwrap();
+        assert_eq!(top.join("./a.fol").unwrap().as_str(), "a.fol");
+        assert_eq!(ProjectPath::new("a\\b"), None);
     }
 
     #[test]
