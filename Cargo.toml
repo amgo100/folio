@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.0.0"
 edition = "2024"
 # Minimum supported Rust version. Raise it only when a dependency needs it;
-# the `msrv` CI job checks the workspace with exactly this toolchain.
+# `scripts/check.sh` checks the workspace with exactly this toolchain.
 rust-version = "1.95"
 repository = "https://github.com/amgo100/folio"
 # Nothing is published until the name is cleared (SPEC §16.1).

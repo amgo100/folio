@@ -10,7 +10,7 @@ The repository is at **M0 "Skeleton"** (SPEC §15): `docs/SPEC.md` holds the des
 
 ## Build, lint and test
 
-Rust edition 2024, MSRV 1.95 (`rust-version` in `Cargo.toml`; the `msrv` CI job and `dtolnay/rust-toolchain@1.95` in `.github/workflows/ci.yml` must move together). CI runs these, and all must pass:
+Rust edition 2024, MSRV 1.95 (`rust-version` in `Cargo.toml`). There is no hosted CI: checks run locally. Before every push, run `scripts/check.sh` and push only if it ends with "all checks passed" (`--fast` skips the MSRV check and cargo-deny while iterating, not before a push). It runs:
 
 ```bash
 cargo build --workspace --all-targets --locked
@@ -18,11 +18,12 @@ cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+cargo +1.95 check --workspace --all-targets --all-features --locked
 cargo deny check                  # licences, advisories, bans, sources; config in deny.toml
 ```
 
 - One test: `cargo test -p folio-component --test dependency_direction`. Run the binary with `cargo run -- --version`.
-- `cargo deny` is not bundled with rustup: `cargo install cargo-deny --locked`.
+- One-time setup: `rustup toolchain install 1.95 --profile minimal` and `cargo install cargo-deny --locked`.
 - Crates live in `crates/` (`folio-syntax`, `folio-component`, `folio-core`, `folio-pdf`, `folio`). `folio-core` holds the stages that are not yet their own crates; split crates out of it as interfaces settle (§2.2).
 - Lints are set once in `[workspace.lints]` in the root `Cargo.toml`; every crate has `[lints] workspace = true` and `#![forbid(unsafe_code)]` in each crate root (`lib.rs`, `main.rs`). `missing_docs` is on, so public items need doc comments.
 - **Dependency direction**: `folio-component` must not depend (normally or at build time) on any other workspace crate except those in `ALLOWED` in `crates/folio-component/tests/dependency_direction.rs` (`folio-text`, `folio-draw` once they exist). The test fails otherwise; move shared types into `folio-component` instead of widening the list.
