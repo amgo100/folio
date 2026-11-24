@@ -55,7 +55,8 @@ pub struct SegmentMetrics {
 }
 
 /// A paragraph to break: shaped, with the metrics of its segments and the
-/// widths of its inline objects.
+/// widths of its inline objects. `segments` has one entry per segment of
+/// the shaped paragraph.
 #[derive(Debug, Clone)]
 pub struct ParagraphInput<'a> {
     /// The shaped paragraph.
@@ -168,13 +169,18 @@ const HYPHEN_PENALTY: f64 = 50.0;
 ///
 /// # Panics
 ///
-/// When `slots` is empty.
+/// When `slots` is empty, or the input has fewer segment metrics than the
+/// paragraph has segments.
 pub fn layout_paragraph(
     input: &ParagraphInput<'_>,
     slots: &[LineSlot],
     deadline: Option<Instant>,
 ) -> ParagraphLayout {
     assert!(!slots.is_empty(), "a paragraph needs a line slot");
+    assert!(
+        input.segments.len() >= input.shaped.paragraph.segments.len(),
+        "every segment of a paragraph needs its metrics"
+    );
     let prepared = Prepared::new(input);
     let params = Params {
         justify: input.style.justify,
@@ -291,7 +297,9 @@ impl Prepared {
                 0.0
             };
             let start_extra = if b.kind == BreakKind::RepeatHyphen {
-                char_width(offset - 1)
+                // The explicit hyphen before the break, of any length.
+                let hyphen = text[..offset].chars().next_back().map_or(0, char::len_utf8);
+                char_width(offset - hyphen)
             } else {
                 0.0
             };

@@ -139,6 +139,9 @@ pub const INF_BAD: f64 = 10_000.0;
 /// The demerits of an overfull line in the final pass: more than any
 /// number of loose lines a paragraph could otherwise have.
 const OVERFULL_DEMERITS: f64 = 1e12;
+/// Lengths closer than this, in points, are equal: sums of advances carry
+/// rounding errors.
+pub const EPSILON: f64 = 1e-9;
 /// How many candidates total fit looks at between checks of its deadline.
 const CHECK_EVERY: usize = 64;
 
@@ -183,12 +186,23 @@ impl Measure {
     /// TeX's badness of the line: 100 times the cube of its ratio, at most
     /// [`INF_BAD`]; [`INF_BAD`] for an overfull line.
     pub fn badness(&self) -> f64 {
-        badness(self.ratio())
+        if self.is_overfull() {
+            INF_BAD
+        } else {
+            badness(self.ratio().max(-1.0))
+        }
+    }
+
+    /// Whether the line is wider than its width even at its tightest.
+    pub fn is_overfull(&self) -> bool {
+        self.overflow() > 0.0
     }
 
     /// How far the line is wider than its width at its tightest, or zero.
+    /// Rounding errors below [`EPSILON`] are not overflow.
     pub fn overflow(&self) -> f64 {
-        (self.natural - self.shrink - self.width).max(0.0)
+        let overflow = self.natural - self.shrink - self.width;
+        if overflow > EPSILON { overflow } else { 0.0 }
     }
 }
 
@@ -407,13 +421,12 @@ pub fn demerits(
     prev_fitness: u8,
     is_last: bool,
 ) -> f64 {
-    let ratio = measure.ratio();
-    let mut d = if ratio < -1.0 {
+    let mut d = if measure.is_overfull() {
         // Only the final pass takes overfull lines: the wider, the worse.
         let overflow = measure.overflow();
         OVERFULL_DEMERITS * (1.0 + overflow * overflow)
     } else {
-        (LINE_PENALTY + badness(ratio)).powi(2)
+        (LINE_PENALTY + measure.badness()).powi(2)
     };
     if end.kind != BreakKind::Mandatory {
         if end.penalty >= 0.0 {
@@ -460,11 +473,11 @@ pub fn total_fit(
     let mut best: Vec<(u8, usize, f64, usize)> = Vec::new();
 
     for (b, end) in paragraph.candidates.iter().enumerate() {
-        if pass == Pass::First && end.kind == BreakKind::Hyphenate {
-            continue;
-        }
         if deadline.is_some_and(|d| b % CHECK_EVERY == CHECK_EVERY - 1 && Instant::now() > d) {
             return Outcome::OutOfTime;
+        }
+        if pass == Pass::First && end.kind == BreakKind::Hyphenate {
+            continue;
         }
         let is_last = b == count - 1;
         best.clear();
@@ -474,12 +487,11 @@ pub fn total_fit(
             let node = &nodes[a];
             let start = paragraph.at(node.at);
             let measure = paragraph.measure(start, end, node.lines, widths, params);
-            let ratio = measure.ratio();
-            let overfull = ratio < -1.0;
+            let overfull = measure.is_overfull();
             let acceptable = if overfull {
                 pass == Pass::Final
             } else {
-                badness(ratio) <= tolerance
+                measure.badness() <= tolerance
             };
             if acceptable {
                 let d = node.demerits + demerits(&measure, end, start, node.fitness, is_last);
@@ -550,7 +562,7 @@ pub fn greedy(paragraph: &Breakable, widths: &[f64], params: &Params) -> Vec<usi
     while b < paragraph.candidates.len() {
         let end = &paragraph.candidates[b];
         let measure = paragraph.measure(paragraph.at(start), end, ends.len(), widths, params);
-        if measure.overflow() > 0.0
+        if measure.is_overfull()
             && let Some(f) = fitting
         {
             // Break at the last candidate that fit and measure again from
@@ -561,7 +573,7 @@ pub fn greedy(paragraph: &Breakable, widths: &[f64], params: &Params) -> Vec<usi
             b = f + 1;
             continue;
         }
-        if end.kind == BreakKind::Mandatory || measure.overflow() > 0.0 {
+        if end.kind == BreakKind::Mandatory || measure.is_overfull() {
             ends.push(b);
             start = Some(b);
             fitting = None;

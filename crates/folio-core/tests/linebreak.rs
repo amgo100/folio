@@ -150,7 +150,7 @@ fn evaluate(
     for (line, &e) in ends.iter().enumerate() {
         let end = &p.candidates[e];
         let measure = p.measure(start, end, line, widths, params);
-        if measure.ratio() < -1.0 || measure.badness() > tolerance {
+        if measure.is_overfull() || measure.badness() > tolerance {
             return None;
         }
         total += demerits(

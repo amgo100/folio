@@ -245,17 +245,18 @@ fn report_lines(
                 ),
             );
         } else if line.underfull {
-            let factor = line.space(Abs::pt(1.0)).to_pt();
+            let message = if line.glue.get() > 0.0 {
+                let factor = line.space(Abs::pt(1.0)).to_pt();
+                eco_format!(
+                    "this line is underfull: its spaces are stretched to {factor:.1} \
+                     times their width"
+                )
+            } else {
+                "this line is underfull: it has no spaces to stretch to its width".into()
+            };
             diag::report(
                 db,
-                Diagnostic::warning(
-                    line_span(db, project, paragraph, line),
-                    eco_format!(
-                        "this line is underfull: its spaces are stretched to {factor:.1} \
-                         times their width"
-                    ),
-                )
-                .with_hint(
+                Diagnostic::warning(line_span(db, project, paragraph, line), message).with_hint(
                     "allow hyphenation with `hyphenate: true`, set `justify: false`, \
                      or reword the text",
                 ),

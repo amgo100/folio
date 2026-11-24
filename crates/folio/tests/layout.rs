@@ -219,14 +219,25 @@ fn polish_single_letters_never_end_a_line() {
 
 #[test]
 fn polish_repeats_a_hyphen_at_the_break() {
-    let world = world(
+    let plain = world(
         "pl",
         "page { page-size: (28mm, 100mm); margin-inner: 0mm; margin-outer: 0mm; }\n\
          paragraph { justify: false; hyphenate: false; }\n",
         "Flaga biało-czerwona powiewała.\n",
     );
-    let lines = line_texts(&world, 0);
+    let lines = line_texts(&plain, 0);
     assert_eq!(lines, ["Flaga biało-", "-czerwona", "powiewała."]);
+
+    // The hyphen may be U+2010, three bytes long.
+    let unicode = world(
+        "pl",
+        "page { page-size: (28mm, 100mm); margin-inner: 0mm; margin-outer: 0mm; }\n\
+         doc { font: \"New Computer Modern\"; }\n\
+         paragraph { justify: false; hyphenate: false; }\n",
+        "Flaga biało\u{2010}czerwona powiewała.\n",
+    );
+    let lines = line_texts(&unicode, 0);
+    assert_eq!(lines, ["Flaga biało\u{2010}", "-czerwona", "powiewała."]);
 }
 
 #[test]

@@ -80,7 +80,8 @@ impl Cache {
     ///
     /// # Panics
     ///
-    /// When `slots` is empty.
+    /// When `slots` is empty, or the input has fewer segment metrics than
+    /// the paragraph has segments.
     pub fn layout(
         &self,
         input: &ParagraphInput<'_>,
@@ -118,7 +119,8 @@ impl Cache {
     ///
     /// # Panics
     ///
-    /// When a paragraph's slots are empty.
+    /// When a paragraph's slots are empty, or an input has fewer segment
+    /// metrics than its paragraph has segments.
     pub fn layout_all(
         &self,
         paragraphs: &[(ParagraphInput<'_>, &[LineSlot])],
