@@ -27,7 +27,7 @@ Folio is for documents whose structure matters and whose outputs must stay consi
 | R11 | Several documents from one source, such as an exam and its mark scheme | §6 |
 | R12 | Multi-column layouts with column balancing | §13.2 |
 | R13 | Graphics generated from source and styled by stylesheets | §9 |
-| R14 | A native visual editor | §12.4 |
+| R14 | A visual editor built into Folio, as a desktop application | §12.4 |
 | R15 | A modular architecture, in which features such as multi-column layout or circuit drawings are encapsulated components | §3 |
 | R16 | Animations rendered as PDF pages or PowerPoint animations; dynamic components such as countdown timers in Folio's own renderer | §10.1–10.5, §13.4 |
 | R17 | Interactive inputs, such as a slider whose value changes the parameters of generated graphics | §10.6, §13.5 |
@@ -45,7 +45,7 @@ Folio is for documents whose structure matters and whose outputs must stay consi
 2. **One model, several renderers.** PDF and live views come from Folio's layout engine; Word and PowerPoint receive the styled document tree and lay it out themselves.
 3. **A small core with components.** Anything that not every document needs (multi-column layout, plots, exam elements, timers) is a component with a declared interface.
 4. **Incremental everything.** Every stage is memoised and invalidated precisely, so the cost of an edit is proportional to its effect.
-5. **Deterministic output.** The same inputs produce byte-identical outputs.
+5. **Deterministic output.** The same inputs and the same compiler version produce byte-identical outputs.
 6. **Editable by design.** Source positions, node identity and edit transactions exist from the first version, so the visual editor is a front end rather than a retrofit.
 
 ### 1.5 Terminology
@@ -64,7 +64,7 @@ Folio is for documents whose structure matters and whose outputs must stay consi
 | Numbering group | A set of variants that share counters (§6.1) |
 | Common tree | The union of the content visible in any variant of a numbering group (§6.1) |
 | Target | An output format: `pdf`, `docx`, `pptx`, `live` |
-| Edition | A version of the language and of the first-party components' behaviour, pinned in the manifest |
+| Edition | A version of the language's syntax and semantics, pinned in the manifest. Output is pinned by the compiler version instead (§2.4) |
 | Step | One state in the animation sequence of a slide (§10) |
 | Input | A dynamic element, such as a slider, whose value live regions can read (§10.6) |
 | Live region | A box of reserved size whose content depends on inputs or runtime values and is redrawn without re-laying out the page |
@@ -115,44 +115,49 @@ Components take part in every stage through the extension points of §3.
 
 | Crate | Responsibility | Key dependencies |
 | --- | --- | --- |
-| `folio-syntax` | Lexer, parser, CST, incremental reparsing | `rowan`-style green/red tree |
-| `folio-eval` | Script interpreter, standard library, content tree | — |
+| `folio-syntax` | Lexer, parser, lossless CST and incremental reparsing for content and stylesheets, with one expression grammar shared by scripts, stylesheet values and render templates | Started as a fork of `typst-syntax` (Apache-2.0) |
+| `folio-eval` | Interpreter for scripts, stylesheet values and render templates; standard library; content tree | — |
 | `folio-model` | Element types, schemas, counters, references, queries, bibliography | `hayagriva` (CSL) |
-| `folio-style` | Stylesheet parser, selector matching, cascade, computed styles | — |
+| `folio-style` | Selector matching, cascade, computed styles as shared property groups (§5.1) | — |
 | `folio-component` | Extension-point traits, component registry, manifests, conformance-test API (the suite itself runs as integration tests (tests/) with folio as a dev-dependency); the interface types shared with layout and rendering, such as Fragment and Regions | folio-text, folio-draw (glyph runs and primitives used by fragments) |
-| `folio-text` | Shaping, bidi, hyphenation, line-break opportunities | `rustybuzz` or `harfrust`, `unicode-bidi`, `unicode-linebreak`, `hypher` |
+| `folio-text` | Shaping, bidi, hyphenation, line-break opportunities | `harfrust`, `unicode-bidi`, `icu_segmenter`, `hypher` |
 | `folio-fonts` | Font discovery, loading, metrics, subsetting | `fontdb`, `ttf-parser`, `subsetter` |
-| `folio-math` | Math parser and OpenType MATH layout | `ttf-parser` |
+| `folio-math` | Math parser and OpenType MATH layout, adapted from Typst's math layout (Apache-2.0) | `ttf-parser` |
 | `folio-draw` | Graphic primitives, paths, label placement | `kurbo` |
 | `folio-layout` | Paragraph and page builders, baseline grid, tables, floats, notes, wrap, footnotes | `folio-text`, `folio-math`, `folio-draw`, folio-component (it calls layout containers) |
 | `folio-anim` | Step model, timelines, effects | — |
-| `folio-runtime` | Live renderer: clock, events, dynamic elements, triggers | folio-component, folio-anim, folio-render; the live-region sub-pipeline is injected by the folio library as a callback |
-| `folio-edit` | Editable model: buffers, transactions, undo, hit-testing, caret geometry | `folio-syntax`, `folio-layout` |
-| `folio-render` | Display lists, glyph rasterisation, SVG and raster output | `tiny-skia`, usvg, image |
-| `folio-pdf` | PDF writer, import of PDF figures (with a PDF parser such as lopdf), tagging, PDF/A, colour management | `pdf-writer` (`krilla` under evaluation) |
+| `folio-runtime` | Live renderer: clock, events, dynamic elements, triggers. No tokio or threads, so it also compiles to WebAssembly (§16.1) | folio-component, folio-anim, folio-render; the live-region sub-pipeline is injected by the folio library as a callback |
+| `folio-edit` | Editable model: buffers, transactions, undo, hit-testing, caret geometry, spell checking | `folio-syntax`, `folio-layout`, `spellbook` |
+| `folio-render` | Display lists and their binary wire format (§12.2), glyph rasterisation, SVG and raster output. No tokio or threads, so it also compiles to WebAssembly (§16.1) | `tiny-skia`, usvg, image |
+| `folio-pdf` | PDF output through krilla: tagging, PDF/UA, PDF/A, font subsetting, colour management, import of PDF figures | `krilla` |
 | `folio-ooxml` | OOXML package writer; DOCX and PPTX backends; OMML; animation timing | `zip`, `quick-xml` |
 | `folio-preview` | Watch server, live presentation server, websocket protocol | `notify`, `tokio` |
-| `folio-lsp` | Language server | `tower-lsp-server` |
+| `folio-lsp` | Language server, synchronous, with cancellation through the query database (§2.3) | `lsp-server` |
 | `folio-node` | Node.js native addon for Folio Studio | `napi-rs` |
-| `folio` (lib and bin) | Library: the memoised compile pipeline (folio::compile) and the live-region callback used by folio-runtime. Binary: command-line interface | `clap` |
+| `folio` (lib and bin) | Library: the memoised compile pipeline (folio::compile) and the live-region callback used by folio-runtime. Binary: command-line interface and toolchain dispatch (§2.4) | `salsa`, `clap` |
 
-First-party components live in their own crates (`folio-component-exam`, `-multicol`, `-plot`, `-timer` and `-inputs`) and depend only on `folio-component`, never on core internals. They are compiled into the binary, and their behaviour is frozen per language edition: a newer binary carries each first-party component in the version that belongs to every edition it supports, so a document pinned to an edition builds the same way (§2.4); bug fixes that change output apply only to new editions. The public library API is `folio::World` (sources, fonts, files, components) plus `folio::compile(world, target, variant)`. Folio Studio is a TypeScript/Electron project in the same repository that depends on `folio-node`.
+First-party components live in their own crates (`folio-component-exam`, `-multicol`, `-plot`, `-timer` and `-inputs`) and depend only on `folio-component`, never on core internals. They are compiled into the binary and versioned with it, so a project that pins the compiler version also pins them (§2.4). A fix that changes output is written once and reaches a document when its project moves to a newer compiler. The public library API is `folio::World` (sources, fonts, files, components) plus `folio::compile(world, target, variant)`. Folio Studio is a TypeScript/Electron project in the same repository that depends on `folio-node`.
+
+The table is the target structure. Development starts with fewer crates (syntax, core, component, PDF, and the `folio` library and binary) and splits the others out as their interfaces settle. The `folio-component` boundary, with the interface types it shares with layout and rendering, is fixed from the start, because components may depend on nothing else.
 
 ### 2.3 Incremental compilation
 
-- Every stage is a query in a demand-driven, memoised database (in the style of `salsa` or `comemo`). Queries record which inputs they read; an edit invalidates only the queries whose inputs changed. Component calls are queries too (§3.5).
+- Every stage is a query in a demand-driven, memoised database built on `salsa`. Queries record which inputs they read; an edit invalidates only the queries whose inputs changed. Component calls are queries too (§3.5).
+- **Early cutoff**: when a query re-runs and returns a value equal to its previous one, the queries that depend on it are not re-run. The convergence short-circuit of page layout, below, relies on this.
+- **Cancellation**: a new edit cancels the queries still running for the previous revision, so the editor, the preview and the language server never wait for stale work.
+- **Durability**: bundled fonts, the standard library and first-party components are marked as rarely changing, so the validity check after an edit skips the queries that depend only on them.
 - Parsing is incremental at the CST level: an edit reparses the smallest enclosing block and reuses untouched nodes.
 - Evaluation is memoised per function call with argument hashing.
 - Layout caches each paragraph's line breaks keyed on *(content hash, computed style hash, sequence of line widths)*, and each page keyed on its incoming flow state and page master.
 - **The flow state has two parts.** The *layout part* holds what decides line and page breaks: the content position, float, margin-note and footnote queues, keep constraints, the region widths of the master, and the state of any open layout container (§3.3). The *furniture part* holds the page number, parity and running marks. Anything that can change line widths (page-number references, footnote markers that restart per page or section) belongs to the layout part instead. When only the furniture part differs (for example after a page is inserted earlier and mirrored masters have the same body width), later pages are re-dressed with new headers and footers but not re-broken.
 - Page breaking is strictly forward, with no optimisation across pages. That makes the convergence short-circuit sound: re-layout starts at the first page whose key changed and stops when the outgoing layout part equals the previous run's. Container states must therefore implement `Eq` with a stable hash and hold positions and small data only, never fragments.
-- Page-number references converge by a bounded fixpoint of at most three extra passes. If they have not converged, a final pass freezes each one at its previous value, so output stays deterministic, and a warning names them.
+- Page-number references converge by a bounded fixpoint, built on salsa's cycle handling, of at most three extra passes. If they have not converged, a final pass freezes each one at its previous value, so output stays deterministic, and a warning names them.
 - Fonts are loaded once per process and shared between compiles. They are memory-mapped only from the immutable font cache; files that can change (project and system fonts) are read into memory.
 - Independent work runs in parallel with `rayon`: shaping, page rendering, font subsetting, and emitting several variants.
 
 ### 2.4 Determinism
 
-The same inputs produce byte-identical outputs, and fonts and components count as inputs. A project pins its fonts (bundled families, a project font directory, or fonts locked by hash in `folio.lock`) and its third-party components and packages (versions and hashes in the same lockfile); a build fails if a locked version is not available. First-party components are pinned by the edition (§2.2). System fonts are allowed in watch mode; in builds they produce a warning, and in strict and CI builds an error. No wall-clock time enters output: PDF IDs derive from content hashes, and DOCX/PPTX packages use a fixed timestamp or `SOURCE_DATE_EPOCH`. `folio.toml` pins the language edition (`edition = "2027"`), so newer compilers build old documents the same way. Live runtime state and input values are the one exception by nature: they depend on time and user actions, but only inside the live renderer, never in files (§10.5, §10.6).
+The same inputs and the same compiler version produce byte-identical outputs, and fonts and components count as inputs. A project pins its fonts (bundled families, a project font directory, or fonts locked by hash in `folio.lock`) and its third-party components and packages (versions and hashes in the same lockfile); a build fails if a locked version is not available. First-party components are versioned with the compiler (§2.2). System fonts are allowed in watch mode; in builds they produce a warning, and in strict and CI builds an error. No wall-clock time enters output: PDF IDs derive from content hashes, and DOCX/PPTX packages use a fixed timestamp or `SOURCE_DATE_EPOCH`. `folio.toml` pins two versions. The language edition (`edition = "2027"`) fixes syntax and semantics, and changes only when a project opts into a new edition. The compiler version (`compiler = "1.2.0"`) fixes output: `folio` runs the pinned version from its local toolchain cache (`folio toolchain install` adds one), so an old exam rebuilds identically years later. When the pinned version is not installed, the build uses the running version with a warning, which is an error in strict and CI builds. Folio Studio and the language server use their own compiler version and show a notice when it differs from the pin; export from Folio Studio runs the pinned version. Live runtime state and input values are the one exception by nature: they depend on time and user actions, but only inside the live renderer, never in files (§10.5, §10.6).
 
 ### 2.5 Fonts
 
@@ -262,7 +267,7 @@ The native interface is defined in WebAssembly-compatible terms (plain data in a
 - **Memoisable.** Every extension-point call is a query; components declare the properties they read, so restyling invalidates them precisely.
 - **Encapsulated.** A component cannot see another component's state; components interact only through elements, properties, labels and queries. Cross-element triggers at runtime (a button starting a countdown) are resolved by the core, which delivers a `Triggered` event (§10.5).
 - **Paint-only states.** Rules on component states (pseudo-classes) and on runtime states may set paint properties and effects only, so a state change repaints without re-layout. A dynamic element's states and published values are declared in its signature (§10.5); the compiler checks that each state fits its reserved size, and checks live regions by sampling (§10.6).
-- **Two version axes.** A component declares the interface version it targets (`folio-component = "1"`), which is stable across the editions that support it; separately, the language edition pins first-party component behaviour (§2.2).
+- **Two version axes.** A component declares the interface version it targets (`folio-component = "1"`), which is stable across the compiler versions that support it; separately, first-party components are versioned with the compiler, which the project pins (§2.2, §2.4).
 - **Total.** A component declares the targets it supports. For any other target the fallback chain is a generic mapping (render as a picture, or flatten to text), then a placeholder with a warning. A missing mapping never fails a build.
 - **Tested.** A conformance suite in `folio-component` checks determinism, fallbacks, incremental behaviour and replay of runtime event logs; every component ships golden tests.
 
@@ -275,7 +280,7 @@ circuits = { version = "0.3" }                   # a third-party component
 disable = ["plot"]                               # first-party components are on by default
 ```
 
-- First-party components (§13) are available without declaration and pinned by the edition; they can be disabled. Other components are declared and pinned in `folio.lock`.
+- First-party components (§13) are available without declaration and pinned with the compiler version (§2.4); they can be disabled. Other components are declared and pinned in `folio.lock`.
 - **Namespaces.** Elements and properties belong to their component's namespace and can always be written qualified (`exam.question`, in content and in selectors). Unqualified names resolve as recorded in the lockfile, so a component that adds an element in a later version cannot change how an existing document resolves; a new clash after an upgrade is a warning, and the lockfile's binding stays until the author chooses.
 
 ## 4. Document model and source language
@@ -298,6 +303,7 @@ mechanics-test-3/
 [project]
 entry = "main.fol"
 edition = "2027"
+compiler = "1.2.0"
 lang = "en"
 styles = ["styles/exam.fsty"]
 
@@ -355,6 +361,7 @@ Air resistance is negligible.#sidenote[Take $g = qty(9.81, "m s^-2")$.]
 - **Labels** consist of letters, digits, `-`, `_` and `:`, and do not end with `:` or `-`; they cannot contain `.`, which separates a label from a published value (`<timer:task>.remaining`, §10.6). A reference in running text therefore never ends with `:` or `-`, so in "see @fig:ball: it shows" the final colon is punctuation.
 - **Sigils.** `$` starts math, `#` starts an element call and `@` a reference. Stylesheet tokens are therefore written `tok.accent` in content (`$accent` in stylesheets), and colours `rgb("1f5fa8")`.
 - **Per-instance data** that is not formatting is content in every mode: the number of grid columns, the number of answer lines, a drawing's scale.
+- **Relation to Typst.** The markup follows Typst's wherever Folio has no reason to differ, so authors who know Typst meet few surprises, and `folio-syntax` started as a fork of Typst's parser (§2.2). Folio's own constructs are element declarations (§4.3), scoped rules (§5.4), quantities and LaTeX math mode (§8.1), and the label grammar above. Source compatibility remains a non-goal (§1.3).
 
 ### 4.3 Elements
 
@@ -393,6 +400,7 @@ Every element, built in or added by a component, has a declared schema. A packag
 - Data loading from CSV, JSON, TOML, YAML and BibTeX/CSL-JSON, so a question bank or a results table can drive content.
 - A deterministic sandbox: file reads are limited to the project root and declared assets; there is no network access and no clock (a `today` value comes from the manifest or the command line).
 - Resource limits on steps, memory and recursion; exceeding one is an error that points at the call.
+- One expression language serves scripts, stylesheet values and render templates (§5.1, §5.3), with one grammar in `folio-syntax` and one evaluator in `folio-eval`.
 
 ### 4.5 Counters, references, queries and citations
 
@@ -441,6 +449,8 @@ heading + paragraph { indent: 0; }
 - **Selectors**: element name, `.class`, `#{fig:ball}` (a labelled element; braces because labels may contain `:`), `[field=value]` and `[field>3]`, descendant (`question answer`), child (`>`), adjacent sibling (`+`), `:first`, `:last`, `:nth(n)`, :nth-col(n) (table cells), `:has(child)` limited to direct children, and the state pseudo-classes `:step(...)` (§10.2) and component states (which may set paint properties only), such as `:expired` (§13.4). General sibling (`~`) and deep `:has` are excluded; rules using `+`, `:last`, `:nth` or `:has` register sibling dependencies, so an insertion restyles only the siblings of the changed node.
 - **Cascade**: origin first (built-in and component defaults < imported theme < project stylesheet < variant overlay < target overlay < overrides stylesheet < local overrides in content), then specificity, then source order. `!important` does not exist.
 - **Inheritance**: text properties (font, size, language, colour, hyphenation) inherit down the tree; box properties (space, borders, padding, placement) do not.
+- **Computed styles** are stored as shared, reference-counted property groups (§5.2), so nodes with equal styles share memory, and the style hashes in layout cache keys (§2.3) are cheap to compute.
+- **Lossless parsing**: stylesheets are parsed into the same kind of lossless syntax tree as content (§2.1), so the editor (§12.4) and `folio promote` (§5.4) rewrite rules without disturbing comments or formatting.
 - **Tokens**: `$accent: #1f5fa8;` and `$body-size: 11pt;` are defined once and reused; they map to Office theme values explicitly (§11.2).
 - **Overlays**: `@variant markscheme { ... }` and `@target pptx { ... }` blocks contain rules that apply only there; both accept comma-separated lists (@variant slides, handout).
 - **One meaning per name**: `font-size`, `font-style` and `page-size` are distinct; `columns` means text columns (§13.2) and `column-tracks` table columns (§7.4); `numbering` always takes a pattern string (`"1."`, `"(a)"`, `"i"`).
@@ -620,7 +630,7 @@ Layout turns the resolved tree into pages of positioned fragments in two levels:
 
 ### 7.2 Paragraphs and lines
 
-- Shaping with `rustybuzz` or `harfrust`, script and language itemisation, bidi reordering (UAX #9), break opportunities (UAX #14), and hyphenation patterns per language.
+- Shaping with `harfrust`, script and language itemisation, bidi reordering (UAX #9), break opportunities (UAX #14, with `icu_segmenter`, which also handles scripts written without spaces), and hyphenation patterns per language.
 - **Line breaking** uses the Knuth–Plass total-fit algorithm with line widths given per line index. Where the shape depends on vertical position (text wrap, §7.7), leading is fixed so that the line index determines the position; a line taller than the leading, such as one with tall inline math, triggers a re-break with the shape recomputed from that line.
 - Knuth–Plass takes well under a millisecond for ordinary paragraphs. Only a paragraph that exceeds 5 ms is broken greedily while typing, and gets the optimal result once the editor is idle.
 - **Language rules**: hyphenation, quotation marks and line-end rules per language. In Polish, single-letter words (a, i, o, u, w, z and their capitals) are never left at the end of a line; a non-breaking space is inserted automatically.
@@ -723,6 +733,7 @@ Math is parsed into a semantic math tree and laid out with the font's OpenType M
 - Display, text, script and scriptscript styles, cramped styles, and the `ssty` feature for optical-size script glyphs.
 - Inline math takes part in line breaking, with penalties after relations and binary operators.
 - Supported fonts include New Computer Modern Math, STIX Two Math, Libertinus Math and Fira Math; any font with a MATH table works. The math font is a stylesheet property.
+- The layout code starts from Typst's math layout (Apache-2.0), adapted to Folio's math tree (§16.2).
 
 ### 8.3 Export
 
@@ -978,12 +989,12 @@ PDF and live are fixed-layout targets rendered from Folio's fragments. DOCX and 
 
 ### 11.1 PDF
 
-- Written with `pdf-writer` (`krilla`, a higher-level library on it, is under evaluation); PDF 1.7 by default, PDF 2.0 optional.
+- Written with `krilla`, which provides tagging, PDF/UA-1, PDF/A, font subsetting and ICC colour handling, and which Typst's PDF export also uses; PDF 1.7 by default, PDF 2.0 optional.
 - Font subsets with ToUnicode maps, so text is searchable and copyable (§2.5).
-- Images: JPEG passed through; PNG and WebP decoded and Flate-compressed; SVG converted to native vector paths (via `usvg`); PDF figures imported as form XObjects through a PDF parser.
+- Images: JPEG passed through; PNG and WebP decoded and Flate-compressed; SVG converted to native vector paths (via `usvg`); PDF figures imported as form XObjects through krilla's PDF embedding (§16.2).
 - Navigation: bookmarks from headings, links for references, named destinations for labels, page labels (i, ii, 1, 2, and 3a, 3b for animation steps and 3-s1 for sample pages).
-- **Tagging from the first version**: the structure tree is built from the semantic tree. Targets: PDF/UA-1 on PDF 1.7 and PDF/UA-2 on PDF 2.0; alt text is required under `--strict-a11y`.
-- **PDF/A**: PDF/A-2u (or PDF/A-2a together with PDF/UA-1) on PDF 1.7, and PDF/A-4 with PDF/UA-2, each with the required OutputIntent and ICC profile. MathML associated files are not allowed under PDF/A-2; under PDF/A-4 they need the PDF/A-4f profile, which Folio offers as a separate conformance level; under base PDF/A-4 they are omitted (§16.2).
+- **Tagging from the first version**: the structure tree is built from the semantic tree. Targets: PDF/UA-1 on PDF 1.7, and PDF/UA-2 on PDF 2.0 once krilla supports it (§16.2); alt text is required under `--strict-a11y`.
+- **PDF/A**: PDF/A-2u (or PDF/A-2a together with PDF/UA-1) on PDF 1.7, and PDF/A-4 (with PDF/UA-2 once available), each with the required OutputIntent and ICC profile. MathML associated files are not allowed under PDF/A-2; under PDF/A-4 they need the PDF/A-4f profile, which Folio offers as a separate conformance level; under base PDF/A-4 they are omitted (§16.2).
 - **Colour**: stylesheet colours are sRGB; `color-space: cmyk` with an ICC profile (such as FOGRA39) prepares files for commercial print.
 
 ### 11.2 DOCX
@@ -1074,11 +1085,13 @@ All tools are front ends to the same library: the command line, the browser prev
 | `folio promote <file:line>` | Move a local override into a stylesheet |
 | `folio query <selector>` | Print elements as JSON, such as all questions with their marks |
 | `folio components` | List available components, versions and the targets they support |
+| `folio toolchain install [version]` | Install a compiler version into the local toolchain cache; builds run the version pinned in `folio.toml` (§2.4) |
 
 ### 12.2 Watch and preview
 
 - `folio watch` watches the project, debounces edits (10 ms), recompiles incrementally and serves a preview on localhost, protected by a random session token.
 - The viewer receives display lists over a websocket and draws them on a canvas with the same renderer as Folio Studio; only pages whose content changed are sent, and visible pages are laid out first.
+- Display lists travel in one compact, versioned binary format, defined in `folio-render` and used unchanged by the preview websocket, Folio Studio's `MessagePort` and live clients (§10.6).
 - Clicking in the preview jumps to the source, and moving the cursor in the editor scrolls the preview, through span maps kept in every fragment.
 - Compilation is partial: failing constructs become error markers in place and the rest renders. Only when nothing can be produced, for example when a stylesheet does not parse, do the last good pages stay on screen with an error banner.
 - Output files are written on save or after one second idle, not on every keystroke.
@@ -1109,7 +1122,7 @@ Folio Studio is a desktop editor, built with Electron, in which users edit direc
 **Page view**
 
 - Span maps in every fragment give hit-testing, caret placement and selection rectangles, including bidirectional text and caret stops inside ligatures. The caret moves in reading order across columns, floats and pages.
-- Text input uses Chromium's EditContext API (Chromium 121, so Electron 29 or later), which delivers text, IME composition and selection to a canvas-based editor; composition is applied as a provisional transaction. Spell checking runs in the core with Hunspell-compatible dictionaries (English and Polish built in).
+- Text input uses Chromium's EditContext API (Chromium 121, so Electron 29 or later), which delivers text, IME composition and selection to a canvas-based editor; composition is applied as a provisional transaction. Spell checking runs in the core with Hunspell-compatible dictionaries through `spellbook`, a Rust implementation of Hunspell (English and Polish built in).
 - **Typing fast path**: a text edit inside one paragraph whose element and style are unchanged, and which no query, running mark or outline reads, skips evaluation, styling and resolution; the core re-breaks that paragraph and returns its display list within 5 ms, and the full incremental compile follows.
 - **Layout stability**: while typing, floats stay on their pages unless a new position is clearly better, and pages below the edit re-flow after a 300 ms pause. Once idle, the layout equals what export produces.
 - Hovering a block shows a handle with its element name for selecting and dragging, and a breadcrumb shows its place in the tree.
@@ -1143,16 +1156,17 @@ flowchart LR
 ```
 *The Rust core owns the document; the UI sends edits and draws pages.*
 
+- **Why Electron**: text input in the page view depends on EditContext, which only Chromium implements. Frameworks that use the system webview, such as Tauri, run on WebKit on macOS and Linux, which lacks it.
 - **Main process** (Electron): windows, menus, file access and watching, updates.
 - **Core process**: a Node utility process that loads the Rust core as a native addon (`folio-node`, built with `napi-rs`). It owns the buffers, the compiler, layout, components and the live runtime, and uses all CPU cores.
-- **Renderer**: TypeScript UI and the page canvas. Display lists arrive over a `MessagePort` (copied across the process boundary, so they are kept compact) and are drawn with Canvas 2D from glyphs rasterised by the core at the current zoom.
+- **Renderer**: TypeScript UI and the page canvas. Display lists arrive over a `MessagePort` in the binary format of §12.2 (copied across the process boundary, so it is compact) and are drawn with Canvas 2D from glyphs rasterised by the core at the current zoom. Whether `folio-render`, compiled to WebAssembly, draws them instead is open (§16.1).
 - **Source pane**: CodeMirror connected to the core's buffer through the same transaction channel, with language features from the core.
 
 **Accessibility and platforms**: every action has a shortcut or is in the command palette; screen readers get an accessible mirror of the visible page built from the semantic tree; builds exist for Windows, macOS and Linux.
 
 ## 13. Standard components
 
-Folio ships five first-party native components, each built only on the extension points of §3: exam papers, multi-column layout, plots, the countdown timer, and interactive inputs. They are available by default, pinned by the edition, and serve as reference implementations of the interface.
+Folio ships five first-party native components, each built only on the extension points of §3: exam papers, multi-column layout, plots, the countdown timer, and interactive inputs. They are available by default, versioned with the compiler (§2.4), and serve as reference implementations of the interface.
 
 ### 13.1 Exam
 
@@ -1287,7 +1301,7 @@ These are release criteria. Benchmarks run on every merge on a dedicated runner;
 ### 14.2 Testing
 
 - **Golden files** for layout (page images compared with a perceptual threshold), OOXML (normalised XML) and animation (the sequence of step states).
-- **Office checks**: outputs opened in Word and PowerPoint on a licensed self-hosted Windows runner, and in LibreOffice on standard CI, for repair prompts, style integrity and animation playback.
+- **Office checks**: outputs opened in Word and PowerPoint on a licensed self-hosted Windows runner, and in LibreOffice on standard CI, for repair prompts, style integrity and animation playback. Standard CI also validates every DOCX and PPTX output against the OOXML schemas with the Open XML SDK validator, which runs on Linux, so schema errors are caught on every merge.
 - **Leak tests** (§6.4) on every variant of the test corpus.
 - **Component conformance**: every component passes the `folio-component` suite (determinism, fallbacks for every target, incremental invalidation, runtime replay from event logs).
 - **Editor tests**: end-to-end tests drive Folio Studio, including IME composition (Polish, Chinese pinyin), accessibility-tree snapshots, and undo and redo round trips against the source.
@@ -1305,12 +1319,12 @@ These are release criteria. Benchmarks run on every merge on a dedicated runner;
 
 ## 15. Roadmap
 
-A first usable release (PDF with math, variants, floats and live preview) comes after M3. Slides follow, because lessons are a primary document type, and then Word output. The component interface is prototyped together with the page builder and proven by the first-party components before it is opened to others; the visual editor is built once the compiler is in daily use. The acceptance exam (a physics exam with its mark scheme) applies from M1, and the acceptance lesson (20 animated slides with a timer and a slider-driven graph) from M4.
+A first usable release (exam and mark scheme to PDF, with math, variants and live preview) comes after M2, so that the page layout of M3 is shaped by documents written with it. The decisions that are most expensive to change are tested first: the Office assumptions of §16.2 in M0, and the editor's typing path in M1. Slides follow, because lessons are a primary document type, and then Word output. The component interface is prototyped together with the page builder and proven by the first-party components before it is opened to others; the visual editor is built once the compiler is in daily use. The acceptance exam (a physics exam with its mark scheme) applies from M1, and the acceptance lesson (20 animated slides with a timer and a slider-driven graph) from M4.
 
-1. **M0 — Skeleton.** Parser, evaluator, style cascade, Knuth–Plass line breaking, single-column tagged PDF, deterministic output with `folio.lock` for fonts, span maps and node identity, and the component host with the element, property and template extension points. *Exit:* a 10-page document compiles in under 200 ms.
-2. **M1 — Math, preview, diagnostics.** OpenType math, quantities and units, references, footnotes, `folio watch` with browser preview (display lists) and source sync, language-server diagnostics. *Exit:* the acceptance exam renders correctly; the preview updates within 80 ms of an edit.
-3. **M2 — Structure and variants.** Elements and templates, variants with numbering groups, answer space, the leak check for PDF (with provenance), local overrides, strict mode and promotion, and the exam component. *Exit:* exam and mark scheme from one source with matching numbering and totals; the leak check passes.
-4. **M3 — Page layout.** Floats, margin notes, baseline grid, tables, running marks and exam page furniture, together with prototypes of the layout-container interface and the two-part flow state. *Exit:* layout golden tests pass; a prototype column container passes the incremental-layout tests. **Release 0.1: PDF.**
+1. **M0 — Skeleton.** Parser (started from `typst-syntax`), evaluator, style cascade, Knuth–Plass line breaking, single-column tagged PDF through krilla, deterministic output with `folio.lock` for fonts and the compiler pin, span maps and node identity, and the component host with the element, property and template extension points. Hand-written DOCX and PPTX files test the Office assumptions of §16.2, and the effort is estimated per milestone (§16.1). *Exit:* a 10-page document compiles in under 200 ms; each Office assumption in §16.2 is confirmed, or the design that depends on it is revised; the estimate exists.
+2. **M1 — Math, preview, diagnostics.** OpenType math, quantities and units, references, footnotes, `folio watch` with browser preview (display lists) and source sync, language-server diagnostics, and a typing prototype: EditContext input in Electron, passed through `folio-node` and the utility process, re-breaking a paragraph and drawing it on the preview canvas. *Exit:* the acceptance exam renders correctly; the preview updates within 80 ms of an edit; the prototype meets the editor-typing targets of §14.1, or the editor architecture of §12.4 is revised before M8.
+3. **M2 — Structure and variants.** Elements and templates, variants with numbering groups, answer space, the leak check for PDF (with provenance), local overrides, strict mode and promotion, and the exam component. *Exit:* exam and mark scheme from one source with matching numbering and totals; the leak check passes. **Release 0.1: exam and mark scheme to PDF.**
+4. **M3 — Page layout.** Floats, margin notes, baseline grid, tables, running marks and exam page furniture, together with prototypes of the layout-container interface and the two-part flow state. *Exit:* layout golden tests pass; a prototype column container passes the incremental-layout tests. **Release 0.2: PDF page layout.**
 5. **M4 — Slides.** Slides and steps, PDF step pages, PPTX with masters, placeholders, slide fitting and static content, with steps mapped to split slides only. Graphic primitives, `#draw`, `#animate` in its static form (final state), and a minimal plot component (function and data series); element schemas, signatures and static fallbacks of the timer and inputs components; static evaluation of live regions (defaults and samples) with the compile-time overflow check; the leak check for PPTX. *Exit:* the acceptance lesson prints as step pages and opens in PowerPoint without repair.
 6. **M5 — DOCX.** Style mapping, numbering with gaps, OMML, fields, anchored margin notes, templates, and the leak check for DOCX. *Exit:* files open in Word without repair, and changing a main style in Word's style pane restyles all its instances.
 7. **M6 — Components and graphics.** The layout-container and graphic-generator interfaces stabilised; the multicol component; the full plot component; package components pinned in the lockfile. *Exit:* both components pass the conformance suite; the balancing default is chosen on example documents.
@@ -1331,7 +1345,8 @@ A first usable release (PDF with math, variants, floats and live preview) comes 
 - **Evaluation budgets.** Whether time-dependent drawings and live regions evaluate within one frame for typical lessons, or whether components must provide precompiled paths by default.
 - **Live documents.** 1.0 supports inputs on slides only. Whether worksheets with live inputs, viewed in Folio Studio or a browser, follow later, and with which scoping element.
 - **WebAssembly tier timing.** After 1.0, or earlier if third-party components are needed sooner.
-- **Effort and team.** Not yet estimated. An estimate per milestone should follow M0, and the scope of 1.0 adjusted to the team available.
+- **Renderer in WebAssembly.** Whether `folio-render` and `folio-runtime`, compiled to WebAssembly, draw display lists in Folio Studio's renderer and in browser clients, replacing a separate TypeScript Canvas 2D renderer and preparing standalone HTML presentations (§15). Both crates are kept free of tokio and threads so that either path stays open; the M1 typing prototype informs the decision.
+- **Effort and team.** Not yet estimated. The estimate is made in M0, per milestone, and assumes the reuse of §2.2 (krilla, Typst's parser and math layout); the scope of 1.0 is then adjusted to the team available.
 - **Name.** "Folio" is a working name; check for conflicts before publishing crates.
 
 ### 16.2 Assumptions to verify
@@ -1346,8 +1361,10 @@ A first usable release (PDF with math, variants, floats and live preview) comes 
 | Chained motion-path segments approximate physical timing acceptably | §10.3 | Test decks |
 | PDF viewers used in classrooms honour page transitions | §10.4 | Test common viewers |
 | PDF 2.0 MathML structure elements are usable; MathML attachments need PDF/A-4f | §8.3, §11.1 | Check ISO 19005-4; validate with veraPDF |
-| `rustybuzz` or `harfrust`, and `tower-lsp-server`, are maintained | §2.2 | Review before M0 |
-| `krilla` is preferable to raw `pdf-writer` for tagging and PDF/A | §11.1 | Prototype in M0 |
+| `harfrust`, `icu_segmenter`, `salsa`, `lsp-server` and `krilla` stay maintained | §2.2 | Review at each milestone |
+| `krilla` embeds PDF figures as form XObjects | §11.1 | Prototype in M0 |
+| `krilla` supports PDF/UA-2 by M10 | §11.1 | Check krilla's releases before M10 |
+| Typst's math layout can be adapted to Folio's math tree without Typst's content model | §8.2 | Prototype in M1 |
 
 ## Appendix A. Why the stylesheet language is a CSS-like hybrid
 
