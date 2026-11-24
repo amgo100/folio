@@ -19,7 +19,8 @@ use crate::eval::{Content, Dict, Element, Node, Value, evaluate};
 /// call and the rest of the document as its body. Every element is an
 /// instance checked against its schema. Bodies and slots that hold blocks
 /// hold only block elements and scoped rules: inline content between blocks
-/// is grouped into `paragraph`s, consecutive list items into a `list`,
+/// is grouped into `paragraph`s (a float written in a paragraph's text stays
+/// in it as an anchor), consecutive list items into a `list`,
 /// `enum` or `terms`, and each heading with the blocks after it, up to the
 /// next heading of the same or a higher level, into a `section`. Inline
 /// content has no spaces at its ends and no two spaces in a row.
@@ -212,9 +213,12 @@ impl Model<'_> {
                 Node::Slot(slot) => self.misplaced(slot),
                 Node::Element(element) => {
                     let element = self.element(element);
+                    // A float written in a paragraph's text stays there as
+                    // its anchor (SPEC §7.5, §7.7).
+                    let anchor = element.kind == ElementKind::Float && !blocks.run.is_empty();
                     if let Some(list) = list_of(&element.name) {
                         blocks.item(list, element);
-                    } else if is_block(element.kind) {
+                    } else if is_block(element.kind) && !anchor {
                         blocks.block(Node::Element(element));
                     } else {
                         blocks.inline(Node::Element(element));

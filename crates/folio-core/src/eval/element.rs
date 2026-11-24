@@ -25,7 +25,8 @@ use crate::db::data_file;
 use crate::model::{self, schema};
 
 /// The universal fields whose value may be written as a bare keyword, as a
-/// stylesheet writes it: `placement: wrap`, `handout: keep`.
+/// stylesheet writes it: `placement: wrap`, `handout: keep`. An identifier
+/// that names a variable is that variable's value.
 pub(crate) const KEYWORD_FIELDS: &[&str] =
     &["placement", "side", "wrap-shape", "break-before", "handout"];
 
@@ -128,9 +129,22 @@ impl Vm<'_> {
                     Universal::Label(id) => label = Some(id),
                 }
             } else if let Some(decl) = schema.field(&field) {
+                if decl.default.is_none() && value == Value::None {
+                    return Err(EvalError::new(
+                        arg_span,
+                        eco_format!("`{name}` needs a value for `{field}`, not `none`"),
+                    )
+                    .into());
+                }
                 let value = coerce(&decl.ty, value, arg_span)
                     .map_err(|message| field_error(name, &field, message, arg_span))?;
-                if name.namespace.is_none() && name.name.as_str() == "image" && field == "path" {
+                if is_builtin(name, "heading")
+                    && field == "level"
+                    && matches!(value, Value::Int(level) if level < 1)
+                {
+                    bail!(arg_span, "a heading's level is 1 or more");
+                }
+                if is_builtin(name, "image") && field == "path" {
                     fields.insert(key, self.image_path(value, arg_span)?);
                 } else {
                     fields.insert(key, value);
@@ -155,7 +169,9 @@ impl Vm<'_> {
                     .into());
                 }
                 Some(Constant::None) => {}
-                Some(default) => fields.insert(decl.name.as_str().into(), constant(default)),
+                Some(default) => {
+                    fields.insert(decl.name.as_str().into(), constant(default, &decl.ty, span))
+                }
             }
         }
 
@@ -500,30 +516,47 @@ fn plural(ty: &FieldType) -> EcoString {
     }
 }
 
-/// A default value as the evaluator represents it.
-fn constant(value: &Constant) -> Value {
+/// A default value as the evaluator represents it. A string default of a
+/// content field is its text.
+fn constant(value: &Constant, ty: &FieldType, span: Span) -> Value {
+    let item = match ty {
+        FieldType::Array(item) | FieldType::Dict(item) => item.as_ref(),
+        _ => ty,
+    };
     match value {
         Constant::None => Value::None,
         Constant::Auto => Value::Auto,
         Constant::Bool(v) => Value::Bool(*v),
         Constant::Int(v) => Value::Int(*v),
         Constant::Number(v) => Value::Float(*v),
-        // A default for a content field is its text.
+        Constant::Str(text) if *ty == FieldType::Content => {
+            Value::Content(Content::node(Node::Text {
+                text: text.clone(),
+                span,
+            }))
+        }
         Constant::Str(text) => Value::Str(text.clone()),
         Constant::Keyword(word) => Value::Str(word.as_str().into()),
         Constant::Length(abs) => Value::Length(Length::abs(*abs)),
         Constant::Em(em) => Value::Length(Length::em(*em)),
         Constant::Ratio(ratio) => Value::Ratio(*ratio),
         Constant::Color(color) => Value::Color(*color),
-        Constant::Array(items) => Value::Array(items.iter().map(constant).collect()),
+        Constant::Array(items) => {
+            Value::Array(items.iter().map(|v| constant(v, item, span)).collect())
+        }
         Constant::Dict(pairs) => {
             let mut dict = Dict::new();
             for (key, value) in pairs {
-                dict.insert(key.as_str().into(), constant(value));
+                dict.insert(key.as_str().into(), constant(value, item, span));
             }
             Value::Dict(dict)
         }
     }
+}
+
+/// Whether a name is the built-in element `builtin`.
+fn is_builtin(name: &QualifiedName, builtin: &str) -> bool {
+    name.namespace.is_none() && name.name.as_str() == builtin
 }
 
 /// Checks that content is inline: no paragraph breaks, and no blocks.
@@ -636,30 +669,27 @@ fn check_classes(names: &[Value], span: Span) -> EvalResult<()> {
 /// Checks a step specification (SPEC §10.1): comma-separated items, each a
 /// step (`3`, `+`, `.`), a range (`2-4`), or an open range (`2-`, `-3`).
 fn check_steps(steps: &str) -> StrResult<()> {
-    let step = |s: &str| {
-        s == "+"
-            || s == "."
-            || (!s.is_empty()
-                && s.bytes().all(|b| b.is_ascii_digit())
-                && s.parse::<u32>().is_ok_and(|n| n >= 1))
-    };
-    let valid = !steps.trim().is_empty()
-        && steps
-            .split(',')
-            .map(str::trim)
-            .all(|item| match item.split_once('-') {
-                None => step(item),
-                Some((from, to)) => {
-                    (from.is_empty() || step(from))
-                        && (to.is_empty() || step(to))
-                        && !(from.is_empty() && to.is_empty())
+    let number =
+        |s: &str| s.bytes().all(|b| b.is_ascii_digit()) && s.parse::<u32>().is_ok_and(|n| n >= 1);
+    let step = |s: &str| s == "+" || s == "." || number(s);
+    let item = |item: &str| match item.split_once('-') {
+        None => step(item),
+        Some(("", "")) => false,
+        Some((from, to)) => {
+            (from.is_empty() || step(from))
+                && (to.is_empty() || step(to))
+                && match (from.parse::<u32>(), to.parse::<u32>()) {
+                    (Ok(from), Ok(to)) => from <= to,
+                    _ => true,
                 }
-            });
-    if valid {
+        }
+    };
+    if !steps.trim().is_empty() && steps.split(',').map(str::trim).all(item) {
         Ok(())
     } else {
         Err(eco_format!(
-            "`{steps}` is not a step specification; write steps such as `\"3\"`, `\"2-4\"`, `\"2-\"` or `\"1,3-4\"`"
+            "`{steps}` is not a step specification; write steps such as `\"3\"`, `\"2-4\"`, \
+             `\"2-\"` or `\"1,3-4\"`"
         ))
     }
 }

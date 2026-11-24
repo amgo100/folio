@@ -69,6 +69,11 @@ impl Component for Exam {
                 folio_component::Value::None,
             ),
             FieldDecl::with_default(
+                name("label-text"),
+                FieldType::Content,
+                folio_component::Value::Str("Example".into()),
+            ),
+            FieldDecl::with_default(
                 name("numbered"),
                 FieldType::Bool,
                 folio_component::Value::Bool(true),
@@ -337,7 +342,7 @@ doc
         tree("#example(title: [A *b*], difficulty: \"extension\")[#statement[S]] <ex>\n"),
         "\
 doc
-  exam.example(title: [\"A\", space, strong(body: [\"b\"])], difficulty: \"extension\", numbered: true) <ex>
+  exam.example(title: [\"A\", space, strong(body: [\"b\"])], difficulty: \"extension\", label-text: [\"Example\"], numbered: true) <ex>
     statement:
       paragraph(body: [\"S\"])
 "
@@ -370,7 +375,7 @@ fn slots_are_filled_by_sub_blocks() {
         ),
         "\
 doc
-  exam.example(hint: [\"Use\", space, strong(body: [\"axes\"])], numbered: true, difficulty: \"core\") <ex:slope>
+  exam.example(hint: [\"Use\", space, strong(body: [\"axes\"])], label-text: [\"Example\"], numbered: true, difficulty: \"core\") <ex:slope>
     solution:
       paragraph(body: [\"Resolve.\"])
       paragraph(body: [\"Then solve.\"])
@@ -382,6 +387,43 @@ doc
     assert_eq!(
         messages("#statement[A]"),
         ["error: unknown variable: statement"]
+    );
+}
+
+#[test]
+fn elements_with_arguments_applied_keep_slots_and_keywords() {
+    assert_eq!(
+        tree(
+            "#let ex = example.with(difficulty: \"extension\")\n\
+             #ex[#statement[S]]\n\
+             #let fig = figure.with(placement: top)\n\
+             #fig[]\n"
+        ),
+        "\
+doc
+  exam.example(difficulty: \"extension\", label-text: [\"Example\"], numbered: true)
+    statement:
+      paragraph(body: [\"S\"])
+  figure(placement: \"top\", body: [])
+"
+    );
+    // A variable is its value, not a keyword.
+    assert_eq!(
+        tree("#let p = \"bottom\"\n#figure(placement: p)[]\n"),
+        "doc\n  figure(placement: \"bottom\", body: [])\n"
+    );
+}
+
+#[test]
+fn floats_in_running_text_stay_as_anchors() {
+    assert_eq!(
+        tree("Text #figure(placement: wrap)[] more.\n\n#figure[]\nAfter\n"),
+        "\
+doc
+  paragraph(body: [\"Text\", space, figure(placement: \"wrap\", body: []), space, \"more.\"])
+  figure(body: [])
+  paragraph(body: [\"After\"])
+"
     );
 }
 
@@ -557,6 +599,22 @@ fn schema_violations() {
         (
             "#raw(1)",
             "error: field `text` of `raw`: expected a string, found an int",
+        ),
+        (
+            "#question(marks: none)[A]",
+            "error: `exam.question` needs a value for `marks`, not `none`",
+        ),
+        (
+            "#heading(level: 0)[A]",
+            "error: a heading's level is 1 or more",
+        ),
+        (
+            "#figure(steps: \"4-2\")[]",
+            "error: `4-2` is not a step specification; write steps such as `\"3\"`, `\"2-4\"`, `\"2-\"` or `\"1,3-4\"`",
+        ),
+        (
+            "#figure(steps: \"+3\")[]",
+            "error: `+3` is not a step specification; write steps such as `\"3\"`, `\"2-4\"`, `\"2-\"` or `\"1,3-4\"`",
         ),
     ];
     for (main, expected) in cases {

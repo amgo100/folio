@@ -890,7 +890,12 @@ impl<'a> Vm<'a> {
                 },
                 _ => None,
             };
-            let args = self.call_args(func.as_ref(), call.args(), span)?;
+            // `element.with(..)` takes an element's arguments.
+            let callee = match (&func, &target) {
+                (None, Value::Func(_)) if name == "with" => Some(&target),
+                _ => func.as_ref(),
+            };
+            let args = self.call_args(callee, call.args(), span)?;
             return match func {
                 Some(func) => self.call_value(func, args, span),
                 None => library::call_method(self, target, name, args, span),
@@ -901,8 +906,9 @@ impl<'a> Vm<'a> {
         self.call_value(callee, args, span)
     }
 
-    /// Evaluates the arguments of a call. For a call of an element, bare
-    /// keywords are values of the fields that take them (`placement:
+    /// Evaluates the arguments of a call. For a call of an element, or of
+    /// an element with arguments applied, a bare identifier that names no
+    /// variable is a keyword for the fields that take one (`placement:
     /// wrap`), and the element's slots are defined as functions that make
     /// their sub-blocks (`#statement[..]`).
     fn call_args(
@@ -911,7 +917,7 @@ impl<'a> Vm<'a> {
         args: ast::Args<'_>,
         span: Span,
     ) -> EvalResult<Args> {
-        let Some(Value::Func(Func::Element(name))) = callee else {
+        let Some(name) = callee.and_then(element_of) else {
             return self.args(args, span, false);
         };
         let slots = match crate::model::schema(self.db, self.project, name).map(|s| &s.body) {
@@ -942,7 +948,10 @@ impl<'a> Vm<'a> {
                     let name = named.name().get().clone();
                     let value = match named.expr() {
                         ast::Expr::Ident(word)
-                            if element && element::KEYWORD_FIELDS.contains(&name.as_str()) =>
+                            if element
+                                && element::KEYWORD_FIELDS.contains(&name.as_str())
+                                && self.scopes.get(word.get()).is_none()
+                                && self.globals.get(word.get()).is_none() =>
                         {
                             self.step(word.span())?;
                             Value::Str(word.get().clone())
@@ -1405,6 +1414,21 @@ impl<'a> Vm<'a> {
             }
             Err(stop) => Err(stop.clone()),
         }
+    }
+}
+
+/// The element a function makes, directly or with arguments applied.
+fn element_of(value: &Value) -> Option<&QualifiedName> {
+    fn func(f: &Func) -> Option<&QualifiedName> {
+        match f {
+            Func::Element(name) => Some(name),
+            Func::With(with) => func(&with.0),
+            _ => None,
+        }
+    }
+    match value {
+        Value::Func(f) => func(f),
+        _ => None,
     }
 }
 
