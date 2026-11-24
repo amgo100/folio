@@ -12,6 +12,9 @@ publish.workspace = true
 # tests/dependency_direction.rs. Dev-dependencies are exempt: the conformance
 # suite runs against `folio`.
 [dependencies]
+ecow.workspace = true
+semver.workspace = true
+unicode-ident.workspace = true
 
 [lints]
 workspace = true

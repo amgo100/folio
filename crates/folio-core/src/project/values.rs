@@ -4,93 +4,45 @@
 use std::fmt::{self, Debug, Display, Formatter};
 
 use ecow::{EcoString, eco_format};
+pub use folio_component::{ComponentName, Name, QualifiedName, Target};
 
 use super::de::{Invalid, list};
 
 /// The first-party components, available without declaration (SPEC §13).
 pub const FIRST_PARTY_COMPONENTS: &[&str] = &["exam", "multicol", "plot", "timer", "inputs"];
 
-/// A name of a variant, numbering group or element: an identifier as in
-/// content (`markscheme`, `shared-part`).
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Name(EcoString);
-
-impl Name {
-    pub(super) fn parse(text: &str) -> Result<Self, Invalid> {
-        if folio_syntax::is_ident(text) {
-            Ok(Self(text.into()))
-        } else {
-            Err(Invalid::new(eco_format!("`{text}` is not a valid name")).with_hint(
-                "a name starts with a letter or `_` and continues with letters, digits, `-` or `_`",
-            ))
-        }
-    }
-
-    /// The name as written.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+/// Parses a name of a variant, numbering group or element: an identifier
+/// as in content (`markscheme`, `shared-part`).
+pub(super) fn parse_name(text: &str) -> Result<Name, Invalid> {
+    Name::new(text).ok_or_else(|| {
+        Invalid::new(eco_format!("`{text}` is not a valid name")).with_hint(
+            "a name starts with a letter or `_` and continues with letters, digits, `-` or `_`",
+        )
+    })
 }
 
-/// A name that may be qualified with a component namespace: `question` or
-/// `exam.question` (SPEC §3.6).
-#[derive(Clone, Eq, PartialEq, Hash)]
-pub struct QualifiedName {
-    /// The component namespace, if the name is qualified.
-    pub namespace: Option<Name>,
-    /// The name within the namespace.
-    pub name: Name,
+/// Parses a name that may be qualified with a component namespace:
+/// `question` or `exam.question` (SPEC §3.6).
+pub(super) fn parse_qualified_name(text: &str) -> Result<QualifiedName, Invalid> {
+    QualifiedName::new(text).ok_or_else(|| {
+        Invalid::new(eco_format!("`{text}` is not a valid name")).with_hint(
+            "write a name such as `question`, or qualify it with its component: `exam.question`",
+        )
+    })
 }
 
-impl QualifiedName {
-    pub(super) fn parse(text: &str) -> Result<Self, Invalid> {
-        let invalid = || {
-            Invalid::new(eco_format!("`{text}` is not a valid name")).with_hint(
-                "write a name such as `question`, or qualify it with its component: `exam.question`",
-            )
-        };
-        let (namespace, name) = match text.split_once('.') {
-            Some((ns, name)) => (Some(Name::parse(ns).map_err(|_| invalid())?), name),
-            None => (None, text),
-        };
-        let name = Name::parse(name).map_err(|_| invalid())?;
-        Ok(Self { namespace, name })
-    }
+/// Parses the name of a component: an identifier for components installed
+/// by version (`circuits`), or a scoped name for packages (`@school/house`).
+pub(super) fn parse_component_name(text: &str) -> Result<ComponentName, Invalid> {
+    ComponentName::new(text).ok_or_else(|| {
+        Invalid::new(eco_format!("`{text}` is not a valid component name"))
+            .with_hint("write a name such as `circuits`, or a scoped name such as `@school/house`")
+    })
 }
 
-/// The name of a component: an identifier for components installed by
-/// version (`circuits`), or a scoped name for packages (`@school/house`).
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct ComponentName(EcoString);
-
-impl ComponentName {
-    pub(super) fn parse(text: &str) -> Result<Self, Invalid> {
-        let valid = match text.strip_prefix('@') {
-            Some(rest) => rest.split_once('/').is_some_and(|(scope, name)| {
-                folio_syntax::is_ident(scope) && folio_syntax::is_ident(name)
-            }),
-            None => folio_syntax::is_ident(text),
-        };
-        if valid {
-            Ok(Self(text.into()))
-        } else {
-            Err(
-                Invalid::new(eco_format!("`{text}` is not a valid component name")).with_hint(
-                    "write a name such as `circuits`, or a scoped name such as `@school/house`",
-                ),
-            )
-        }
-    }
-
-    /// The name as written.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Whether this is a first-party component (SPEC §13).
-    pub fn is_first_party(&self) -> bool {
-        FIRST_PARTY_COMPONENTS.contains(&self.as_str())
-    }
+/// Whether a component is first-party (SPEC §13).
+pub fn is_first_party(name: &ComponentName) -> bool {
+    FIRST_PARTY_COMPONENTS.contains(&name.as_str())
 }
 
 /// A language edition: a version of the syntax and semantics of the
@@ -179,60 +131,13 @@ impl Lang {
     }
 }
 
-/// An output target (SPEC §1.5, §11).
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Target {
-    /// PDF (§11.1).
-    Pdf,
-    /// Word (§11.2).
-    Docx,
-    /// PowerPoint (§11.3).
-    Pptx,
-    /// The live presentation (§11.4), which writes no file.
-    Live,
-}
-
-impl Target {
-    /// Every target.
-    pub const ALL: &[Self] = &[Self::Pdf, Self::Docx, Self::Pptx, Self::Live];
-
-    /// The target as written in the manifest: `"pdf"`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pdf => "pdf",
-            Self::Docx => "docx",
-            Self::Pptx => "pptx",
-            Self::Live => "live",
-        }
-    }
-
-    /// The extension of the file the target writes, if it writes one.
-    pub fn extension(self) -> Option<&'static str> {
-        match self {
-            Self::Pdf => Some("pdf"),
-            Self::Docx => Some("docx"),
-            Self::Pptx => Some("pptx"),
-            Self::Live => None,
-        }
-    }
-
-    pub(super) fn parse(text: &str) -> Result<Self, Invalid> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|t| t.as_str() == text)
-            .ok_or_else(|| {
-                let names: Vec<&str> = Self::ALL.iter().map(|t| t.as_str()).collect();
-                Invalid::new(eco_format!("unknown target `{text}`"))
-                    .with_hint(eco_format!("the targets are {}", list(&names)))
-            })
-    }
-}
-
-impl Display for Target {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
+/// Parses an output target as the manifest writes it: `"pdf"`.
+pub(super) fn parse_target(text: &str) -> Result<Target, Invalid> {
+    Target::from_name(text).ok_or_else(|| {
+        let names: Vec<&str> = Target::ALL.iter().map(|t| t.as_str()).collect();
+        Invalid::new(eco_format!("unknown target `{text}`"))
+            .with_hint(eco_format!("the targets are {}", list(&names)))
+    })
 }
 
 /// A calendar date, as TOML writes local dates: `2026-11-24`.
@@ -475,29 +380,7 @@ macro_rules! string_traits {
     )*};
 }
 
-string_traits!(
-    Name,
-    ComponentName,
-    Lang,
-    ProjectPath,
-    RelativePath,
-    PathPattern
-);
-
-impl Display for QualifiedName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if let Some(ns) = &self.namespace {
-            write!(f, "{ns}.")?;
-        }
-        write!(f, "{}", self.name)
-    }
-}
-
-impl Debug for QualifiedName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(self.to_string().as_str(), f)
-    }
-}
+string_traits!(Lang, ProjectPath, RelativePath, PathPattern);
 
 #[cfg(test)]
 mod tests {
@@ -545,17 +428,17 @@ mod tests {
 
     #[test]
     fn names() {
-        assert!(Name::parse("markscheme").is_ok());
-        assert!(Name::parse("part-b_2").is_ok());
-        assert!(Name::parse("2nd").is_err());
-        assert!(Name::parse("a.b").is_err());
-        let q = QualifiedName::parse("exam.question").unwrap();
+        assert!(parse_name("markscheme").is_ok());
+        assert!(parse_name("part-b_2").is_ok());
+        assert!(parse_name("2nd").is_err());
+        assert!(parse_name("a.b").is_err());
+        let q = parse_qualified_name("exam.question").unwrap();
         assert_eq!(q.to_string(), "exam.question");
-        assert!(QualifiedName::parse("a.b.c").is_err());
-        assert!(ComponentName::parse("@school/house").is_ok());
-        assert!(ComponentName::parse("circuits").is_ok());
-        assert!(ComponentName::parse("@school").is_err());
-        assert!(ComponentName::parse("school/house").is_err());
+        assert!(parse_qualified_name("a.b.c").is_err());
+        assert!(parse_component_name("@school/house").is_ok());
+        assert!(parse_component_name("circuits").is_ok());
+        assert!(parse_component_name("@school").is_err());
+        assert!(parse_component_name("school/house").is_err());
     }
 
     #[test]

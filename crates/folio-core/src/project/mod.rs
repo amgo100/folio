@@ -31,7 +31,7 @@ pub use self::manifest::{
 };
 pub use self::values::{
     ComponentName, Date, Edition, FIRST_PARTY_COMPONENTS, Lang, Name, PathPattern, ProjectPath,
-    QualifiedName, RelativePath, Sha256, Target,
+    QualifiedName, RelativePath, Sha256, Target, is_first_party,
 };
 
 /// A value read from `folio.toml` or `folio.lock`, with the span of its

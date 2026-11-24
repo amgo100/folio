@@ -23,6 +23,7 @@ salsa = "0.28.6"
 semver = "1.0.28"
 # The span-preserving parser only: the manifest and lockfile readers report
 # errors on keys and values themselves, so serde is not needed.
+unicode-ident = "1.0"
 toml = { version = "1.2.2", default-features = false, features = ["std", "parse"] }
 
 [workspace.lints.rust]

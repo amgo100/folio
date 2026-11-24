@@ -4,7 +4,7 @@ use ecow::{EcoString, eco_format};
 use folio_syntax::FileId;
 
 use super::de::{Cx, Invalid, Table, suggest};
-use super::values::{ComponentName, Name, Sha256};
+use super::values::{ComponentName, Name, Sha256, parse_component_name, parse_name};
 use super::{ProjectError, Spanned};
 
 /// A parsed `folio.lock`: fonts locked by hash, third-party components and
@@ -218,7 +218,7 @@ fn read_packages(cx: &mut Cx, tables: &[Table<'_>], kind: &str) -> Vec<LockedPac
         table.check_keys(cx, &["name", "version", "hash"]);
         let name = table
             .require(cx, "name")
-            .and_then(|v| v.parse(cx, ComponentName::parse));
+            .and_then(|v| v.parse(cx, parse_component_name));
         let version = table.require(cx, "version").and_then(|v| {
             v.parse(cx, |s| {
                 semver::Version::parse(s).map_err(|_| {
@@ -267,14 +267,14 @@ fn read_bindings(cx: &mut Cx, table: &Table<'_>, components: &[LockedPackage]) -
         };
         let mut out = Vec::new();
         for (key, value) in table.entries() {
-            let name = match Name::parse(key.name) {
+            let name = match parse_name(key.name) {
                 Ok(name) => cx.spanned(name, key.span.clone()),
                 Err(invalid) => {
                     cx.invalid(key.span.clone(), invalid);
                     continue;
                 }
             };
-            let Some(component) = value.parse(cx, ComponentName::parse) else {
+            let Some(component) = value.parse(cx, parse_component_name) else {
                 continue;
             };
             let text = component.v.as_str();
