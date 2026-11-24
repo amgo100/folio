@@ -170,18 +170,22 @@ impl Fonts {
                 continue;
             }
             // Character by character; ignorable ones join the run before.
+            // Ignorable characters join the run before them, or the
+            // first run when they lead.
             let mut start = run.start;
             let mut face = None;
+            let mut first = true;
             for (i, c) in text[run.clone()].char_indices() {
                 let i = run.start + i;
                 if ignorable(c) {
                     continue;
                 }
                 let here = (0..chain.len()).find(|&k| has(k, c)).map(|k| chain[k]);
-                if here != face && i > start {
+                if !first && here != face {
                     push(start..i, face);
                     start = i;
                 }
+                first = false;
                 face = here;
             }
             push(start..run.end, face);
@@ -471,11 +475,26 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
                     }
                 }
             }
+            if chain.is_empty() {
+                // Reported once per chain, rather than every character of
+                // every text set in it.
+                let names: Vec<String> =
+                    request.families.iter().map(|f| format!("`{f}`")).collect();
+                let message = if names.is_empty() {
+                    EcoString::from("the text has no font: `font` names no family")
+                } else {
+                    eco_format!("no font of the `font` chain is available: {}", names.join(", "))
+                };
+                diag::report(
+                    db,
+                    Diagnostic::error(span, message).with_hint(
+                        "name an available family in `font`, such as the bundled `New Computer Modern`",
+                    ),
+                );
+            }
             chain
         });
         if chain.is_empty() {
-            // The unknown families are reported; every character would
-            // be missing too.
             return;
         }
         let mut missing: Vec<char> = Vec::new();
@@ -558,6 +577,8 @@ fn report_missing(db: &dyn Db, fonts: &Fonts, chain: &[usize], missing: &[char],
 
 /// Reports what a face that text is set in costs the build: an unpinned
 /// system font as the mode says, a font that forbids embedding in a PDF.
+/// Watch mode keeps no output, so a system font is allowed there even with
+/// strict formatting; the strict build that writes output reports it.
 fn check_face(db: &dyn Db, face: &Face, span: Span, mode: BuildMode, strict: bool, pdf: bool) {
     if face.pin == Pin::Unpinned && mode != BuildMode::Watch {
         let message = eco_format!(

@@ -407,3 +407,40 @@ fn a_project_file_that_is_not_a_font_is_a_warning() {
         )]
     );
 }
+
+#[test]
+fn a_chain_with_no_available_family_is_an_error() {
+    let compiled = compile(&world("doc { font: \"Nonexistent\"; }\n", "Text.\n"));
+    let messages = messages(&compiled);
+    assert_eq!(
+        messages,
+        [
+            (
+                Severity::Warning,
+                "the font family `Nonexistent` is not available".into()
+            ),
+            (
+                Severity::Error,
+                "no font of the `font` chain is available: `Nonexistent`".into()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn leading_spaces_join_the_first_run() {
+    let world = world("", "Text.\n");
+    let fonts = folio::fonts(&world).unwrap();
+    let serif = fonts.select("Source Serif 4", FontVariant::NORMAL).unwrap();
+    let modern = fonts
+        .select("New Computer Modern", FontVariant::NORMAL)
+        .unwrap();
+    // Source Serif 4 lacks the Hebrew, so the run is split by character.
+    let text = " \u{5e9} x";
+    let runs: Vec<_> = fonts
+        .resolve(&[serif, modern], text)
+        .into_iter()
+        .map(|r| (&text[r.range], r.face))
+        .collect();
+    assert_eq!(runs, [(" \u{5e9} ", Some(modern)), ("x", Some(serif))]);
+}

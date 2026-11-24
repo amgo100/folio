@@ -72,11 +72,13 @@ impl FontCache {
         static MAPPED: Mutex<Option<HashMap<PathBuf, FontFile>>> = Mutex::new(None);
 
         let path = self.path(hash);
-        let mut mapped = MAPPED.lock().unwrap_or_else(PoisonError::into_inner);
-        let mapped = mapped.get_or_insert_with(HashMap::new);
-        if let Some(file) = mapped.get(&path) {
+        let lock = || MAPPED.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(file) = lock().as_ref().and_then(|m| m.get(&path)) {
             return Ok(Some(file.clone()));
         }
+        // Mapped and checked without the lock, so that lookups of other
+        // files need not wait for the hashing; a file mapped twice at once
+        // is kept once.
         let file = match File::open(&path) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -95,7 +97,12 @@ impl FontCache {
             ));
         }
         let font = FontFile::with_hash(FontOrigin::Cache, data, hash);
-        mapped.insert(path, font.clone());
+        let mut mapped = lock();
+        let font = mapped
+            .get_or_insert_with(HashMap::new)
+            .entry(path)
+            .or_insert(font)
+            .clone();
         Ok(Some(font))
     }
 
