@@ -22,6 +22,7 @@ fn folio_component_depends_on_no_core_crate() {
         .current_dir(&root)
         .args([
             "tree",
+            "--locked",
             "--package",
             "folio-component",
             "--edges",
@@ -72,12 +73,15 @@ fn folio_component_depends_on_no_core_crate() {
 /// Splits a `cargo tree` line such as `name v1.2.3 (/path/to/crate) (*)` into
 /// the package name and, for path dependencies, the crate directory.
 fn parse_line(line: &str) -> Option<(&str, Option<PathBuf>)> {
-    let (name, rest) = line.trim().split_once(' ')?;
+    let line = line.trim().trim_end_matches(" (*)");
+    let (name, rest) = line.split_once(' ')?;
+    // `rest` is `v1.2.3`, optionally followed by ` (<source>)`. The source runs
+    // to the final `)`, so a path that itself contains parentheses survives.
     let path = rest
-        .split('(')
-        .skip(1)
-        .filter_map(|group| group.split_once(')').map(|(inner, _)| Path::new(inner)))
-        .find(|candidate| candidate.is_absolute())
+        .split_once(" (")
+        .and_then(|(_, source)| source.strip_suffix(')'))
+        .map(Path::new)
+        .filter(|candidate| candidate.is_absolute())
         .map(Path::to_path_buf);
     Some((name, path))
 }

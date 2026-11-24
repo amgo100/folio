@@ -18,7 +18,7 @@ cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
-cargo deny check --all-features   # licences, advisories, bans, sources; config in deny.toml
+cargo deny check                  # licences, advisories, bans, sources; config in deny.toml
 ```
 
 - One test: `cargo test -p folio-component --test dependency_direction`. Run the binary with `cargo run -- --version`.
