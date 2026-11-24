@@ -356,7 +356,11 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
 fn highlight_ident(node: &LinkedNode<'_>) -> Option<Tag> {
     // The name of an at-rule (`@import`, `@variant`) and the words that start
     // render templates, slide masters and slide layouts are keywords.
-    if node.prev_sibling_kind() == Some(SyntaxKind::At)
+    if (node.prev_sibling_kind() == Some(SyntaxKind::At)
+        && matches!(
+            node.parent_kind(),
+            Some(SyntaxKind::RuleScope | SyntaxKind::StyleImport | SyntaxKind::ExportBlock)
+        ))
         || (matches!(
             node.parent_kind(),
             Some(SyntaxKind::RenderBlock | SyntaxKind::SlideMaster | SyntaxKind::SlideLayout)

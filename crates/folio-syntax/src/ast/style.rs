@@ -97,7 +97,7 @@ impl<'a> TokenDecl<'a> {
 
     /// The items of the value, in order.
     pub fn values(self) -> impl Iterator<Item = Expr<'a>> {
-        values(self.0)
+        values(self.0, |kind| kind == SyntaxKind::TokenName)
     }
 }
 
@@ -641,29 +641,28 @@ node! {
 impl<'a> Declaration<'a> {
     /// The property: `numbering`, `space-before`.
     pub fn property(self) -> Ident<'a> {
-        self.0
-            .children()
-            .take_while(|node| node.kind() != SyntaxKind::Colon)
-            .filter_map(SyntaxNode::cast)
-            .last()
-            .unwrap_or_else(Ident::placeholder)
+        self.names().last().unwrap_or_else(Ident::placeholder)
     }
 
     /// The namespace of a qualified property: `multicol` in
     /// `multicol.columns`.
     pub fn namespace(self) -> Option<Ident<'a>> {
-        let mut names = self
-            .0
-            .children()
-            .take_while(|node| node.kind() != SyntaxKind::Colon)
-            .filter_map(SyntaxNode::cast::<Ident<'a>>);
+        let mut names = self.names();
         let first = names.next()?;
         names.next().map(|_| first)
     }
 
+    /// The names of the qualified property name, before the value.
+    fn names(self) -> impl Iterator<Item = Ident<'a>> {
+        self.0
+            .children()
+            .take_while(|node| is_property_name_part(node.kind()))
+            .filter_map(SyntaxNode::cast)
+    }
+
     /// The items of the value, in order: `outer`, `width`, `32mm`, ...
     pub fn values(self) -> impl Iterator<Item = Expr<'a>> {
-        values(self.0)
+        values(self.0, is_property_name_part)
     }
 
     /// The items of the value grouped by the commas between them:
@@ -673,7 +672,7 @@ impl<'a> Declaration<'a> {
         for node in self
             .0
             .children()
-            .skip_while(|node| node.kind() != SyntaxKind::Colon)
+            .skip_while(|node| is_property_name_part(node.kind()))
         {
             if node.kind() == SyntaxKind::Comma {
                 groups.push(vec![]);
@@ -735,10 +734,20 @@ impl<'a> Guarded<'a> {
     }
 }
 
-/// The value items after the colon of a declaration or token definition.
-fn values<'a>(node: &'a SyntaxNode) -> impl Iterator<Item = Expr<'a>> {
+/// Whether a node is part of a declaration's property name.
+fn is_property_name_part(kind: SyntaxKind) -> bool {
+    matches!(kind, SyntaxKind::Ident | SyntaxKind::Dot)
+}
+
+/// The value items of a declaration or token definition: what follows the
+/// name, whose parts `is_name` tells. A value whose colon is missing counts
+/// too.
+fn values<'a>(
+    node: &'a SyntaxNode,
+    is_name: impl Fn(SyntaxKind) -> bool,
+) -> impl Iterator<Item = Expr<'a>> {
     node.children()
-        .skip_while(|node| node.kind() != SyntaxKind::Colon)
+        .skip_while(move |node| is_name(node.kind()))
         .filter_map(SyntaxNode::cast)
 }
 

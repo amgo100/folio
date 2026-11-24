@@ -653,8 +653,10 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
 
     loop {
         // In a stylesheet value, a name directly followed by an attribute
-        // test is a selector: `slide-break: heading[level=2], slide;`.
+        // test is a selector: `slide-break: heading[level=2], slide;`. In
+        // content, `name[..]` stays a call with a content argument.
         if p.style_values
+            && p.lexer.style()
             && p.directly_at(SyntaxKind::LeftBracket)
             && p.nodes.len() == m.0 + 1
             && p.nodes[m.0].kind() == SyntaxKind::Ident
@@ -685,6 +687,7 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
         // In a stylesheet value, a sign after a space and directly before its
         // operand starts a new item, as in CSS: `margin: 0 -1mm`.
         if p.style_values
+            && p.split_signs
             && p.at_set(syntax_set!(Plus, Minus))
             && p.had_trivia()
             && !p.lexer.clone().next().0.is_trivia()
@@ -805,9 +808,13 @@ pub(super) fn reparse_block(text: &str, range: Range<usize>) -> Option<SyntaxNod
 }
 
 /// Parses a content or code block.
+///
+/// In a stylesheet value, braces hold template items, so a conditional in
+/// parentheses has the same bodies as one at the level of items.
 fn block(p: &mut Parser<'_>) {
     match p.current() {
         SyntaxKind::LeftBracket => content_block(p),
+        SyntaxKind::LeftBrace if p.style_values => style::template_block(p),
         SyntaxKind::LeftBrace => code_block(p),
         _ => p.expected("block"),
     }
@@ -1285,6 +1292,7 @@ fn parenthesized_or_array_or_dict(p: &mut Parser<'_>) -> SyntaxKind {
     // This does allow some unexpected expressions, such as `(: key: val)`, but
     // it's currently intentional.
     let m = p.marker();
+    let split = mem::replace(&mut p.split_signs, false);
     p.with_nl_mode(AtNewline::Continue, |p| {
         p.assert(SyntaxKind::LeftParen);
         if p.eat_if(SyntaxKind::Colon) {
@@ -1307,6 +1315,7 @@ fn parenthesized_or_array_or_dict(p: &mut Parser<'_>) -> SyntaxKind {
 
         p.expect_closing_delimiter(m, SyntaxKind::RightParen);
     });
+    p.split_signs = split;
 
     let kind = if state.maybe_just_parens && state.count == 1 {
         SyntaxKind::Parenthesized
@@ -1743,6 +1752,10 @@ struct Parser<'s> {
     /// a function argument can be several items, braces hold template items
     /// and a name followed by an attribute test is a selector.
     style_values: bool,
+    /// Whether the parser is at the level of template items, where a sign
+    /// after a space starts a new item (`margin: 0 -1mm`) rather than a
+    /// subtraction. Not inside parentheses or conditions.
+    split_signs: bool,
 }
 
 /// A single token returned from the lexer with a cached [`SyntaxKind`] and a
@@ -1861,6 +1874,7 @@ impl<'s> Parser<'s> {
             memo: Default::default(),
             depth: 0,
             style_values: false,
+            split_signs: false,
         }
     }
 

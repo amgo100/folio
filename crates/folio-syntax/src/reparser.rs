@@ -272,8 +272,23 @@ fn expand_and_reparse_stylesheet(
     let children = node.children().as_slice();
     let mut expansion = 1;
     loop {
-        let start = overlap.start.saturating_sub(expansion);
+        let mut start = overlap.start.saturating_sub(expansion);
         let mut end = (overlap.end + expansion).min(children.len());
+
+        // The reparse must start after an item that is closed by its own `}`
+        // or `;`. An unclosed one, such as a token definition without its
+        // semicolon, could have taken in the edited text.
+        while start > 0 {
+            let prev = &children[start - 1];
+            if prev.kind().is_trivia()
+                || prev.diagnosis().errors
+                || !matches!(last_leaf_text(prev), "}" | ";")
+            {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
 
         // The reparse must stop at the start of an item, after the trivia
         // and errors that precede it.
@@ -303,6 +318,14 @@ fn expand_and_reparse_stylesheet(
         expansion *= 2;
     }
     None
+}
+
+/// The text of the last non-empty leaf of a node.
+fn last_leaf_text(node: &SyntaxNode) -> &str {
+    match node.children().rev().find(|child| !child.is_empty()) {
+        Some(child) => last_leaf_text(child),
+        None => node.leaf_text(),
+    }
 }
 
 /// The indices and start offset of the children which overlap a replaced range.

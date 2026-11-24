@@ -481,6 +481,9 @@ fn attr_value(p: &mut Parser<'_>) {
 /// Parses a pseudo-class: `:first`, `:nth(2)`, `:has(answer)`, `:step(2-)`,
 /// or a component state such as `:expired`.
 fn pseudo_class(p: &mut Parser<'_>, in_has: bool) {
+    let Some(p) = &mut p.increase_depth() else {
+        return;
+    };
     let m = p.marker();
     p.assert(SyntaxKind::Colon);
     if p.current().is_keyword() && !p.had_trivia() {
@@ -766,10 +769,14 @@ const ITEM_START: SyntaxSet = syntax_set!(
 /// semicolon there is reported without losing that declaration.
 fn value(p: &mut Parser<'_>) {
     let was = std::mem::replace(&mut p.style_values, true);
+    let split = std::mem::replace(&mut p.split_signs, true);
     let m = p.marker();
     let mut last = None;
     while !p.at_set(VALUE_END) {
-        if p.had_newline() && p.at(SyntaxKind::Ident) && p.peek() == Some(SyntaxKind::Colon) {
+        if p.had_newline()
+            && ((p.at(SyntaxKind::Ident) && p.peek() == Some(SyntaxKind::Colon))
+                || at_rule_start(p))
+        {
             p.expected("semicolon");
             break;
         }
@@ -787,6 +794,31 @@ fn value(p: &mut Parser<'_>) {
         p.expected("value");
     }
     p.style_values = was;
+    p.split_signs = split;
+}
+
+/// Whether a line of a value looks like the start of a rule: a selector
+/// followed by `{` on the same line, as in `heading { .. }` after a token
+/// definition that lacks its semicolon. Lines with a template conditional
+/// (`slot(a) if c { .. }`) do not count.
+fn at_rule_start(p: &Parser<'_>) -> bool {
+    if !p.lexer.style() || !at_compound_start(p) {
+        return false;
+    }
+    let mut lexer = p.lexer.clone();
+    loop {
+        let (kind, _) = lexer.next();
+        match kind {
+            SyntaxKind::LeftBrace => return true,
+            SyntaxKind::Semicolon
+            | SyntaxKind::RightBrace
+            | SyntaxKind::If
+            | SyntaxKind::Else
+            | SyntaxKind::End => return false,
+            kind if kind.is_trivia() && lexer.newline() => return false,
+            _ => {}
+        }
+    }
 }
 
 /// Reports `!important`, which Folio does not have.
@@ -816,7 +848,7 @@ fn item(p: &mut Parser<'_>, last: &mut Option<Marker>) {
     }
 
     p.assert(SyntaxKind::If);
-    code_expr_prec(p, false, ast::BinOp::Assign.precedence() + 1);
+    condition(p);
     if p.at(SyntaxKind::LeftBrace) {
         conditional_rest(p, m);
         *last = Some(m);
@@ -831,15 +863,25 @@ fn item(p: &mut Parser<'_>, last: &mut Option<Marker>) {
     }
 }
 
+/// Parses the condition of a template conditional or a guarded item.
+fn condition(p: &mut Parser<'_>) {
+    let split = std::mem::replace(&mut p.split_signs, false);
+    code_expr_prec(p, false, ast::BinOp::Assign.precedence() + 1);
+    p.split_signs = split;
+}
+
 /// Parses the blocks of a template conditional after its condition:
 /// `{ ": " field(title) } else { .. }`.
 fn conditional_rest(p: &mut Parser<'_>, m: Marker) {
+    let Some(p) = &mut p.increase_depth() else {
+        return;
+    };
     template_block(p);
     if p.eat_if(SyntaxKind::Else) {
         if p.at(SyntaxKind::If) {
             let m_else = p.marker();
             p.assert(SyntaxKind::If);
-            code_expr_prec(p, false, ast::BinOp::Assign.precedence() + 1);
+            condition(p);
             if p.at(SyntaxKind::LeftBrace) {
                 conditional_rest(p, m_else);
             } else {
@@ -858,6 +900,7 @@ fn conditional_rest(p: &mut Parser<'_>, m: Marker) {
 /// Parses a block of template items: `{ ": " field(title) }`.
 pub(super) fn template_block(p: &mut Parser<'_>) {
     let m = p.marker();
+    let split = std::mem::replace(&mut p.split_signs, true);
     p.with_nl_mode(AtNewline::Continue, |p| {
         p.assert(SyntaxKind::LeftBrace);
         let mut last = None;
@@ -870,6 +913,7 @@ pub(super) fn template_block(p: &mut Parser<'_>) {
         }
         p.expect_closing_delimiter(m, SyntaxKind::RightBrace);
     });
+    p.split_signs = split;
     p.wrap(m, SyntaxKind::TemplateBlock);
 }
 
@@ -900,10 +944,12 @@ pub(super) fn template_arg(p: &mut Parser<'_>, seen: &mut FxHashSet<ecow::EcoStr
     let m_value = p.marker();
     let mut last = None;
     let mut count = 0;
+    let split = std::mem::replace(&mut p.split_signs, true);
     while p.at_set(ITEM_START) {
         item(p, &mut last);
         count += 1;
     }
+    p.split_signs = split;
     if count == 0 {
         p.expected("expression");
     } else if p.nodes[m_value.0..]

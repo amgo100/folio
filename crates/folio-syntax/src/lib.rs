@@ -32,6 +32,9 @@
 //!   (`strong(term() " " counter())`), braces hold such items
 //!   (`if field(title) { ": " field(title) }`), and an item can be guarded by
 //!   a condition (`badge(..) if field(difficulty) == "extension"`).
+//! - A sign after a space and directly before its operand starts a new item,
+//!   as in CSS (`margin: 0 -1mm`); inside parentheses and conditions it is
+//!   an operator.
 //! - A name directly followed by an attribute test is a selector
 //!   (`slide-break: heading[level=2], slide;`).
 //! - Code and content blocks (`[..]`) hold script and markup as in content
@@ -43,7 +46,8 @@
 //!
 //! Scoped rules in content (`#rule question:first { .. }`) use the same
 //! selectors and declarations, with tokens and colours written as code
-//! (`tok.accent`, `rgb("1f5fa8")`).
+//! (`tok.accent`, `rgb("1f5fa8")`), and `name[..]` a call with a content
+//! argument as elsewhere in content.
 //!
 //! Where Folio differs from Typst's markup:
 //!

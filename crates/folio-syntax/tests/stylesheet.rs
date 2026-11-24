@@ -456,6 +456,60 @@ fn signs_start_items_as_in_css() {
 }
 
 #[test]
+fn signs_inside_parentheses_and_conditions_are_operators() {
+    let text = "q { width: (100% -2mm) / 2; trailer: x if field(a) -1 > 0; }";
+    ok(text);
+    let root = root(text);
+    assert_eq!(count(&root, SyntaxKind::Binary), 4);
+}
+
+#[test]
+fn missing_semicolon_before_a_rule() {
+    let text = "$accent: #1f5fa8\nheading { color: $accent; }";
+    assert_eq!(errors(text), ["expected semicolon"]);
+    let root = root(text);
+    assert_eq!(count(&root, SyntaxKind::StyleRule), 1);
+    // A template conditional on the next line continues the value.
+    let text = "render q {\n  trailer: field(a)\n    if field(b) { \"x\" };\n}";
+    ok(text);
+}
+
+#[test]
+fn declarations_without_colon() {
+    let root = root("q { numbering solid; }");
+    let decl: ast::Declaration<'_> = first(&root);
+    assert_eq!(decl.property().as_str(), "numbering");
+    assert_eq!(decl.namespace(), None);
+    let values: Vec<_> = decl.values().map(src).collect();
+    assert_eq!(values, ["solid"]);
+    let root = self::root("$c #fff;");
+    let token: ast::TokenDecl<'_> = first(&root);
+    assert_eq!(token.values().count(), 1);
+}
+
+#[test]
+fn parenthesised_conditionals_hold_template_items() {
+    let text = "q { color: (if field(dark) { $accent } else { $ink }); }";
+    ok(text);
+    let root = root(text);
+    assert_eq!(count(&root, SyntaxKind::TemplateBlock), 2);
+    assert_eq!(count(&root, SyntaxKind::TokenName), 2);
+}
+
+#[test]
+fn deep_nesting_does_not_overflow() {
+    let has = format!("a{} {{}}", ":has(b".repeat(100_000));
+    let root = root(&has);
+    assert!(!errors(root.full_text().as_str()).is_empty());
+    let chain = format!(
+        "render q {{ t: if a {{ }}{} else {{ }}; }}",
+        " else if a { }".repeat(100_000)
+    );
+    let root = self::root(&chain);
+    assert!(!errors(root.full_text().as_str()).is_empty());
+}
+
+#[test]
 fn qualified_property_names() {
     let text = "glossary { multicol.columns: 3; columns: 2; }";
     ok(text);
@@ -753,6 +807,16 @@ fn scoped_rules_use_the_stylesheet_grammar() {
     assert_eq!(count(&root, SyntaxKind::TokenName), 0);
     assert_eq!(count(&root, SyntaxKind::FieldAccess), 1);
 
+    // In content, `name[..]` is a call with a content argument, as in
+    // scripts, and braces hold template items.
+    let text = "#rule q { trailer: strong[Total] if field(t) { \": \" field(t) }; }";
+    let root = parse(text);
+    let (errors, _) = Source::detached(text).root().errors_and_warnings();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(count(&root, SyntaxKind::CompoundSelector), 1);
+    assert_eq!(count(&root, SyntaxKind::ContentBlock), 1);
+    assert_eq!(count(&root, SyntaxKind::TemplateBlock), 1);
+
     // An id selector and the excluded combinator.
     let (errors, _) = Source::detached("#rule #{fig:ball} ~ x { a: 1; }")
         .root()
@@ -826,6 +890,31 @@ fn reparse_of_a_scoped_rule_in_a_stylesheet_value() {
     assert_eq!(&source.text()[reparsed], "{ bb: #fff; }");
     assert!(source.root().spanless_eq(&parse_stylesheet(source.text())));
     assert_eq!(count(source.root(), SyntaxKind::Color), 0);
+}
+
+#[test]
+fn reparse_after_an_unclosed_item() {
+    // The rule `a` lacks its block. Once the unknown at-rule is gone, `.x`
+    // continues its selector, so the edit must be reparsed together with it.
+    let text = "q { x: 1; }\na\n/* note */\n@b .x { }\nc { x: 1; }\n";
+    let mut source = Source::detached_stylesheet(text);
+    let at = text.find("@b ").unwrap();
+    source.edit(at..at + 3, "");
+    assert!(source.root().spanless_eq(&parse_stylesheet(source.text())));
+    assert_eq!(count(source.root(), SyntaxKind::StyleRule), 3);
+    // Edits further on still agree with a full parse.
+    for (find, with) in [
+        (".x {", ".y {"),
+        ("c { x: 1", "c { x: 2"),
+        ("\na\n", "\na {}\n"),
+    ] {
+        let at = source.text().find(find).unwrap();
+        source.edit(at..at + find.len(), with);
+        assert!(
+            source.root().spanless_eq(&parse_stylesheet(source.text())),
+            "after replacing {find:?} with {with:?}"
+        );
+    }
 }
 
 #[test]
