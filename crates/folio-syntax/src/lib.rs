@@ -11,26 +11,31 @@
 //! repository root). It currently parses content markup (SPEC §4.2):
 //!
 //! - [`parse`] turns source text into a lossless, error-tolerant concrete
-//!   syntax tree of [`SyntaxNode`]s. Printing the tree gives back the source
-//!   byte for byte, and a broken construct becomes an error node while the rest
-//!   of the file still parses.
+//!   syntax tree of [`SyntaxNode`]s. Printing the tree
+//!   ([`SyntaxNode::full_text`]) gives back the source byte for byte, and a
+//!   broken construct becomes an error node while the rest of the file still
+//!   parses.
 //! - [`ast`] is a typed view over that tree.
 //! - [`Source`] holds one file's text and tree and reparses only the smallest
 //!   enclosing block after an edit, reusing untouched nodes (SPEC §2.3).
 //!
 //! Where Folio differs from Typst's markup:
 //!
-//! - Labels consist of letters, digits, `-`, `_` and `:`, and do not end with
-//!   `:` or `-`. They cannot contain `.`, which separates a label from a
-//!   published value (`<timer:task>.remaining`). Trailing `:` and `-` after a
-//!   reference are punctuation.
+//! - Labels consist of letters, digits, `-`, `_` and `:`, start with a
+//!   letter, digit or `_`, and do not end with `:` or `-`. They cannot contain
+//!   `.`, which separates a label from a published value
+//!   (`<timer:task>.remaining`). Trailing `:` and `-` after a reference are
+//!   punctuation.
+//! - A named argument can be limited to a variant or target:
+//!   `override@markscheme: (..)` (SPEC §5.4).
 //! - `#element` declares an element schema (SPEC §4.3), `#rule` is a scoped
 //!   style rule (SPEC §5.4) and `$:tex ...$` is LaTeX math input (SPEC §8.1).
 //!   `element` and `rule` are keywords only in those positions, so they stay
 //!   available as names elsewhere (such as the `rule(...)` template primitive).
 //! - Styling lives in stylesheets, so Typst's `set`, `show` and `context`
 //!   are not part of the language; they are ordinary identifiers.
-//! - Numbers also take the duration units `ms`, `s` and `min` (SPEC §10).
+//! - Numbers also take the duration units `ms`, `s` and `min` (SPEC §10), and
+//!   the language tag of raw text runs to the first space (` ```c++ `).
 
 #![forbid(unsafe_code)]
 

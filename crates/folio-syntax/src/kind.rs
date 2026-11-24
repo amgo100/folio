@@ -46,7 +46,7 @@ pub enum SyntaxKind {
     Emph,
     /// Raw text with optional syntax highlighting: `` `...` ``.
     Raw,
-    /// A language tag at the start of raw text: ``typ ``.
+    /// A language tag at the start of raw text: ``rust ``.
     RawLang,
     /// A raw delimiter consisting of 1 or 3+ backticks: `` ` ``.
     RawDelim,
@@ -79,6 +79,12 @@ pub enum SyntaxKind {
 
     /// A mathematical equation: `$x$`, `$ x^2 $`.
     Equation,
+    /// An equation in LaTeX input mode: `$:tex \frac{1}{2} m v^2$`.
+    TexEquation,
+    /// The input mode of a [`TexEquation`](Self::TexEquation): `:tex`.
+    MathMode,
+    /// The LaTeX source of a [`TexEquation`](Self::TexEquation), kept verbatim.
+    TexText,
     /// The contents of a mathematical equation: `x^2 + 1`.
     Math,
     /// A lone text fragment in math: `x`, `25`, `3.1415`, `=`, `|`, `[`.
@@ -176,6 +182,8 @@ pub enum SyntaxKind {
     Root,
     /// An exclamation mark; groups with directly preceding text in math: `!`.
     Bang,
+    /// An at sign in code, which starts a variant or target scope: `@target`.
+    At,
 
     /// The `not` operator.
     Not,
@@ -189,12 +197,6 @@ pub enum SyntaxKind {
     Auto,
     /// The `let` keyword.
     Let,
-    /// The `set` keyword.
-    Set,
-    /// The `show` keyword.
-    Show,
-    /// The `context` keyword.
-    Context,
     /// The `if` keyword.
     If,
     /// The `else` keyword.
@@ -217,6 +219,12 @@ pub enum SyntaxKind {
     Include,
     /// The `as` keyword.
     As,
+    /// The `element` keyword, which starts an element declaration. It is a
+    /// keyword only at the start of a statement and before a name.
+    Element,
+    /// The `rule` keyword, which starts a scoped rule. It is a keyword only at
+    /// the start of a statement and before a selector.
+    Rule,
 
     /// The contents of a code block.
     Code,
@@ -228,7 +236,7 @@ pub enum SyntaxKind {
     Int,
     /// A floating-point number: `1.2`, `10e-4`.
     Float,
-    /// A numeric value with a unit: `12pt`, `3cm`, `2em`, `90deg`, `50%`.
+    /// A numeric value with a unit: `12pt`, `3cm`, `90deg`, `50%`, `2.4s`.
     Numeric,
     /// A quoted string: `"..."`.
     Str,
@@ -264,19 +272,13 @@ pub enum SyntaxKind {
     Params,
     /// A let binding: `let x = 1`.
     LetBinding,
-    /// A set rule: `set text(...)`.
-    SetRule,
-    /// A show rule: `show heading: it => emph(it.body)`.
-    ShowRule,
-    /// A contextual expression: `context text.lang`.
-    Contextual,
     /// An if-else conditional: `if x { y } else { z }`.
     Conditional,
     /// A while loop: `while x { y }`.
     WhileLoop,
     /// A for loop: `for x in y { z }`.
     ForLoop,
-    /// A module import: `import "utils.typ": a, b, c`.
+    /// A module import: `import "utils.fol": a, b, c`.
     ModuleImport,
     /// Items to import from a module: `a, b, c`.
     ImportItems,
@@ -284,7 +286,7 @@ pub enum SyntaxKind {
     ImportItemPath,
     /// A renamed import item: `a as d`.
     RenamedImportItem,
-    /// A module include: `include "chapter1.typ"`.
+    /// A module include: `include "chapter1.fol"`.
     ModuleInclude,
     /// A break from a loop: `break`.
     LoopBreak,
@@ -296,6 +298,30 @@ pub enum SyntaxKind {
     Destructuring,
     /// A destructuring assignment expression: `(x, y) = (1, 2)`.
     DestructAssignment,
+
+    /// An element declaration: `element example(title: content = none) { .. }`.
+    ElementDecl,
+    /// The fields of an element declaration: `(title: content = none)`.
+    SchemaFields,
+    /// A field of an element declaration: `title: content = none`.
+    SchemaField,
+    /// The body of an element declaration: `{ kind: block }`.
+    SchemaBody,
+    /// An entry in the body of an element declaration: `kind: block`,
+    /// `counter: within heading(level: 1)`.
+    SchemaEntry,
+    /// A scoped rule: `rule question { numbering: "(a)"; }`.
+    ScopedRule,
+    /// A variant or target scope of a scoped rule: `@target pptx`,
+    /// `@variant slides, handout`.
+    RuleScope,
+    /// The selector of a scoped rule, kept as a token sequence: `question`,
+    /// `heading[level=1]`, `question > answer`.
+    Selector,
+    /// The declaration block of a scoped rule: `{ numbering: "(a)"; }`.
+    RuleBlock,
+    /// A declaration in a scoped rule: `numbering: "(a)";`.
+    Declaration,
 }
 
 impl SyntaxKind {
@@ -330,10 +356,10 @@ impl SyntaxKind {
         matches!(
             self,
             Self::LetBinding
-                | Self::SetRule
-                | Self::ShowRule
                 | Self::ModuleImport
                 | Self::ModuleInclude
+                | Self::ElementDecl
+                | Self::ScopedRule
         )
     }
 
@@ -347,9 +373,6 @@ impl SyntaxKind {
                 | Self::None
                 | Self::Auto
                 | Self::Let
-                | Self::Set
-                | Self::Show
-                | Self::Context
                 | Self::If
                 | Self::Else
                 | Self::For
@@ -361,6 +384,8 @@ impl SyntaxKind {
                 | Self::Import
                 | Self::Include
                 | Self::As
+                | Self::Element
+                | Self::Rule
         )
     }
 
@@ -413,6 +438,9 @@ impl SyntaxKind {
             Self::TermItem => "term list item",
             Self::TermMarker => "term marker",
             Self::Equation => "equation",
+            Self::TexEquation => "LaTeX equation",
+            Self::MathMode => "math input mode",
+            Self::TexText => "LaTeX math",
             Self::Math => "math",
             Self::MathText => "math text",
             Self::MathIdent => "math identifier",
@@ -459,15 +487,13 @@ impl SyntaxKind {
             Self::Arrow => "arrow",
             Self::Root => "root",
             Self::Bang => "exclamation mark",
+            Self::At => "at sign",
             Self::Not => "operator `not`",
             Self::And => "operator `and`",
             Self::Or => "operator `or`",
             Self::None => "`none`",
             Self::Auto => "`auto`",
             Self::Let => "keyword `let`",
-            Self::Set => "keyword `set`",
-            Self::Show => "keyword `show`",
-            Self::Context => "keyword `context`",
             Self::If => "keyword `if`",
             Self::Else => "keyword `else`",
             Self::For => "keyword `for`",
@@ -479,6 +505,8 @@ impl SyntaxKind {
             Self::Import => "keyword `import`",
             Self::Include => "keyword `include`",
             Self::As => "keyword `as`",
+            Self::Element => "keyword `element`",
+            Self::Rule => "keyword `rule`",
             Self::Code => "code",
             Self::Ident => "identifier",
             Self::Bool => "boolean",
@@ -502,9 +530,6 @@ impl SyntaxKind {
             Self::Closure => "closure",
             Self::Params => "closure parameters",
             Self::LetBinding => "`let` expression",
-            Self::SetRule => "`set` expression",
-            Self::ShowRule => "`show` expression",
-            Self::Contextual => "`context` expression",
             Self::Conditional => "`if` expression",
             Self::WhileLoop => "while-loop expression",
             Self::ForLoop => "for-loop expression",
@@ -518,6 +543,16 @@ impl SyntaxKind {
             Self::FuncReturn => "`return` expression",
             Self::Destructuring => "destructuring pattern",
             Self::DestructAssignment => "destructuring assignment expression",
+            Self::ElementDecl => "element declaration",
+            Self::SchemaFields => "element fields",
+            Self::SchemaField => "element field",
+            Self::SchemaBody => "element body",
+            Self::SchemaEntry => "element body entry",
+            Self::ScopedRule => "scoped rule",
+            Self::RuleScope => "rule scope",
+            Self::Selector => "selector",
+            Self::RuleBlock => "declaration block",
+            Self::Declaration => "declaration",
         }
     }
 }
@@ -538,8 +573,9 @@ pub(crate) enum ModeAfter {
     /// After the opening raw delimiter is `None`, but after the closing one is
     /// the same as the parent `Raw`.
     RawDelim,
-    /// Dollar signs in an equation. After the opening dollar sign is math mode,
-    /// after the closing dollar sign is the same as the parent `Equation`.
+    /// Dollar signs in an equation. After the opening dollar sign is math mode
+    /// (or no mode in a LaTeX equation), after the closing dollar sign is the
+    /// same as the parent `Equation`.
     Dollar,
     /// Spaces are usually only based on their parent, but an edge case with
     /// `Equation` requires special handling.
@@ -608,7 +644,10 @@ impl SyntaxKind {
             Self::TermItem => Known(Markup),
             Self::TermMarker => Known(Markup),
 
-            Self::Equation => Embeddable, // code/markup: expr
+            Self::Equation => Embeddable,    // code/markup: expr
+            Self::TexEquation => Embeddable, // code/markup: expr
+            Self::MathMode => None,          // none: LaTeX input
+            Self::TexText => None,           // none: LaTeX input
             Self::Math => Known(Math),
             Self::MathText => Known(Math),
             Self::MathIdent => Known(Math),
@@ -656,6 +695,7 @@ impl SyntaxKind {
             Self::Arrow => Known(Code),
             Self::Root => Known(Math),
             Self::Bang => Known(Math),
+            Self::At => Known(Code),
 
             Self::Not => Known(Code),
             Self::And => Known(Code),
@@ -663,9 +703,6 @@ impl SyntaxKind {
             Self::None => Known(Code),
             Self::Auto => Known(Code),
             Self::Let => Known(Code),
-            Self::Set => Known(Code),
-            Self::Show => Known(Code),
-            Self::Context => Known(Code),
             Self::If => Known(Code),
             Self::Else => Known(Code),
             Self::For => Known(Code),
@@ -677,6 +714,8 @@ impl SyntaxKind {
             Self::Import => Known(Code),
             Self::Include => Known(Code),
             Self::As => Known(Code),
+            Self::Element => Known(Code),
+            Self::Rule => Known(Code),
 
             Self::Code => Known(Code),
             Self::Ident => Embeddable, // code: expr/part | math: Named
@@ -701,9 +740,6 @@ impl SyntaxKind {
             Self::Closure => Known(Code),
             Self::Params => Known(Code),
             Self::LetBinding => Known(Code),
-            Self::SetRule => Known(Code),
-            Self::ShowRule => Known(Code),
-            Self::Contextual => Known(Code),
             Self::Conditional => Known(Code),
             Self::WhileLoop => Known(Code),
             Self::ForLoop => Known(Code),
@@ -717,6 +753,16 @@ impl SyntaxKind {
             Self::FuncReturn => Known(Code),
             Self::Destructuring => Known(Code),
             Self::DestructAssignment => Known(Code),
+            Self::ElementDecl => Known(Code),
+            Self::SchemaFields => Known(Code),
+            Self::SchemaField => Known(Code),
+            Self::SchemaBody => Known(Code),
+            Self::SchemaEntry => Known(Code),
+            Self::ScopedRule => Known(Code),
+            Self::RuleScope => Known(Code),
+            Self::Selector => Known(Code),
+            Self::RuleBlock => Known(Code),
+            Self::Declaration => Known(Code),
         }
     }
 }
@@ -794,9 +840,10 @@ mod test {
         test_mode("#{(x) => {}}", [3, 6], Some(Code));
         test_mode("#let x = 1", [1, 7], Some(Code));
         test_mode("#let x;", [6], Some(Markup)); // After semicolon is the parent
-        test_mode("#set text()", [1, 4], Some(Code));
-        test_mode("#show text : it => it", [1, 11], Some(Code));
-        test_mode("#context 1", [1, 8], Some(Code));
+        test_mode("#rule q { a: 1 }", [1, 5, 9], Some(Code));
+        test_mode("#rule @target pptx q { a: 1 }", [6, 13, 18], Some(Code));
+        test_mode("#element e(x: int) { kind: block }", [1, 8, 20], Some(Code));
+        test_mode("#rule(1pt)", [1, 6], Some(Code));
         test_mode("#while true {break;continue;}", [1, 13, 19], Some(Code));
         test_mode("#for a in b {}", [1, 7], Some(Code));
         test_mode("#if true {} else {}", [1, 12], Some(Code));
@@ -813,6 +860,9 @@ mod test {
         // Math
         test_mode("$$", [0], Some(Math)); // Opening dollar is math
         test_mode("$$", [1], Some(Markup)); // Closing dollar is parent
+        test_mode("$:tex x$", [0, 4, 6], None); // LaTeX has no mode
+        test_mode("$:tex x$", [7], Some(Markup)); // Closing dollar is parent
+        test_mode("#$:tex x$", [8], Some(Code));
         test_mode("#$$", [2], Some(Code)); // Closing dollar is parent
         test_mode("$ a b $", [1, 3, 5], Some(Math)); // Just the spaces
         test_mode("$\na\nb\n$", [1, 3, 5], Some(Math)); // Just the newlines
@@ -856,8 +906,8 @@ mod test {
             [3, 4, 5, 7, 9, 19, 20],
             Some(Code),
         );
-        test_mode("$#context 1$", [9, 10], Some(Code));
-        test_mode("$#context $", [9], Some(Code));
+        test_mode("$#return 1$", [8, 9], Some(Code));
+        test_mode("$#return $", [8], Some(Code));
         test_mode("$#std.align$", [2, 5, 6], Some(Code));
         test_mode("$ff(named: #ident)$", [12], Some(Code));
         test_mode("$ #$x$; $", [0, 1, 3, 4, 6, 7], Some(Math));

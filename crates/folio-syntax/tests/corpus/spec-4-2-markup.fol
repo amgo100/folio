@@ -1,0 +1,17 @@
+#doc(title: "Mechanics: Test 3", subject: "WPH11")
+
+= Kinematics <sec:kin>
+
+A ball is thrown vertically upwards with speed $u = qty(12, "m s^-1")$.
+Air resistance is negligible.#sidenote[Take $g = qty(9.81, "m s^-2")$.]
+
+#figure(placement: wrap, side: outer, width: 1/3)[
+  #image("assets/ball.svg")
+][Path of the ball.] <fig:ball>
+
+#question(marks: 3)[
+  Calculate the maximum height reached. See @fig:ball.
+  #answer(lines: 4)[
+    $h = u^2 / (2g) = qty(7.3, "m")$ #mark("M1") #mark("A1")
+  ]
+]

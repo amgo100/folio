@@ -31,7 +31,7 @@ use crate::FileId;
 /// [`Span::get`] or [`DiagSpan::get`] methods.
 /// 1. They can be detached, originating from nowhere or from the compiler
 ///    itself.
-/// 2. They can be numbered values, corresponding to a node in a Typst source
+/// 2. They can be numbered values, corresponding to a node in a Folio source
 ///    file's concrete syntax tree. These are the most common span type and are
 ///    explained more below.
 /// 3. They can be raw range spans, containing a range of two indices that came

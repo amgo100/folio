@@ -1,0 +1,21 @@
+#element
+#element example
+#element example(title: = none, title: str, 3) {
+  kind:
+  : block
+  counter within
+}
+#rule
+#rule question
+#rule question {
+  numbering "(a)";
+  space-before: 24pt
+  font-weight: 700;
+  : stray;
+}
+#rule @bogus pptx figure { width: 40%; }
+#rule @target figure {}
+#rule heading[level=1 { a: 1; }
+#question(override@: (a: 1), override@markscheme 3, override@x: 1, override@x: 2)[]
+$:foo x + y$ and $:tex \frac{1}{2}$ <eq:half>
+$:tex unclosed LaTeX \$ until the end

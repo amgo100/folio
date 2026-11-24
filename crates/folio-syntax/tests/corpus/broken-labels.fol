@@ -1,0 +1,4 @@
+Bad labels: <a.b> <fig:> <fig-> <timer:task.remaining> <unclosed and <a:b:>.
+Good after them: <ok:label> and @ok:label.
+#let v = <timer:task>.remaining
+#let w = <a.b>

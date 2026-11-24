@@ -5,7 +5,7 @@
 /*!
 # Abstract Syntax Tree Interface
 
-Typst's Abstract Syntax Tree (AST) is a lazy, typed view over the untyped
+Folio's Abstract Syntax Tree (AST) is a lazy, typed view over the untyped
 Concrete Syntax Tree (CST) and is rooted in the [`Markup`] node.
 
 ## The AST is a View
@@ -53,7 +53,7 @@ otherwise the parser wouldn't have produced this node.
 
 The AST is rooted in the [`Markup`] node, which provides only one method:
 [`Markup::exprs`]. This returns an iterator of the main [`Expr`] enum. [`Expr`]
-is important because it contains the majority of expressions that Typst will
+is important because it contains the majority of expressions that Folio will
 evaluate. Not just markup, but also math and code expressions. Not all
 expression types are available from the parser at every step, but this does
 decrease the amount of wrapper enums needed in the AST (and this file is long
@@ -83,7 +83,7 @@ throughput at the cost of initial latency and development flexibility.
 
 // The AST should never panic when traversing a CST, even if the CST is in an
 // invalid structure, e.g. if we have a syntax error or make an incorrect edit
-// from the `typst-ide` crate. We disallow common panics in this file using
+// from an editor. We disallow common panics in this file using
 // these lints, and we provide an alternative to panicking with the
 // `AstNode::placeholder()` method.
 #![deny(
@@ -292,6 +292,8 @@ pub enum Expr<'a> {
     TermItem(TermItem<'a>),
     /// A mathematical equation: `$x$`, `$ x^2 $`.
     Equation(Equation<'a>),
+    /// An equation in LaTeX input mode: `$:tex \frac{1}{2} m v^2$`.
+    TexEquation(TexEquation<'a>),
     /// The contents of a mathematical equation: `x^2 + 1`.
     Math(Math<'a>),
     /// A lone text fragment in math: `x`, `25`, `3.1415`, `=`, `[`.
@@ -328,7 +330,7 @@ pub enum Expr<'a> {
     Int(Int<'a>),
     /// A floating-point number: `1.2`, `10e-4`.
     Float(Float<'a>),
-    /// A numeric value with a unit: `12pt`, `3cm`, `2em`, `90deg`, `50%`.
+    /// A numeric value with a unit: `12pt`, `3cm`, `90deg`, `50%`, `2.4s`.
     Numeric(Numeric<'a>),
     /// A quoted string: `"..."`.
     Str(Str<'a>),
@@ -354,23 +356,21 @@ pub enum Expr<'a> {
     Closure(Closure<'a>),
     /// A let binding: `let x = 1`.
     LetBinding(LetBinding<'a>),
+    /// An element declaration: `element example(title: content = none) { .. }`.
+    ElementDecl(ElementDecl<'a>),
+    /// A scoped rule: `rule question { numbering: "(a)"; }`.
+    ScopedRule(ScopedRule<'a>),
     /// A destructuring assignment: `(x, y) = (1, 2)`.
     DestructAssignment(DestructAssignment<'a>),
-    /// A set rule: `set text(...)`.
-    SetRule(SetRule<'a>),
-    /// A show rule: `show heading: it => emph(it.body)`.
-    ShowRule(ShowRule<'a>),
-    /// A contextual expression: `context text.lang`.
-    Contextual(Contextual<'a>),
     /// An if-else conditional: `if x { y } else { z }`.
     Conditional(Conditional<'a>),
     /// A while loop: `while x { y }`.
     WhileLoop(WhileLoop<'a>),
     /// A for loop: `for x in y { z }`.
     ForLoop(ForLoop<'a>),
-    /// A module import: `import "utils.typ": a, b, c`.
+    /// A module import: `import "utils.fol": a, b, c`.
     ModuleImport(ModuleImport<'a>),
-    /// A module include: `include "chapter1.typ"`.
+    /// A module include: `include "chapter1.fol"`.
     ModuleInclude(ModuleInclude<'a>),
     /// A break from a loop: `break`.
     LoopBreak(LoopBreak<'a>),
@@ -410,6 +410,7 @@ impl<'a> AstNode<'a> for Expr<'a> {
             SyntaxKind::EnumItem => Some(Self::EnumItem(EnumItem(node))),
             SyntaxKind::TermItem => Some(Self::TermItem(TermItem(node))),
             SyntaxKind::Equation => Some(Self::Equation(Equation(node))),
+            SyntaxKind::TexEquation => Some(Self::TexEquation(TexEquation(node))),
             SyntaxKind::Math => Some(Self::Math(Math(node))),
             SyntaxKind::MathText => Some(Self::MathText(MathText(node))),
             SyntaxKind::MathIdent => Some(Self::MathIdent(MathIdent(node))),
@@ -441,12 +442,11 @@ impl<'a> AstNode<'a> for Expr<'a> {
             SyntaxKind::FuncCall => Some(Self::FuncCall(FuncCall(node))),
             SyntaxKind::Closure => Some(Self::Closure(Closure(node))),
             SyntaxKind::LetBinding => Some(Self::LetBinding(LetBinding(node))),
+            SyntaxKind::ElementDecl => Some(Self::ElementDecl(ElementDecl(node))),
+            SyntaxKind::ScopedRule => Some(Self::ScopedRule(ScopedRule(node))),
             SyntaxKind::DestructAssignment => {
                 Some(Self::DestructAssignment(DestructAssignment(node)))
             }
-            SyntaxKind::SetRule => Some(Self::SetRule(SetRule(node))),
-            SyntaxKind::ShowRule => Some(Self::ShowRule(ShowRule(node))),
-            SyntaxKind::Contextual => Some(Self::Contextual(Contextual(node))),
             SyntaxKind::Conditional => Some(Self::Conditional(Conditional(node))),
             SyntaxKind::WhileLoop => Some(Self::WhileLoop(WhileLoop(node))),
             SyntaxKind::ForLoop => Some(Self::ForLoop(ForLoop(node))),
@@ -479,6 +479,7 @@ impl<'a> AstNode<'a> for Expr<'a> {
             Self::EnumItem(v) => v.to_untyped(),
             Self::TermItem(v) => v.to_untyped(),
             Self::Equation(v) => v.to_untyped(),
+            Self::TexEquation(v) => v.to_untyped(),
             Self::Math(v) => v.to_untyped(),
             Self::MathText(v) => v.to_untyped(),
             Self::MathIdent(v) => v.to_untyped(),
@@ -510,10 +511,9 @@ impl<'a> AstNode<'a> for Expr<'a> {
             Self::FuncCall(v) => v.to_untyped(),
             Self::Closure(v) => v.to_untyped(),
             Self::LetBinding(v) => v.to_untyped(),
+            Self::ElementDecl(v) => v.to_untyped(),
+            Self::ScopedRule(v) => v.to_untyped(),
             Self::DestructAssignment(v) => v.to_untyped(),
-            Self::SetRule(v) => v.to_untyped(),
-            Self::ShowRule(v) => v.to_untyped(),
-            Self::Contextual(v) => v.to_untyped(),
             Self::Conditional(v) => v.to_untyped(),
             Self::WhileLoop(v) => v.to_untyped(),
             Self::ForLoop(v) => v.to_untyped(),
@@ -551,9 +551,8 @@ impl Expr<'_> {
                 | Self::FieldAccess(_)
                 | Self::FuncCall(_)
                 | Self::LetBinding(_)
-                | Self::SetRule(_)
-                | Self::ShowRule(_)
-                | Self::Contextual(_)
+                | Self::ElementDecl(_)
+                | Self::ScopedRule(_)
                 | Self::Conditional(_)
                 | Self::WhileLoop(_)
                 | Self::ForLoop(_)
@@ -727,7 +726,7 @@ impl<'a> Raw<'a> {
 }
 
 node! {
-    /// A language tag at the start of raw element: ``typ ``.
+    /// A language tag at the start of raw element: ``rust ``.
     struct RawLang
 }
 
@@ -879,6 +878,39 @@ impl<'a> Equation<'a> {
         let is_space =
             |node: Option<&SyntaxNode>| node.map(SyntaxNode::kind) == Some(SyntaxKind::Space);
         is_space(self.0.children().nth(1)) && is_space(self.0.children().nth_back(1))
+    }
+}
+
+node! {
+    /// An equation in LaTeX input mode: `$:tex \frac{1}{2} m v^2$` (SPEC §8.1).
+    struct TexEquation
+}
+
+impl<'a> TexEquation<'a> {
+    /// The input mode, without its colon: `tex`.
+    pub fn mode(self) -> &'a str {
+        // The mode follows the opening `$`, and is an error if unknown.
+        self.0
+            .children()
+            .nth(1)
+            .map_or("", |node| node.leaf_text().trim_start_matches(':'))
+    }
+
+    /// The LaTeX source, without the spaces around it.
+    pub fn body(self) -> &'a str {
+        self.0
+            .children()
+            .find(|node| node.kind() == SyntaxKind::TexText)
+            .map_or("", |node| node.leaf_text().trim())
+    }
+
+    /// Whether the equation should be displayed as a separate block: a space
+    /// precedes the closing `$`, as in `$:tex \frac{1}{2} $`.
+    pub fn block(self) -> bool {
+        self.0
+            .children()
+            .find(|node| node.kind() == SyntaxKind::TexText)
+            .is_some_and(|node| node.leaf_text().ends_with(char::is_whitespace))
     }
 }
 
@@ -1388,7 +1420,7 @@ impl Float<'_> {
 }
 
 node! {
-    /// A numeric value with a unit: `12pt`, `3cm`, `2em`, `90deg`, `50%`.
+    /// A numeric value with a unit: `12pt`, `3cm`, `90deg`, `50%`, `2.4s`.
     struct Numeric
 }
 
@@ -1414,6 +1446,9 @@ impl Numeric<'_> {
             "em" => Unit::Em,
             "fr" => Unit::Fr,
             "%" => Unit::Percent,
+            "ms" => Unit::Ms,
+            "s" => Unit::S,
+            "min" => Unit::Min,
             _ => Unit::Percent,
         };
 
@@ -1442,6 +1477,12 @@ pub enum Unit {
     Fr,
     /// Percentage: `%`.
     Percent,
+    /// Milliseconds: `ms`.
+    Ms,
+    /// Seconds: `s`.
+    S,
+    /// Minutes: `min`.
+    Min,
 }
 
 node! {
@@ -1647,6 +1688,16 @@ impl<'a> Named<'a> {
     /// The name: `thickness`.
     pub fn name(self) -> Ident<'a> {
         self.0.cast_first()
+    }
+
+    /// The variant or target that an argument is limited to:
+    /// `markscheme` in `override@markscheme: (..)` (SPEC §5.4).
+    pub fn scope(self) -> Option<Ident<'a>> {
+        self.0
+            .children()
+            .skip_while(|node| node.kind() != SyntaxKind::At)
+            .take_while(|node| node.kind() != SyntaxKind::Colon)
+            .find_map(SyntaxNode::cast)
     }
 
     /// The right-hand side of the pair: `3pt`.
@@ -2297,60 +2348,172 @@ impl<'a> DestructAssignment<'a> {
 }
 
 node! {
-    /// A set rule: `set text(...)`.
-    struct SetRule
+    /// An element declaration (SPEC §4.3):
+    /// `element example(title: content = none) { kind: block }`.
+    struct ElementDecl
 }
 
-impl<'a> SetRule<'a> {
-    /// The function to set style properties for.
-    pub fn target(self) -> Expr<'a> {
+impl<'a> ElementDecl<'a> {
+    /// The name of the declared element.
+    pub fn name(self) -> Ident<'a> {
         self.0.cast_first()
     }
 
-    /// The style properties to set.
-    pub fn args(self) -> Args<'a> {
-        self.0.cast_last()
+    /// The declared fields.
+    pub fn fields(self) -> impl DoubleEndedIterator<Item = SchemaField<'a>> {
+        self.0
+            .try_cast_first::<SchemaFields<'a>>()
+            .into_iter()
+            .flat_map(|fields| fields.0.children().filter_map(SyntaxNode::cast))
     }
 
-    /// A condition under which the set rule applies.
-    pub fn condition(self) -> Option<Expr<'a>> {
+    /// The entries of the body: `kind: block`, `counter: ...`.
+    pub fn entries(self) -> impl DoubleEndedIterator<Item = SchemaEntry<'a>> {
+        self.0
+            .try_cast_first::<SchemaBody<'a>>()
+            .into_iter()
+            .flat_map(|body| body.0.children().filter_map(SyntaxNode::cast))
+    }
+}
+
+node! {
+    /// The fields of an element declaration: `(title: content = none)`.
+    struct SchemaFields
+}
+
+node! {
+    /// A field of an element declaration: `title: content = none`.
+    struct SchemaField
+}
+
+impl<'a> SchemaField<'a> {
+    /// The name of the field.
+    pub fn name(self) -> Ident<'a> {
+        self.0.cast_first()
+    }
+
+    /// The type of the field: `content`, `choice("core", "extension")`.
+    pub fn ty(self) -> Expr<'a> {
         self.0
             .children()
-            .skip_while(|child| child.kind() != SyntaxKind::If)
+            .skip_while(|node| node.kind() != SyntaxKind::Colon)
+            .find_map(SyntaxNode::cast)
+            .unwrap_or_else(Expr::placeholder)
+    }
+
+    /// The default value, if the field has one.
+    pub fn default(self) -> Option<Expr<'a>> {
+        self.0
+            .children()
+            .skip_while(|node| node.kind() != SyntaxKind::Eq)
             .find_map(SyntaxNode::cast)
     }
 }
 
 node! {
-    /// A show rule: `show heading: it => emph(it.body)`.
-    struct ShowRule
+    /// The body of an element declaration: `{ kind: block }`.
+    struct SchemaBody
 }
 
-impl<'a> ShowRule<'a> {
-    /// Defines which nodes the show rule applies to.
-    pub fn selector(self) -> Option<Expr<'a>> {
-        self.0
-            .children()
-            .rev()
-            .skip_while(|child| child.kind() != SyntaxKind::Colon)
-            .find_map(SyntaxNode::cast)
+node! {
+    /// An entry in the body of an element declaration: `kind: block`,
+    /// `counter: within heading(level: 1)`.
+    struct SchemaEntry
+}
+
+impl<'a> SchemaEntry<'a> {
+    /// The key: `kind`, `body`, `counter`, `ref-key`.
+    pub fn key(self) -> Ident<'a> {
+        self.0.cast_first()
     }
 
-    /// The transformation recipe.
-    pub fn transform(self) -> Expr<'a> {
-        self.0.cast_last()
+    /// The expressions of the value, in order: `within`, `heading(level: 1)`.
+    pub fn values(self) -> impl Iterator<Item = Expr<'a>> {
+        self.0
+            .children()
+            .skip_while(|node| node.kind() != SyntaxKind::Colon)
+            .filter_map(SyntaxNode::cast)
     }
 }
 
 node! {
-    /// A contextual expression: `context text.lang`.
-    struct Contextual
+    /// A scoped rule (SPEC §5.4): `rule question { numbering: "(a)"; }`.
+    struct ScopedRule
 }
 
-impl<'a> Contextual<'a> {
-    /// The expression which depends on the context.
-    pub fn body(self) -> Expr<'a> {
+impl<'a> ScopedRule<'a> {
+    /// The variant and target scopes: `@target pptx`.
+    pub fn scopes(self) -> impl DoubleEndedIterator<Item = RuleScope<'a>> {
+        self.0.children().filter_map(SyntaxNode::cast)
+    }
+
+    /// The selector.
+    pub fn selector(self) -> Selector<'a> {
         self.0.cast_first()
+    }
+
+    /// The declarations.
+    pub fn declarations(self) -> impl DoubleEndedIterator<Item = Declaration<'a>> {
+        self.0
+            .try_cast_first::<RuleBlock<'a>>()
+            .into_iter()
+            .flat_map(|block| block.0.children().filter_map(SyntaxNode::cast))
+    }
+}
+
+node! {
+    /// A variant or target scope of a scoped rule: `@target pptx`,
+    /// `@variant slides, handout`.
+    struct RuleScope
+}
+
+impl<'a> RuleScope<'a> {
+    /// The kind of scope: `variant` or `target`.
+    pub fn kind(self) -> Ident<'a> {
+        self.0.cast_first()
+    }
+
+    /// The variants or targets.
+    pub fn names(self) -> impl Iterator<Item = Ident<'a>> {
+        self.0.children().filter_map(SyntaxNode::cast).skip(1)
+    }
+}
+
+node! {
+    /// The selector of a scoped rule, kept as a sequence of tokens:
+    /// `heading[level=1]`.
+    struct Selector
+}
+
+impl Selector<'_> {
+    /// The source text of the selector.
+    pub fn text(self) -> EcoString {
+        self.0.full_text()
+    }
+}
+
+node! {
+    /// The declaration block of a scoped rule: `{ numbering: "(a)"; }`.
+    struct RuleBlock
+}
+
+node! {
+    /// A declaration in a scoped rule: `numbering: "(a)";`.
+    struct Declaration
+}
+
+impl<'a> Declaration<'a> {
+    /// The property: `numbering`, `space-before`.
+    pub fn property(self) -> Ident<'a> {
+        self.0.cast_first()
+    }
+
+    /// The expressions of the value, in order: `outer`, `width`, `32mm`.
+    pub fn values(self) -> impl Iterator<Item = Expr<'a>> {
+        self.0
+            .children()
+            .skip_while(|node| node.kind() != SyntaxKind::Colon)
+            .filter_map(SyntaxNode::cast)
     }
 }
 
@@ -2424,7 +2587,7 @@ impl<'a> ForLoop<'a> {
 }
 
 node! {
-    /// A module import: `import "utils.typ": a, b, c`.
+    /// A module import: `import "utils.fol": a, b, c`.
     struct ModuleImport
 }
 
@@ -2610,7 +2773,7 @@ impl<'a> RenamedImportItem<'a> {
 }
 
 node! {
-    /// A module include: `include "chapter1.typ"`.
+    /// A module include: `include "chapter1.fol"`.
     struct ModuleInclude
 }
 

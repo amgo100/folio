@@ -1,0 +1,19 @@
+= Unclosed things
+
+A paragraph with *unclosed strong
+and _unclosed emphasis
+
+#question(marks: 3[
+  Missing closing paren.
+]
+
+#figure[An unclosed content block
+
+#{ let x = (1, 2
+x }
+
+Closing bracket without opening ] here.
+#"unclosed string
+$ unclosed math
+
+and an unclosed `raw that runs to the end

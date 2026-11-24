@@ -1,0 +1,24 @@
+// Local overrides of SPEC §5.4.
+#question[
+  #rule question { numbering: "(a)"; }
+  #rule @target pptx figure { width: 40%; space-before: 24pt; }
+  #rule @variant slides, handout heading[level=1] > answer:first {
+    margin-column: outer, width 32mm, gap 6mm;
+    font-weight: 700
+  }
+  #question(marks: 3, override: (space-before: 24pt))[Part one.]
+  #question(marks: 2, override@markscheme: (space-before: 6pt))[Part two.]
+  #figure(placement: wrap, width: 1/3)[#image("assets/ball.svg")]
+  #styled(color: tok.warn, font-weight: 700)[read carefully]
+  #box(fill: rgb("1f5fa8"))[Colour from a literal.]
+]
+
+#{
+  rule answer { space-before: 12pt; }
+  let rule = 1
+  rule + 1
+}
+
+#let line = rule(0.4pt)
+#let element = (fields: ())
+#element.fields

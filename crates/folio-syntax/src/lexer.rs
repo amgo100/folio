@@ -118,6 +118,9 @@ impl Lexer<'_> {
                 error
             }
             Some('`') if self.mode != SyntaxMode::Math => return self.raw(),
+            Some('$') if self.mode != SyntaxMode::Math && self.at_math_mode() => {
+                return self.tex_equation(start);
+            }
             Some(c) => match self.mode {
                 SyntaxMode::Markup => self.markup(start, c),
                 SyntaxMode::Math => match self.math(start, c) {
@@ -236,9 +239,8 @@ impl Lexer<'_> {
         let mut nodes = vec![delim.clone()];
 
         let mut tag = None;
-        let mut diff_future_tag_len = None;
         if delim.len() >= 3 {
-            (tag, diff_future_tag_len) = Self::raw_lang_tag(&mut inner);
+            tag = Self::raw_lang_tag(&mut inner);
             if let Some(tag) = tag {
                 nodes.push(SyntaxNode::leaf(SyntaxKind::RawLang, tag));
             }
@@ -252,32 +254,27 @@ impl Lexer<'_> {
 
         let mut raw = SyntaxNode::inner(SyntaxKind::Raw, nodes);
 
-        Self::add_raw_warnings(&mut raw, backticks, diff_future_tag_len, tag, inner_len);
+        // A tag with no text after it is likely meant as the text.
+        if let Some(tag) = tag
+            && inner_len == tag.len()
+        {
+            raw.warn("empty raw text");
+            raw.hint(eco_format!("`{tag}` is read as the language tag"));
+            let tag_range = backticks..backticks + tag.len();
+            raw.hint_at(
+                tag_range,
+                "to treat this as text, add a space after the initial backticks",
+            );
+        }
 
         (SyntaxKind::Raw, raw)
     }
 
-    /// Lex the raw language tag into an optional string and return the length
-    /// of the future language tag if it will differ in the next version.
-    ///
-    /// See [`Self::add_raw_warnings`] for more.
-    fn raw_lang_tag<'a>(s: &mut Scanner<'a>) -> (Option<&'a str>, Option<usize>) {
-        let start = s.cursor();
-        let future_tag = s.eat_until(|c: char| c.is_whitespace() || c == '`');
-        if future_tag.is_empty() {
-            // Future tag is always longer than current tag, if empty, we have
-            // no current tag either.
-            return (None, None);
-        }
-        s.jump(start);
-        let tag = s.eat_if(is_id_start).then(|| {
-            s.eat_while(is_id_continue);
-            s.from(start)
-        });
-        let diff_future_tag_len = tag
-            .is_none_or(|tag| tag.len() != future_tag.len())
-            .then_some(future_tag.len());
-        (tag, diff_future_tag_len)
+    /// Lex the raw language tag: all text up to the first whitespace or
+    /// backtick, so tags such as `c++` or `html.j2` work.
+    fn raw_lang_tag<'a>(s: &mut Scanner<'a>) -> Option<&'a str> {
+        let tag = s.eat_until(|c: char| c.is_whitespace() || c == '`');
+        (!tag.is_empty()).then_some(tag)
     }
 
     /// Raw blocks parse a language tag, have smart behavior for trimming
@@ -422,78 +419,6 @@ impl Lexer<'_> {
         }
         nodes.push(SyntaxNode::leaf(SyntaxKind::Text, s.from(prev)));
     }
-
-    /// Add warnings if the raw language tag will differ in the next version of
-    /// Typst or if there is a language tag but the raw text is empty.
-    ///
-    /// Currently, we parse the language tag only up to the end of a valid
-    /// identifier or the first whitespace. So if we start with `C++`, the
-    /// identifier `C` will be the language tag, and the raw text will start
-    /// with `++`. If we start with `++C`, we will have no language tag and the
-    /// raw text will start with `++C`.
-    ///
-    /// In the next version of Typst, we will parse all text up to the first
-    /// whitespace or backtick, so tags like `C++` or `html.j2` or `$!#%@` can
-    /// be written without issue
-    ///
-    /// However, this may cause some documents relying on the behavior of raw
-    /// text starting like `C++` or `++C` to change, so we are giving a warning
-    /// for those cases.
-    fn add_raw_warnings(
-        raw: &mut SyntaxNode,
-        backticks: usize,
-        diff_future_tag_len: Option<usize>,
-        tag: Option<&str>,
-        inner_len: usize,
-    ) {
-        // Add a warning if the tag will differ in the next version.
-        if let Some(future_tag_len) = diff_future_tag_len {
-            let future_range = backticks..backticks + future_tag_len;
-            if let Some(tag) = tag {
-                raw.warn_at(
-                    future_range,
-                    "no whitespace between language tag and raw text",
-                );
-                raw.hint(eco_format!(
-                    "currently, Typst is treating `{tag}` as the language tag"
-                ));
-                raw.hint(
-                    "in the next version of Typst, this will change and we will treat \
-                        all text until the first whitespace as the language tag",
-                );
-                let tag_range = backticks..backticks + tag.len();
-                raw.hint_at(
-                    tag_range.clone(),
-                    eco_format!(
-                        "if the current behavior is correct, please add a space after `{tag}`"
-                    ),
-                );
-                raw.hint_at(
-                    tag_range,
-                    "otherwise, add a space or newline after the initial backticks",
-                );
-            } else {
-                raw.warn_at(future_range, "no whitespace before raw text");
-                raw.hint(
-                    "in the next version of Typst, this text will be treated as \
-                        the language tag for this element",
-                );
-                raw.hint("to avoid this, add a space after the initial backticks");
-            }
-        } else if let Some(tag) = tag
-            && inner_len == tag.len()
-        {
-            // Empty with no tag/ws is only possible with exactly two backticks,
-            // which is handled by the caller.
-            raw.warn("empty raw text");
-            raw.hint(eco_format!("Typst is treating `{tag}` as the language tag"));
-            let tag_range = backticks..backticks + tag.len();
-            raw.hint_at(
-                tag_range,
-                "to treat this as text, add a space after the initial backticks",
-            );
-        }
-    }
 }
 
 /// Markup.
@@ -503,8 +428,8 @@ impl Lexer<'_> {
             '\\' => self.backslash(),
             'h' if self.s.eat_if("ttp://") => self.link(),
             'h' if self.s.eat_if("ttps://") => self.link(),
-            '<' if self.s.at(is_id_continue) => self.label(),
-            '@' if self.s.at(is_id_continue) => self.ref_marker(),
+            '<' if self.s.at(is_label_start) => self.label(),
+            '@' if ref_name_len(self.s.after()) > 0 => self.ref_marker(),
 
             '.' if self.s.eat_if("..") => SyntaxKind::Shorthand,
             '-' if self.s.eat_if("--") => SyntaxKind::Shorthand,
@@ -590,28 +515,101 @@ impl Lexer<'_> {
         self.text()
     }
 
+    /// Lex a reference marker. A label never ends with `:` or `-`, so these
+    /// are left as punctuation: in `see @fig:ball: it shows`, the reference
+    /// is `@fig:ball`.
     fn ref_marker(&mut self) -> SyntaxKind {
-        self.s.eat_while(is_valid_in_label_literal);
-
-        // Don't include the trailing characters likely to be part of text.
-        while matches!(self.s.scout(-1), Some('.' | ':')) {
-            self.s.uneat();
-        }
-
+        let len = ref_name_len(self.s.after());
+        self.s.advance(len);
         SyntaxKind::RefMarker
     }
+}
 
+/// Labels (shared by markup and code).
+impl Lexer<'_> {
+    /// Lex a label after its `<`, which is followed by a valid start
+    /// character.
     fn label(&mut self) -> SyntaxKind {
-        let label = self.s.eat_while(is_valid_in_label_literal);
-        if label.is_empty() {
-            return self.error("label cannot be empty");
+        let name = self.s.eat_while(is_valid_in_label_literal);
+
+        // A dot separates a label from a published value
+        // (`<timer:task>.remaining`), so it cannot be part of the name. Report
+        // `<a.b>` as one error rather than an unclosed label followed by text.
+        if self.s.at('.') {
+            let mut s = self.s;
+            s.eat_while(|c| is_valid_in_label_literal(c) || c == '.');
+            if s.eat_if('>') {
+                self.s = s;
+                let error = self.error("labels cannot contain `.`");
+                self.hint(
+                    "a dot separates a label from a published value, \
+                     as in `<timer:task>.remaining`",
+                );
+                return error;
+            }
         }
 
         if !self.s.eat_if('>') {
             return self.error("unclosed label");
         }
 
+        if let Some(last @ (':' | '-')) = name.chars().next_back() {
+            return self.error(eco_format!("labels cannot end with `{last}`"));
+        }
+
         SyntaxKind::Label
+    }
+}
+
+/// LaTeX math.
+impl Lexer<'_> {
+    /// Whether the `$` just eaten starts a math input mode: `$:tex`.
+    fn at_math_mode(&self) -> bool {
+        let mut s = self.s;
+        s.eat_if(':') && s.at(is_id_start)
+    }
+
+    /// Lex a whole equation in an input mode other than native math after
+    /// its opening `$`, such as `$:tex \frac{1}{2} m v^2$`. The body is kept
+    /// verbatim up to the first `$` that is not escaped with a backslash.
+    fn tex_equation(&mut self, start: usize) -> (SyntaxKind, SyntaxNode) {
+        let mut nodes = vec![];
+
+        let mode_start = self.s.cursor();
+        self.s.eat_if(':');
+        self.s.eat_while(is_id_continue);
+        let mode = self.s.from(mode_start);
+        nodes.push(if mode == ":tex" {
+            SyntaxNode::leaf(SyntaxKind::MathMode, mode)
+        } else {
+            SyntaxNode::error(eco_format!("unknown math input mode: `{mode}`"), mode)
+                .with_hints(eco_vec!["LaTeX math is written `$:tex ...$`".into()])
+        });
+
+        let body_start = self.s.cursor();
+        let mut escaped = false;
+        self.s.eat_until(|c| {
+            let stop = c == '$' && !escaped;
+            escaped = c == '\\' && !escaped;
+            stop
+        });
+        let body = self.s.from(body_start);
+        if !body.is_empty() {
+            nodes.push(SyntaxNode::leaf(SyntaxKind::TexText, body));
+        }
+
+        let open = self.s.get(start..mode_start);
+        if self.s.eat_if('$') {
+            nodes.insert(0, SyntaxNode::leaf(SyntaxKind::Dollar, open));
+            nodes.push(SyntaxNode::leaf(SyntaxKind::Dollar, "$"));
+        } else {
+            nodes.insert(0, SyntaxNode::error("unclosed delimiter", open));
+        }
+
+        (
+            SyntaxKind::TexEquation,
+            SyntaxNode::inner(SyntaxKind::TexEquation, nodes),
+        )
     }
 
     fn text(&mut self) -> SyntaxKind {
@@ -648,7 +646,7 @@ impl Lexer<'_> {
                 Some('-') if !s.at(['-', '?']) => {}
                 Some('.') if !s.at("..") => {}
                 Some('h') if !s.at("ttp://") && !s.at("ttps://") => {}
-                Some('@') if !s.at(is_valid_in_label_literal) => {}
+                Some('@') if ref_name_len(s.after()) == 0 => {}
                 _ => break,
             }
 
@@ -867,7 +865,7 @@ impl Lexer<'_> {
 impl Lexer<'_> {
     fn code(&mut self, start: usize, c: char) -> SyntaxKind {
         match c {
-            '<' if self.s.at(is_id_continue) => self.label(),
+            '<' if self.s.at(is_label_start) => self.label(),
             '0'..='9' => self.number(start, c),
             '.' if self.s.at(char::is_ascii_digit) => self.number(start, c),
             '"' => self.string(),
@@ -901,6 +899,7 @@ impl Lexer<'_> {
             '=' => SyntaxKind::Eq,
             '<' => SyntaxKind::Lt,
             '>' => SyntaxKind::Gt,
+            '@' => SyntaxKind::At,
 
             c if is_id_start(c) => self.ident(start),
 
@@ -1038,7 +1037,9 @@ impl Lexer<'_> {
 
         let mut suffix_result = match suffix {
             "" => Ok(None),
-            "pt" | "mm" | "cm" | "in" | "deg" | "rad" | "em" | "fr" | "%" => Ok(Some(())),
+            "pt" | "mm" | "cm" | "in" | "deg" | "rad" | "em" | "fr" | "%" | "ms" | "s" | "min" => {
+                Ok(Some(()))
+            }
             _ => Err(eco_format!("invalid number suffix: `{suffix}`")),
         };
 
@@ -1116,9 +1117,6 @@ fn keyword(ident: &str) -> Option<SyntaxKind> {
         "and" => SyntaxKind::And,
         "or" => SyntaxKind::Or,
         "let" => SyntaxKind::Let,
-        "set" => SyntaxKind::Set,
-        "show" => SyntaxKind::Show,
-        "context" => SyntaxKind::Context,
         "if" => SyntaxKind::If,
         "else" => SyntaxKind::Else,
         "for" => SyntaxKind::For,
@@ -1288,13 +1286,39 @@ fn is_math_id_continue(c: char) -> bool {
     is_xid_continue(c) && c != '_'
 }
 
-/// Whether a character can be part of a label literal's name.
+/// Whether a character can start a label's name: a letter, a digit or `_`.
 #[inline]
-fn is_valid_in_label_literal(c: char) -> bool {
-    is_id_continue(c) || matches!(c, ':' | '.')
+fn is_label_start(c: char) -> bool {
+    is_xid_continue(c) || c == '_'
 }
 
-/// Returns true if this string is valid in a label literal.
+/// Whether a character can be part of a label's name: a letter, a digit, `-`,
+/// `_` or `:`. A dot is not, because it separates a label from a published
+/// value (`<timer:task>.remaining`).
+#[inline]
+fn is_valid_in_label_literal(c: char) -> bool {
+    is_id_continue(c) || c == ':'
+}
+
+/// The length of the reference name at the start of `text`, which follows an
+/// `@`, or zero if there is none. Trailing `:` and `-` are punctuation, since
+/// a label never ends with them.
+fn ref_name_len(text: &str) -> usize {
+    if !text.starts_with(is_label_start) {
+        return 0;
+    }
+    let end = text
+        .find(|c| !is_valid_in_label_literal(c))
+        .unwrap_or(text.len());
+    text[..end].trim_end_matches([':', '-']).len()
+}
+
+/// Whether a string is a valid label name (without the angle brackets).
+///
+/// A label name consists of letters, digits, `-`, `_` and `:`; it starts with
+/// a letter, a digit or `_`, and does not end with `:` or `-` (SPEC §4.2).
 pub fn is_valid_label_literal_id(id: &str) -> bool {
-    !id.is_empty() && id.chars().all(is_valid_in_label_literal)
+    id.starts_with(is_label_start)
+        && id.chars().all(is_valid_in_label_literal)
+        && !id.ends_with([':', '-'])
 }

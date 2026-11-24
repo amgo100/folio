@@ -358,10 +358,10 @@ Air resistance is negligible.#sidenote[Take $g = qty(9.81, "m s^-2")$.]
 | Comment | `//`, `/* */` | Nothing |
 
 - **Fields.** Element calls accept the semantic fields declared in the element's schema plus the universal fields: `class` (style hooks such as `class: "hard"`), `id` (the same as a label), `steps` and `handout` (§10.1, §10.4), `override`, and the layout hints listed in §5.4. No element has fields such as `font`, `size` or `color`.
-- **Labels** consist of letters, digits, `-`, `_` and `:`, and do not end with `:` or `-`; they cannot contain `.`, which separates a label from a published value (`<timer:task>.remaining`, §10.6). A reference in running text therefore never ends with `:` or `-`, so in "see @fig:ball: it shows" the final colon is punctuation.
+- **Labels** consist of letters, digits, `-`, `_` and `:`, start with a letter, digit or `_`, and do not end with `:` or `-`; they cannot contain `.`, which separates a label from a published value (`<timer:task>.remaining`, §10.6). A reference in running text therefore never ends with `:` or `-`, so in "see @fig:ball: it shows" the final colon is punctuation.
 - **Sigils.** `$` starts math, `#` starts an element call and `@` a reference. Stylesheet tokens are therefore written `tok.accent` in content (`$accent` in stylesheets), and colours `rgb("1f5fa8")`.
 - **Per-instance data** that is not formatting is content in every mode: the number of grid columns, the number of answer lines, a drawing's scale.
-- **Relation to Typst.** The markup follows Typst's wherever Folio has no reason to differ, so authors who know Typst meet few surprises, and `folio-syntax` started as a fork of Typst's parser (§2.2). Folio's own constructs are element declarations (§4.3), scoped rules (§5.4), quantities and LaTeX math mode (§8.1), and the label grammar above. Source compatibility remains a non-goal (§1.3).
+- **Relation to Typst.** The markup follows Typst's wherever Folio has no reason to differ, so authors who know Typst meet few surprises, and `folio-syntax` started as a fork of Typst's parser (§2.2). Folio's own constructs are element declarations (§4.3), scoped rules (§5.4), quantities and LaTeX math mode (§8.1), and the label grammar above. Typst's `set`, `show` and `context` are not part of the language, because styling lives in stylesheets. Source compatibility remains a non-goal (§1.3).
 
 ### 4.3 Elements
 
@@ -723,7 +723,7 @@ Math is parsed into a semantic math tree and laid out with the font's OpenType M
 ### 8.1 Input
 
 - **Native syntax**, readable without backslashes: `$v^2 = u^2 + 2 a s$`, `$F = (m v - m u) / t$`, `$sum_(i=1)^n x_i$`, `$vec(F)$`, `$integral_0^T P(t) dif t$`.
-- **LaTeX mode** for pasted material: `$:tex \frac{1}{2} m v^2$`, or `math-input: tex` for a whole project. It covers the amsmath core (fractions, roots, scripts, matrices, `align`, `cases`, delimiters, accents, operators, `\text`); unknown commands are errors. The colon cannot start an identifier, so the mode never collides with native math.
+- **LaTeX mode** for pasted material: `$:tex \frac{1}{2} m v^2$`, or `math-input: tex` for a whole project. The formula runs to the first `$` not escaped as `\$`, and is displayed when a space precedes that `$`. It covers the amsmath core (fractions, roots, scripts, matrices, `align`, `cases`, delimiters, accents, operators, `\text`); unknown commands are errors. The colon cannot start an identifier, so the mode never collides with native math.
 - **Display and alignment**: display math with inner spaces; multi-line equations with `\` line breaks and `&` alignment points; per-line numbers and labels (`<eq:suvat>`).
 - **Quantities**: `qty(9.81, "m s^-2")` with upright units, thin-space digit grouping and a configurable decimal marker; `unit("kg m^2 s^-1")`; `num(6.02e23)`; uncertainties `qty(2.31, "m", pm: 0.02)`. Vectors `vec(a)` and unit vectors `hat(i)` are semantic; whether a vector is bold or arrowed is a stylesheet choice (`math.vector { math-style: bold-upright; }`).
 

@@ -114,28 +114,28 @@ impl Tag {
     /// The recommended CSS class for the highlighting tag.
     pub fn css_class(self) -> &'static str {
         match self {
-            Self::Comment => "typ-comment",
-            Self::Punctuation => "typ-punct",
-            Self::Escape => "typ-escape",
-            Self::Strong => "typ-strong",
-            Self::Emph => "typ-emph",
-            Self::Link => "typ-link",
-            Self::Raw => "typ-raw",
-            Self::Label => "typ-label",
-            Self::Ref => "typ-ref",
-            Self::Heading => "typ-heading",
-            Self::ListMarker => "typ-marker",
-            Self::ListTerm => "typ-term",
-            Self::MathDelimiter => "typ-math-delim",
-            Self::MathOperator => "typ-math-op",
-            Self::MathGroupingParens => "typ-math-group",
-            Self::Keyword => "typ-key",
-            Self::Operator => "typ-op",
-            Self::Number => "typ-num",
-            Self::String => "typ-str",
-            Self::Function => "typ-func",
-            Self::Interpolated => "typ-pol",
-            Self::Error => "typ-error",
+            Self::Comment => "fol-comment",
+            Self::Punctuation => "fol-punct",
+            Self::Escape => "fol-escape",
+            Self::Strong => "fol-strong",
+            Self::Emph => "fol-emph",
+            Self::Link => "fol-link",
+            Self::Raw => "fol-raw",
+            Self::Label => "fol-label",
+            Self::Ref => "fol-ref",
+            Self::Heading => "fol-heading",
+            Self::ListMarker => "fol-marker",
+            Self::ListTerm => "fol-term",
+            Self::MathDelimiter => "fol-math-delim",
+            Self::MathOperator => "fol-math-op",
+            Self::MathGroupingParens => "fol-math-group",
+            Self::Keyword => "fol-key",
+            Self::Operator => "fol-op",
+            Self::Number => "fol-num",
+            Self::String => "fol-str",
+            Self::Function => "fol-func",
+            Self::Interpolated => "fol-pol",
+            Self::Error => "fol-error",
         }
     }
 }
@@ -178,6 +178,9 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::TermItem => None,
         SyntaxKind::TermMarker => Some(Tag::ListMarker),
         SyntaxKind::Equation => None,
+        SyntaxKind::TexEquation => None,
+        SyntaxKind::MathMode => Some(Tag::Keyword),
+        SyntaxKind::TexText => None,
 
         SyntaxKind::Math => None,
         SyntaxKind::MathText => None,
@@ -244,6 +247,7 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::Arrow => Some(Tag::Operator),
         SyntaxKind::Root => Some(Tag::MathOperator),
         SyntaxKind::Bang => None,
+        SyntaxKind::At => Some(Tag::Keyword),
 
         SyntaxKind::Not => Some(Tag::Keyword),
         SyntaxKind::And => Some(Tag::Keyword),
@@ -251,9 +255,6 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::None => Some(Tag::Keyword),
         SyntaxKind::Auto => Some(Tag::Keyword),
         SyntaxKind::Let => Some(Tag::Keyword),
-        SyntaxKind::Set => Some(Tag::Keyword),
-        SyntaxKind::Show => Some(Tag::Keyword),
-        SyntaxKind::Context => Some(Tag::Keyword),
         SyntaxKind::If => Some(Tag::Keyword),
         SyntaxKind::Else => Some(Tag::Keyword),
         SyntaxKind::For => Some(Tag::Keyword),
@@ -265,6 +266,8 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::Import => Some(Tag::Keyword),
         SyntaxKind::Include => Some(Tag::Keyword),
         SyntaxKind::As => Some(Tag::Keyword),
+        SyntaxKind::Element => Some(Tag::Keyword),
+        SyntaxKind::Rule => Some(Tag::Keyword),
 
         SyntaxKind::Code => None,
         SyntaxKind::Ident => highlight_ident(node),
@@ -289,9 +292,6 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::Closure => None,
         SyntaxKind::Params => None,
         SyntaxKind::LetBinding => None,
-        SyntaxKind::SetRule => None,
-        SyntaxKind::ShowRule => None,
-        SyntaxKind::Contextual => None,
         SyntaxKind::Conditional => None,
         SyntaxKind::WhileLoop => None,
         SyntaxKind::ForLoop => None,
@@ -305,6 +305,16 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::FuncReturn => None,
         SyntaxKind::Destructuring => None,
         SyntaxKind::DestructAssignment => None,
+        SyntaxKind::ElementDecl => None,
+        SyntaxKind::SchemaFields => None,
+        SyntaxKind::SchemaField => None,
+        SyntaxKind::SchemaBody => None,
+        SyntaxKind::SchemaEntry => None,
+        SyntaxKind::ScopedRule => None,
+        SyntaxKind::RuleScope => None,
+        SyntaxKind::Selector => None,
+        SyntaxKind::RuleBlock => None,
+        SyntaxKind::Declaration => None,
 
         SyntaxKind::Shebang => Some(Tag::Comment),
         SyntaxKind::LineComment => Some(Tag::Comment),
@@ -348,14 +358,6 @@ fn highlight_ident(node: &LinkedNode<'_>) -> Option<Tag> {
     let mut ancestor = node;
     while ancestor.parent_kind() == Some(SyntaxKind::FieldAccess) {
         ancestor = ancestor.parent()?;
-    }
-
-    // Are we directly before or behind a show rule colon?
-    if ancestor.parent_kind() == Some(SyntaxKind::ShowRule)
-        && (next_leaf.map(|leaf| leaf.kind()) == Some(SyntaxKind::Colon)
-            || node.prev_leaf().map(|leaf| leaf.kind()) == Some(SyntaxKind::Colon))
-    {
-        return Some(Tag::Function);
     }
 
     // Are we (or an ancestor field access) directly after a hash.

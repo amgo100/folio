@@ -163,6 +163,14 @@ fn expand_and_reparse_markup(
             start -= 1;
         }
 
+        // Never end right after a hash: the expression that follows it was
+        // parsed in code mode, so it cannot be reused on its own. (Not in
+        // typst-syntax v0.15.1, where an edit such as inserting `#` before
+        // `  #f()` leaves a stale `f()` call in the tree.)
+        if end > 0 && end < children.len() && children[end - 1].kind() == SyntaxKind::Hash {
+            end += 1;
+        }
+
         // Synthesize what `at_start` and `nesting` would be at the start of the
         // reparse.
         let mut prefix_len = 0;
@@ -436,7 +444,7 @@ mod tests {
             "\nmore\n\n",
             Incr("abc\nmore\n\n= a head\n"),
         );
-        test("#show f: a => b..", Edit::End, "c", All);
+        test("#rule f { a: b.. }", Edit::End, "c", All);
         test("#for", Edit::End, "//", All);
         test("a\n#let \nb", Edit::At(7), "i", Incr("#let i\nb"));
         test("#{{let x = z}; a = 1} b", Edit::At(7), "//", All);
@@ -490,7 +498,7 @@ mod tests {
         test("#import \"@preview/pkg", Edit::End, "\"", All);
         test("#import [a\nb\nc", Edit::End, "]", All);
         test("#import $a\nb\nc", Edit::End, "$", All);
-        test("#set thing\"a\n", Edit::End, "\"", All);
+        test("#rule thing\"a\n", Edit::End, "\"", All);
         test("#let x = \"a\nb\nc", Edit::End, "\"", All);
         test(
             "#let x = {\"a\nb\nc}",

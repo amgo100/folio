@@ -1192,7 +1192,13 @@ impl<'a> LinkedNode<'a> {
             ModeAfter::RawDelim if self.index == 0 => None,
             // Text not under raw is always markup.
             ModeAfter::Text => Some(SyntaxMode::Markup),
-            // An opening dollar sign starts math mode.
+            // An opening dollar sign starts math mode, except in a LaTeX
+            // equation, whose body has no syntax mode.
+            ModeAfter::Dollar
+                if self.index == 0 && self.parent_kind() == Some(SyntaxKind::TexEquation) =>
+            {
+                None
+            }
             ModeAfter::Dollar if self.index == 0 => Some(SyntaxMode::Math),
             // Spaces at the left/right of an equation are still in math mode.
             ModeAfter::Space if self.parent_kind() == Some(SyntaxKind::Equation) => {
@@ -1624,7 +1630,7 @@ Markup: 9 [
 
     #[test]
     fn test_linked_node() {
-        let source = Source::detached("#set text(12pt, red)");
+        let source = Source::detached("#let text = (12pt, red)");
 
         // Find "text" with Before.
         let node = LinkedNode::new(source.root())
@@ -1640,21 +1646,21 @@ Markup: 9 [
         assert_eq!(node.offset(), 5);
         assert_eq!(node.leaf_text(), "text");
 
-        // Go back to "#set". Skips the space.
+        // Go back to "#let". Skips the space.
         let prev = node.prev_sibling().unwrap();
         assert_eq!(prev.offset(), 1);
-        assert_eq!(prev.leaf_text(), "set");
+        assert_eq!(prev.leaf_text(), "let");
     }
 
     #[test]
     fn test_linked_node_non_trivia_leaf() {
-        let source = Source::detached("#set fun(12pt, red)");
+        let source = Source::detached("#let fun = (12pt, red)");
         let leaf = LinkedNode::new(source.root())
             .leaf_at(6, Side::Before)
             .unwrap();
         let prev = leaf.prev_leaf().unwrap();
         assert_eq!(leaf.leaf_text(), "fun");
-        assert_eq!(prev.leaf_text(), "set");
+        assert_eq!(prev.leaf_text(), "let");
 
         // Check position 9 with Before.
         let source = Source::detached("#let x = 10");

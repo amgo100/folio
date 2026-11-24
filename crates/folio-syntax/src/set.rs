@@ -64,7 +64,7 @@ macro_rules! syntax_set {
 pub(crate) use syntax_set;
 
 /// Syntax kinds that can start a statement.
-pub(crate) const STMT: SyntaxSet = syntax_set!(Let, Set, Show, Import, Include, Return);
+pub(crate) const STMT: SyntaxSet = syntax_set!(Let, Import, Include, Return, Element, Rule);
 
 /// Syntax kinds that can start a math expression.
 pub(crate) const MATH_EXPR: SyntaxSet = syntax_set!(
@@ -106,10 +106,10 @@ pub(crate) const ATOMIC_CODE_EXPR: SyntaxSet = syntax_set!(
     LeftBracket,
     LeftParen,
     Dollar,
+    TexEquation,
     Let,
-    Set,
-    Show,
-    Context,
+    Element,
+    Rule,
     If,
     While,
     For,

@@ -121,6 +121,7 @@ fn markup_expr(p: &mut Parser<'_>, at_start: bool, nesting: &mut usize) {
         | SyntaxKind::Label => p.eat(),
 
         SyntaxKind::Raw => p.eat(), // Raw is handled entirely in the Lexer.
+        SyntaxKind::TexEquation => p.eat(), // So is LaTeX math.
 
         SyntaxKind::Hash => embedded_code_expr(p),
         SyntaxKind::Star => strong(p),
@@ -571,6 +572,7 @@ fn code_exprs(p: &mut Parser<'_>, stop_set: SyntaxSet) {
 
     while !p.at_set(stop_set) {
         p.with_nl_mode(AtNewline::ContextualContinue, |p| {
+            contextual_keyword(p);
             if !p.at_set(set::CODE_EXPR) {
                 p.unexpected();
                 return;
@@ -596,6 +598,7 @@ fn embedded_code_expr(p: &mut Parser<'_>) {
             return;
         }
 
+        contextual_keyword(p);
         let stmt = p.at_set(set::STMT);
         code_expr_prec(p, true, 0);
 
@@ -633,6 +636,14 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
         }
     } else {
         code_primary(p, atomic);
+        // Element declarations and scoped rules are statements: nothing
+        // attaches to them.
+        if matches!(
+            p.nodes.get(m.0).map(SyntaxNode::kind),
+            Some(SyntaxKind::ElementDecl | SyntaxKind::ScopedRule)
+        ) {
+            return;
+        }
     }
 
     loop {
@@ -724,9 +735,8 @@ fn code_primary(p: &mut Parser<'_>, atomic: bool) {
         SyntaxKind::LeftParen => expr_with_paren(p, atomic),
         SyntaxKind::Dollar => equation(p),
         SyntaxKind::Let => let_binding(p),
-        SyntaxKind::Set => set_rule(p),
-        SyntaxKind::Show => show_rule(p),
-        SyntaxKind::Context => contextual(p, atomic),
+        SyntaxKind::Element => element_decl(p),
+        SyntaxKind::Rule => scoped_rule(p),
         SyntaxKind::If => conditional(p),
         SyntaxKind::While => while_loop(p),
         SyntaxKind::For => for_loop(p),
@@ -737,6 +747,7 @@ fn code_primary(p: &mut Parser<'_>, atomic: bool) {
         SyntaxKind::Return => return_stmt(p),
 
         SyntaxKind::Raw => p.eat(), // Raw is handled entirely in the Lexer.
+        SyntaxKind::TexEquation => p.eat(), // So is LaTeX math.
 
         SyntaxKind::None
         | SyntaxKind::Auto
@@ -829,50 +840,259 @@ fn let_binding(p: &mut Parser<'_>) {
     p.wrap(m, SyntaxKind::LetBinding);
 }
 
-/// Parses a set rule: `set text(...)`.
-fn set_rule(p: &mut Parser<'_>) {
-    let m = p.marker();
-    p.assert(SyntaxKind::Set);
+/// Turns the identifiers `element` and `rule` into keywords where they start
+/// an element declaration (`element example(..)`) or a scoped rule
+/// (`rule question { .. }`). This happens only at the start of a statement and
+/// when a name or selector follows on the same line after a space, so
+/// `element` and `rule` remain usable as ordinary names elsewhere, such as in
+/// `rule(0.4pt)` or `element.fields`.
+fn contextual_keyword(p: &mut Parser<'_>) {
+    if !p.at(SyntaxKind::Ident) {
+        return;
+    }
+    let kind = match p.current_text() {
+        "element" => SyntaxKind::Element,
+        "rule" => SyntaxKind::Rule,
+        _ => return,
+    };
+    let starts = match (kind, p.peek_after_space()) {
+        (SyntaxKind::Element, Some(next)) => next == SyntaxKind::Ident,
+        (SyntaxKind::Rule, Some(next)) => {
+            matches!(next, SyntaxKind::Ident | SyntaxKind::At | SyntaxKind::Dot)
+        }
+        _ => false,
+    };
+    if starts {
+        p.convert_current(kind);
+    }
+}
 
-    let m2 = p.marker();
+/// Parses an element declaration (SPEC §4.3):
+/// `element example(title: content = none) { kind: block }`.
+fn element_decl(p: &mut Parser<'_>) {
+    let m = p.marker();
+    p.assert(SyntaxKind::Element);
     p.expect(SyntaxKind::Ident);
-    while p.eat_if(SyntaxKind::Dot) {
-        p.expect(SyntaxKind::Ident);
-        p.wrap(m2, SyntaxKind::FieldAccess);
-    }
-
-    args(p);
-    if p.eat_if(SyntaxKind::If) {
-        code_expr(p);
-    }
-    p.wrap(m, SyntaxKind::SetRule);
-}
-
-/// Parses a show rule: `show heading: it => emph(it.body)`.
-fn show_rule(p: &mut Parser<'_>) {
-    let m = p.marker();
-    p.assert(SyntaxKind::Show);
-    let m2 = p.before_trivia();
-
-    if !p.at(SyntaxKind::Colon) {
-        code_expr(p);
-    }
-
-    if p.eat_if(SyntaxKind::Colon) {
-        code_expr(p);
+    if p.at(SyntaxKind::LeftParen) {
+        schema_fields(p);
     } else {
-        p.expected_at(m2, "colon");
+        p.expected("field list");
     }
-
-    p.wrap(m, SyntaxKind::ShowRule);
+    if p.at(SyntaxKind::LeftBrace) {
+        schema_body(p);
+    }
+    p.wrap(m, SyntaxKind::ElementDecl);
 }
 
-/// Parses a contextual expression: `context text.lang`.
-fn contextual(p: &mut Parser<'_>, atomic: bool) {
+/// Parses the fields of an element declaration: `(title: content = none)`.
+fn schema_fields(p: &mut Parser<'_>) {
     let m = p.marker();
-    p.assert(SyntaxKind::Context);
-    code_expr_prec(p, atomic, 0);
-    p.wrap(m, SyntaxKind::Contextual);
+    p.with_nl_mode(AtNewline::Continue, |p| {
+        p.assert(SyntaxKind::LeftParen);
+
+        let mut seen = FxHashSet::default();
+        while !p.current().is_terminator() {
+            if !p.at(SyntaxKind::Ident) {
+                p.unexpected();
+                continue;
+            }
+
+            schema_field(p, &mut seen);
+
+            if !p.current().is_terminator() {
+                p.expect(SyntaxKind::Comma);
+            }
+        }
+
+        p.expect_closing_delimiter(m, SyntaxKind::RightParen);
+    });
+    p.wrap(m, SyntaxKind::SchemaFields);
+}
+
+/// Parses a field of an element declaration: `title: content = none`. The type
+/// is an expression that binds tighter than assignment, so that `=` starts the
+/// default value.
+fn schema_field<'s>(p: &mut Parser<'s>, seen: &mut FxHashSet<&'s str>) {
+    let m = p.marker();
+    let name = p.current_text();
+    p.assert(SyntaxKind::Ident);
+    if !seen.insert(name) {
+        p[m].convert_to_error(eco_format!("duplicate field: {name}"));
+    }
+
+    if p.expect(SyntaxKind::Colon) {
+        code_expr_prec(p, false, ast::BinOp::Assign.precedence() + 1);
+    }
+    if p.eat_if(SyntaxKind::Eq) {
+        code_expr(p);
+    }
+
+    p.wrap(m, SyntaxKind::SchemaField);
+}
+
+/// Parses the body of an element declaration: `{ kind: block }`.
+fn schema_body(p: &mut Parser<'_>) {
+    let m = p.marker();
+    p.enter_modes(SyntaxMode::Code, AtNewline::Continue, |p| {
+        p.assert(SyntaxKind::LeftBrace);
+        while !p.at_set(syntax_set!(RightBrace, RightBracket, RightParen, End)) {
+            if p.at(SyntaxKind::Ident) {
+                schema_entry(p);
+            } else if !p.eat_if(SyntaxKind::Semicolon) {
+                p.unexpected();
+            }
+        }
+        p.expect_closing_delimiter(m, SyntaxKind::RightBrace);
+    });
+    p.wrap(m, SyntaxKind::SchemaBody);
+}
+
+/// Parses an entry in the body of an element declaration: `kind: block`. The
+/// value is one or more expressions up to the end of the line or a semicolon:
+/// `counter: within heading(level: 1)`.
+fn schema_entry(p: &mut Parser<'_>) {
+    let m = p.marker();
+    p.with_nl_mode(AtNewline::Stop, |p| {
+        p.assert(SyntaxKind::Ident);
+        if p.expect(SyntaxKind::Colon) {
+            let m_value = p.marker();
+            while p.at_set(set::CODE_EXPR) {
+                code_expr(p);
+            }
+            if p.marker() == m_value {
+                p.expected("expression");
+            }
+        }
+    });
+    p.wrap(m, SyntaxKind::SchemaEntry);
+}
+
+/// Parses a scoped rule (SPEC §5.4): `rule question { numbering: "(a)"; }`,
+/// `rule @target pptx figure { .. }`.
+///
+/// The selector is kept as a token sequence and the values as expressions;
+/// their full grammar is that of stylesheets.
+fn scoped_rule(p: &mut Parser<'_>) {
+    let m = p.marker();
+    p.assert(SyntaxKind::Rule);
+    while p.at(SyntaxKind::At) {
+        rule_scope(p);
+    }
+    selector(p);
+    if p.at(SyntaxKind::LeftBrace) {
+        rule_block(p);
+    } else {
+        p.expected("declaration block");
+    }
+    p.wrap(m, SyntaxKind::ScopedRule);
+}
+
+/// Parses a variant or target scope of a scoped rule: `@target pptx`,
+/// `@variant slides, handout`.
+fn rule_scope(p: &mut Parser<'_>) {
+    let m = p.marker();
+    p.assert(SyntaxKind::At);
+    if p.directly_at(SyntaxKind::Ident) {
+        let m_kind = p.marker();
+        let kind = p.current_text();
+        p.eat();
+        if !matches!(kind, "variant" | "target") {
+            p[m_kind].convert_to_error(eco_format!("unknown rule scope: `@{kind}`"));
+            p[m_kind].hint("a scope is `@variant name` or `@target name`");
+        }
+        loop {
+            p.expect(SyntaxKind::Ident);
+            if !p.eat_if(SyntaxKind::Comma) {
+                break;
+            }
+        }
+    } else {
+        p.expected("`variant` or `target`");
+    }
+    p.wrap(m, SyntaxKind::RuleScope);
+}
+
+/// Parses the selector of a scoped rule as a flat sequence of tokens up to the
+/// declaration block, keeping brackets and parentheses balanced.
+fn selector(p: &mut Parser<'_>) {
+    let m = p.marker();
+    let mut depth: usize = 0;
+    while !p.end() {
+        match p.current() {
+            SyntaxKind::LeftBrace if depth == 0 => break,
+            SyntaxKind::LeftBrace | SyntaxKind::LeftBracket | SyntaxKind::LeftParen => {
+                depth += 1;
+            }
+            SyntaxKind::RightBrace | SyntaxKind::RightBracket | SyntaxKind::RightParen => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+        p.eat();
+    }
+    if depth > 0 {
+        p.balanced = false;
+    }
+    if p.marker() == m {
+        p.expected("selector");
+    } else {
+        p.wrap(m, SyntaxKind::Selector);
+    }
+}
+
+/// Parses the declaration block of a scoped rule: `{ numbering: "(a)"; }`.
+fn rule_block(p: &mut Parser<'_>) {
+    let m = p.marker();
+    p.enter_modes(SyntaxMode::Code, AtNewline::Continue, |p| {
+        p.assert(SyntaxKind::LeftBrace);
+        while !p.at_set(syntax_set!(RightBrace, RightBracket, RightParen, End)) {
+            if p.at(SyntaxKind::Ident) {
+                declaration(p);
+            } else if !p.eat_if(SyntaxKind::Semicolon) {
+                p.unexpected();
+            }
+        }
+        p.expect_closing_delimiter(m, SyntaxKind::RightBrace);
+    });
+    p.wrap(m, SyntaxKind::RuleBlock);
+}
+
+/// Parses a declaration in a scoped rule: `space-before: 24pt;`. The value is
+/// a sequence of expressions, optionally separated by commas:
+/// `margin-column: outer, width 32mm, gap 6mm`.
+fn declaration(p: &mut Parser<'_>) {
+    let m = p.marker();
+    p.assert(SyntaxKind::Ident);
+    if p.expect(SyntaxKind::Colon) {
+        let m_value = p.marker();
+        while !p.at_set(syntax_set!(
+            Semicolon,
+            RightBrace,
+            RightBracket,
+            RightParen,
+            End
+        )) {
+            // A new line that starts with `name:` is the next declaration,
+            // with the semicolon missing.
+            if p.had_newline() && p.at(SyntaxKind::Ident) && p.peek() == Some(SyntaxKind::Colon) {
+                p.expected("semicolon");
+                break;
+            }
+            if p.at_set(set::CODE_EXPR) {
+                code_expr(p);
+            } else if !p.eat_if(SyntaxKind::Comma) {
+                p.unexpected();
+            }
+        }
+        if p.marker() == m_value {
+            p.expected("value");
+        }
+    }
+    p.eat_if(SyntaxKind::Semicolon);
+    p.wrap(m, SyntaxKind::Declaration);
 }
 
 /// Parses an if-else conditional: `if x { y } else { z }`.
@@ -923,7 +1143,7 @@ fn for_loop(p: &mut Parser<'_>) {
     p.wrap(m, SyntaxKind::ForLoop);
 }
 
-/// Parses a module import: `import "utils.typ": a, b, c`.
+/// Parses a module import: `import "utils.fol": a, b, c`.
 fn module_import(p: &mut Parser<'_>) {
     let m = p.marker();
     p.assert(SyntaxKind::Import);
@@ -983,7 +1203,7 @@ fn import_items(p: &mut Parser<'_>) {
     p.wrap(m, SyntaxKind::ImportItems);
 }
 
-/// Parses a module include: `include "chapter1.typ"`.
+/// Parses a module include: `include "chapter1.fol"`.
 fn module_include(p: &mut Parser<'_>) {
     let m = p.marker();
     p.assert(SyntaxKind::Include);
@@ -1260,12 +1480,29 @@ fn arg<'s>(p: &mut Parser<'s>, seen: &mut FxHashSet<&'s str>) {
 
     // Parses a normal positional argument or an argument name.
     let was_at_expr = p.at_set(set::CODE_EXPR);
-    let text = p.current_text();
+    let start = p.current_start();
     code_expr(p);
+
+    // Parses the scope of a named argument limited to a variant or target:
+    // `override@markscheme: (..)` (SPEC §5.4).
+    if p.directly_at(SyntaxKind::At)
+        && p.nodes.get(m.0).map(SyntaxNode::kind) == Some(SyntaxKind::Ident)
+    {
+        p.eat();
+        if p.directly_at(SyntaxKind::Ident) {
+            p.eat();
+        } else {
+            p.expected("variant or target name");
+        }
+        if !p.at(SyntaxKind::Colon) {
+            p.expected("colon");
+        }
+    }
 
     // Parses a named argument: `thickness: 12pt`.
     if p.eat_if(SyntaxKind::Colon) {
         // Recover from bad argument name.
+        let text = p.text[start..p.prev_end()].trim_end_matches(':').trim_end();
         if was_at_expr {
             if p[m].kind() != SyntaxKind::Ident {
                 p[m].expected("identifier");
@@ -1729,6 +1966,35 @@ impl<'s> Parser<'s> {
     fn prev_end(&self) -> usize {
         self.token.prev_end
     }
+
+    /// The kind of the next non-trivia token after the current one.
+    fn peek(&self) -> Option<SyntaxKind> {
+        let mut lexer = self.lexer.clone();
+        loop {
+            match lexer.next().0 {
+                SyntaxKind::End => return None,
+                kind if kind.is_trivia() => {}
+                kind => return Some(kind),
+            }
+        }
+    }
+
+    /// The kind of the next non-trivia token after the current one, if it is
+    /// separated from the current token by trivia without a newline.
+    fn peek_after_space(&self) -> Option<SyntaxKind> {
+        let mut lexer = self.lexer.clone();
+        let mut kind = lexer.next().0;
+        if !kind.is_trivia() {
+            return None;
+        }
+        while kind.is_trivia() {
+            if lexer.newline() {
+                return None;
+            }
+            kind = lexer.next().0;
+        }
+        (kind != SyntaxKind::End).then_some(kind)
+    }
 }
 
 // The main parsing interface for generating tokens and eating/modifying nodes.
@@ -1772,6 +2038,12 @@ impl<'s> Parser<'s> {
     fn assert(&mut self, kind: SyntaxKind) {
         assert_eq!(self.token.kind, kind);
         self.eat();
+    }
+
+    /// Convert the current token's [`SyntaxKind`] without eating it.
+    fn convert_current(&mut self, kind: SyntaxKind) {
+        self.token.node.convert_to_kind(kind);
+        self.token.kind = kind;
     }
 
     /// Convert the current token's [`SyntaxKind`] and eat it.
