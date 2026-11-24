@@ -1,0 +1,15 @@
+[package]
+name = "folio-core"
+description = "Folio's compile stages from evaluation to layout, until they are split into their own crates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+folio-component.workspace = true
+folio-syntax.workspace = true
+
+[lints]
+workspace = true

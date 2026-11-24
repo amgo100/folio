@@ -1349,6 +1349,7 @@ A first usable release (exam and mark scheme to PDF, with math, variants and liv
 - **Renderer in WebAssembly.** Whether `folio-render` and `folio-runtime`, compiled to WebAssembly, draw display lists in Folio Studio's renderer and in browser clients, replacing a separate TypeScript Canvas 2D renderer and preparing standalone HTML presentations (§15). Both crates are kept free of tokio and threads so that either path stays open; the M1 typing prototype informs the decision.
 - **Effort and team.** Not yet estimated. The estimate is made in M0, per milestone, and assumes the reuse of §2.2 (krilla, Typst's parser and math layout); the scope of 1.0 is then adjusted to the team available.
 - **Name.** "Folio" is a working name; check for conflicts before publishing crates.
+- **Licence.** Folio's own licence is not chosen yet, so the workspace crates have no `license` field and are not published. It must allow the Apache-2.0 code derived from Typst (§2.2); `NOTICE` records that attribution.
 
 ### 16.2 Assumptions to verify
 

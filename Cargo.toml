@@ -1,0 +1,40 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+# Minimum supported Rust version. Raise it only when a dependency needs it;
+# `scripts/check.sh` checks the workspace with exactly this toolchain.
+rust-version = "1.95"
+repository = "https://github.com/amgo100/folio"
+# Nothing is published until the name is cleared (SPEC §16.1).
+publish = false
+
+[workspace.dependencies]
+folio-syntax = { path = "crates/folio-syntax" }
+folio-component = { path = "crates/folio-component" }
+folio-core = { path = "crates/folio-core" }
+folio-pdf = { path = "crates/folio-pdf" }
+folio = { path = "crates/folio" }
+
+[workspace.lints.rust]
+# SPEC §14.2. `folio-node` and font memory-mapping will be the only exceptions;
+# they declare their own `[lints]` table instead of inheriting this one.
+unsafe_code = "forbid"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+debug = "line-tables-only"
