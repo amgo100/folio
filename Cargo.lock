@@ -82,10 +82,13 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 name = "folio"
 version = "0.0.0"
 dependencies = [
+ "ecow",
  "folio-component",
  "folio-core",
  "folio-pdf",
  "folio-syntax",
+ "rayon",
+ "salsa",
 ]
 
 [[package]]

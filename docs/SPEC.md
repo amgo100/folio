@@ -143,6 +143,7 @@ The table is the target structure. Development starts with fewer crates and spli
 ### 2.3 Incremental compilation
 
 - Every stage is a query in a demand-driven, memoised database built on `salsa`. Queries record which inputs they read; an edit invalidates only the queries whose inputs changed. Component calls are queries too (§3.5).
+- **Inputs and keys**: the inputs are the manifest, the lockfile, sources, data files, fonts and the component registry, which the host sets through `folio::World`. The variant and the target are keys of the per-variant queries, not inputs. A query that reads neither runs once for all variants, and the variants of one revision compile in parallel, each on its own database handle.
 - **Early cutoff**: when a query re-runs and returns a value equal to its previous one, the queries that depend on it are not re-run. The convergence short-circuit of page layout, below, relies on this.
 - **Cancellation**: a new edit cancels the queries still running for the previous revision, so the editor, the preview and the language server never wait for stale work.
 - **Durability**: bundled fonts, the standard library and first-party components are marked as rarely changing, so the validity check after an edit skips the queries that depend only on them.
@@ -330,7 +331,7 @@ mode = "local"          # or "strict" (§5.5)
 | `project.styles` | Project stylesheets, applied in order to every variant | None |
 | `project.today` | The date that scripts see as `today`, a TOML date such as `2026-11-24` (§4.4) | From the command line |
 | `[components]` | Components by path or version, and `disable` (§3.6) | First-party components only |
-| `[variants.<name>]` | `targets` (one or more of `pdf`, `docx`, `pptx`, `live`) and overlay `styles` (§6.1) | No variants |
+| `[variants.<name>]` | `targets` (one or more of `pdf`, `docx`, `pptx`, `live`) and overlay `styles` (§6.1) | No variants: the document is built once, for PDF |
 | `[numbering-groups.<name>]` | `variants` and `shared-counters` (§6.1) | No groups |
 | `[formatting]` | `mode`, `strict-paths`, `overrides-sheet`, `allow-overrides-sheet` (default `true`) and `allow-local-packages` (default `false`) (§5.5) | `mode = "local"` |
 | `[output]` | `path` of each output file, with the placeholders `{stem}` (the entry file's name), `{variant}` and `{ext}` (§6.4) | `"out/{stem}-{variant}.{ext}"` |

@@ -21,14 +21,14 @@ use folio_syntax::{DiagSpanKind, Source};
 use crate::project::{Bindings, Components};
 
 /// The components a project uses, with their templates parsed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ComponentHost {
     components: Vec<Hosted>,
     bindings: Bindings,
 }
 
 /// A component in use.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 struct Hosted {
     registered: Registered,
     templates: Vec<Template>,
@@ -325,6 +325,16 @@ pub struct Template {
     /// <parts> }`.
     pub source: Source,
 }
+
+/// Templates are equal when their declarations are: the parsed source is
+/// made from the declaration and the component's namespace alone.
+impl PartialEq for Template {
+    fn eq(&self, other: &Self) -> bool {
+        self.component == other.component && self.decl == other.decl
+    }
+}
+
+impl Eq for Template {}
 
 impl Template {
     /// The parsed `render` block.

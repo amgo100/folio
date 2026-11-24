@@ -5,8 +5,12 @@
 //! their interfaces settle (SPEC §2.2). This crate depends on
 //! `folio-component`, never the reverse, and sees components only through
 //! its registry ([`component`]).
+//!
+//! Every stage is a query in the database of [`db`] (SPEC §2.3).
 
 #![forbid(unsafe_code)]
 
 pub mod component;
+pub mod db;
+pub mod diag;
 pub mod project;
