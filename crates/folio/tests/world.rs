@@ -54,7 +54,7 @@ impl Logged {
         world
             .set_source(
                 "styles/exam.fsty",
-                "@import \"base.fsty\";\nheading { size: 14pt; }\n",
+                "@import \"base.fsty\";\nheading { font-size: 14pt; }\n",
             )
             .unwrap();
         world
@@ -81,8 +81,10 @@ impl Logged {
 /// The queries that evaluate a variant whose entry file changed, written as
 /// one name for [`set`]: the file's evaluation, the variant's, its
 /// document tree, and the build's check of it, which returns the same and so
-/// cuts the build off.
-const EVAL: &str = "eval_file evaluate document check_document";
+/// cuts the build off; and the styling of the tree, which finds every node's
+/// match memoised and returns the same, so the build's check of the styles
+/// is cut off too.
+const EVAL: &str = "eval_file evaluate document check_document styles";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {
@@ -143,6 +145,8 @@ fn early_cutoff_on_a_whitespace_edit() {
             "dependencies",
             "check_source",
             "source_file",
+            // Evaluation fails, so there is no document to style.
+            "check_styles",
             EVAL
         ])
     );
@@ -187,7 +191,11 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         "{:?}",
         compiled.diagnostics
     );
-    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
+    // The document is gone, so the build's check of the styles re-runs.
+    assert_eq!(
+        logged.take(),
+        set(&["dependencies", "check_source", "check_styles", EVAL])
+    );
 
     // Fixing it removes the diagnostic, again without re-running the build.
     logged.world.set_source("main.fol", MAIN).unwrap();
@@ -197,7 +205,10 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         "{:?}",
         compiled.diagnostics
     );
-    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
+    assert_eq!(
+        logged.take(),
+        set(&["dependencies", "check_source", "check_styles", EVAL])
+    );
 
     // A diagnostic of a file that two builds share is reported by one
     // query, and each build collects it once.

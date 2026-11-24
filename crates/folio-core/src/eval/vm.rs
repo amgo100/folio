@@ -1531,7 +1531,7 @@ fn field(target: Value, name: &str, span: Span) -> EvalResult<Value> {
     }
 }
 
-fn numeric(value: f64, unit: Unit) -> Value {
+pub(crate) fn numeric(value: f64, unit: Unit) -> Value {
     match unit {
         Unit::Pt => Value::Length(Length::abs(Abs::pt(value))),
         Unit::Mm => Value::Length(Length::abs(Abs::mm(value))),

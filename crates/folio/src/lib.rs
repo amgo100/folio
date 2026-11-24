@@ -41,6 +41,7 @@ pub use folio_core::eval;
 pub use folio_core::eval::Limits;
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
+pub use folio_core::style;
 pub use folio_syntax::{FileId, Source};
 
 pub use self::world::{Event, World, WorldBuilder, WorldError};
@@ -89,6 +90,25 @@ pub fn document(
     variant: Option<&Name>,
 ) -> Result<Option<model::Document>, Cancelled> {
     catch(|| model::document(world.db(), world.project(), variant.cloned()).clone())
+}
+
+/// Styles a variant of the world's document for a target (SPEC §2.1,
+/// §5): the document tree with a computed style for every node, or `None`
+/// when the document could not be built. The variant is `None` only for a
+/// project that declares no variants.
+///
+/// The problems found are the diagnostics that [`compile`] reports for the
+/// build. Fails only when an edit to the world cancels it.
+pub fn styles(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+) -> Result<Option<style::Styled>, Cancelled> {
+    catch(|| {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        style::styles(db, build).clone()
+    })
 }
 
 /// Compiles every variant and target the manifest declares

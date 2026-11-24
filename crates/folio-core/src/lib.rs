@@ -16,3 +16,4 @@ pub mod diag;
 pub mod eval;
 pub mod model;
 pub mod project;
+pub mod style;

@@ -374,6 +374,7 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     }
     component_host(db, project);
     check_document(db, project, build.variant(db).clone());
+    check_styles(db, build);
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),
@@ -387,6 +388,14 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
 #[salsa::tracked]
 fn check_document(db: &dyn Db, project: Project, variant: Option<Name>) {
     crate::model::document(db, project, variant);
+}
+
+/// Styles the document of a build for its diagnostics. Like
+/// [`check_document`], it stands in for the stages that will read the
+/// styled tree.
+#[salsa::tracked]
+fn check_styles(db: &dyn Db, build: Build<'_>) {
+    crate::style::styles(db, build);
 }
 
 /// Compiles one build: runs [`build_output`] and collects the diagnostics
