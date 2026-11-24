@@ -91,6 +91,11 @@ dependencies = [
 [[package]]
 name = "folio-component"
 version = "0.0.0"
+dependencies = [
+ "ecow",
+ "semver",
+ "unicode-ident",
+]
 
 [[package]]
 name = "folio-core"

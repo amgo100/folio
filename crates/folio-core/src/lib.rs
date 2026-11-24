@@ -3,8 +3,10 @@
 //!
 //! These start in one crate and move into their own `folio-*` crates as
 //! their interfaces settle (SPEC §2.2). This crate depends on
-//! `folio-component`, never the reverse.
+//! `folio-component`, never the reverse, and sees components only through
+//! its registry ([`component`]).
 
 #![forbid(unsafe_code)]
 
+pub mod component;
 pub mod project;

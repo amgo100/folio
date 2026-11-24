@@ -281,7 +281,7 @@ disable = ["plot"]                               # first-party components are on
 ```
 
 - First-party components (§13) are available without declaration and pinned with the compiler version (§2.4); they can be disabled. Other components are declared and pinned in `folio.lock`.
-- **Namespaces.** Elements and properties belong to their component's namespace and can always be written qualified (`exam.question`, in content and in selectors). Unqualified names resolve as recorded in the lockfile, so a component that adds an element in a later version cannot change how an existing document resolves; a new clash after an upgrade is a warning, and the lockfile's binding stays until the author chooses.
+- **Namespaces.** Elements and properties belong to their component's namespace and can always be written qualified (`exam.question`, in content and in selectors). A component's namespace is its name, or the part after the scope for a scoped name (`house` for `@school/house`); two components with the same namespace cannot be registered together. Unqualified names resolve as recorded in the lockfile, so a component that adds an element in a later version cannot change how an existing document resolves; a new clash after an upgrade is a warning, and the lockfile's binding stays until the author chooses.
 
 ## 4. Document model and source language
 

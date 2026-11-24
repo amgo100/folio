@@ -6,7 +6,8 @@ use folio_syntax::FileId;
 use super::de::{Cx, Invalid, Table, Value, list, suggest};
 use super::values::{
     ComponentName, Date, Edition, FIRST_PARTY_COMPONENTS, Lang, Name, PathPattern, ProjectPath,
-    QualifiedName, RelativePath, Target,
+    QualifiedName, RelativePath, Target, is_first_party, parse_component_name, parse_name,
+    parse_qualified_name, parse_target,
 };
 use super::{ProjectError, Spanned};
 
@@ -72,7 +73,8 @@ impl Components {
 /// A component declared in `[components]`.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ComponentDecl {
-    /// The component's name, which is also its namespace.
+    /// The component's name. Its namespace is the name, or the part after
+    /// the scope for a scoped name (SPEC §3.6).
     pub name: Spanned<ComponentName>,
     /// Where it comes from.
     pub source: ComponentSource,
@@ -408,8 +410,8 @@ fn read_components(cx: &mut Cx, table: &Table<'_>) -> Components {
     for (key, value) in table.entries() {
         if key.name == "disable" {
             components.disabled = value.parse_list(cx, |s| {
-                let name = ComponentName::parse(s)?;
-                if !name.is_first_party() {
+                let name = parse_component_name(s)?;
+                if !is_first_party(&name) {
                     return Err(
                         Invalid::new(eco_format!("`{s}` is not a first-party component"))
                             .with_hint(eco_format!(
@@ -423,14 +425,14 @@ fn read_components(cx: &mut Cx, table: &Table<'_>) -> Components {
             continue;
         }
 
-        let name = match ComponentName::parse(key.name) {
+        let name = match parse_component_name(key.name) {
             Ok(name) => name,
             Err(invalid) => {
                 cx.invalid(key.span.clone(), invalid);
                 continue;
             }
         };
-        if name.is_first_party() {
+        if is_first_party(&name) {
             cx.error(
                 key.span.clone(),
                 eco_format!("`{name}` is a first-party component and needs no declaration"),
@@ -487,7 +489,7 @@ fn parse_version_req(text: &str) -> Result<semver::VersionReq, Invalid> {
 fn read_variants(cx: &mut Cx, table: &Table<'_>) -> Vec<Variant> {
     let mut variants = Vec::new();
     for (key, value) in table.entries() {
-        let name = match Name::parse(key.name) {
+        let name = match parse_name(key.name) {
             Ok(name) => cx.spanned(name, key.span.clone()),
             Err(invalid) => {
                 cx.invalid(key.span.clone(), invalid);
@@ -500,7 +502,7 @@ fn read_variants(cx: &mut Cx, table: &Table<'_>) -> Vec<Variant> {
         entry.check_keys(cx, &["targets", "styles"]);
         let targets = match entry.require(cx, "targets") {
             Some(v) => {
-                let targets = v.parse_list(cx, Target::parse);
+                let targets = v.parse_list(cx, parse_target);
                 if targets.is_empty() && v.is_empty_array() {
                     cx.error(
                         v.span.clone(),
@@ -533,7 +535,7 @@ fn read_numbering_groups(
     let declared: Vec<&str> = variants.iter().map(|v| v.name.v.as_str()).collect();
     let mut groups: Vec<NumberingGroup> = Vec::new();
     for (key, value) in table.entries() {
-        let name = match Name::parse(key.name) {
+        let name = match parse_name(key.name) {
             Ok(name) => cx.spanned(name, key.span.clone()),
             Err(invalid) => {
                 cx.invalid(key.span.clone(), invalid);
@@ -555,7 +557,7 @@ fn read_numbering_groups(
                 );
             }
             for item in items {
-                let Some(variant) = item.parse(cx, Name::parse) else {
+                let Some(variant) = item.parse(cx, parse_name) else {
                     continue;
                 };
                 let text = variant.v.as_str();
@@ -593,7 +595,7 @@ fn read_numbering_groups(
 
         let shared_counters = entry
             .get("shared-counters")
-            .map(|v| v.parse_list(cx, QualifiedName::parse))
+            .map(|v| v.parse_list(cx, parse_qualified_name))
             .unwrap_or_default();
         groups.push(NumberingGroup {
             name,
