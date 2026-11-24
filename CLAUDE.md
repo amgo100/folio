@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Folio is a typesetting system, to be written in Rust, that compiles one semantic source into PDF, DOCX, PPTX and live presentations. Its primary use is teaching material: exams with mark schemes, notes, handouts and lesson slides from shared sources.
 
-The repository is at the **specification stage**: it contains only `README.md` and `docs/SPEC.md`. There is no code, Cargo workspace, build, lint or test setup yet. Implementation follows the roadmap in SPEC §15 (M0 "Skeleton" first). When code is added, update this file with the real commands.
+The repository is at the **specification stage**: it contains only documentation (`README.md`, `docs/SPEC.md` and this file). There is no code, Cargo workspace, build, lint or test setup yet. Implementation follows the roadmap in SPEC §15 (M0 "Skeleton" first). When code is added, update this file with the real commands.
 
 ## Pull requests
 
-Every pull request is reviewed with the `/code-review` skill (it runs the review in reviewer subagents):
+Every pull request is reviewed with the `/code-review` skill (which may spread the review over reviewer subagents, depending on effort level):
 
 - Before opening a PR, and before every later push to one, run `/code-review` on the branch's diff against `main`. Fix confirmed findings, or say in the PR why one does not apply, before pushing.
 - When asked to review or check someone else's PR, use `/code-review <PR number>` rather than reviewing by hand; add `--comment` only when asked to post the findings on GitHub.
@@ -30,7 +30,7 @@ Every pull request is reviewed with the `/code-review` skill (it runs the review
 
 Read SPEC §2–§3 before writing any code; the key ideas that span many sections:
 
-- **Pipeline** (§2.1): Parse (lossless, error-tolerant CST) → Evaluate (once per build, shared) → then per variant and target: Style → Select → Sequence → Resolve → Step styling → Layout → Emit. The pipeline forks after Resolve: PDF, live and preview go through Folio's own layout engine; DOCX and PPTX are generated from the resolved, styled tree (using Folio layout only for measurement).
+- **Pipeline** (§2.1): Parse (lossless, error-tolerant CST) → Evaluate (shared; only code that reads `variant` re-runs per variant) → then per variant and target: Style → Select → Sequence → Resolve → Step styling → Layout → Emit. The pipeline forks after Resolve and Step styling: PDF, live and preview go through Folio's own layout engine; DOCX and PPTX are generated from the resolved, step-styled tree (using Folio layout only for measurement).
 - **Incremental and deterministic** (§2.3, §2.4): every stage is a memoised query (salsa/comemo style). Page breaking is strictly forward; the flow state is split into a *layout part* (decides breaks, must be `Eq` with a stable hash) and a *furniture part* (page numbers, running marks). Same inputs must give byte-identical output: no wall-clock time, fonts and components pinned via `folio.lock` and the language edition in `folio.toml`.
 - **Crates** (§2.2): a workspace of `folio-*` crates (`syntax`, `eval`, `model`, `style`, `component`, `text`, `fonts`, `math`, `draw`, `layout`, `anim`, `runtime`, `edit`, `render`, `pdf`, `ooxml`, `preview`, `lsp`, `node`) plus the `folio` lib/bin exposing `folio::World` and `folio::compile(world, target, variant)`. Folio Studio (TypeScript/Electron, §12.4) lives in the same repo and uses `folio-node` (napi-rs).
 - **Small core, components** (§3): anything not every document needs is a component that reaches the core only through the extension points in §3.2. First-party components (`folio-component-exam`, `-multicol`, `-plot`, `-timer`, `-inputs`) depend only on `folio-component`, never on core internals, and their behaviour is frozen per edition. The test for core vs component is in §3.1. Layout containers (§3.3) are the most demanding extension point and must support multicol as a component.
