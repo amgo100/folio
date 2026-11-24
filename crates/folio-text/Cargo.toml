@@ -1,0 +1,26 @@
+[package]
+name = "folio-text"
+description = "Shaping, script and bidi itemisation, line-break opportunities and hyphenation for Folio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# `folio-component` may depend on this crate (SPEC §2.2), so it depends on no
+# other workspace crate: fonts come in as bytes (tests/dependency_direction.rs
+# in folio-component checks this once the dependency exists).
+[dependencies]
+ecow.workspace = true
+harfrust.workspace = true
+hypher.workspace = true
+icu_segmenter.workspace = true
+rayon.workspace = true
+unicode-bidi.workspace = true
+unicode-script.workspace = true
+
+[dev-dependencies]
+folio-fonts.workspace = true
+
+[lints]
+workspace = true

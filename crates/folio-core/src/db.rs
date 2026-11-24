@@ -62,7 +62,13 @@ pub use folio_fonts::{FontFile, SystemFont};
 /// the implementation; each stage extends it when it moves into its own
 /// crate.
 #[salsa::db]
-pub trait Db: salsa::Database {}
+pub trait Db: salsa::Database {
+    /// The memoised shaped paragraphs and shaping fonts that every handle of
+    /// the database shares (SPEC §2.3). Shaping is a pure function of a
+    /// paragraph, so the cache holds no state that queries could observe
+    /// besides its results.
+    fn text_cache(&self) -> &crate::text::Cache;
+}
 
 /// What a build reads besides source text, one field per kind of input.
 #[salsa::input(debug)]
@@ -389,6 +395,7 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     check_document(db, project, build.variant(db).clone());
     check_styles(db, build);
     crate::fonts::check_fonts(db, build);
+    check_text(db, build);
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),
@@ -410,6 +417,14 @@ fn check_document(db: &dyn Db, project: Project, variant: Option<Name>) {
 #[salsa::tracked]
 fn check_styles(db: &dyn Db, build: Build<'_>) {
     crate::style::styles(db, build);
+}
+
+/// Shapes the paragraphs of a build for its diagnostics. Like
+/// [`check_document`], it stands in for the layout stage, which will read
+/// the shaped text.
+#[salsa::tracked]
+fn check_text(db: &dyn Db, build: Build<'_>) {
+    crate::text::text(db, build);
 }
 
 /// Compiles one build: runs [`build_output`] and collects the diagnostics

@@ -1,0 +1,172 @@
+paragraph ltr
+  "Wczoraj w Warszawie i w Krakowie odbył się biało-czerwony marsz. Uczniowie z klasy a nauczyciel o tym wiedział, u nas zaś nikt. O wszystkim dowiedzieliśmy się z gazety." level 0 Latn pl
+    W @0 +891
+    c @1 +488 unsafe
+    z @2 +456
+    o @3 +549
+    r @4 +412
+    a @5 +509 unsafe
+    j @6 +277
+    space @7 +233
+    w @8 +764
+    space @9 +203
+    W @10 +892 unsafe
+    a @11 +504 unsafe
+    r @12 +413 unsafe
+    s @13 +434 unsafe
+    z @14 +456
+    a @15 +489
+    w @16 +764 unsafe
+    i @17 +298
+    e @18 +510
+    space @19 +233
+    i @20 +298
+    space @21 +233
+    w @22 +764
+    space @23 +233
+    K @24 +667
+    r @25 +412
+    a @26 +509 unsafe
+    k @27 +527
+    o @28 +549 unsafe
+    w @29 +764
+    i @30 +298
+    e @31 +510
+    space @32 +233
+    o @33 +549
+    d @34 +567
+    b @35 +567
+    y @36 +492 unsafe
+    lslash @37 +298 unsafe
+    space @39 +233
+    s @40 +434
+    i @41 +298
+    eogonek @42 +510
+    space @44 +233
+    b @45 +577
+    i @46 +298
+    a @47 +509
+    lslash @48 +298
+    o @50 +559
+    hyphen @51 +322 unsafe
+    c @52 +488 unsafe
+    z @53 +456
+    e @54 +510
+    r @55 +433
+    w @56 +744 unsafe
+    o @57 +549 unsafe
+    n @58 +576
+    y @59 +512 unsafe
+    space @60 +233
+    m @61 +901
+    a @62 +504
+    r @63 +413 unsafe
+    s @64 +434 unsafe
+    z @65 +456
+    period @66 +300
+    space @67 +233
+    U @68 +696
+    c @69 +488 unsafe
+    z @70 +456
+    n @71 +606
+    i @72 +298
+    o @73 +549
+    w @74 +764
+    i @75 +298
+    e @76 +510
+    space @77 +233
+    z @78 +456
+    space @79 +233
+    k @80 +547
+    l @81 +288
+    a @82 +509 unsafe
+    s @83 +434
+    y @84 +512
+    space @85 +233
+    a @86 +509
+    space @87 +233
+    n @88 +606
+    a @89 +509
+    u @90 +573
+    c @91 +488 unsafe
+    z @92 +456
+    y @93 +492
+    c @94 +488 unsafe
+    i @95 +298
+    e @96 +500
+    l @97 +298 unsafe
+    space @98 +233
+    o @99 +549
+    space @100 +233
+    t @101 +325
+    y @102 +512
+    m @103 +901
+    space @104 +233
+    w @105 +764
+    i @106 +298
+    e @107 +510
+    d @108 +567
+    z @109 +456
+    i @110 +298
+    a @111 +509
+    lslash @112 +298
+    comma @114 +300
+    space @115 +233
+    u @116 +583
+    space @117 +233
+    n @118 +606
+    a @119 +509
+    s @120 +434
+    space @121 +233
+    z @122 +456
+    a @123 +509
+    sacute @124 +434
+    space @126 +233
+    n @127 +606
+    i @128 +298
+    k @129 +547
+    t @130 +325
+    period @131 +300
+    space @132 +233
+    O @133 +707
+    space @134 +233
+    w @135 +754
+    s @136 +434 unsafe
+    z @137 +456
+    y @138 +502
+    s @139 +434 unsafe
+    t @140 +325
+    k @141 +547
+    i @142 +298
+    m @143 +901
+    space @144 +233
+    d @145 +567
+    o @146 +549
+    w @147 +764
+    i @148 +298
+    e @149 +510
+    d @150 +567
+    z @151 +456
+    i @152 +298
+    e @153 +500
+    l @154 +298 unsafe
+    i @155 +298
+    sacute @156 +434
+    m @158 +871
+    y @159 +512 unsafe
+    space @160 +233
+    s @161 +434
+    i @162 +298
+    eogonek @163 +510
+    space @165 +233
+    z @166 +456
+    space @167 +233
+    g @168 +498
+    a @169 +509 unsafe
+    z @170 +456
+    e @171 +510
+    t @172 +325
+    y @173 +421
+    period @174 +300 unsafe
+breaks Wczo-raj |w War-sza-wie |i w Kra-ko-wie |od-był |się |bia-ło-=czer-wo-ny |marsz. |Ucznio-wie |z kla-sy |a na-uczy-ciel |o tym |wie-dział, |u nas |zaś |nikt. |O wszyst-kim |do-wie-dzie-li-śmy |się |z ga-ze-ty.¶
+visual "Wczoraj w Warszawie i w Krakowie odbył się biało-czerwony marsz. Uczniowie z klasy a nauczyciel o tym wiedział, u nas zaś nikt. O wszystkim dowiedzieliśmy się z gazety."@0
