@@ -35,13 +35,18 @@ use std::panic::AssertUnwindSafe;
 use rayon::prelude::*;
 
 pub use folio_component::{Name, Registry, Target};
-pub use folio_core::db::{Bytes, Compiled, FontFile};
+pub use folio_core::db::{BuildMode, Bytes, Compiled};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::eval;
 pub use folio_core::eval::Limits;
+pub use folio_core::fonts::{Face, FontRun, Fonts, Pin};
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 pub use folio_core::style;
+pub use folio_fonts::{
+    BUNDLED_FAMILIES, FaceKey, FontCache, FontFile, FontHash, FontOrigin, FontStyle, FontVariant,
+    SystemFont, bundled as bundled_fonts, project_fonts, system_fonts,
+};
 pub use folio_syntax::{FileId, Source};
 
 pub use self::world::{Event, World, WorldBuilder, WorldError};
@@ -109,6 +114,17 @@ pub fn styles(
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         style::styles(db, build).clone()
     })
+}
+
+/// The faces the world's project can use (SPEC §2.5): the bundled
+/// families, the project's and locked fonts, and the system fonts, each with
+/// what pins it.
+///
+/// The problems found (files that hold no font, locked fonts that are
+/// missing or changed) are diagnostics that [`compile`] reports. Fails only
+/// when an edit to the world cancels it.
+pub fn fonts(world: &World) -> Result<Fonts, Cancelled> {
+    catch(|| folio_core::fonts::fonts(world.db(), world.project()).clone())
 }
 
 /// Compiles every variant and target the manifest declares

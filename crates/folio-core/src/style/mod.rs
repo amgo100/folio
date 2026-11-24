@@ -40,5 +40,6 @@ pub use self::selector::{
     Attr, AttrOp, AttrTest, Combinator, Compound, Need, Needs, NodeName, NodeView, Position,
     Pseudo, Selector, Specificity, Subject,
 };
+pub(crate) use self::tree::for_each_text;
 pub use self::tree::{Styled, StyledNode, styles};
 pub use self::value::{Declared, coerce, compute};

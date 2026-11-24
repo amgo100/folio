@@ -33,3 +33,24 @@ it (Apache License 2.0, section 4(b)), for example:
     // Derived from typst-syntax v0.15.1, crates/typst-syntax/src/lexer.rs.
     // Copyright The Typst Project Developers. Licensed under Apache-2.0
     // (third_party/typst/LICENSE). Modified for Folio.
+
+================================================================================
+Bundled fonts
+
+Folio bundles font families in `crates/folio-fonts/bundled/` and compiles them
+into its binary (SPEC §2.5). They are not under Folio's licence: each keeps
+its own, kept in `crates/folio-fonts/bundled/licences/`, and
+`crates/folio-fonts/bundled/README.md` records each file's version and
+source.
+
+* New Computer Modern and New Computer Modern Math
+  (C) 2019-2024 Antonis Tsolomitis. GUST Font License 1.0:
+  crates/folio-fonts/bundled/licences/GUST-FONT-LICENSE.txt
+* Source Serif 4, Source Sans 3 and Source Code Pro
+  Copyright Adobe, with Reserved Font Name 'Source'. SIL Open Font License
+  1.1: crates/folio-fonts/bundled/licences/OFL-SourceSerif4.txt,
+  OFL-SourceSans3.txt and OFL-SourceCodePro.txt
+* STIX Two Text and STIX Two Math
+  Copyright 2001-2021 The STIX Fonts Project Authors, with Reserved Font Name
+  "TM Math". SIL Open Font License 1.1:
+  crates/folio-fonts/bundled/licences/OFL-STIXTwo.txt

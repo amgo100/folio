@@ -428,7 +428,7 @@ pub(super) fn list(names: &[&str]) -> EcoString {
 }
 
 /// The candidate closest to `word`, if it is close enough to be a likely typo.
-pub(super) fn suggest<'c>(word: &str, candidates: &[&'c str]) -> Option<&'c str> {
+pub(crate) fn suggest<'c>(word: &str, candidates: &[&'c str]) -> Option<&'c str> {
     let limit = word.chars().count().div_ceil(3).max(1);
     candidates
         .iter()

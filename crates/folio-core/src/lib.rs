@@ -1,5 +1,5 @@
 //! The compile stages from evaluation to layout (SPEC §2.1): evaluation,
-//! model, style, text, fonts, math, drawing, layout and animation.
+//! model, style, fonts, text, math, drawing, layout and animation.
 //!
 //! These start in one crate and move into their own `folio-*` crates as
 //! their interfaces settle (SPEC §2.2). This crate depends on
@@ -14,6 +14,7 @@ pub mod component;
 pub mod db;
 pub mod diag;
 pub mod eval;
+pub mod fonts;
 pub mod model;
 pub mod project;
 pub mod style;

@@ -22,6 +22,7 @@ use std::fmt::{self, Display, Formatter};
 use ecow::{EcoString, EcoVec};
 use folio_syntax::DiagSpan;
 
+pub(crate) use self::de::suggest;
 pub use self::lock::{Binding, Bindings, LockedFont, LockedPackage, Lockfile};
 pub use self::manifest::{
     ComponentDecl, ComponentSource, Components, Formatting, FormattingMode, Manifest,

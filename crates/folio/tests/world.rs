@@ -83,8 +83,9 @@ impl Logged {
 /// document tree, and the build's check of it, which returns the same and so
 /// cuts the build off; and the styling of the tree, which finds every node's
 /// match memoised and returns the same, so the build's check of the styles
-/// is cut off too.
-const EVAL: &str = "eval_file evaluate document check_document styles";
+/// is cut off too. The check of the fonts the text is set in reads the text
+/// itself, so it runs again whenever the document changes.
+const EVAL: &str = "eval_file evaluate document check_document styles check_fonts";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {
