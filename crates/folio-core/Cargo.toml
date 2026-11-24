@@ -11,6 +11,7 @@ publish.workspace = true
 folio-component.workspace = true
 folio-syntax.workspace = true
 folio-fonts.workspace = true
+folio-text.workspace = true
 ecow.workspace = true
 indexmap.workspace = true
 salsa.workspace = true
@@ -18,7 +19,6 @@ semver.workspace = true
 serde_json.workspace = true
 stacker.workspace = true
 toml.workspace = true
-unicode-script.workspace = true
 
 [dev-dependencies]
 ecow.workspace = true

@@ -17,12 +17,20 @@ folio-syntax = { path = "crates/folio-syntax" }
 folio-component = { path = "crates/folio-component" }
 folio-core = { path = "crates/folio-core" }
 folio-fonts = { path = "crates/folio-fonts" }
+folio-text = { path = "crates/folio-text" }
 folio-pdf = { path = "crates/folio-pdf" }
 folio = { path = "crates/folio" }
 codespan-reporting = "0.13.1"
 ecow = "0.2.6"
 # System font discovery; `memmap` is off, so it reads files instead of
 # mapping them (SPEC §2.3).
+# Shaping (SPEC §2.2); it reads fonts through the same `read-fonts` as skrifa.
+harfrust = "0.16.1"
+# Hyphenation patterns, every language.
+hypher = "0.1.8"
+# Line-break opportunities (UAX #14), with the models for scripts written
+# without spaces.
+icu_segmenter = "2.4.0"
 fontdb = { version = "0.24.0", default-features = false, features = ["std", "fs", "fontconfig"] }
 indexmap = "2.14.2"
 # Maps files of the immutable font cache (SPEC §2.3, §14.2).
@@ -43,6 +51,7 @@ tempfile = "3.27.0"
 # The span-preserving parser only: the manifest and lockfile readers report
 # errors on keys and values themselves, so serde is not needed.
 toml = { version = "1.2.2", default-features = false, features = ["std", "parse"] }
+unicode-bidi = "0.3.18"
 unicode-ident = "1.0"
 unicode-script = "0.5"
 

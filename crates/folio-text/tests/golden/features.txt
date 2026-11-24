@@ -1,0 +1,16 @@
+paragraph ltr
+  "office " level 0 Latn en
+    o @0 +549
+    f_f_i @1 +911
+    c @4 +488
+    e @5 +510
+    space @6 +233
+  "office" level 0 Latn en
+    o @7 +549
+    f @8 +354
+    f @9 +384
+    i @10 +298 unsafe
+    c @11 +488
+    e @12 +510
+breaks office |office¶
+visual "office "@0 "office"@0

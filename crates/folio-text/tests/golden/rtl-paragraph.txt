@@ -1,0 +1,29 @@
+paragraph rtl
+  "שלום, " level 1 Hebr he
+    space @9 +333
+    comma @8 +278
+    uni05DD @6 +632
+    uni05D5 @4 +367
+    uni05DC @2 +607
+    uni05E9 @0 +806
+  "world 2026" level 2 Latn he
+    w @10 +694
+    o @11 +500 unsafe
+    r @12 +392
+    l @13 +278
+    d @14 +556
+    space @15 +333
+    two @16 +500
+    zero @17 +500
+    two @18 +500
+    six @19 +500
+  "! " level 1 Latn he
+    space @21 +333
+    exclam @20 +278
+  "עולם" level 1 Hebr he
+    uni05DD @28 +632
+    uni05DC @26 +607
+    uni05D5 @24 +367
+    uni05E2 @22 +656
+breaks שלום, |world |2026! |עולם¶
+visual "עולם"@1 "! "@1 "world 2026"@2 "שלום, "@1

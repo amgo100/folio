@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Workspace crates that `folio-component` may depend on. SPEC §2.2 allows
-/// `folio-text` and `folio-draw` (glyph runs and graphic primitives) once they
-/// are split out of the core crate; their own dependencies are checked too.
+/// `folio-text` and `folio-draw` (glyph runs and graphic primitives), the
+/// latter once it is split out of the core crate; their own dependencies are
+/// checked too.
 const ALLOWED: &[&str] = &["folio-text", "folio-draw"];
 
 #[test]

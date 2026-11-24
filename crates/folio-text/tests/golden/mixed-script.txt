@@ -1,0 +1,41 @@
+paragraph ltr
+  "Office (" level 0 Latn en
+    O @0 +778
+    ffi @1 +833
+    c @4 +444
+    e @5 +444
+    space @6 +333
+    parenleft @7 +389
+  "Физика, " level 0 Cyrl en
+    afii10038 @8 +833
+    afii10074 @10 +555
+    afii10073 @12 +444
+    afii10074 @14 +555
+    afii10076 @16 +527
+    afii10065 @18 +500 unsafe
+    comma @20 +278
+    space @21 +333
+  "Φυσική, " level 0 Grek en
+    Phi @22 +722
+    upsilon @24 +500
+    sigma @26 +569
+    iota @28 +250
+    kappa @30 +528
+    etatonos @32 +500
+    comma @34 +278
+    space @35 +333
+  "פיזיקה" level 1 Hebr en
+    uni05D4 @46 +652
+    uni05E7 @44 +607
+    uni05D9 @42 +370
+    uni05D6 @40 +383
+    uni05D9 @38 +370
+    uni05E4 @36 +604
+  ") fit." level 0 Latn en
+    parenright @48 +389
+    space @49 +333
+    fi @50 +556
+    t @52 +389
+    period @53 +278
+breaks Office |(Физика, |Φυσική, |פיזיקה) |fit.¶
+visual "Office ("@0 "Физика, "@0 "Φυσική, "@0 "פיזיקה"@1 ") fit."@0

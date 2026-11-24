@@ -1,0 +1,15 @@
+paragraph ltr
+  "日本語" level 0 Hani ja missing
+  "の" level 0 Hira ja missing
+  "文章" level 0 Hani ja missing
+  "は、" level 0 Hira ja missing
+  "単語" level 0 Hani ja missing
+  "の" level 0 Hira ja missing
+  "間" level 0 Hani ja missing
+  "に" level 0 Hira ja missing
+  "空白" level 0 Hani ja missing
+  "を" level 0 Hira ja missing
+  "入" level 0 Hani ja missing
+  "れない。" level 0 Hira ja missing
+breaks 日|本|語|の|文|章|は、|単|語|の|間|に|空|白|を|入|れ|な|い。¶
+visual "日本語"@0 "の"@0 "文章"@0 "は、"@0 "単語"@0 "の"@0 "間"@0 "に"@0 "空白"@0 "を"@0 "入"@0 "れない。"@0

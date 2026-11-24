@@ -43,11 +43,16 @@ pub use folio_core::fonts::{Face, FontRun, Fonts, Pin};
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 pub use folio_core::style;
+pub use folio_core::text::{SegmentStyle, Text, TextParagraph, TextSource};
 pub use folio_fonts::{
     BUNDLED_FAMILIES, FaceKey, FontCache, FontFile, FontHash, FontOrigin, FontStyle, FontVariant,
     SystemFont, bundled as bundled_fonts, project_fonts, system_fonts,
 };
 pub use folio_syntax::{FileId, Source};
+pub use folio_text::{
+    Break, BreakKind, Feature, Glyph, Item, ItemKind, Lang, Paragraph, Segment, SegmentKind,
+    Shaped, mark_breaks,
+};
 
 pub use self::world::{Event, World, WorldBuilder, WorldError};
 
@@ -125,6 +130,28 @@ pub fn styles(
 /// when an edit to the world cancels it.
 pub fn fonts(world: &World) -> Result<Fonts, Cancelled> {
     catch(|| folio_core::fonts::fonts(world.db(), world.project()).clone())
+}
+
+/// Shapes the paragraphs of a variant of the world's document for a target
+/// (SPEC §7.2): each itemised by script and direction, set in its fonts by
+/// fallback, shaped, and with its line-break opportunities and hyphenation
+/// points; or `None` when the document could not be styled. The variant
+/// is `None` only for a project that declares no variants.
+///
+/// Paragraphs equal to ones shaped before in this world share their shaped
+/// form, so after an edit only the changed paragraphs are shaped again. The
+/// problems found are diagnostics that [`compile`] reports. Fails only when
+/// an edit to the world cancels it.
+pub fn text(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+) -> Result<Option<Text>, Cancelled> {
+    catch(|| {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        folio_core::text::text(db, build).clone()
+    })
 }
 
 /// Compiles every variant and target the manifest declares
