@@ -236,7 +236,7 @@ pub(crate) fn for_each_text(
 
 /// A child of a node: an element of its body, or a part.
 #[derive(Copy, Clone)]
-enum Child<'a> {
+pub(crate) enum Child<'a> {
     Element(&'a Element),
     Part(&'a str, &'a Content),
 }
@@ -249,6 +249,18 @@ impl<'a> Child<'a> {
             Self::Part(_, content) => content_elements(content).map(Child::Element).collect(),
         }
     }
+}
+
+/// The children of an element with their nodes in the styled tree
+/// (`node` is the element's node), in the styled tree's order.
+pub(crate) fn styled_children<'a>(
+    element: &'a Element,
+    node: &'a StyledNode,
+) -> Vec<(Child<'a>, &'a StyledNode)> {
+    element_children(element)
+        .into_iter()
+        .zip(&node.children)
+        .collect()
 }
 
 /// The children of an element: the elements of its body, and a part for
@@ -268,7 +280,7 @@ fn element_children(element: &Element) -> Vec<Child<'_>> {
     out
 }
 
-fn content_elements(content: &Content) -> impl Iterator<Item = &Element> {
+pub(crate) fn content_elements(content: &Content) -> impl Iterator<Item = &Element> {
     content.nodes().iter().filter_map(|node| match node {
         Node::Element(element) => Some(element),
         _ => None,

@@ -1,0 +1,26 @@
+paragraph ltr
+  "See " level 0 Latn en
+    S @0 +512
+    e @1 +510
+    e @2 +510
+    space @3 +233
+  "￼" level 0 Latn en object
+  " here.\u{2028}Next line" level 0 Latn en
+    space @7 +233
+    h @8 +601
+    e @9 +510
+    r @10 +413
+    e @11 +490 unsafe
+    period @12 +300 unsafe
+    .notdef @13 +640
+    N @16 +723
+    e @17 +510 unsafe
+    x @18 +526
+    t @19 +325
+    space @20 +233
+    l @21 +298
+    i @22 +298
+    n @23 +606
+    e @24 +510
+breaks See |￼ |here.⏎¶Next |line¶
+visual "See "@0 "￼"@0 " here.\u{2028}Next line"@0

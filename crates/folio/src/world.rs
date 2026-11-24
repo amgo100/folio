@@ -636,6 +636,8 @@ fn set_source(db: &mut Database, file: SourceFile, source: Source) {
 #[derive(Clone)]
 pub(crate) struct Database {
     storage: salsa::Storage<Self>,
+    /// Shared by every handle of the world.
+    text: Arc<folio_core::text::Cache>,
 }
 
 impl Database {
@@ -660,6 +662,7 @@ impl Database {
         });
         Self {
             storage: salsa::Storage::new(callback),
+            text: Arc::default(),
         }
     }
 }
@@ -668,4 +671,8 @@ impl Database {
 impl salsa::Database for Database {}
 
 #[salsa::db]
-impl folio_core::db::Db for Database {}
+impl folio_core::db::Db for Database {
+    fn text_cache(&self) -> &folio_core::text::Cache {
+        &self.text
+    }
+}

@@ -151,6 +151,7 @@ The table is the target structure. Development starts with fewer crates and spli
 - **Durability**: bundled fonts, the standard library and first-party components are marked as rarely changing, so the validity check after an edit skips the queries that depend only on them.
 - Parsing is incremental at the CST level: an edit reparses the smallest enclosing block and reuses untouched nodes.
 - Evaluation is memoised per function call with argument hashing.
+- Shaping is memoised per paragraph, keyed on its text and the fonts, languages and features its text is set in, in a cache that all handles of the database share. Paragraphs not in the cache are shaped in parallel, so an edit re-shapes only the paragraphs it changed.
 - Layout caches each paragraph's line breaks keyed on *(content hash, computed style hash, sequence of line widths)*, and each page keyed on its incoming flow state and page master.
 - **The flow state has two parts.** The *layout part* holds what decides line and page breaks: the content position, float, margin-note and footnote queues, keep constraints, the region widths of the master, and the state of any open layout container (§3.3). The *furniture part* holds the page number, parity and running marks. Anything that can change line widths (page-number references, footnote markers that restart per page or section) belongs to the layout part instead. When only the furniture part differs (for example after a page is inserted earlier and mirrored masters have the same body width), later pages are re-dressed with new headers and footers but not re-broken.
 - Page breaking is strictly forward, with no optimisation across pages. That makes the convergence short-circuit sound: re-layout starts at the first page whose key changed and stops when the outgoing layout part equals the previous run's. Container states must therefore implement `Eq` with a stable hash and hold positions and small data only, never fragments.
@@ -683,9 +684,12 @@ Layout turns the resolved tree into pages of positioned fragments in two levels:
 ### 7.2 Paragraphs and lines
 
 - Shaping with `harfrust`, script and language itemisation, bidi reordering (UAX #9), break opportunities (UAX #14, with `icu_segmenter`, which also handles scripts written without spaces), and hyphenation patterns per language.
+- A paragraph runs in the direction of its first strongly directional character, or of its language when it has none. A closing bracket takes the script of its opening bracket (UAX #24).
+- `hyphenate: auto` hyphenates justified paragraphs. A word with a soft hyphen is hyphenated only there.
 - **Line breaking** uses the Knuth–Plass total-fit algorithm with line widths given per line index. Where the shape depends on vertical position (text wrap, §7.7), leading is fixed so that the line index determines the position; a line taller than the leading, such as one with tall inline math, triggers a re-break with the shape recomputed from that line.
 - Knuth–Plass takes well under a millisecond for ordinary paragraphs. Only a paragraph that exceeds 5 ms is broken greedily while typing, and gets the optimal result once the editor is idle.
-- **Language rules**: hyphenation, quotation marks and line-end rules per language. In Polish, single-letter words (a, i, o, u, w, z and their capitals) are never left at the end of a line; a non-breaking space is inserted automatically.
+- **Language rules**: hyphenation, quotation marks and line-end rules per language. In Polish, single-letter words (a, i, o, u, w, z and their capitals) are never left at the end of a line; a non-breaking space is inserted automatically. A Polish line that ends at an explicit hyphen repeats the hyphen at the start of the next line.
+- **Quotation marks**: markup's `"` and `'` become the language's double and single marks (“…” and ‘…’ in English, „…” and ‚…’ in Polish). A mark opens at the start of text, after a space, or after an opening bracket, dash or mark, and closes otherwise; `'` between two letters is an apostrophe.
 - Character protrusion (hanging punctuation) is optional.
 - Widow and orphan control, `keep-with-next`, `keep-together` and break penalties are costs, not hard rules, so an impossible constraint produces the least-bad page and a warning rather than an overfull page.
 

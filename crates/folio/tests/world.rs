@@ -84,8 +84,10 @@ impl Logged {
 /// cuts the build off; and the styling of the tree, which finds every node's
 /// match memoised and returns the same, so the build's check of the styles
 /// is cut off too. The check of the fonts the text is set in reads the text
-/// itself, so it runs again whenever the document changes.
-const EVAL: &str = "eval_file evaluate document check_document styles check_fonts";
+/// itself, so it runs again whenever the document changes, and so does the
+/// text stage with its check: its paragraphs record the spans of their
+/// text, which the reparse renumbered (their shaping is memoised apart).
+const EVAL: &str = "eval_file evaluate document check_document styles check_fonts text check_text";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {

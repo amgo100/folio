@@ -35,7 +35,6 @@ use folio_fonts::{
     FaceKey, Font, FontBook, FontFile, FontOrigin, FontStyle, FontVariant, SystemFont,
 };
 use folio_syntax::{DiagSpan, Span};
-use unicode_script::{Script, UnicodeScript};
 
 use crate::db::{Build, BuildMode, Db, Project};
 use crate::diag::{self, Diagnostic};
@@ -194,35 +193,16 @@ impl Fonts {
     }
 }
 
-/// Splits text into runs of one script.
-fn script_runs(text: &str) -> Vec<Range<usize>> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut current: Option<Script> = None;
-    for (i, c) in text.char_indices() {
-        let script = c.script();
-        if matches!(script, Script::Common | Script::Inherited | Script::Unknown) {
-            continue;
-        }
-        match current {
-            Some(s) if s != script => {
-                out.push(start..i);
-                start = i;
-                current = Some(script);
-            }
-            None => current = Some(script),
-            _ => {}
-        }
-    }
-    if start < text.len() {
-        out.push(start..text.len());
-    }
-    out
+/// Splits text into runs of one script, as shaping does.
+fn script_runs(text: &str) -> impl Iterator<Item = Range<usize>> {
+    folio_text::script_runs(text)
+        .into_iter()
+        .map(|(range, _)| range)
 }
 
 /// Whether a character is drawn without a glyph of its own: whitespace,
 /// controls and invisible formatting characters.
-fn ignorable(c: char) -> bool {
+pub(crate) fn ignorable(c: char) -> bool {
     c.is_whitespace()
         || c.is_control()
         || matches!(
@@ -401,13 +381,13 @@ fn check_locked(
 
 /// The fonts a node's text asks for: the family chain and the variant.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-struct Request {
-    families: EcoVec<EcoString>,
-    variant: FontVariant,
+pub(crate) struct Request {
+    pub(crate) families: EcoVec<EcoString>,
+    pub(crate) variant: FontVariant,
 }
 
 impl Request {
-    fn of(style: &ComputedStyle, props: &Properties) -> Self {
+    pub(crate) fn of(style: &ComputedStyle, props: &Properties) -> Self {
         let families = match style.value(props, props.builtin("font")) {
             Some(Value::Array(items)) => items
                 .iter()
@@ -623,9 +603,9 @@ mod tests {
     #[test]
     fn splits_scripts() {
         let text = "Abc, αβγ. Def";
-        let runs: Vec<&str> = script_runs(text).into_iter().map(|r| &text[r]).collect();
+        let runs: Vec<&str> = script_runs(text).map(|r| &text[r]).collect();
         assert_eq!(runs, ["Abc, ", "αβγ. ", "Def"]);
-        assert_eq!(script_runs("1, 2"), vec![0..4]);
-        assert!(script_runs("").is_empty());
+        assert_eq!(script_runs("1, 2").collect::<Vec<_>>(), vec![0..4]);
+        assert_eq!(script_runs("").count(), 0);
     }
 }
