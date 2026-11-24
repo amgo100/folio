@@ -381,7 +381,7 @@ fn check_properties(cx: &mut Checker, properties: &[PropertyDecl]) {
 
 fn has_empty_keywords(ty: &PropertyType) -> bool {
     match ty {
-        PropertyType::Keyword(words) => words.is_empty(),
+        PropertyType::Keyword(words) | PropertyType::Call(words) => words.is_empty(),
         PropertyType::List(item) => has_empty_keywords(item),
         PropertyType::AnyOf(types) => types.is_empty() || types.iter().any(has_empty_keywords),
         _ => false,

@@ -2,8 +2,9 @@
 //! and produces the content tree.
 //!
 //! This is the stage that becomes `folio-eval` (SPEC §2.2) once its
-//! interface settles. Stylesheet values and render templates will be
-//! evaluated here too, with the same expression grammar.
+//! interface settles. The style stage evaluates stylesheet values with the
+//! same operators and standard library; render
+//! templates will be evaluated here too, with the same expression grammar.
 //!
 //! # Memoisation
 //!
@@ -56,7 +57,7 @@ mod content;
 mod element;
 mod error;
 mod library;
-mod ops;
+pub(crate) mod ops;
 mod value;
 mod vm;
 
@@ -225,6 +226,36 @@ pub(crate) fn call_closure(
         outcome,
         cost: vm.cost,
     }
+}
+
+/// Calls a function of the standard library or a closure, as a stylesheet
+/// value does (`rgb("1f5fa8")`, `calc.max(..)`), from the stylesheet at
+/// `file`. Stylesheets have no variables, so the call cannot read
+/// `variant`; a function that does is an error.
+pub(crate) fn call_function(
+    db: &dyn Db,
+    project: Project,
+    file: ProjectPath,
+    func: Func,
+    args: Args,
+    span: folio_syntax::Span,
+) -> Result<Value, EvalError> {
+    let mut vm = Vm::new(db, project, file, Mode::Shared, 0, Scope::default());
+    match vm.call(func, args, span) {
+        Ok(value) => Ok(value),
+        Err(Stop::Error(error)) => Err(*error),
+        Err(Stop::NeedsVariant) => Err(EvalError::new(
+            span,
+            "a stylesheet value cannot depend on the variant",
+        )
+        .with_hint("put rules for one variant in `@variant name { .. }`")),
+        Err(Stop::Reported) => Err(EvalError::new(span, "this function cannot be evaluated")),
+    }
+}
+
+/// A numeric literal with its unit, as the evaluator represents it.
+pub(crate) fn numeric(value: f64, unit: ast::Unit) -> Value {
+    vm::numeric(value, unit)
 }
 
 /// The standard library and the elements of the project's components: the

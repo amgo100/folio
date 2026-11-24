@@ -19,7 +19,7 @@ use folio_syntax::{Span, is_valid_label_literal_id};
 use super::content::{Content, Element, Node, Slot};
 use super::error::{EvalError, EvalResult, StrResult, bail};
 use super::ops::a_type;
-use super::value::{Arg, Args, Dict, Length, Value};
+use super::value::{Angle, Arg, Args, Dict, Duration, Fraction, Length, Value};
 use super::vm::Vm;
 use crate::db::data_file;
 use crate::model::{self, schema};
@@ -541,6 +541,12 @@ fn constant(value: &Constant, ty: &FieldType, span: Span) -> Value {
         Constant::Em(em) => Value::Length(Length::em(*em)),
         Constant::Ratio(ratio) => Value::Ratio(*ratio),
         Constant::Color(color) => Value::Color(*color),
+        Constant::Duration(seconds) => Value::Duration(Duration(*seconds)),
+        Constant::Angle(radians) => Value::Angle(Angle(*radians)),
+        Constant::Fraction(fr) => Value::Fraction(Fraction(*fr)),
+        // No field type accepts a call, so the registry rejects it as a
+        // default.
+        Constant::Call(..) => Value::None,
         Constant::Array(items) => {
             Value::Array(items.iter().map(|v| constant(v, item, span)).collect())
         }

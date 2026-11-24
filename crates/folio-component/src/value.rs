@@ -37,6 +37,15 @@ pub enum Value {
     Ratio(Ratio),
     /// A colour.
     Color(Color),
+    /// A duration in seconds: `300ms`.
+    Duration(Scalar),
+    /// An angle in radians: `90deg`.
+    Angle(Scalar),
+    /// A fraction of the remaining space: `1fr`.
+    Fraction(Scalar),
+    /// A keyword with arguments, as stylesheets write effects and areas:
+    /// `wipe(from-left)`, `area(5%, 5%, 90%, 15%)`.
+    Call(Name, EcoVec<Value>),
     /// An array.
     Array(EcoVec<Value>),
     /// A dictionary with keys in declaration order.
@@ -58,6 +67,10 @@ impl Value {
             Self::Em(_) => "em length",
             Self::Ratio(_) => "ratio",
             Self::Color(_) => "colour",
+            Self::Duration(_) => "duration",
+            Self::Angle(_) => "angle",
+            Self::Fraction(_) => "fraction",
+            Self::Call(..) => "call",
             Self::Array(_) => "array",
             Self::Dict(_) => "dictionary",
         }
@@ -167,14 +180,28 @@ pub enum PropertyType {
     Ratio,
     /// A colour.
     Color,
+    /// A duration.
+    Duration,
+    /// A fraction of the remaining space: `1fr`.
+    Fraction,
     /// A string.
     Str,
     /// One of a fixed set of keywords: `balance | auto`.
     Keyword(EcoVec<Name>),
     /// A list of values of one type.
     List(Box<PropertyType>),
+    /// A keyword with arguments, one of a fixed set of names:
+    /// `placeholder("..")`.
+    Call(EcoVec<Name>),
     /// A value of any of several types: `auto | int`.
     AnyOf(EcoVec<PropertyType>),
+    /// Any value. For compound values whose grammar the stage that reads
+    /// them checks, such as `margin-column: outer, width 32mm`.
+    Any,
+    /// A render template (SPEC §5.3), such as a `trailer` or a `header`,
+    /// expanded per element. Its initial value is `none` or `auto`; the
+    /// style stage keeps a declared template as syntax.
+    Template,
 }
 
 impl PropertyType {
@@ -189,9 +216,14 @@ impl PropertyType {
             (Self::Length, Value::Length(_) | Value::Em(_)) => true,
             (Self::Ratio, Value::Ratio(_)) => true,
             (Self::Color, Value::Color(_)) => true,
+            (Self::Duration, Value::Duration(_)) => true,
+            (Self::Fraction, Value::Fraction(_)) => true,
             (Self::Str, Value::Str(_)) => true,
             (Self::Keyword(words), Value::Keyword(word)) => words.contains(word),
+            (Self::Any, _) => true,
+            (Self::Template, Value::None | Value::Auto) => true,
             (Self::List(item), Value::Array(items)) => items.iter().all(|v| item.accepts(v)),
+            (Self::Call(names), Value::Call(name, _)) => names.contains(name),
             (Self::AnyOf(types), value) => types.iter().any(|ty| ty.accepts(value)),
             _ => false,
         }
@@ -209,10 +241,15 @@ impl Display for PropertyType {
             Self::Length => f.write_str("length"),
             Self::Ratio => f.write_str("ratio"),
             Self::Color => f.write_str("color"),
+            Self::Duration => f.write_str("duration"),
+            Self::Fraction => f.write_str("fraction"),
             Self::Str => f.write_str("str"),
             Self::Keyword(words) => join(f, words.iter()),
             Self::List(item) => write!(f, "list({item})"),
+            Self::Call(names) => join(f, names.iter().map(|n| format!("{n}(..)"))),
             Self::AnyOf(types) => join(f, types.iter()),
+            Self::Any => f.write_str("any"),
+            Self::Template => f.write_str("template"),
         }
     }
 }
