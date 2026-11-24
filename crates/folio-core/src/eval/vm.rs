@@ -16,7 +16,8 @@ use super::value::{
     Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module, Scope, Value,
 };
 use super::{Cost, Limits, Mode, eval_file_for, globals, reachable, today};
-use crate::db::{Db, Project, source_file};
+use crate::component::Reason;
+use crate::db::{Db, Project, component_host, source_file};
 use crate::project::ProjectPath;
 
 /// How much stack must be left before an expression is evaluated: enough
@@ -607,10 +608,19 @@ impl<'a> Vm<'a> {
             }
             _ => {}
         }
-        match self.globals.get(name) {
-            Some(value) => Ok(value.clone()),
-            None => bail!(ident.span(), "unknown variable: {name}"),
+        if let Some(value) = self.globals.get(name) {
+            return Ok(value.clone());
         }
+        // An element name that components provide but that does not resolve,
+        // because it is ambiguous or its binding is stale, says why.
+        if let Some(host) = component_host(self.db, self.project)
+            && let Some(element) = Name::new(name)
+            && let Err(error) = host.element(&QualifiedName::unqualified(element))
+            && error.reason != Reason::Unknown
+        {
+            bail!(ident.span(), "{error}");
+        }
+        bail!(ident.span(), "unknown variable: {name}")
     }
 
     /// The value of `variant`: the name of the variant being built, or
@@ -711,12 +721,12 @@ impl<'a> Vm<'a> {
             }
             Assign => {
                 let value = self.expr(binary.rhs())?;
-                *self.access(binary.lhs())? = value;
+                *self.access(binary.lhs(), true)? = value;
                 Ok(Value::None)
             }
             AddAssign | SubAssign | MulAssign | DivAssign => {
                 let rhs = self.expr(binary.rhs())?;
-                let lhs = std::mem::take(self.access(binary.lhs())?);
+                let lhs = std::mem::take(self.access(binary.lhs(), false)?);
                 let op = match op {
                     AddAssign => Add,
                     SubAssign => Sub,
@@ -724,7 +734,7 @@ impl<'a> Vm<'a> {
                     _ => Div,
                 };
                 let value = self.apply(op, lhs, rhs, span)?;
-                *self.access(binary.lhs())? = value;
+                *self.access(binary.lhs(), false)? = value;
                 Ok(Value::None)
             }
             Eq | Neq | Lt | Leq | Gt | Geq | In | NotIn => {
@@ -780,15 +790,25 @@ impl<'a> Vm<'a> {
     }
 
     /// The place an assignment or a mutating method changes: a variable, a
-    /// dictionary field, or an item (`x.at(i)`).
-    fn access<'s>(&'s mut self, expr: ast::Expr<'_>) -> EvalResult<&'s mut Value> {
+    /// dictionary field, or an item (`x.at(i)`). A plain assignment
+    /// (`insert`) adds a missing dictionary field; anything else needs it.
+    fn access<'s>(&'s mut self, expr: ast::Expr<'_>, insert: bool) -> EvalResult<&'s mut Value> {
         match expr {
             ast::Expr::Ident(ident) => self.scopes.get_mut(ident.get()).at(ident.span()),
-            ast::Expr::Parenthesized(p) => self.access(p.expr()),
+            ast::Expr::Parenthesized(p) => self.access(p.expr(), insert),
             ast::Expr::FieldAccess(access) => {
                 let field = access.field();
-                match self.access(access.target())? {
-                    Value::Dict(dict) => Ok(dict.get_or_insert_mut(field.get().clone())),
+                match self.access(access.target(), false)? {
+                    Value::Dict(dict) => {
+                        if !insert && dict.get(field.get()).is_none() {
+                            bail!(
+                                field.span(),
+                                "dictionary does not contain key {:?}",
+                                field.get()
+                            );
+                        }
+                        Ok(dict.get_or_insert_mut(field.get().clone()))
+                    }
                     v => bail!(
                         field.span(),
                         "cannot change the fields of {}",
@@ -807,7 +827,7 @@ impl<'a> Vm<'a> {
                 let mut args = self.args(call.args(), span)?;
                 let key: Value = args.expect("index or key")?;
                 args.finish()?;
-                match self.access(access.target())? {
+                match self.access(access.target(), false)? {
                     Value::Array(items) => {
                         let Value::Int(i) = key else {
                             bail!(span, "expected an integer index");
@@ -835,13 +855,21 @@ impl<'a> Vm<'a> {
         let span = call.span();
         if let ast::Expr::FieldAccess(access) = call.callee() {
             let name = access.field().get();
-            if library::is_mutating_method(name) {
+            let target = self.expr(access.target())?;
+            // `push`, `pop`, `insert` and `remove` change an array or
+            // dictionary in place, unless the dictionary holds a function of
+            // that name. The target is evaluated again, as a place.
+            let mutates = match &target {
+                Value::Array(_) => true,
+                Value::Dict(dict) => !matches!(dict.get(name), Some(Value::Func(_))),
+                _ => false,
+            };
+            if mutates && library::is_mutating_method(name) {
                 let args = self.args(call.args(), span)?;
                 self.alloc(16, span)?;
-                let target = self.access(access.target())?;
+                let target = self.access(access.target(), false)?;
                 return library::call_mutating(target, name, args, span);
             }
-            let target = self.expr(access.target())?;
             let func = match &target {
                 Value::Module(module) => match module.scope().get(name) {
                     Some(func) => Some(func.clone()),
@@ -1032,7 +1060,7 @@ impl<'a> Vm<'a> {
                 if bind {
                     bail!(expr.span(), "cannot bind to this expression");
                 }
-                *self.access(expr)? = value;
+                *self.access(expr, true)? = value;
             }
             ast::Pattern::Placeholder(_) => {}
             ast::Pattern::Parenthesized(p) => self.pattern(p.pattern(), value, bind)?,
@@ -1055,7 +1083,7 @@ impl<'a> Vm<'a> {
                 self.define(ident.get().clone(), value);
             }
         } else if let Some(expr) = spread.sink_expr() {
-            *self.access(expr)? = value;
+            *self.access(expr, true)? = value;
         }
         Ok(())
     }
@@ -1387,6 +1415,12 @@ fn element(name: &QualifiedName, args: Args, span: Span) -> EvalResult<Value> {
         }
     }
     if let Some(body) = body {
+        if fields.get("body").is_some() {
+            bail!(
+                span,
+                "duplicate field `body`: it is given by name and as the body"
+            );
+        }
         let body = match body {
             Value::Str(text) => Value::Content(Content::node(Node::Text { text, span })),
             other => other,

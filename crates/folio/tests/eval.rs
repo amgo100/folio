@@ -226,6 +226,49 @@ fn collections_and_destructuring() {
 }
 
 #[test]
+fn edge_cases_of_operators_and_places() {
+    // Repeating an empty value does not loop, however large the count.
+    assert_eq!(
+        text(
+            "#(\"\" * 1000000000000000000).len() #(() * 9223372036854775807).len()#([] * 1000000000)"
+        ),
+        "0 0"
+    );
+    // Functions named like mutating methods, in modules and dictionaries.
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            (
+                "main.fol",
+                "#import \"lib.fol\" as lib\n#lib.insert(1) #let d = (push: x => x * 2)\n#d.push(3)\n",
+            ),
+            ("lib.fol", "#let insert(x) = x + 1\n"),
+        ],
+    );
+    assert_eq!(logged.text(None), "2 6");
+    // A plain assignment adds a dictionary key; a compound one needs it.
+    assert_eq!(text("#let d = (:)\n#{ d.x = 1; d.x += 1 }#d.x"), "2");
+    assert_eq!(
+        messages("#let d = (:)\n#{ d.x += 1 }"),
+        ["error: dictionary does not contain key \"x\""]
+    );
+    // Division rounds down, the remainder keeps the dividend's sign.
+    assert_eq!(
+        text("#calc.quo(-7, 2) #calc.quo(7, -2) #calc.quo(7, 2) #calc.rem(-7, 2)"),
+        "-4 -4 3 -1"
+    );
+    // A result that is not a number is an error, not zero.
+    assert_eq!(
+        messages("#calc.pow(-8, 0.5)"),
+        ["error: the result is not a number"]
+    );
+    assert_eq!(
+        messages("#(calc.exp(1000) - calc.exp(1000))"),
+        ["error: the result is not a number"]
+    );
+}
+
+#[test]
 fn markup_becomes_a_content_tree() {
     assert_eq!(
         repr("= Forces <sec:forces>\n\nA *ball* is _thrown_. See @sec:forces.\n"),
@@ -690,13 +733,14 @@ fn deep_expressions_in_deep_calls_do_not_exhaust_the_stack() {
 
 // ---- Components ----
 
+/// A component that provides one element, `question`.
 #[derive(Debug)]
-struct Exam;
+struct Exam(&'static str);
 
 impl Component for Exam {
     fn manifest(&self) -> ComponentManifest {
         ComponentManifest {
-            name: ComponentName::new("exam").unwrap(),
+            name: ComponentName::new(self.0).unwrap(),
             version: semver::Version::new(0, 0, 0),
             interface: INTERFACE_VERSION,
             targets: EcoVec::from([Target::Pdf]),
@@ -720,7 +764,7 @@ impl Component for Exam {
 #[test]
 fn component_elements_make_instances() {
     let mut registry = Registry::new();
-    registry.register(&Exam).unwrap();
+    registry.register(&Exam("exam")).unwrap();
     let logged = Logged::with(
         World::builder().components(registry),
         MANIFEST,
@@ -743,4 +787,37 @@ fn component_elements_make_instances() {
     };
     assert_eq!(element.field("marks"), Some(&Value::Int(3)));
     assert_eq!(element.label.as_deref(), Some("q:1"));
+}
+
+#[test]
+fn element_calls_report_why_a_name_does_not_resolve() {
+    let mut registry = Registry::new();
+    registry.register(&Exam("exam")).unwrap();
+    registry.register(&Exam("quiz")).unwrap();
+    let manifest = format!("{MANIFEST}\n[components]\nquiz = {{ version = \"0.0.0\" }}\n");
+    let logged = Logged::with(
+        World::builder().components(registry.clone()),
+        &manifest,
+        &[("main.fol", "#question(marks: 1)[A]\n")],
+    );
+    let errors = logged.errors();
+    assert!(
+        errors.starts_with(
+            "error: element `question` is ambiguous: `exam` and `quiz` provide it; \
+             qualify it with a namespace\n"
+        ),
+        "{errors}"
+    );
+
+    // Qualified, it resolves; a body given twice is an error.
+    let logged = Logged::with(
+        World::builder().components(registry),
+        &manifest,
+        &[("main.fol", "#quiz.question(marks: 1, body: [A])[B]\n")],
+    );
+    assert!(
+        logged
+            .errors()
+            .starts_with("error: duplicate field `body`: it is given by name and as the body\n")
+    );
 }

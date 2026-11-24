@@ -123,6 +123,15 @@ fn float_value(v: f64) -> Value {
     Value::Float(Scalar::new(v))
 }
 
+/// A computed float, or an error for one that is not a number, which would
+/// otherwise become zero silently.
+fn real(v: f64, span: Span) -> EvalResult<Value> {
+    if v.is_nan() {
+        bail!(span, "the result is not a number");
+    }
+    Ok(float_value(v))
+}
+
 // ---- Global functions ----
 
 /// `type(value)`: the name of the value's type.
@@ -172,16 +181,19 @@ fn int(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 fn float(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let span = args.span;
     let value: Value = args.expect("value")?;
-    Ok(float_value(match value {
-        Value::Int(i) => i as f64,
-        Value::Float(f) => f.get(),
-        Value::Ratio(r) => r.get(),
-        Value::Str(s) => match s.trim().parse() {
-            Ok(f) => f,
-            Err(_) => bail!(span, "{s:?} is not a number"),
+    real(
+        match value {
+            Value::Int(i) => i as f64,
+            Value::Float(f) => f.get(),
+            Value::Ratio(r) => r.get(),
+            Value::Str(s) => match s.trim().parse() {
+                Ok(f) => f,
+                Err(_) => bail!(span, "{s:?} is not a number"),
+            },
+            v => bail!(span, "cannot convert {} to a float", a_type(v.type_name())),
         },
-        v => bail!(span, "cannot convert {} to a float", a_type(v.type_name())),
-    }))
+        span,
+    )
 }
 
 /// `assert(condition, message: ..)`.
@@ -518,8 +530,9 @@ fn calc_abs(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 }
 
 fn unary_float(args: &mut Args, f: fn(f64) -> f64) -> EvalResult<Value> {
+    let span = args.span;
     let x = num(args, "value")?;
-    Ok(float_value(f(as_f64(&x))))
+    real(f(as_f64(&x)), span)
 }
 
 fn calc_sqrt(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
@@ -558,7 +571,7 @@ fn angle_or_number(args: &mut Args, f: fn(f64) -> f64) -> EvalResult<Value> {
             a_type(v.type_name())
         ),
     };
-    Ok(float_value(f(x)))
+    real(f(x), span)
 }
 
 fn calc_log(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
@@ -568,10 +581,13 @@ fn calc_log(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     if x <= 0.0 {
         bail!(span, "the logarithm is defined only for positive numbers");
     }
-    Ok(float_value(match base {
-        Some(base) => x.log(base),
-        None => x.log10(),
-    }))
+    real(
+        match base {
+            Some(base) => x.log(base),
+            None => x.log10(),
+        },
+        span,
+    )
 }
 
 fn calc_pow(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
@@ -588,7 +604,7 @@ fn calc_pow(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
                 .ok_or_else(|| "the result is too large".into())
                 .at(span)
         }
-        _ => Ok(float_value(as_f64(&base).powf(as_f64(&exp)))),
+        _ => real(as_f64(&base).powf(as_f64(&exp)), span),
     }
 }
 
@@ -617,13 +633,14 @@ fn calc_ceil(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 
 /// `calc.round(x, digits: 0)`: an integer without digits, a float with.
 fn calc_round(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    let span = args.span;
     let digits: Option<i64> = args.named("digits")?;
     match digits {
         None | Some(0) => rounding(args, f64::round),
         Some(digits) => {
             let x = as_f64(&num(args, "value")?);
             let factor = 10f64.powi(i32::try_from(digits.clamp(-300, 300)).unwrap_or(0));
-            Ok(float_value((x * factor).round() / factor))
+            real((x * factor).round() / factor, span)
         }
     }
 }
@@ -646,12 +663,18 @@ fn calc_rem(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
         .at(span)
 }
 
+/// `calc.quo(a, b)`: the quotient rounded down, as Typst's is; `calc.rem`
+/// keeps the sign of the dividend, as Typst's does.
 fn calc_quo(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let (a, b, span) = int_pair(args)?;
-    a.checked_div_euclid(b)
-        .map(Value::Int)
-        .ok_or_else(|| "the result is too large".into())
-        .at(span)
+    let (Some(q), Some(r)) = (a.checked_div(b), a.checked_rem(b)) else {
+        bail!(span, "the result is too large");
+    };
+    Ok(Value::Int(if r != 0 && (r < 0) != (b < 0) {
+        q - 1
+    } else {
+        q
+    }))
 }
 
 fn calc_even(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {

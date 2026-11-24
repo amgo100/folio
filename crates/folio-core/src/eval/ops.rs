@@ -26,8 +26,13 @@ pub(crate) fn a_type(name: &str) -> String {
     format!("{article} {name}")
 }
 
-fn float(v: f64) -> V {
-    V::Float(Scalar::new(v))
+/// A float result, or an error for one that is not a number, such as
+/// `inf - inf`: it would otherwise become zero silently.
+fn float(v: f64) -> StrResult<V> {
+    if v.is_nan() {
+        return Err("the result is not a number".into());
+    }
+    Ok(V::Float(Scalar::new(v)))
 }
 
 /// `+x`.
@@ -54,7 +59,7 @@ pub(crate) fn neg(value: V) -> StrResult<V> {
             v.checked_neg()
                 .ok_or_else(|| eco_format!("value is too large"))?,
         ),
-        V::Float(v) => float(-v.get()),
+        V::Float(v) => float(-v.get())?,
         V::Length(v) => V::Length(Length {
             abs: -v.abs,
             em: -v.em,
@@ -88,9 +93,9 @@ use bail_str;
 pub(crate) fn add(lhs: V, rhs: V) -> StrResult<V> {
     Ok(match (lhs, rhs) {
         (V::Int(a), V::Int(b)) => V::Int(a.checked_add(b).ok_or("value is too large")?),
-        (V::Int(a), V::Float(b)) => float(a as f64 + b.get()),
-        (V::Float(a), V::Int(b)) => float(a.get() + b as f64),
-        (V::Float(a), V::Float(b)) => float(a.get() + b.get()),
+        (V::Int(a), V::Float(b)) => float(a as f64 + b.get())?,
+        (V::Float(a), V::Int(b)) => float(a.get() + b as f64)?,
+        (V::Float(a), V::Float(b)) => float(a.get() + b.get())?,
         (V::Length(a), V::Length(b)) => V::Length(Length {
             abs: a.abs + b.abs,
             em: a.em + b.em,
@@ -140,9 +145,9 @@ fn into_content(value: V) -> Content {
 pub(crate) fn sub(lhs: V, rhs: V) -> StrResult<V> {
     Ok(match (lhs, rhs) {
         (V::Int(a), V::Int(b)) => V::Int(a.checked_sub(b).ok_or("value is too large")?),
-        (V::Int(a), V::Float(b)) => float(a as f64 - b.get()),
-        (V::Float(a), V::Int(b)) => float(a.get() - b as f64),
-        (V::Float(a), V::Float(b)) => float(a.get() - b.get()),
+        (V::Int(a), V::Float(b)) => float(a as f64 - b.get())?,
+        (V::Float(a), V::Int(b)) => float(a.get() - b as f64)?,
+        (V::Float(a), V::Float(b)) => float(a.get() - b.get())?,
         (V::Length(a), V::Length(b)) => V::Length(Length {
             abs: a.abs - b.abs,
             em: a.em - b.em,
@@ -197,7 +202,21 @@ pub(crate) fn mul(lhs: V, rhs: V) -> StrResult<V> {
     Ok(match (lhs, rhs) {
         (V::Int(a), V::Int(b)) => V::Int(a.checked_mul(b).ok_or("value is too large")?),
         (a @ (V::Int(_) | V::Float(_)), b @ (V::Int(_) | V::Float(_))) => {
-            float(number(&a).unwrap_or(0.0) * number(&b).unwrap_or(0.0))
+            float(number(&a).unwrap_or(0.0) * number(&b).unwrap_or(0.0))?
+        }
+        // An empty value repeats to itself without looping: the memory
+        // limit, which bounds the other repetitions, does not count it.
+        (V::Str(s), n @ V::Int(_)) | (n @ V::Int(_), V::Str(s)) if s.is_empty() => {
+            repetitions(&n)?;
+            V::Str(s)
+        }
+        (V::Array(a), n @ V::Int(_)) | (n @ V::Int(_), V::Array(a)) if a.is_empty() => {
+            repetitions(&n)?;
+            V::Array(a)
+        }
+        (V::Content(c), n @ V::Int(_)) | (n @ V::Int(_), V::Content(c)) if c.is_empty() => {
+            repetitions(&n)?;
+            V::Content(c)
         }
         (V::Str(s), n @ V::Int(_)) | (n @ V::Int(_), V::Str(s)) => {
             V::Str(s.repeat(repetitions(&n)?))
@@ -240,18 +259,18 @@ pub(crate) fn div(lhs: V, rhs: V) -> StrResult<V> {
     }
     Ok(match (lhs, rhs) {
         (a @ (V::Int(_) | V::Float(_)), b @ (V::Int(_) | V::Float(_))) => {
-            float(number(&a).unwrap_or(0.0) / number(&b).unwrap_or(1.0))
+            float(number(&a).unwrap_or(0.0) / number(&b).unwrap_or(1.0))?
         }
         (V::Length(a), V::Length(b)) if a.em.is_zero() && b.em.is_zero() => {
-            float(a.abs.to_pt() / b.abs.to_pt())
+            float(a.abs.to_pt() / b.abs.to_pt())?
         }
         (V::Length(a), V::Length(b)) if a.abs.is_zero() && b.abs.is_zero() => {
-            float(a.em.get() / b.em.get())
+            float(a.em.get() / b.em.get())?
         }
-        (V::Angle(a), V::Angle(b)) => float(a.0.get() / b.0.get()),
-        (V::Ratio(a), V::Ratio(b)) => float(a.get() / b.get()),
-        (V::Fraction(a), V::Fraction(b)) => float(a.get() / b.get()),
-        (V::Duration(a), V::Duration(b)) => float(a.seconds() / b.seconds()),
+        (V::Angle(a), V::Angle(b)) => float(a.0.get() / b.0.get())?,
+        (V::Ratio(a), V::Ratio(b)) => float(a.get() / b.get())?,
+        (V::Fraction(a), V::Fraction(b)) => float(a.get() / b.get())?,
+        (V::Duration(a), V::Duration(b)) => float(a.seconds() / b.seconds())?,
         (a, b) => match number(&b).and_then(|by| scale(&a, 1.0 / by)) {
             Some(v) => v,
             None => return Err(mismatch("divide", &a, &b)),
