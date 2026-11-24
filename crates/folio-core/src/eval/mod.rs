@@ -53,6 +53,7 @@
 
 mod captures;
 mod content;
+mod element;
 mod error;
 mod library;
 mod ops;
@@ -64,7 +65,7 @@ use std::collections::{BTreeSet, VecDeque};
 use folio_component::Name;
 use folio_syntax::ast;
 
-pub use self::content::{Content, Element, Node};
+pub use self::content::{Content, Element, Node, Slot};
 pub use self::error::{EvalError, Tracepoint};
 pub use self::value::{
     Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module, NativeFunc,

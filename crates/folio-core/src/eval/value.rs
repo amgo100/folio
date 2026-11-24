@@ -6,7 +6,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{Abs, Color, Em, QualifiedName, Ratio, Scalar};
+use folio_component::{Abs, Color, Em, Name, QualifiedName, Ratio, Scalar};
 use folio_syntax::{Span, SyntaxNode};
 use indexmap::IndexMap;
 
@@ -441,6 +441,10 @@ pub enum Func {
     Closure(Closure),
     /// An element: calling it makes an instance (SPEC §4.3).
     Element(QualifiedName),
+    /// A slot of an element, `statement` of `example`: calling it makes the
+    /// sub-block that fills the slot. It is defined only while the
+    /// arguments of a call of the element are evaluated.
+    Slot(Arc<(QualifiedName, Name)>),
     /// A function with some arguments already applied: `f.with(x)`.
     With(Arc<(Func, Args)>),
 }
@@ -452,6 +456,7 @@ impl Func {
             Self::Native(f) => Some(f.name.into()),
             Self::Closure(c) => c.name().cloned(),
             Self::Element(name) => Some(eco_format!("{name}")),
+            Self::Slot(slot) => Some(slot.1.as_str().into()),
             Self::With(inner) => inner.0.name(),
         }
     }

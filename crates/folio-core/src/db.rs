@@ -184,9 +184,10 @@ pub struct Dependency {
 
 /// What the build query ([`build_output`]) produces.
 ///
-/// The stages after evaluation (SPEC §2.1) are not wired in yet, so a build
-/// collects its files, checks them, checks its variant and target against
-/// the manifest, hosts its components, and evaluates its entry file.
+/// The stages after the document model (SPEC §2.1) are not wired in yet,
+/// so a build collects its files, checks them, checks its variant and
+/// target against the manifest, hosts its components, and builds the
+/// document tree.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct BuildOutput {
     /// The source files the build read, in the order they were found. A
@@ -372,20 +373,20 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
         check_source(db, file);
     }
     component_host(db, project);
-    check_evaluation(db, project, build.variant(db).clone());
+    check_document(db, project, build.variant(db).clone());
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),
     }
 }
 
-/// Evaluates a variant for its diagnostics. No stage reads the content yet,
-/// so the build depends on this instead of on
-/// [`evaluate`](crate::eval::evaluate), and is not re-run when an edit
+/// Builds the document tree of a variant for its diagnostics. No stage
+/// reads the tree yet, so the build depends on this instead of on
+/// [`document`](crate::model::document), and is not re-run when an edit
 /// changes only the content.
 #[salsa::tracked]
-fn check_evaluation(db: &dyn Db, project: Project, variant: Option<Name>) {
-    crate::eval::evaluate(db, project, variant);
+fn check_document(db: &dyn Db, project: Project, variant: Option<Name>) {
+    crate::model::document(db, project, variant);
 }
 
 /// Compiles one build: runs [`build_output`] and collects the diagnostics

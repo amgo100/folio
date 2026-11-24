@@ -79,9 +79,10 @@ impl Logged {
 }
 
 /// The queries that evaluate a variant whose entry file changed, written as
-/// one name for [`set`]: the file's evaluation, the variant's, and the
-/// build's check of it, which returns the same and so cuts the build off.
-const EVAL: &str = "eval_file evaluate check_evaluation";
+/// one name for [`set`]: the file's evaluation, the variant's, its
+/// document tree, and the build's check of it, which returns the same and so
+/// cuts the build off.
+const EVAL: &str = "eval_file evaluate document check_document";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {
