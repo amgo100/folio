@@ -2468,14 +2468,15 @@ node! {
 }
 
 impl<'a> RuleScope<'a> {
-    /// The kind of scope: `variant` or `target`.
-    pub fn kind(self) -> Ident<'a> {
-        self.0.cast_first()
+    /// The kind of scope, directly after the `@`: `variant` or `target` (or
+    /// what was written instead, if the scope is an error).
+    pub fn kind(self) -> &'a str {
+        self.0.children().nth(1).map_or("", |node| node.leaf_text())
     }
 
     /// The variants or targets.
     pub fn names(self) -> impl Iterator<Item = Ident<'a>> {
-        self.0.children().filter_map(SyntaxNode::cast).skip(1)
+        self.0.children().skip(2).filter_map(SyntaxNode::cast)
     }
 }
 

@@ -858,7 +858,13 @@ fn contextual_keyword(p: &mut Parser<'_>) {
     let starts = match (kind, p.peek_after_space()) {
         (SyntaxKind::Element, Some(next)) => next == SyntaxKind::Ident,
         (SyntaxKind::Rule, Some(next)) => {
-            matches!(next, SyntaxKind::Ident | SyntaxKind::At | SyntaxKind::Dot)
+            matches!(
+                next,
+                SyntaxKind::Ident | SyntaxKind::At | SyntaxKind::Dot | SyntaxKind::Colon
+            ) || (next == SyntaxKind::Error
+                && p.text[p.current_end()..]
+                    .trim_start_matches([' ', '\t'])
+                    .starts_with("#{"))
         }
         _ => false,
     };
@@ -970,7 +976,8 @@ fn schema_entry(p: &mut Parser<'_>) {
 /// Parses a scoped rule (SPEC §5.4): `rule question { numbering: "(a)"; }`,
 /// `rule @target pptx figure { .. }`.
 ///
-/// The selector is kept as a token sequence and the values as expressions;
+/// The selector (`question`, `.hard`, `:first`, `#{fig:ball}`, `@target pptx
+/// figure`) is kept as a token sequence and the values as expressions;
 /// their full grammar is that of stylesheets.
 fn scoped_rule(p: &mut Parser<'_>) {
     let m = p.marker();
@@ -1018,8 +1025,16 @@ fn selector(p: &mut Parser<'_>) {
     let m = p.marker();
     let mut depth: usize = 0;
     while !p.end() {
+        // An id selector: `#{fig:ball}`. In code, `#` lexes as an error.
+        if p.current_text() == "#" && p.text[p.current_end()..].starts_with('{') {
+            p.token.node = SyntaxNode::leaf(SyntaxKind::Hash, "#");
+            p.eat();
+            depth += 1;
+            p.eat();
+            continue;
+        }
         match p.current() {
-            SyntaxKind::LeftBrace if depth == 0 => break,
+            SyntaxKind::LeftBrace | SyntaxKind::Semicolon if depth == 0 => break,
             SyntaxKind::LeftBrace | SyntaxKind::LeftBracket | SyntaxKind::LeftParen => {
                 depth += 1;
             }
@@ -1468,7 +1483,7 @@ fn args(p: &mut Parser<'_>) {
 }
 
 /// Parses a single argument in an argument list.
-fn arg<'s>(p: &mut Parser<'s>, seen: &mut FxHashSet<&'s str>) {
+fn arg(p: &mut Parser<'_>, seen: &mut FxHashSet<EcoString>) {
     let m = p.marker();
 
     // Parses a spread argument: `..args`.
@@ -1480,7 +1495,8 @@ fn arg<'s>(p: &mut Parser<'s>, seen: &mut FxHashSet<&'s str>) {
 
     // Parses a normal positional argument or an argument name.
     let was_at_expr = p.at_set(set::CODE_EXPR);
-    let start = p.current_start();
+    let name = p.current_text();
+    let mut key = EcoString::from(name);
     code_expr(p);
 
     // Parses the scope of a named argument limited to a variant or target:
@@ -1490,6 +1506,7 @@ fn arg<'s>(p: &mut Parser<'s>, seen: &mut FxHashSet<&'s str>) {
     {
         p.eat();
         if p.directly_at(SyntaxKind::Ident) {
+            key = eco_format!("{name}@{}", p.current_text());
             p.eat();
         } else {
             p.expected("variant or target name");
@@ -1502,12 +1519,11 @@ fn arg<'s>(p: &mut Parser<'s>, seen: &mut FxHashSet<&'s str>) {
     // Parses a named argument: `thickness: 12pt`.
     if p.eat_if(SyntaxKind::Colon) {
         // Recover from bad argument name.
-        let text = p.text[start..p.prev_end()].trim_end_matches(':').trim_end();
         if was_at_expr {
             if p[m].kind() != SyntaxKind::Ident {
                 p[m].expected("identifier");
-            } else if !seen.insert(text) {
-                p[m].convert_to_error(eco_format!("duplicate argument: {text}"));
+            } else if !seen.insert(key.clone()) {
+                p[m].convert_to_error(eco_format!("duplicate argument: {key}"));
             }
         }
 

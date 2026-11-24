@@ -18,7 +18,8 @@ use crate::{FileId, LinkedNode, Span, SpanNumber, SubRange, SyntaxNode, parse};
 /// All line and column indices start at zero, just like byte indices. Only for
 /// user-facing display, you should add 1 to them.
 ///
-/// Values of this type are cheap to clone and hash.
+/// Values of this type are cheap to clone. Hashing one walks its whole text
+/// and tree.
 #[derive(Clone, Hash)]
 pub struct Source(Arc<SourceInner>);
 

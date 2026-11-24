@@ -206,6 +206,12 @@ fn universal_fields_and_scoped_override() {
         errors("#f(override@: 1)"),
         ["expected variant or target name"]
     );
+    // Trivia before the colon does not hide a duplicate.
+    assert_eq!(errors("#f(a /* c */: 1, a: 2)"), ["duplicate argument: a"]);
+    assert_eq!(
+        errors("#f(a@x /* c */: 1, a@x\n: 2)"),
+        ["duplicate argument: a@x"]
+    );
 }
 
 // --- Labels and references -----------------------------------------------------
@@ -531,7 +537,7 @@ fn scoped_rule_with_scopes_and_compound_selector() {
                 .names()
                 .map(|name| name.as_str().to_string())
                 .collect();
-            (scope.kind().as_str().to_string(), names)
+            (scope.kind().to_string(), names)
         })
         .collect();
     assert_eq!(
@@ -561,11 +567,45 @@ fn scoped_rule_with_scopes_and_compound_selector() {
 }
 
 #[test]
+fn scoped_rule_with_other_selectors() {
+    for (text, selector) in [
+        ("#rule #{fig:ball} { width: 40%; }", "#{fig:ball}"),
+        (
+            "#rule figure#{fig:ball} > caption { width: 40%; }",
+            "figure#{fig:ball} > caption",
+        ),
+        ("#rule .hard { numbering: \"(a)\"; }", ".hard"),
+        ("#rule :first { space-before: 0pt; }", ":first"),
+    ] {
+        ok(text);
+        let root = root(text);
+        let rule: ast::ScopedRule<'_> = first(&root);
+        assert_eq!(rule.selector().text(), selector, "{text}");
+        assert_eq!(rule.declarations().count(), 1, "{text}");
+    }
+}
+
+#[test]
 fn scoped_rule_errors() {
     assert_eq!(errors("#rule question"), ["expected declaration block"]);
     assert_eq!(
         errors("#rule @bogus pptx figure {}"),
         ["unknown rule scope: `@bogus`"]
+    );
+    let root = root("#rule @bogus pptx figure {}");
+    let scope: ast::RuleScope<'_> = first(&root);
+    assert_eq!(scope.kind(), "bogus");
+    let names: Vec<_> = scope
+        .names()
+        .map(|name| name.as_str().to_string())
+        .collect();
+    assert_eq!(names, ["pptx"]);
+    // A semicolon ends the selector, so the next statement still parses.
+    let root = self::root("#{ rule q; let x = 1; x }");
+    assert_eq!(count(&root, SyntaxKind::LetBinding), 1);
+    assert_eq!(
+        errors("#{ rule q; let x = 1; x }"),
+        ["expected declaration block"]
     );
     assert_eq!(
         errors("#rule question { numbering \"(a)\"; }"),
@@ -575,7 +615,7 @@ fn scoped_rule_errors() {
     // declaration still parses.
     let text = "#rule q {\n  a: 1\n  b: 2;\n}";
     assert_eq!(errors(text), ["expected semicolon"]);
-    let root = root(text);
+    let root = self::root(text);
     let rule: ast::ScopedRule<'_> = first(&root);
     assert_eq!(rule.declarations().count(), 2);
     // An unbalanced selector stops at the end of the line.
