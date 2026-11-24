@@ -617,3 +617,113 @@ fn content_taller_than_the_page_overflows_with_a_warning() {
         "{diags:?}"
     );
 }
+
+/// The text each line draws, in order: its runs' texts joined, for
+/// left-to-right text.
+fn drawn_lines(page: &Page) -> Vec<String> {
+    let mut lines: Vec<(Abs, String)> = Vec::new();
+    for (pos, text) in page_runs(page) {
+        match lines.last_mut() {
+            Some((y, line)) if *y == pos.y => line.push_str(&text),
+            _ => lines.push((pos.y, text)),
+        }
+    }
+    lines.into_iter().map(|(_, t)| t).collect()
+}
+
+#[test]
+fn every_line_draws_its_own_text() {
+    // Narrow lines full of ligatures, hyphenated inside them.
+    let words = "difficult office affluent baffling efficient sufficiently offline \
+                 afflicted scaffolding traffic officials effortlessly ";
+    let world = world(
+        "page { margin-inner: 45mm; margin-outer: 45mm; }\n",
+        &format!("{}\n", words.repeat(6)),
+    );
+    assert_lines_drawn(&world, false);
+}
+
+#[test]
+fn polish_lines_repeat_their_hyphen() {
+    let words = "biało-czerwona flaga i polsko-niemiecka granica oraz naukowo-techniczny \
+                 postęp w badawczo-rozwojowym ośrodku ";
+    let world = world(
+        "page { margin-inner: 50mm; margin-outer: 50mm; }\ndoc { lang: \"pl\"; }\n",
+        &format!("{}\n", words.repeat(8)),
+    );
+    assert_lines_drawn(&world, true);
+}
+
+/// Every line draws its text, the hyphen a break inserts after it, and the
+/// one a Polish break repeats before it; some line is hyphenated, and with
+/// `repeats`, some line repeats a hyphen.
+fn assert_lines_drawn(world: &World, repeats: bool) {
+    let text = text(world);
+    let lines = folio::lines(world, Target::Pdf, None).unwrap().unwrap();
+    let pages = pages(world);
+    let mut hyphenated = 0;
+    let mut repeated = 0;
+    let mut drawn = Vec::new();
+    for page in &pages.pages {
+        drawn.extend(drawn_lines(page));
+    }
+    let paragraph = &text.paragraphs[0];
+    let layout = &lines.paragraphs[0];
+    assert_eq!(drawn.len(), layout.lines.len());
+    for (line, drawn) in layout.lines.iter().zip(&drawn) {
+        let mut expected = String::new();
+        if line.repeated_hyphen {
+            expected.push('-');
+            repeated += 1;
+        }
+        expected.push_str(&paragraph.shaped.text()[line.range.start..line.content_end]);
+        if line.hyphen {
+            expected.push('-');
+        }
+        if line.hyphen || line.repeated_hyphen {
+            hyphenated += 1;
+        }
+        assert_eq!(drawn, &expected);
+    }
+    assert!(hyphenated > 0, "no line is hyphenated");
+    assert!(!repeats || repeated > 0, "no line repeats a hyphen");
+}
+
+#[test]
+fn a_side_of_a_border_can_be_removed() {
+    let world = world(
+        "figure { border: 1pt; border-top: none; border-bottom: 2pt dashed; }\n",
+        "#figure[Boxed.]\n",
+    );
+    let mut found = Vec::new();
+    shapes(&pages(&world).pages[0].fragment, &mut found);
+    assert_eq!(found.len(), 3, "{found:?}");
+}
+
+#[test]
+fn odd_and_even_page_breaks_pad_with_blank_pages() {
+    let world = world(
+        "heading { break-before: odd-page; }\nheading.even { break-before: even-page; }\n\
+         heading.col { break-before: column; }\n",
+        "Intro.\n\n= One\n\nFirst.\n\n#heading(class: \"col\")[Same page]\n\n\
+         = Three\n\nThird.\n\n#heading(class: \"even\")[Four]\n",
+    );
+    let text = text(&world);
+    let pages = pages(&world);
+    let heads: Vec<Option<String>> = pages
+        .pages
+        .iter()
+        .map(|p| {
+            p.lines
+                .first()
+                .map(|l| text.paragraphs[l.paragraph].shaped.text().to_string())
+        })
+        .collect();
+    let s = |t: &str| Some(t.to_string());
+    // One starts page 3 after a blank page 2; a column break does nothing in
+    // one column; Three is on page 5, and Four on page 6, which is even.
+    assert_eq!(
+        heads,
+        [s("Intro."), None, s("One"), None, s("Three"), s("Four")]
+    );
+}

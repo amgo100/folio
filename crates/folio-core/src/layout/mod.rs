@@ -71,7 +71,7 @@ use folio_syntax::{DiagSpan, SubRange};
 
 pub use self::cache::{Cache, Stats};
 pub use self::flow::{KEEP, UNBREAKABLE, WIDOW};
-pub use self::master::{BlockBox, PageMaster, Sides};
+pub use self::master::{BlockBox, BreakBefore, PageMaster, Sides};
 pub use self::page::{FILL, LineRef, Page, PageCache, PageStats, Pages, pages};
 pub use self::paragraph::{
     Align, Line, LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,

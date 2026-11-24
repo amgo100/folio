@@ -373,14 +373,10 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     prop("space-before", Length, pt(0.0), Layout);
     prop("space-after", Length, pt(0.0), Layout);
     prop("padding", any_of([Length, list(Length)]), pt(0.0), Layout);
-    for side in [
-        "border",
-        "border-top",
-        "border-right",
-        "border-bottom",
-        "border-left",
-    ] {
-        prop(side, Any, Value::None, Layout);
+    prop("border", Any, Value::None, Layout);
+    // `auto` takes `border`'s value; `none` draws no border on the side.
+    for side in ["border-top", "border-right", "border-bottom", "border-left"] {
+        prop(side, Any, Value::Auto, Layout);
     }
     prop(
         "background",

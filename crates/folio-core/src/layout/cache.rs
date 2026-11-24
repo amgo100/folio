@@ -10,10 +10,11 @@ use std::time::Instant;
 
 use ecow::EcoVec;
 use folio_component::Abs;
-use folio_text::Paragraph;
+use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind};
 
 use super::paragraph::{
-    LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics, layout_paragraph,
+    LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics, hyphen_glyphs,
+    layout_paragraph,
 };
 
 /// How many calls of [`Cache::layout_all`] a paragraph's lines are kept
@@ -41,7 +42,16 @@ pub struct Cache {
     clock: AtomicU64,
     hits: AtomicU64,
     misses: AtomicU64,
+    /// The glyphs of hyphens, by the font, features and language they are
+    /// set in, and the hyphen.
+    hyphens: Mutex<HashMap<HyphenKey, Hyphen>>,
 }
+
+/// A hyphen in a font, with features and a language.
+type HyphenKey = (SegmentKind, Option<Lang>, char);
+
+/// The glyphs of a hyphen and the units per em they are measured in.
+pub(super) type Hyphen = Option<(EcoVec<Glyph>, u16)>;
 
 #[derive(Clone, Eq, PartialEq, Hash)]
 struct Key {
@@ -134,6 +144,18 @@ impl Cache {
             lock(&self.entries).retain(|_, entry| entry.used + MAX_AGE >= now);
         }
         out
+    }
+
+    /// The glyphs of a hyphen `c` in a segment's font, features and
+    /// language ([`hyphen_glyphs`]), shaped once per world.
+    pub(super) fn hyphen(&self, segment: &Segment, c: char) -> Hyphen {
+        let key = (segment.kind.clone(), segment.lang.clone(), c);
+        if let Some(found) = lock(&self.hyphens).get(&key) {
+            return found.clone();
+        }
+        let glyphs = hyphen_glyphs(segment, c);
+        lock(&self.hyphens).insert(key, glyphs.clone());
+        glyphs
     }
 
     /// How often the cache had a paragraph's lines since it was made.

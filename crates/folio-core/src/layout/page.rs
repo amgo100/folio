@@ -107,6 +107,7 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let master = PageMaster::of(&styled.page, props);
     let flow = Flow::new(
         text,
+        db.layout_cache(),
         &lines.paragraphs,
         &lines.slots,
         props,
@@ -119,6 +120,16 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let mut pages = EcoVec::new();
     let mut start = 0;
     while start < flow.items.len() {
+        // `break-before: odd-page` and `even-page` pad with a blank page.
+        if start > 0
+            && let Some(odd) = flow.boundary(start).parity
+            && (pages.len() % 2 == 0) != odd
+        {
+            pages.push(Page {
+                fragment: blank(&master),
+                lines: EcoVec::new(),
+            });
+        }
         let out = cache.page(&flow, master, start, start == 0, now);
         report(db, &out);
         let lines = flow.origins[start..start + out.leaves]
@@ -136,6 +147,13 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     }
     cache.sweep(now);
     Some(Pages { master, pages })
+}
+
+/// A page without content.
+fn blank(master: &PageMaster) -> Fragment {
+    let mut page = Fragment::new(master.size);
+    page.push_fragment(master.body.origin, Fragment::new(master.body.size));
+    page
 }
 
 /// Reports what a page relaxed or could not fit.
@@ -645,7 +663,7 @@ mod tests {
             keep_with_next: false,
             keep_together: false,
             breakable: true,
-            break_before: false,
+            break_before: crate::layout::BreakBefore::Auto,
         });
         // A paragraph ends (space after 6pt), a section with padding 2pt
         // starts (space before 10pt), then its heading (space before 4pt).

@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{Abs, Em, FontId, FragmentItem, Glyph, GlyphRun, Paint, Point};
+use folio_text::{Item, ItemKind, Paragraph, Segment};
 
 use super::flow::{ParagraphInfo, em, glyphs};
 
@@ -40,15 +41,23 @@ pub(super) fn set_line(
             .partition_point(|s| s.range.end < offset)
             .min(segments.len().saturating_sub(1))
     };
-    let start_hyphen = line.repeated_hyphen.then_some(line.range.start);
-    let end_hyphen = line.hyphen.then_some(line.content_end);
+    // The explicit hyphen a line repeats, and the one a break inserts.
+    let start_hyphen = if line.repeated_hyphen {
+        text[..line.range.start]
+            .chars()
+            .next_back()
+            .map(|c| (line.range.start, c))
+    } else {
+        None
+    };
+    let end_hyphen = line.hyphen.then_some((line.content_end, '-'));
     let (left, right) = if rtl {
         (end_hyphen, start_hyphen)
     } else {
         (start_hyphen, end_hyphen)
     };
-    if let Some(at) = left {
-        pen = runs.hyphen(info, segment_at(at), at, pen);
+    if let Some((at, c)) = left {
+        pen = runs.hyphen(info, segment_at(at), at, c, pen);
     }
 
     for (piece, _) in shaped.visual_runs(line.range.clone()) {
@@ -73,21 +82,16 @@ pub(super) fn set_line(
         let Some(face) = paint.face else {
             continue;
         };
-        let mut clusters: Vec<u32> = item_glyphs.iter().map(|g| g.cluster).collect();
-        clusters.sort_unstable();
-        clusters.dedup();
-        let cluster_end = |c: u32| -> usize {
-            let next = clusters.partition_point(|&x| x <= c);
-            clusters.get(next).map_or(item.range.end, |&n| n as usize)
-        };
         let size = paint.size;
+        let segment = &segments[item.segment];
         let mut last_cluster = None;
-        for g in item_glyphs {
-            let cluster = g.cluster as usize;
-            if !range.contains(&cluster) {
-                continue;
-            }
-            let end = cluster_end(g.cluster);
+        for placed in line_glyphs(text, item, item_glyphs, units_per_em, segment, range) {
+            let Placed {
+                glyph: g,
+                cluster,
+                end,
+                units_per_em,
+            } = placed;
             let mut advance = em(g.x_advance, units_per_em).at(size);
             if last_cluster != Some(cluster) {
                 last_cluster = Some(cluster);
@@ -121,10 +125,100 @@ pub(super) fn set_line(
         }
     }
 
-    if let Some(at) = right {
-        runs.hyphen(info, segment_at(at), at, pen);
+    if let Some((at, c)) = right {
+        runs.hyphen(info, segment_at(at), at, c, pen);
     }
     runs.flush();
+}
+
+/// A glyph of a line, in visual order, with the bytes of the paragraph's
+/// text it shows.
+struct Placed {
+    glyph: folio_text::Glyph,
+    /// Where its cluster starts in the paragraph's text.
+    cluster: usize,
+    /// Where its cluster ends.
+    end: usize,
+    /// The units per em its advances and offsets are in.
+    units_per_em: u16,
+}
+
+/// The glyphs of the part `range` of an item that a line holds, in visual
+/// order. Where the line's edge cuts through a cluster of the item (a
+/// ligature broken at a hyphenation point), the part is shaped again on its
+/// own, so that each line draws exactly its own characters; the part may
+/// then be a little wider or narrower than the paragraph builder measured.
+fn line_glyphs(
+    text: &str,
+    item: &Item,
+    glyphs: &[folio_text::Glyph],
+    units_per_em: u16,
+    segment: &Segment,
+    range: Range<usize>,
+) -> Vec<Placed> {
+    let mut clusters: Vec<u32> = glyphs.iter().map(|g| g.cluster).collect();
+    clusters.sort_unstable();
+    clusters.dedup();
+    let starts = |at: usize| {
+        at <= item.range.start
+            || at >= item.range.end
+            || u32::try_from(at).is_ok_and(|at| clusters.binary_search(&at).is_ok())
+    };
+    if starts(range.start) && starts(range.end) {
+        let end_of = |c: u32| {
+            let next = clusters.partition_point(|&x| x <= c);
+            clusters.get(next).map_or(item.range.end, |&n| n as usize)
+        };
+        return glyphs
+            .iter()
+            .filter(|g| range.contains(&(g.cluster as usize)))
+            .map(|g| Placed {
+                glyph: *g,
+                cluster: g.cluster as usize,
+                end: end_of(g.cluster),
+                units_per_em,
+            })
+            .collect();
+    }
+
+    let part = Paragraph {
+        text: text[range.clone()].into(),
+        segments: EcoVec::from([Segment {
+            range: 0..range.len(),
+            kind: segment.kind.clone(),
+            lang: segment.lang.clone(),
+            hyphenate: false,
+        }]),
+    };
+    let reshaped = folio_text::shape(&part);
+    let mut items: Vec<&Item> = reshaped.items.iter().collect();
+    if item.is_rtl() {
+        items.reverse();
+    }
+    let mut out = Vec::new();
+    for sub in items {
+        let ItemKind::Glyphs {
+            glyphs,
+            units_per_em,
+        } = &sub.kind
+        else {
+            continue;
+        };
+        let mut clusters: Vec<u32> = glyphs.iter().map(|g| g.cluster).collect();
+        clusters.sort_unstable();
+        clusters.dedup();
+        for g in glyphs {
+            let next = clusters.partition_point(|&x| x <= g.cluster);
+            let end = clusters.get(next).map_or(sub.range.end, |&n| n as usize);
+            out.push(Placed {
+                glyph: *g,
+                cluster: range.start + g.cluster as usize,
+                end: range.start + end,
+                units_per_em: *units_per_em,
+            });
+        }
+    }
+    out
 }
 
 /// A length at a font size as ems.
@@ -218,16 +312,27 @@ impl Runs<'_> {
         ));
     }
 
-    /// Sets a hyphen of segment `segment` at `pen`, for the text at byte
-    /// `at`, as a run of its own, and returns the pen after it.
-    fn hyphen(&mut self, info: &ParagraphInfo, segment: usize, at: usize, pen: Abs) -> Abs {
+    /// Sets a hyphen `c` of segment `segment` at `pen`, for the text at
+    /// byte `at`, as a run of its own, and returns the pen after it.
+    fn hyphen(
+        &mut self,
+        info: &ParagraphInfo,
+        segment: usize,
+        at: usize,
+        c: char,
+        pen: Abs,
+    ) -> Abs {
         self.flush();
         let Some(paint) = info.segments.get(segment) else {
             return pen;
         };
-        let (Some(face), Some((hyphen, units_per_em))) = (paint.face, &paint.hyphen) else {
+        let Some(face) = paint.face else {
             return pen;
         };
+        let Some((_, hyphen, units_per_em)) = paint.hyphens.iter().find(|h| h.0 == c) else {
+            return pen;
+        };
+        let len = u32::try_from(c.len_utf8()).unwrap_or(1);
         let size = paint.size;
         let count = hyphen.len();
         let glyphs: EcoVec<Glyph> = hyphen
@@ -243,7 +348,7 @@ impl Runs<'_> {
                     x_advance: per_em(advance, size),
                     x_offset: em(g.x_offset, *units_per_em),
                     y_offset: em(g.y_offset, *units_per_em),
-                    range: 0..1,
+                    range: 0..len,
                     source: info.source(at.saturating_sub(1)),
                 }
             })
@@ -252,7 +357,7 @@ impl Runs<'_> {
             font: FontId(face),
             size,
             fill: paint.fill.clone(),
-            text: "-".into(),
+            text: c.to_string().into(),
             glyphs,
         };
         let width = run.width();

@@ -81,24 +81,6 @@ pub enum TextFlow {
     Block(TextBlock),
 }
 
-impl TextBlock {
-    /// The indices of the paragraphs in the block and its descendants, in
-    /// document order.
-    pub fn paragraphs(&self) -> Vec<usize> {
-        fn walk(block: &TextBlock, out: &mut Vec<usize>) {
-            for child in &block.children {
-                match child {
-                    TextFlow::Paragraph(i) => out.push(*i),
-                    TextFlow::Block(b) => walk(b, out),
-                }
-            }
-        }
-        let mut out = Vec::new();
-        walk(self, &mut out);
-        out
-    }
-}
-
 /// One paragraph of a build, shaped.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct TextParagraph {

@@ -95,7 +95,8 @@ pub struct BlockBox {
     pub space_after: Abs,
     /// The padding inside its borders.
     pub padding: Sides<Abs>,
-    /// Its borders. Each takes up its thickness inside the box.
+    /// Its borders: `border-top` and the other sides, where they are `auto`
+    /// the value of `border`. Each takes up its thickness inside the box.
     pub border: Sides<Option<Stroke>>,
     /// The paint of its border box, if any.
     pub background: Option<Paint>,
@@ -106,8 +107,21 @@ pub struct BlockBox {
     /// Whether it may be broken across pages at all: `false` avoids a
     /// break inside it more strongly than `keep-together`.
     pub breakable: bool,
-    /// Whether it starts a new page.
-    pub break_before: bool,
+    /// Whether it starts a new page, and on which side.
+    pub break_before: BreakBefore,
+}
+
+/// Whether a block starts a new page (`break-before`).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum BreakBefore {
+    /// Where it falls: `auto`, and `column` in a body of one column.
+    Auto,
+    /// On a new page.
+    Page,
+    /// On a new odd page, after a blank even one if need be.
+    OddPage,
+    /// On a new even page, after a blank odd one if need be.
+    EvenPage,
 }
 
 impl BlockBox {
@@ -117,7 +131,11 @@ impl BlockBox {
         let value = |name: &str| style.value(props, props.builtin(name));
         let flag = |name: &str| matches!(value(name), Some(Value::Bool(true)));
         let all = value("border").and_then(stroke);
-        let side = |name: &str| value(name).and_then(stroke).or_else(|| all.clone());
+        // A side's `auto` takes `border`'s value, and its `none` removes it.
+        let side = |name: &str| match value(name) {
+            Some(Value::Auto) | None => all.clone(),
+            Some(v) => stroke(v),
+        };
         Self {
             span,
             x,
@@ -138,7 +156,17 @@ impl BlockBox {
             keep_with_next: flag("keep-with-next"),
             keep_together: flag("keep-together"),
             breakable: !matches!(value("breakable"), Some(Value::Bool(false))),
-            break_before: matches!(value("break-before"), Some(Value::Keyword(_))),
+            break_before: match value("break-before") {
+                Some(Value::Keyword(k)) => match k.as_str() {
+                    "page" => BreakBefore::Page,
+                    "odd-page" => BreakBefore::OddPage,
+                    "even-page" => BreakBefore::EvenPage,
+                    // A column break needs columns, which a column set
+                    // makes (§13.2).
+                    _ => BreakBefore::Auto,
+                },
+                _ => BreakBefore::Auto,
+            },
         }
     }
 

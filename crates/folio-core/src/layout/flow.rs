@@ -25,8 +25,9 @@
 //! than `orphans` lines on the page or fewer than `widows` on the next
 //! costs [`WIDOW`]; a break directly after a block with `keep-with-next`,
 //! or inside one with `keep-together`, costs [`KEEP`]; inside a block with
-//! `breakable: false`, [`UNBREAKABLE`]. A block with `break-before` forces
-//! a break before it. Costs add up, and they are costs, not rules: the page
+//! `breakable: false`, [`UNBREAKABLE`]. A block with `break-before: page`
+//! forces a break before it; `odd-page` and `even-page` also ask for a page
+//! of that parity, and `column` breaks nothing in a body of one column. Costs add up, and they are costs, not rules: the page
 //! builder takes the cheapest break and reports the constraints it had to
 //! relax (SPEC §7.2).
 
@@ -39,8 +40,9 @@ use folio_component::{Abs, Color, Em, Paint, SourceRef, Value};
 use folio_syntax::Span;
 use folio_text::{Glyph, ItemKind, Shaped};
 
-use super::master::BlockBox;
-use super::paragraph::{LineSlot, ParagraphLayout, hyphen_glyphs};
+use super::cache::Cache;
+use super::master::{BlockBox, BreakBefore};
+use super::paragraph::{LineSlot, ParagraphLayout};
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
@@ -126,9 +128,10 @@ pub(super) struct SegmentPaint {
     pub tracking: Abs,
     /// The paint of its glyphs.
     pub fill: Paint,
-    /// The glyphs of a hyphen in its font, if a line needs one, in font
-    /// units of `units_per_em`.
-    pub hyphen: Option<(EcoVec<Glyph>, u16)>,
+    /// The hyphens its lines need, inserted ones (`-`) and the explicit
+    /// ones Polish repeats: each with its glyphs in the segment's font, in
+    /// font units of the units per em they come with.
+    pub hyphens: EcoVec<(char, EcoVec<Glyph>, u16)>,
 }
 
 impl ParagraphInfo {
@@ -239,6 +242,9 @@ pub(super) struct Boundary {
     pub penalty: f64,
     /// Whether a break here is forced.
     pub forced: bool,
+    /// Whether the page after a forced break here must be odd (`true`) or
+    /// even (`false`), if either.
+    pub parity: Option<bool>,
     /// The constraints a break here goes against.
     pub constraints: EcoVec<Constraint>,
 }
@@ -248,6 +254,7 @@ impl Hash for Boundary {
         self.parts.hash(state);
         self.penalty.to_bits().hash(state);
         self.forced.hash(state);
+        self.parity.hash(state);
         self.constraints.hash(state);
     }
 }
@@ -378,9 +385,11 @@ pub(super) struct Flow {
 
 impl Flow {
     /// Flattens a build's blocks and lines. `layouts` and `slots` hold the
-    /// lines and line slots of each paragraph of `text`.
+    /// lines and line slots of each paragraph of `text`; `cache` memoises
+    /// the hyphens they need.
     pub(super) fn new(
         text: &Text,
+        cache: &Cache,
         layouts: &[Arc<ParagraphLayout>],
         slots: &[LineSlot],
         props: &Properties,
@@ -389,6 +398,7 @@ impl Flow {
     ) -> Self {
         let mut builder = Builder {
             text,
+            cache,
             layouts,
             slots,
             props,
@@ -430,6 +440,7 @@ enum Event {
 
 struct Builder<'a> {
     text: &'a Text,
+    cache: &'a Cache,
     layouts: &'a [Arc<ParagraphLayout>],
     slots: &'a [LineSlot],
     props: &'a Properties,
@@ -478,22 +489,33 @@ impl Builder<'_> {
             Some(Value::Int(n)) => usize::try_from(*n).unwrap_or(0),
             _ => 0,
         };
-        // A hyphen in the segment of each line end that needs one.
+        // The hyphens each segment's lines need: an inserted one at a
+        // line's end, and the explicit one a line repeats at its start.
         let segments = &paragraph.shaped.paragraph.segments;
-        let mut needs = vec![false; segments.len()];
+        let mut needs: Vec<Vec<char>> = vec![Vec::new(); segments.len()];
         let segment_at = |offset: usize| {
             segments
                 .partition_point(|s| s.range.end < offset)
                 .min(segments.len().saturating_sub(1))
         };
+        let text = paragraph.shaped.text();
         for line in &layout.lines {
+            let mut need = |at: usize, c: char| {
+                let list = &mut needs[segment_at(at)];
+                if !list.contains(&c) {
+                    list.push(c);
+                }
+            };
             if line.hyphen {
-                needs[segment_at(line.content_end)] = true;
+                need(line.content_end, '-');
             }
-            if line.repeated_hyphen {
-                needs[segment_at(line.range.start)] = true;
+            if line.repeated_hyphen
+                && let Some(c) = text[..line.range.start].chars().next_back()
+            {
+                need(line.range.start, c);
             }
         }
+        let cache = self.cache;
         let paints = paragraph
             .segments
             .iter()
@@ -504,11 +526,15 @@ impl Builder<'_> {
                 size: metrics.size,
                 tracking: metrics.tracking,
                 fill: fill(&seg.style, self.props),
-                hyphen: if needs.get(i).copied().unwrap_or(false) {
-                    segments.get(i).and_then(hyphen_glyphs)
-                } else {
-                    None
-                },
+                hyphens: needs
+                    .get(i)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|&c| {
+                        let (glyphs, units) = cache.hyphen(segments.get(i)?, c)?;
+                        Some((c, glyphs, units))
+                    })
+                    .collect(),
             })
             .collect();
         let info = Arc::new(ParagraphInfo {
@@ -609,8 +635,19 @@ impl Builder<'_> {
                     out.parts.push(Part::Space(b.space_before));
                     out.parts.push(Part::Open(b.clone()));
                     out.parts.push(Part::Solid(b.inset().top));
-                    if b.break_before && prev.is_some() {
-                        out.forced = true;
+                    if prev.is_some() {
+                        match b.break_before {
+                            BreakBefore::Auto => {}
+                            BreakBefore::Page => out.forced = true,
+                            BreakBefore::OddPage => {
+                                out.forced = true;
+                                out.parity = Some(true);
+                            }
+                            BreakBefore::EvenPage => {
+                                out.forced = true;
+                                out.parity = Some(false);
+                            }
+                        }
                     }
                 }
             }
