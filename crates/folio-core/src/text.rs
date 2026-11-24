@@ -28,7 +28,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{BODY, ElementKind, QualifiedName, Value};
+use folio_component::{BODY, ElementKind, Name, QualifiedName, Value};
 use folio_syntax::Span;
 use folio_text::{Feature, Lang, OBJECT, Paragraph, Segment, SegmentKind, Shaped, TextFont};
 
@@ -43,7 +43,9 @@ use crate::style::{
 
 pub use folio_text::Cache;
 
-/// The shaped paragraphs of a build, in document order.
+/// The shaped paragraphs of a build, in document order: an element's body
+/// and content fields in the order they were given, and the blocks of a
+/// note or float after the paragraph it is anchored in.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Text {
     /// The paragraphs.
@@ -192,18 +194,28 @@ impl Collector<'_> {
             self.finish(builder);
             return;
         }
+        // The body and the parts, in the order of the element's fields, as
+        // they are written.
         let kids = styled_children(element, node);
-        if let Some(eval::Value::Content(body)) = element.field(BODY) {
-            let mut body_kids = kids.iter().filter_map(|(child, node)| match child {
-                Child::Element(e) => Some((*e, *node)),
-                Child::Part(..) => None,
-            });
-            self.content(body, &node.style, element.span, &mut body_kids);
-        }
-        for (child, node) in &kids {
-            if let Child::Part(_, content) = child {
-                let mut part_kids = content_elements(content).zip(node.children.iter());
-                self.content(content, &node.style, element.span, &mut part_kids);
+        let mut parts = kids.iter().filter_map(|(child, node)| match child {
+            Child::Part(_, content) => Some((*content, *node)),
+            Child::Element(_) => None,
+        });
+        for (key, value) in element.fields.iter() {
+            let eval::Value::Content(content) = value else {
+                continue;
+            };
+            if key == BODY {
+                let mut body_kids = kids.iter().filter_map(|(child, node)| match child {
+                    Child::Element(e) => Some((*e, *node)),
+                    Child::Part(..) => None,
+                });
+                self.content(content, &node.style, element.span, &mut body_kids);
+            } else if Name::new(key).is_some()
+                && let Some((part, part_node)) = parts.next()
+            {
+                let mut part_kids = content_elements(part).zip(part_node.children.iter());
+                self.content(part, &part_node.style, element.span, &mut part_kids);
             }
         }
     }

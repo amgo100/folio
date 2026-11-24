@@ -70,6 +70,11 @@ impl TextFont {
         self.0.units_per_em
     }
 
+    /// The address of the face's bytes.
+    pub(crate) fn addr(&self) -> usize {
+        self.0.addr
+    }
+
     /// Whether a handle other than this one refers to the face.
     pub(crate) fn is_shared(&self) -> bool {
         Arc::strong_count(&self.0) > 1
@@ -230,9 +235,14 @@ pub(crate) fn shape_run(text: &str, range: Range<usize>, props: &RunProps<'_>) -
         Script::Common | Script::Inherited | Script::Unknown => None,
         script => Some(tag_bytes(iso_code(script))),
     };
-    let mut features = props.features.to_vec();
-    features.sort_unstable();
-    features.dedup();
+    // The last setting of a tag wins, as in a stylesheet.
+    let mut features: Vec<Feature> = Vec::with_capacity(props.features.len());
+    for feature in props.features.iter().rev() {
+        if !features.iter().any(|f| f.tag == feature.tag) {
+            features.push(*feature);
+        }
+    }
+    features.reverse();
     let key = PlanKey {
         rtl: props.rtl,
         script,
@@ -307,6 +317,32 @@ fn to_language(lang: &Lang) -> Option<Language> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_setting_of_a_tag_wins() {
+        let data = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../folio-fonts/bundled/SourceSerif4-Regular.otf"
+        ))
+        .unwrap();
+        let data: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(data);
+        let font = TextFont::new(data, 0).unwrap();
+        let shape = |features: &[&str]| {
+            let features: Vec<Feature> = features.iter().map(|f| f.parse().unwrap()).collect();
+            let props = RunProps {
+                font: &font,
+                rtl: false,
+                script: Script::Latin,
+                lang: None,
+                features: &features,
+            };
+            shape_run("office", 0..6, &props).len()
+        };
+        // `ffi` is one glyph with ligatures, three without.
+        assert_eq!(shape(&[]), 4);
+        assert_eq!(shape(&["liga", "-liga"]), 6);
+        assert_eq!(shape(&["-liga", "liga"]), 4);
+    }
 
     #[test]
     fn parses_features() {

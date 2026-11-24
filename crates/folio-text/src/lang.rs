@@ -8,7 +8,7 @@ use ecow::EcoString;
 /// A BCP 47 language tag, such as `en`, `pl` or `en-GB`.
 ///
 /// Tags compare without regard to case, as BCP 47 says: the tag is stored
-/// with its primary subtag in lower case.
+/// in the case BCP 47 recommends (`en-GB`, `sr-Latn`, `zh-Hant-TW`).
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Lang(EcoString);
 
@@ -37,9 +37,21 @@ impl Lang {
         if !valid {
             return None;
         }
-        let rest = &tag[primary.len()..];
         let mut out = EcoString::from(primary.to_ascii_lowercase());
-        out.push_str(rest);
+        for subtag in tag.split('-').skip(1) {
+            out.push('-');
+            let all_alpha = subtag.bytes().all(|b| b.is_ascii_alphabetic());
+            match subtag.len() {
+                // A region.
+                2 if all_alpha => out.push_str(&subtag.to_ascii_uppercase()),
+                // A script.
+                4 if all_alpha => {
+                    out.push_str(&subtag[..1].to_ascii_uppercase());
+                    out.push_str(&subtag[1..].to_ascii_lowercase());
+                }
+                _ => out.push_str(&subtag.to_ascii_lowercase()),
+            }
+        }
         Some(Self(out))
     }
 
@@ -208,6 +220,9 @@ mod tests {
     fn parses_tags() {
         assert_eq!(Lang::new("PL").unwrap().as_str(), "pl");
         assert_eq!(Lang::new("en-GB").unwrap().as_str(), "en-GB");
+        assert_eq!(Lang::new("en-gb"), Lang::new("EN-GB"));
+        assert_eq!(Lang::new("sr-latn-rs").unwrap().as_str(), "sr-Latn-RS");
+        assert_eq!(Lang::new("es-419").unwrap().as_str(), "es-419");
         assert_eq!(Lang::new("en-GB").unwrap().primary(), "en");
         assert!(Lang::new("english").is_none());
         assert!(Lang::new("").is_none());

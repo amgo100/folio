@@ -59,12 +59,16 @@ static SEGMENTER: LazyLock<icu_segmenter::LineSegmenterBorrowed<'static>> =
 /// its language binds to the next ([`Lang::binds_to_next`]) is not a
 /// break.
 pub(crate) fn breaks(text: &str, spans: &[LangSpan<'_>]) -> Vec<Break> {
+    // Spans are sorted and do not overlap, so a binary search finds the
+    // span of an offset.
     let lang_at = |offset: usize| {
+        let i = spans.partition_point(|s| s.range.end <= offset);
         spans
-            .iter()
-            .find(|s| s.range.contains(&offset))
+            .get(i)
+            .filter(|s| s.range.contains(&offset))
             .or_else(|| spans.last().filter(|s| s.range.end == offset))
     };
+    let any_hyphenate = spans.iter().any(|s| s.hyphenate);
     let mut out: Vec<Break> = Vec::new();
     let mut prev = 0;
     for offset in SEGMENTER.segment_str(text) {
@@ -89,8 +93,9 @@ pub(crate) fn breaks(text: &str, spans: &[LangSpan<'_>]) -> Vec<Break> {
         };
 
         // Hyphenation points of the word in this segment.
-        let segment = prev..offset;
-        hyphenate(text, segment, spans, &lang_at, &mut out);
+        if any_hyphenate {
+            hyphenate(text, prev..offset, &lang_at, &mut out);
+        }
         prev = offset;
 
         if kind == BreakKind::Normal && binds(text, offset, &lang_at) {
@@ -107,13 +112,9 @@ pub(crate) fn breaks(text: &str, spans: &[LangSpan<'_>]) -> Vec<Break> {
 fn hyphenate<'a>(
     text: &str,
     segment: Range<usize>,
-    spans: &[LangSpan<'a>],
     lang_at: &impl Fn(usize) -> Option<&'a LangSpan<'a>>,
     out: &mut Vec<Break>,
 ) {
-    if !spans.iter().any(|s| s.hyphenate) {
-        return;
-    }
     let piece = &text[segment.clone()];
     // The author's soft hyphens replace automatic hyphenation of the word.
     let after_soft = text[..segment.start].ends_with('\u{AD}');

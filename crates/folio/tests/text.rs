@@ -305,3 +305,54 @@ fn an_edit_reshapes_only_its_paragraph() {
         &docx.paragraphs[0].shaped
     ));
 }
+
+/// Shaping runs in parallel inside the text query while `compile_all` runs
+/// the builds in parallel: a thread waiting for shaping must not pick up
+/// another build's compilation, whose database handle salsa would refuse.
+/// Each variant sets its text in another font, so that every build has
+/// paragraphs of its own to shape.
+#[test]
+fn compile_all_shapes_every_build_in_parallel() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+        [variants.a]\ntargets = [\"pdf\", \"docx\", \"pptx\"]\nstyles = [\"a.fsty\"]\n\
+        [variants.b]\ntargets = [\"pdf\", \"docx\", \"pptx\"]\nstyles = [\"b.fsty\"]\n\
+        [variants.c]\ntargets = [\"pdf\", \"docx\", \"pptx\"]\nstyles = [\"c.fsty\"]\n\
+        [variants.d]\ntargets = [\"pdf\", \"docx\", \"pptx\"]\nstyles = [\"d.fsty\"]\n";
+    let fonts = [
+        ("a.fsty", "Source Serif 4"),
+        ("b.fsty", "Source Sans 3"),
+        ("c.fsty", "New Computer Modern"),
+        ("d.fsty", "STIX Two Text"),
+    ];
+    for round in 0..5 {
+        let mut world = World::new(manifest).unwrap();
+        for (file, font) in fonts {
+            world
+                .set_source(file, &format!("doc {{ font: \"{font}\"; }}\n"))
+                .unwrap();
+        }
+        let text: String = (0..400)
+            .map(|i| format!("Paragraph {i} of round {round}, with some words to shape.\n\n"))
+            .collect();
+        world.set_source("main.fol", &text).unwrap();
+        let outputs = folio::compile_all(&world);
+        assert_eq!(outputs.len(), 12);
+        for output in outputs {
+            let compiled = output.result.unwrap();
+            assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+        }
+    }
+}
+
+#[test]
+fn fields_are_collected_in_the_order_they_are_written() {
+    let world = world(
+        "en",
+        SERIF,
+        "#doc(title: [Mechanics])\n\nFirst paragraph.\n\n#figure[Body.][Caption.]\n",
+    );
+    assert_eq!(
+        paragraph_texts(&text(&world)),
+        ["Mechanics", "First paragraph.", "Body.", "Caption."]
+    );
+}
