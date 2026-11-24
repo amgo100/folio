@@ -6,3 +6,5 @@
 //! `folio-component`, never the reverse.
 
 #![forbid(unsafe_code)]
+
+pub mod project;
