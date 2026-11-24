@@ -439,6 +439,7 @@ Every element, built in or added by a component, has a declared schema. A packag
 ### 4.4 Scripting and data
 
 - Expressions, `#let` bindings, functions, `#if`, `#for`, and modules through `#import`.
+- Import and include paths are string literals, relative to the importing file or, with a leading `/`, to the project root. The files a document reads are therefore known before any script runs, and an import that would form a cycle is an error.
 - Data loading from CSV, JSON, TOML, YAML and BibTeX/CSL-JSON, so a question bank or a results table can drive content.
 - A deterministic sandbox: file reads are limited to the project root and declared assets; there is no network access and no clock (a `today` value comes from the manifest or the command line).
 - Resource limits on steps, memory and recursion; exceeding one is an error that points at the call.

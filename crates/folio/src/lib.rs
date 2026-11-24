@@ -37,7 +37,9 @@ use rayon::prelude::*;
 pub use folio_component::{Name, Registry, Target};
 pub use folio_core::db::{Bytes, Compiled, FontFile};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
-pub use folio_core::project::{Lockfile, Manifest, ProjectError, ProjectPath};
+pub use folio_core::eval;
+pub use folio_core::eval::Limits;
+pub use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 pub use folio_syntax::{FileId, Source};
 
 pub use self::world::{Event, World, WorldBuilder, WorldError};
@@ -61,6 +63,17 @@ pub fn compile(
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         folio_core::db::compile(db, build)
     })
+}
+
+/// Evaluates a variant of the world's document into its content tree
+/// (SPEC §2.1), or `None` when it could not be evaluated. The variant is
+/// `None` only for a project that declares no variants.
+///
+/// The problems found are the diagnostics that [`compile`] reports for the
+/// variant. Evaluation does not depend on the target, so every target of a
+/// variant shares it. Fails only when an edit to the world cancels it.
+pub fn evaluate(world: &World, variant: Option<&Name>) -> Result<Option<eval::Content>, Cancelled> {
+    catch(|| eval::evaluate(world.db(), world.project(), variant.cloned()).clone())
 }
 
 /// Compiles every variant and target the manifest declares

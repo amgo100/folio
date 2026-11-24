@@ -53,7 +53,8 @@ pub use salsa::Durability;
 
 use crate::component::ComponentHost;
 use crate::diag::{self, Diagnostic, Reported};
-use crate::project::{Lockfile, Manifest, Name, ProjectPath, Spanned};
+use crate::eval::Limits;
+use crate::project::{Date, Lockfile, Manifest, Name, ProjectPath, Spanned};
 
 /// The database that the compile queries run in. The `folio` crate provides
 /// the implementation; each stage extends it when it moves into its own
@@ -88,6 +89,12 @@ pub struct Project {
     /// The components the compiler hosts. [`Durability::HIGH`].
     #[returns(ref)]
     pub components: Registry,
+    /// The date scripts see as `today` when the host sets one, as a command
+    /// line does; otherwise the manifest's `project.today` (SPEC §4.4).
+    /// [`Durability::MEDIUM`].
+    pub today: Option<Date>,
+    /// The limits of evaluation. [`Durability::HIGH`].
+    pub limits: Limits,
 }
 
 /// A content (`.fol`) or stylesheet (`.fsty`) file.
@@ -177,9 +184,9 @@ pub struct Dependency {
 
 /// What the build query ([`build_output`]) produces.
 ///
-/// The stages after parsing (SPEC §2.1) are not wired in yet, so a build
+/// The stages after evaluation (SPEC §2.1) are not wired in yet, so a build
 /// collects its files, checks them, checks its variant and target against
-/// the manifest, and hosts its components.
+/// the manifest, hosts its components, and evaluates its entry file.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct BuildOutput {
     /// The source files the build read, in the order they were found. A
@@ -221,9 +228,10 @@ pub fn data_file(db: &dyn Db, project: Project, path: ProjectPath) -> Option<Dat
 }
 
 /// The files a source names literally: string paths of `#import` and
-/// `#include` in content, and of `@import` in stylesheets. Paths computed by
-/// scripts are found when the file is evaluated, and packages (`@scope/name`)
-/// through the lockfile.
+/// `#include` in content, and of `@import` in stylesheets. These are all the
+/// files it imports or includes, because evaluation accepts only literal
+/// paths there (SPEC §4.4); packages (`@scope/name`) resolve through the
+/// lockfile.
 ///
 /// Spans are numbers in the syntax tree, not offsets, and an incremental
 /// reparse renumbers only the block it reparses. An edit outside the blocks
@@ -364,21 +372,35 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
         check_source(db, file);
     }
     component_host(db, project);
+    check_evaluation(db, project, build.variant(db).clone());
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),
     }
 }
 
+/// Evaluates a variant for its diagnostics. No stage reads the content yet,
+/// so the build depends on this instead of on
+/// [`evaluate`](crate::eval::evaluate), and is not re-run when an edit
+/// changes only the content.
+#[salsa::tracked]
+fn check_evaluation(db: &dyn Db, project: Project, variant: Option<Name>) {
+    crate::eval::evaluate(db, project, variant);
+}
+
 /// Compiles one build: runs [`build_output`] and collects the diagnostics
-/// that it and every query it depends on reported, each query's once.
+/// that it and every query it depends on reported, each query's once. A
+/// diagnostic that two queries report alike, such as a missing imported file
+/// that both the file search and evaluation find, is kept once.
 ///
 /// This is not a query, and must not be called from one: reading
 /// diagnostics is not tracked.
 pub fn compile(db: &dyn Db, build: Build<'_>) -> Compiled {
     let output = build_output(db, build);
+    let mut seen = HashSet::new();
     let diagnostics = build_output::accumulated::<Reported>(db, build)
         .into_iter()
+        .filter(|reported| seen.insert(&reported.0))
         .map(|reported| reported.0.clone())
         .collect();
     Compiled {

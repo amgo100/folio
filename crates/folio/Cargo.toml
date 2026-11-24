@@ -19,5 +19,8 @@ salsa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+semver.workspace = true
+
 [lints]
 workspace = true
