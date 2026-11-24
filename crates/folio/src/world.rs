@@ -638,6 +638,8 @@ pub(crate) struct Database {
     storage: salsa::Storage<Self>,
     /// Shared by every handle of the world.
     text: Arc<folio_core::text::Cache>,
+    /// Shared by every handle of the world.
+    layout: Arc<folio_core::layout::Cache>,
 }
 
 impl Database {
@@ -663,6 +665,7 @@ impl Database {
         Self {
             storage: salsa::Storage::new(callback),
             text: Arc::default(),
+            layout: Arc::default(),
         }
     }
 }
@@ -674,5 +677,9 @@ impl salsa::Database for Database {}
 impl folio_core::db::Db for Database {
     fn text_cache(&self) -> &folio_core::text::Cache {
         &self.text
+    }
+
+    fn layout_cache(&self) -> &folio_core::layout::Cache {
+        &self.layout
     }
 }

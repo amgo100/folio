@@ -513,7 +513,7 @@ heading + paragraph { indent: 0; }
 | Group | Examples | Applies to |
 | --- | --- | --- |
 | Text | `font`, `font-size`, `font-weight`, `font-style`, `tracking`, `features`, `lang`, `color` | Inline and block |
-| Paragraph | `leading`, `indent`, `align`, `justify`, `hyphenate`, `widows`, `orphans`, `grid-snap` | Blocks containing text |
+| Paragraph | `leading`, `indent`, `align`, `justify`, `hyphenate`, `protrusion`, `widows`, `orphans`, `grid-snap` | Blocks containing text |
 | Block | `space-before/after`, `padding`, `border`, `background`, `keep-with-next`, `keep-together`, `break-before`, `breakable`, `trailer` | Blocks |
 | Numbering | `numbering`, `counter-reset`, `marker`, `marker-position`, `ref-format` | Numbered elements |
 | Visibility | `display`, `show-only` (which slots or child elements are shown) | Any element |
@@ -686,11 +686,12 @@ Layout turns the resolved tree into pages of positioned fragments in two levels:
 - Shaping with `harfrust`, script and language itemisation, bidi reordering (UAX #9), break opportunities (UAX #14, with `icu_segmenter`, which also handles scripts written without spaces), and hyphenation patterns per language.
 - A paragraph runs in the direction of its first strongly directional character, or of its language when it has none. A closing bracket takes the script of its opening bracket (UAX #24).
 - `hyphenate: auto` hyphenates justified paragraphs. A word with a soft hyphen is hyphenated only there.
-- **Line breaking** uses the Knuth–Plass total-fit algorithm with line widths given per line index. Where the shape depends on vertical position (text wrap, §7.7), leading is fixed so that the line index determines the position; a line taller than the leading, such as one with tall inline math, triggers a re-break with the shape recomputed from that line.
+- **Line breaking** uses the Knuth–Plass total-fit algorithm with line widths given per line index. Where the shape depends on vertical position (text wrap, §7.7), lines are a fixed distance apart so that the line index determines the position; a line taller than that distance, such as one with tall inline math, triggers a re-break with the shape recomputed from that line.
+- **Leading** is the space between one line's descent and the next line's ascent. A line's ascent and descent are the largest of the fonts on it, at their sizes.
 - Knuth–Plass takes well under a millisecond for ordinary paragraphs. Only a paragraph that exceeds 5 ms is broken greedily while typing, and gets the optimal result once the editor is idle.
 - **Language rules**: hyphenation, quotation marks and line-end rules per language. In Polish, single-letter words (a, i, o, u, w, z and their capitals) are never left at the end of a line; a non-breaking space is inserted automatically. A Polish line that ends at an explicit hyphen repeats the hyphen at the start of the next line.
 - **Quotation marks**: markup's `"` and `'` become the language's double and single marks (“…” and ‘…’ in English, „…” and ‚…’ in Polish). A mark opens at the start of text, after a space, or after an opening bracket, dash or mark, and closes otherwise; `'` between two letters is an apostrophe.
-- Character protrusion (hanging punctuation) is optional.
+- Character protrusion (hanging punctuation) is optional: with `protrusion: true`, punctuation and hyphens at the ends of lines hang into the margin by part of their width.
 - Widow and orphan control, `keep-with-next`, `keep-together` and break penalties are costs, not hard rules, so an impossible constraint produces the least-bad page and a warning rather than an overfull page.
 
 ### 7.3 Baseline grid
@@ -698,7 +699,7 @@ Layout turns the resolved tree into pages of positioned fragments in two levels:
 Body text sits on a baseline grid, so lines are at the same heights on every page, across columns, and through the sheet when printed double-sided.
 
 - `page { baseline-grid: 13pt; grid-offset: 0; }` defines the grid for the body; margin columns share it, so margin notes align with body lines.
-- Body paragraphs snap every baseline to the grid (`grid-snap: lines`, the default when a grid is set); their leading equals the grid.
+- Body paragraphs snap every baseline to the grid (`grid-snap: lines`, the default when a grid is set); their baselines are one grid line apart, whatever the leading.
 - Blocks that are not a whole number of grid lines tall (headings, display math, figures, tables, spaced lists) snap as a block (`grid-snap: block`): the space after them grows so that the next body line lands on the grid; `grid-snap-align: below | above | centre` decides where the excess goes.
 - Multi-line headings can use a finer grid (`grid-snap: 1/2`); footnotes and margin notes can use a secondary grid (`footnote-grid: 10pt`).
 - Layout containers receive the grid with their regions, so column sets keep baselines aligned (§13.2).

@@ -58,6 +58,12 @@ pub struct TextParagraph {
     /// The paragraph shaped, shared with every build and revision that has
     /// an equal paragraph.
     pub shaped: Arc<Shaped>,
+    /// The style of the element (or the part of one) whose content the
+    /// paragraph is: its paragraph properties (`leading`, `indent`,
+    /// `align`, `justify`) are the paragraph's.
+    pub style: ComputedStyle,
+    /// The element whose content the paragraph is.
+    pub span: Span,
     /// For each segment of the paragraph ([`Paragraph::segments`]), the
     /// style its text is set in and its face.
     pub segments: EcoVec<SegmentStyle>,
@@ -120,6 +126,8 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
         .zip(shaped)
         .map(|(p, shaped)| TextParagraph {
             shaped,
+            style: p.style,
+            span: p.span,
             segments: p.segments,
             sources: p.sources,
         })
@@ -130,6 +138,8 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
 /// A paragraph made, before shaping.
 struct Pending {
     paragraph: Paragraph,
+    style: ComputedStyle,
+    span: Span,
     segments: EcoVec<SegmentStyle>,
     sources: EcoVec<TextSource>,
 }
@@ -191,7 +201,7 @@ impl Collector<'_> {
         if let Some(text) = raw_text(element) {
             let mut builder = Builder::default();
             builder.push(&text, &node.style, Some(element.span));
-            self.finish(builder);
+            self.finish(builder, &node.style, element.span);
             return;
         }
         // The body and the parts, in the order of the element's fields, as
@@ -243,7 +253,7 @@ impl Collector<'_> {
         let mut builder = Builder::default();
         let mut anchored = Vec::new();
         self.inline(content, style, span, kids, &mut builder, &mut anchored);
-        self.finish(builder);
+        self.finish(builder, style, span);
         for (element, node) in anchored {
             self.element(element, node);
         }
@@ -335,7 +345,8 @@ impl Collector<'_> {
     }
 
     /// Turns a collected paragraph into segments, with fonts by fallback.
-    fn finish(&mut self, mut builder: Builder) {
+    /// `style` and `span` are those of the element whose content it is.
+    fn finish(&mut self, mut builder: Builder, style: &ComputedStyle, span: Span) {
         builder.flush_quote(None);
         if builder.text.is_empty() {
             return;
@@ -383,6 +394,8 @@ impl Collector<'_> {
                 text: builder.text.as_str().into(),
                 segments,
             },
+            style: style.clone(),
+            span,
             segments: styles,
             sources: builder.sources.into_iter().collect(),
         });
