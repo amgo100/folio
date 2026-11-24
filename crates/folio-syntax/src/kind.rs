@@ -240,6 +240,14 @@ pub enum SyntaxKind {
     Numeric,
     /// A quoted string: `"..."`.
     Str,
+    /// A token name in a stylesheet: `$accent`.
+    TokenName,
+    /// A hexadecimal colour in a stylesheet: `#1f5fa8`.
+    Color,
+    /// An aspect ratio in a stylesheet: `16:9`.
+    Ratio,
+    /// The label of an id selector, without its braces: `fig:ball`.
+    LabelName,
     /// A code block: `{ let x = 1; x + 2 }`.
     CodeBlock,
     /// A content block: `[*Hi* there!]`.
@@ -312,16 +320,67 @@ pub enum SyntaxKind {
     SchemaEntry,
     /// A scoped rule: `rule question { numbering: "(a)"; }`.
     ScopedRule,
-    /// A variant or target scope of a scoped rule: `@target pptx`,
-    /// `@variant slides, handout`.
+    /// A variant or target scope of a scoped rule or an overlay:
+    /// `@target pptx`, `@variant slides, handout`.
     RuleScope,
-    /// The selector of a scoped rule, kept as a token sequence: `question`,
-    /// `heading[level=1]`, `question > answer`.
-    Selector,
-    /// The declaration block of a scoped rule: `{ numbering: "(a)"; }`.
+    /// A declaration block: `{ numbering: "(a)"; }`.
     RuleBlock,
-    /// A declaration in a scoped rule: `numbering: "(a)";`.
+    /// A declaration: `numbering: "(a)";`, `margin-column: outer, width 32mm;`.
     Declaration,
+
+    /// The contents of a stylesheet file.
+    Stylesheet,
+    /// A stylesheet import: `@import "school-base.fsty";`.
+    StyleImport,
+    /// A token definition: `$accent: #1f5fa8;`.
+    TokenDecl,
+    /// A style rule: `heading + paragraph { indent: 0; }`.
+    StyleRule,
+    /// A variant or target overlay: `@variant markscheme { .. }`.
+    Overlay,
+    /// The rules of an overlay: `{ answer { display: block; } }`.
+    OverlayBody,
+    /// An export block: `@export theme { accent1: $accent; }`.
+    ExportBlock,
+    /// A render template: `render example as compact { body: slot(statement); }`.
+    RenderBlock,
+    /// A slide master: `slide-master "Akademeia" { .. }`.
+    SlideMaster,
+    /// The body of a slide master, with declarations and placeholder rules.
+    MasterBlock,
+    /// A placeholder rule in a slide master: `title { font-size: 32pt; }`.
+    PlaceholderRule,
+    /// A slide layout: `slide-layout "Title and Content" { .. }`.
+    SlideLayout,
+    /// A comma-separated list of selectors: `series.answer, fit`.
+    SelectorList,
+    /// A selector: compound selectors joined by combinators, such as
+    /// `question answer`, `list > item` or `heading + paragraph`.
+    Selector,
+    /// A compound selector: `heading[level=1]:first`, `.hard`, `#{fig:ball}`.
+    CompoundSelector,
+    /// A class selector: `.hard`.
+    ClassSelector,
+    /// An id selector: `#{fig:ball}`.
+    IdSelector,
+    /// An attribute test: `[level=1]`, `[marks>3]`.
+    AttrSelector,
+    /// A pseudo-class: `:first`, `:nth(2)`, `:has(answer)`, `:step(2-)`.
+    PseudoClass,
+    /// The argument list of a pseudo-class: `(2)`, `(answer)`, `(1,3-4)`.
+    PseudoArgs,
+    /// A step specification: `2-4`, `2-`, `-3`, `1,3-4`.
+    StepSpec,
+    /// A step or a range of steps in a step specification: `3`, `2-4`, `2-`.
+    StepRange,
+    /// A block of template items: `{ ": " field(title) }`.
+    TemplateBlock,
+    /// Several items written one after another in a template argument:
+    /// `term() " " counter()`.
+    Sequence,
+    /// A template item shown only if a condition holds:
+    /// `badge(field(difficulty)) if field(difficulty) == "extension"`.
+    Guarded,
 }
 
 impl SyntaxKind {
@@ -550,9 +609,37 @@ impl SyntaxKind {
             Self::SchemaEntry => "element body entry",
             Self::ScopedRule => "scoped rule",
             Self::RuleScope => "rule scope",
-            Self::Selector => "selector",
             Self::RuleBlock => "declaration block",
             Self::Declaration => "declaration",
+            Self::TokenName => "token name",
+            Self::Color => "colour",
+            Self::Ratio => "ratio",
+            Self::LabelName => "label name",
+            Self::Stylesheet => "stylesheet",
+            Self::StyleImport => "stylesheet import",
+            Self::TokenDecl => "token definition",
+            Self::StyleRule => "style rule",
+            Self::Overlay => "overlay",
+            Self::OverlayBody => "overlay body",
+            Self::ExportBlock => "export block",
+            Self::RenderBlock => "render template",
+            Self::SlideMaster => "slide master",
+            Self::MasterBlock => "slide master body",
+            Self::PlaceholderRule => "placeholder rule",
+            Self::SlideLayout => "slide layout",
+            Self::SelectorList => "selector list",
+            Self::Selector => "selector",
+            Self::CompoundSelector => "compound selector",
+            Self::ClassSelector => "class selector",
+            Self::IdSelector => "id selector",
+            Self::AttrSelector => "attribute test",
+            Self::PseudoClass => "pseudo-class",
+            Self::PseudoArgs => "pseudo-class arguments",
+            Self::StepSpec => "step specification",
+            Self::StepRange => "step range",
+            Self::TemplateBlock => "template block",
+            Self::Sequence => "sequence",
+            Self::Guarded => "guarded item",
         }
     }
 }
@@ -760,9 +847,37 @@ impl SyntaxKind {
             Self::SchemaEntry => Known(Code),
             Self::ScopedRule => Known(Code),
             Self::RuleScope => Known(Code),
-            Self::Selector => Known(Code),
             Self::RuleBlock => Known(Code),
             Self::Declaration => Known(Code),
+            Self::TokenName => Known(Code),
+            Self::Color => Known(Code),
+            Self::Ratio => Known(Code),
+            Self::LabelName => Known(Code),
+            Self::Stylesheet => Known(Code),
+            Self::StyleImport => Known(Code),
+            Self::TokenDecl => Known(Code),
+            Self::StyleRule => Known(Code),
+            Self::Overlay => Known(Code),
+            Self::OverlayBody => Known(Code),
+            Self::ExportBlock => Known(Code),
+            Self::RenderBlock => Known(Code),
+            Self::SlideMaster => Known(Code),
+            Self::MasterBlock => Known(Code),
+            Self::PlaceholderRule => Known(Code),
+            Self::SlideLayout => Known(Code),
+            Self::SelectorList => Known(Code),
+            Self::Selector => Known(Code),
+            Self::CompoundSelector => Known(Code),
+            Self::ClassSelector => Known(Code),
+            Self::IdSelector => Known(Code),
+            Self::AttrSelector => Known(Code),
+            Self::PseudoClass => Known(Code),
+            Self::PseudoArgs => Known(Code),
+            Self::StepSpec => Known(Code),
+            Self::StepRange => Known(Code),
+            Self::TemplateBlock => Known(Code),
+            Self::Sequence => Known(Code),
+            Self::Guarded => Known(Code),
         }
     }
 }

@@ -1,0 +1,18 @@
+// exam.fsty
+answer { display: answer-space; }
+mark   { display: none; }
+
+@variant markscheme {
+  answer   { display: block; template: markscheme-box; }
+  mark     { display: inline; template: badge; }
+  question { show-only: answer mark; }          // stem condensed, answers prominent
+}
+
+@variant exam, markscheme {
+  $accent: #000;
+  answer:has(mark) { answer-scale: 1.5; display: placeholder("Solution in the mark scheme"); }
+}
+
+@target docx {
+  @variant markscheme { mark { export-name: "Mark"; } }
+}

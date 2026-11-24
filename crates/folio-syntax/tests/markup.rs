@@ -512,7 +512,7 @@ fn scoped_rule() {
     let root = root(text);
     let rule: ast::ScopedRule<'_> = first(&root);
     assert_eq!(rule.scopes().count(), 0);
-    assert_eq!(rule.selector().text(), "question");
+    assert_eq!(rule.selectors().to_untyped().full_text(), "question");
     let declarations: Vec<_> = rule.declarations().collect();
     assert_eq!(declarations.len(), 1);
     assert_eq!(declarations[0].property().as_str(), "numbering");
@@ -550,7 +550,10 @@ fn scoped_rule_with_scopes_and_compound_selector() {
             ),
         ]
     );
-    assert_eq!(rule.selector().text(), "heading[level=1] > answer:first");
+    assert_eq!(
+        rule.selectors().to_untyped().full_text(),
+        "heading[level=1] > answer:first"
+    );
     let properties: Vec<_> = rule
         .declarations()
         .map(|decl| decl.property().as_str().to_string())
@@ -580,7 +583,11 @@ fn scoped_rule_with_other_selectors() {
         ok(text);
         let root = root(text);
         let rule: ast::ScopedRule<'_> = first(&root);
-        assert_eq!(rule.selector().text(), selector, "{text}");
+        assert_eq!(
+            rule.selectors().to_untyped().full_text(),
+            selector,
+            "{text}"
+        );
         assert_eq!(rule.declarations().count(), 1, "{text}");
     }
 }
@@ -609,7 +616,7 @@ fn scoped_rule_errors() {
     );
     assert_eq!(
         errors("#rule question { numbering \"(a)\"; }"),
-        ["expected colon", "unexpected string"]
+        ["expected colon"]
     );
     // A missing semicolon before a new line is reported, and the next
     // declaration still parses.

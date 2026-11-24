@@ -4,7 +4,10 @@
 
 use std::ops::Range;
 
-use crate::{Span, SyntaxKind, SyntaxNode, is_newline, parse, reparse_block, reparse_markup};
+use crate::{
+    Span, SyntaxKind, SyntaxNode, is_newline, parse, parse_stylesheet, reparse_block,
+    reparse_markup, reparse_style_block, reparse_stylesheet_items,
+};
 
 /// Refresh the given syntax node with as little parsing as possible.
 ///
@@ -20,9 +23,14 @@ pub(crate) fn reparse(
     replaced: Range<usize>,
     replacement_len: usize,
 ) -> Range<usize> {
-    try_reparse(text, replaced, replacement_len, None, root, 0).unwrap_or_else(|| {
+    let style = root.kind() == SyntaxKind::Stylesheet;
+    try_reparse(text, replaced, replacement_len, None, root, 0, style).unwrap_or_else(|| {
         let id = root.span().id();
-        *root = parse(text);
+        *root = if style {
+            parse_stylesheet(text)
+        } else {
+            parse(text)
+        };
         if let Some(id) = id {
             root.numberize(id, Span::FULL).unwrap();
         }
@@ -54,6 +62,12 @@ pub(crate) fn reparse(
 /// We also do not currently reparse math in any capacity, but it would not be
 /// too difficult to include equations as another kind of block, or reparse math
 /// expressions similarly to markup expressions.
+///
+/// Folio adds stylesheets: the innermost declaration block, slide master body
+/// or overlay body around an edit is reparsed, or else a range of top-level
+/// items. Declaration blocks of scoped rules in content are reparsed the same
+/// way. `style` tells whether the contents of `node` are lexed as a stylesheet:
+/// true below a stylesheet's root, except inside code and content blocks.
 fn try_reparse(
     text: &str,
     replaced: Range<usize>,
@@ -61,6 +75,7 @@ fn try_reparse(
     parent_kind: Option<SyntaxKind>,
     node: &mut SyntaxNode,
     offset: usize,
+    style: bool,
 ) -> Option<Range<usize>> {
     let (overlap, start_offset) = overlapping_children(node, replaced.clone(), offset)?;
 
@@ -87,6 +102,7 @@ fn try_reparse(
             Some(node_kind),
             child,
             start_offset,
+            style && !child.kind().is_block(),
         ) {
             // A lower level reparse succeeded! Update this node and return the
             // reparsed range.
@@ -98,9 +114,14 @@ fn try_reparse(
 
         // This is the innermost block which fully surrounds the text (and
         // hasn't failed at reparsing yet), reparse!
-        if child.kind().is_block()
-            && let Some(reparsed) = reparse_block(text, new_range.clone())
-        {
+        let reparsed = match child.kind() {
+            kind if kind.is_block() => reparse_block(text, new_range.clone()),
+            kind @ (SyntaxKind::RuleBlock | SyntaxKind::MasterBlock | SyntaxKind::OverlayBody) => {
+                reparse_style_block(text, new_range.clone(), kind, style)
+            }
+            _ => None,
+        };
+        if let Some(reparsed) = reparsed {
             // Reparsing succeeded, but we can still fail if we're out of span
             // numbers to assign to nodes (this is rare).
             return node
@@ -110,7 +131,9 @@ fn try_reparse(
         }
     }
 
-    if node_kind == SyntaxKind::Markup
+    if node_kind == SyntaxKind::Stylesheet && parent_kind.is_none() {
+        expand_and_reparse_stylesheet(text, replaced, replacement_len, node, overlap, offset)
+    } else if node_kind == SyntaxKind::Markup
         && matches!(parent_kind, None | Some(SyntaxKind::ContentBlock))
     {
         expand_and_reparse_markup(
@@ -233,6 +256,76 @@ fn expand_and_reparse_markup(
     }
 
     None
+}
+
+/// Reparse a range of top-level stylesheet items, expanding the range
+/// exponentially on each iteration. Items are delimited by their own braces
+/// and semicolons, so no state carries over from one item to the next.
+fn expand_and_reparse_stylesheet(
+    text: &str,
+    replaced: Range<usize>,
+    replacement_len: usize,
+    node: &mut SyntaxNode,
+    overlap: Range<usize>,
+    offset: usize,
+) -> Option<Range<usize>> {
+    let children = node.children().as_slice();
+    let mut expansion = 1;
+    loop {
+        let mut start = overlap.start.saturating_sub(expansion);
+        let mut end = (overlap.end + expansion).min(children.len());
+
+        // The reparse must start after an item that is closed by its own `}`
+        // or `;`. An unclosed one, such as a token definition without its
+        // semicolon, could have taken in the edited text.
+        while start > 0 {
+            let prev = &children[start - 1];
+            if prev.kind().is_trivia()
+                || prev.diagnosis().errors
+                || !matches!(last_leaf_text(prev), "}" | ";")
+            {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+
+        // The reparse must stop at the start of an item, after the trivia
+        // and errors that precede it.
+        while end < children.len()
+            && (children[end].kind().is_trivia() || children[end].kind().is_error())
+        {
+            end += 1;
+        }
+
+        let prefix_len: usize = children[..start].iter().map(SyntaxNode::len).sum();
+        let prev_len: usize = children[start..end].iter().map(SyntaxNode::len).sum();
+        let shifted = offset + prefix_len;
+        let new_len = prev_len + replacement_len - replaced.len();
+        let new_range = shifted..shifted + new_len;
+        let at_end = end == children.len();
+
+        if let Some(newborns) = reparse_stylesheet_items(text, new_range.clone()) {
+            return node
+                .replace_children(start..end, newborns)
+                .is_ok()
+                .then_some(new_range);
+        }
+
+        if start == 0 && at_end {
+            break;
+        }
+        expansion *= 2;
+    }
+    None
+}
+
+/// The text of the last non-empty leaf of a node.
+fn last_leaf_text(node: &SyntaxNode) -> &str {
+    match node.children().rev().find(|child| !child.is_empty()) {
+        Some(child) => last_leaf_text(child),
+        None => node.leaf_text(),
+    }
 }
 
 /// The indices and start offset of the children which overlap a replaced range.

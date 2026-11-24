@@ -276,6 +276,10 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::Float => Some(Tag::Number),
         SyntaxKind::Numeric => Some(Tag::Number),
         SyntaxKind::Str => Some(Tag::String),
+        SyntaxKind::TokenName => Some(Tag::Interpolated),
+        SyntaxKind::Color => Some(Tag::Number),
+        SyntaxKind::Ratio => Some(Tag::Number),
+        SyntaxKind::LabelName => Some(Tag::Label),
         SyntaxKind::CodeBlock => None,
         SyntaxKind::ContentBlock => None,
         SyntaxKind::Parenthesized => None,
@@ -312,9 +316,33 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::SchemaEntry => None,
         SyntaxKind::ScopedRule => None,
         SyntaxKind::RuleScope => None,
-        SyntaxKind::Selector => None,
         SyntaxKind::RuleBlock => None,
         SyntaxKind::Declaration => None,
+        SyntaxKind::Stylesheet => None,
+        SyntaxKind::StyleImport => None,
+        SyntaxKind::TokenDecl => None,
+        SyntaxKind::StyleRule => None,
+        SyntaxKind::Overlay => None,
+        SyntaxKind::OverlayBody => None,
+        SyntaxKind::ExportBlock => None,
+        SyntaxKind::RenderBlock => None,
+        SyntaxKind::SlideMaster => None,
+        SyntaxKind::MasterBlock => None,
+        SyntaxKind::PlaceholderRule => None,
+        SyntaxKind::SlideLayout => None,
+        SyntaxKind::SelectorList => None,
+        SyntaxKind::Selector => None,
+        SyntaxKind::CompoundSelector => None,
+        SyntaxKind::ClassSelector => None,
+        SyntaxKind::IdSelector => Some(Tag::Label),
+        SyntaxKind::AttrSelector => None,
+        SyntaxKind::PseudoClass => None,
+        SyntaxKind::PseudoArgs => None,
+        SyntaxKind::StepSpec => None,
+        SyntaxKind::StepRange => None,
+        SyntaxKind::TemplateBlock => None,
+        SyntaxKind::Sequence => None,
+        SyntaxKind::Guarded => None,
 
         SyntaxKind::Shebang => Some(Tag::Comment),
         SyntaxKind::LineComment => Some(Tag::Comment),
@@ -326,6 +354,21 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
 
 /// Highlight an identifier based on context.
 fn highlight_ident(node: &LinkedNode<'_>) -> Option<Tag> {
+    // The name of an at-rule (`@import`, `@variant`) and the words that start
+    // render templates, slide masters and slide layouts are keywords.
+    if (node.prev_sibling_kind() == Some(SyntaxKind::At)
+        && matches!(
+            node.parent_kind(),
+            Some(SyntaxKind::RuleScope | SyntaxKind::StyleImport | SyntaxKind::ExportBlock)
+        ))
+        || (matches!(
+            node.parent_kind(),
+            Some(SyntaxKind::RenderBlock | SyntaxKind::SlideMaster | SyntaxKind::SlideLayout)
+        ) && node.prev_sibling().is_none())
+    {
+        return Some(Tag::Keyword);
+    }
+
     // Are we directly before an argument list?
     let next_leaf = node.next_leaf();
     if let Some(next) = &next_leaf

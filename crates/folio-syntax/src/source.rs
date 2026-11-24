@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::lines::Lines;
 use crate::reparser::reparse;
-use crate::{FileId, LinkedNode, Span, SpanNumber, SubRange, SyntaxNode, parse};
+use crate::{FileId, LinkedNode, Span, SpanNumber, SubRange, SyntaxNode, parse, parse_stylesheet};
 
 /// A Folio source file containing the full source text, a mapping from byte
 /// indices to lines/columns, and the parsed syntax tree.
@@ -47,6 +47,24 @@ impl Source {
     /// Its id is [`FileId::DETACHED`].
     pub fn detached(text: impl Into<String>) -> Self {
         Self::new(FileId::DETACHED, text.into())
+    }
+
+    /// Create a new stylesheet (`.fsty`) source file. Edits reparse it as a
+    /// stylesheet.
+    pub fn stylesheet(id: FileId, text: String) -> Self {
+        let mut root = parse_stylesheet(&text);
+        root.numberize(id, Span::FULL).unwrap();
+        Self(Arc::new(SourceInner {
+            id,
+            lines: Lines::new(text),
+            root,
+        }))
+    }
+
+    /// Create a stylesheet source file that belongs to no project, usually
+    /// for testing. Its id is [`FileId::DETACHED`].
+    pub fn detached_stylesheet(text: impl Into<String>) -> Self {
+        Self::stylesheet(FileId::DETACHED, text.into())
     }
 
     /// Create a new source file with an already created syntax tree.

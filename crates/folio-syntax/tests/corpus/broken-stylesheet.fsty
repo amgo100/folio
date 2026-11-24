@@ -1,0 +1,28 @@
+@import "base.fsty"
+@bogus thing { a: 1; }
+$accent #1f5fa8;
+$warn: #12345g;
+heading ~ paragraph { indent: 0; }
+question:has(part answer) { a: 1; }
+question:has(part:has(answer)) { a: 1; }
+answer:step(4-2) { a: 1; }
+answer:step(+-) { a: 1; }
+answer:nth { a: 1; }
+answer:first(2) { a: 1; }
+answer:not(.x) { a: 1; }
+question { color: red !important; }
+question { numbering "(a)"; }
+question {
+  a: 1
+  b: 2;
+}
+question { title { a: 1; } }
+heading[level=1 { a: 1; }
+#{fig:ball.x} { width: 40%; }
+#{} { width: 40%; }
+@variant markscheme { @import "x.fsty"; }
+render example { header: row(if x); }
+}
+question { a: (1 + ; }
+heading[level==1] { a: 1; }
+answer {
