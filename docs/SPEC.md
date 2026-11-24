@@ -703,7 +703,7 @@ Body text sits on a baseline grid, so lines are at the same heights on every pag
 - Multi-line headings can use a finer grid (`grid-snap: 1/2`); footnotes and margin notes can use a secondary grid (`footnote-grid: 10pt`).
 - Layout containers receive the grid with their regions, so column sets keep baselines aligned (§13.2).
 - The preview and editor offer an overlay that shows the grid and highlights off-grid lines.
-- DOCX approximates the grid with Word's document grid and exact line spacing; PPTX ignores it.
+- DOCX approximates the grid with exact line spacing equal to the grid for grid-snapped lines, and pads every block to a whole number of grid lines: the excess of `grid-snap: block` becomes space before and after the block, split as `grid-snap-align` places it. Word does not snap back to the grid after an off-grid block, and its document grid (`w:docGrid`) does not move lines with exact spacing, so the padding carries the grid. Word drops space before at the top of a page, so a block that starts a page loses any excess above it, and the lines after it are off the grid until the next page; with `grid-snap-align: below` this cannot happen. Elsewhere baselines match Folio's where Word breaks lines as Folio does; where it does not, a block's height changes and the following lines are off the grid until the next page (§16.2). PPTX ignores the grid.
 
 ### 7.4 Tables
 
@@ -924,7 +924,7 @@ A drawing can depend on a time parameter, passed as a function argument in code 
 
 - **Starts**: `on-step(n)`; `on-click`, a click on the element itself (not the click or key that advances steps); `on(<label>)`, when the labelled button is pressed; or `manual`, from the presenter view or the start key (§10.5); pausing is separate, by the pause key. The core evaluates every start condition and delivers a single `Triggered(cause)` event (§10.5). `#animate` and dynamic elements accept `retrigger: restart | ignore` (default `restart`) for what a repeated trigger does.
 - **Live**: drawn at the display frame rate. Parts that do not depend on `t` are memoised. A browser client of `folio present` receives the animated group once, with either a table of sampled positions or the compiled time function, so the server sends only events, never frames.
-- **PPTX**: a pure translation becomes a motion path, which reproduces the path but moves at uniform speed along it; chaining several path segments with their own durations can approximate the physical timing (§16.2). Anything else shows its final state.
+- **PPTX**: a pure translation becomes motion paths. PowerPoint moves a shape along a path at a uniform speed measured in fractions of the slide's width and height, not in points, so a single path reproduces the trajectory but not its timing. The writer splits the motion into segments of equal duration, chained with "after previous", each written relative to the shape's original position. Because PowerPoint's motion is predictable, it uses the fewest segments that keep the shape within 1pt of its true position throughout. The deviation falls with the square of the number of segments: a projectile across two thirds of a 16:9 slide needs 16 (§16.2). Anything else shows its final state.
 - **PDF**: the final state.
 - Animation whose parameters come from inputs must sit inside a live region (§10.6).
 
@@ -939,7 +939,7 @@ A drawing can depend on a time parameter, passed as a function argument in code 
 | Continuous animation | Final state | Motion path or final state | Real time |
 | Dynamic elements and inputs | Static fallback and sample pages (§10.5, §10.6) | Static fallback and sample slides | Live |
 
-**PowerPoint mapping.** PowerPoint animates whole shapes or whole paragraphs, and shows and hides objects without reflow. Two steps have the same layout when every box present in both has the same position and size; boxes that only appear or disappear become native entrance and exit effects. For each step change the writer uses, in order: a native effect on a whole shape or paragraph, including PowerPoint's colour-change emphasis effects; for a paint change with no native effect (such as stroke width or dash), a swap between two copies of the shape, the old one exiting as the new one enters; and otherwise a split into consecutive slides that look like one animated slide. Steps on part of a paragraph, and steps that move or resize boxes present in both, therefore split.
+**PowerPoint mapping.** PowerPoint animates whole shapes or whole paragraphs, and shows and hides objects without reflow. Two steps have the same layout when every box present in both has the same position and size; boxes that only appear or disappear become native entrance and exit effects. For each step change the writer uses, in order: a native effect on a whole shape or paragraph, including PowerPoint's colour-change emphasis effects; for a paint change with no native effect (such as stroke width or dash), a swap between two copies of the shape, the old one exiting as the new one enters; and otherwise a split into consecutive slides that look like one animated slide. Steps on part of a paragraph, and steps that move or resize boxes present in both, therefore split. Graphics reach PPTX as pictures (§9.4), so a paint change inside a drawing, such as `stroke-color` on one arrow, is a swap between two pictures of the whole drawing, not a colour-change effect.
 
 ### 10.5 Live renderer and dynamic components
 
@@ -1062,8 +1062,8 @@ Styling goes into `styles.xml`, `numbering.xml` and the theme; body content carr
 | Folio concept | DOCX representation |
 | --- | --- |
 | Text defaults and tokens | `docDefaults`; tokens mapped explicitly to the theme's 12 colour slots and 2 fonts (`@export theme { accent1: $accent; major-font: $heading-font; }`) |
-| Headings, questions, lists | Multi-level lists in `numbering.xml`, linked to their styles. Where a numbering group leaves gaps (Question 4 after Question 2 in the exam), the writer starts a new list instance with a start override (`w:startOverride`) at each gap, so numbers match Folio's at export; items inserted later in Word do not renumber across a gap. The paragraph-level numbering reference this needs is direct formatting and is listed in the export report |
-| Figure, table and equation numbers | `SEQ` fields (with a chapter switch for numbers such as Figure 2.1), with a reset switch (`\r n`) at each gap |
+| Headings, questions, lists | Multi-level lists in `numbering.xml`, linked to their styles. Where a numbering group leaves gaps (Question 4 after Question 2 in the exam), the writer starts a new list instance (`w:num`) at each gap, with a start override (`w:startOverride`) for the gapped level and every level above it, so numbers match Folio's at export. A start override holds for its whole instance, so the instance that follows a gap in a lower level (part 4(c) after 4(a)) ends at the next item of a higher level, which starts another instance. An item inserted later in Word at the end of an instance continues it without renumbering across the gap; one inserted at the start of the instance after a gap takes that instance's start number and shifts the rest. The paragraph-level numbering reference this needs is direct formatting and is listed in the export report |
+| Figure, table and equation numbers | `SEQ` fields. Numbers such as Figure 2.1 are a `STYLEREF` field to the numbered heading level followed by `SEQ` with a chapter switch (`\s 1`), which restarts at each such heading. Each gap adds a reset switch (`\r n`) |
 | Page masters | Sections with page size, margins, and first, odd and even headers and footers |
 | Tables | Tables with named table styles; header rows repeat |
 | Floats | Anchored drawings positioned relative to the margin |
@@ -1249,7 +1249,7 @@ glossary        { columns: 3; }
 - **Balancing**: within a set the column width is constant, so lines are broken once and balancing works on the vertical list of lines, glue and penalties. The balancer binary-searches the smallest height *h* at which the material fits into *n* columns, between total height ÷ *n* and the region height, then scores candidate heights within one line of the minimum by break cost (widows, orphans, keeps, a heading at a column foot) and takes the cheapest. With a baseline grid, *h* is quantised to grid lines. Footnotes pulled onto the page are negotiated with the core at each candidate height (§3.3).
 - **Floats and notes**: column floats sit at the top or bottom of one column and count toward its height; spanning floats run across all columns and split the set into segments. Notes from the leftmost column go to the left margin and from the rightmost to the right margin when both have note columns; otherwise to the configured side. `footnote-columns: per-column` asks the core for a footnote area under each column.
 - **State**: the resume state records the segment and the column reached, so a column set takes part in incremental layout like any page.
-- **Targets**: DOCX uses continuous section breaks with `w:cols`, which Word balances before a continuous break; a set at the end of the document gets an extra continuous section. PPTX sets `numCol` on the text body.
+- **Targets**: DOCX uses continuous section breaks with `w:cols`, which Word balances before a continuous break; a set at the end of the document gets an extra continuous section. Word balances by its own line breaks and keeps widow, orphan and keep settings, so its columns can differ by a few lines from Folio's (§16.2). PPTX sets `numCol` on the text body.
 - Unequal column widths are planned; the container interface already accepts a width per column.
 
 ### 13.3 Plot
@@ -1413,18 +1413,24 @@ A first usable release (exam and mark scheme to PDF, with math, variants and liv
 
 | Assumption | Section | Verification |
 | --- | --- | --- |
-| Word balances columns before a continuous section break | §13.2 | Test in current Word versions |
-| Word's document grid with exact line spacing approximates a baseline grid acceptably | §7.3 | Compare with Folio's PDF |
-| New list instances with start overrides, and `SEQ` resets with a chapter switch, reproduce gapped numbering at export | §11.2 | Open test files in Word |
-| OMML inside `a14:m` renders in PowerPoint 2010 and later; LibreOffice and Keynote fall back to the image | §8.3 | Open test decks in each |
-| PowerPoint build sequences, colour-change effects, paragraph-level effects, motion paths and simultaneous shape swaps cover the effect vocabulary of §10.2 | §10.4 | Round-trip test decks |
-| Chained motion-path segments approximate physical timing acceptably | §10.3 | Test decks |
+| LibreOffice and Keynote show the image fallback of OMML inside `a14:m` (or render the OMML) | §8.3 | Open `tests/office/pptx/math-a14.pptx` in each |
 | PDF viewers used in classrooms honour page transitions | §10.4 | Test common viewers |
 | PDF 2.0 MathML structure elements are usable; MathML attachments need PDF/A-4f | §8.3, §11.1 | Check ISO 19005-4; validate with veraPDF |
 | `harfrust`, `icu_segmenter`, `salsa`, `lsp-server` and `krilla` stay maintained | §2.2 | Review at each milestone |
 | `krilla` embeds PDF figures as form XObjects | §11.1 | Prototype in M0 |
 | `krilla` supports PDF/UA-2 by M10 | §11.1 | Check krilla's releases before M10 |
 | Typst's math layout can be adapted to Folio's math tree without Typst's content model | §8.2 | Prototype in M1 |
+
+The Office assumptions below were verified in M0 with hand-written files opened in Word and PowerPoint 16.0 (Microsoft 365, build 20527). The files, the scripts that measure them and the measurements are in `tests/office`.
+
+| Verified assumption | Section | Result |
+| --- | --- | --- |
+| Word balances columns before a continuous section break | §13.2 | Confirmed, mid-page, on the last page of a set that crosses pages, and with three columns. Word balances by its own line breaks and keeps widow and orphan control, so columns can differ by a few lines. A set at the end of the document stays unbalanced without the extra section |
+| Exact line spacing approximates a baseline grid in Word | §7.3 | Confirmed when every block is a whole number of grid lines; Word's document grid adds nothing under exact spacing and does not snap back after an off-grid block, so §7.3 pads blocks instead |
+| Start overrides and `SEQ` resets reproduce gapped numbering | §11.2 | Confirmed, before and after a field update, with the instance boundaries of §11.2: a start override holds for its whole instance, so a gap in a lower level also ends the instance at the next higher-level item |
+| OMML inside `a14:m` renders in PowerPoint | §8.3 | Confirmed for display and inline equations, and kept on save; versions before Microsoft 365 were not available to test |
+| PowerPoint covers the effect vocabulary of §10.2 | §10.4 | Confirmed: every entrance, exit and emphasis effect, paragraph-level effects, a motion path, and simultaneous swaps of shapes and of pictures read back as native effects and survive a save |
+| Chained motion paths approximate physical timing | §10.3 | Confirmed: PowerPoint moves at a uniform speed in fractions of the slide's width and height, so the writer can predict the deviation; it falls with the square of the number of segments |
 
 ## Appendix A. Why the stylesheet language is a CSS-like hybrid
 
