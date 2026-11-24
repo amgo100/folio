@@ -6,4 +6,4 @@ Its primary use is teaching material: exams with mark schemes, notes and handout
 
 ## Status
 
-Specification stage. The full design is in [docs/SPEC.md](docs/SPEC.md); implementation follows the roadmap in §15.
+Early implementation (M0 "Skeleton"). The full design is in [docs/SPEC.md](docs/SPEC.md); implementation follows the roadmap in §15. Attribution for third-party code is in [NOTICE](NOTICE).

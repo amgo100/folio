@@ -1,0 +1,30 @@
+Folio
+https://github.com/amgo100/folio
+
+Folio includes code derived from third-party projects, listed below with
+their licences. The full licence texts and the upstream notices are kept in
+`third_party/<project>/`.
+
+================================================================================
+Typst
+https://github.com/typst/typst
+Copyright The Typst Project Developers
+Licensed under the Apache License, Version 2.0: third_party/typst/LICENSE
+
+Folio derives the following from Typst (SPEC §2.2). The commit that imports
+Typst code updates its entry, and refreshes third_party/typst/ if it imports
+from another release.
+
+* `crates/folio-syntax`: a fork of the `typst-syntax` crate (import pending).
+* `crates/folio-math`: adapted from Typst's math layout (planned for M1).
+
+The upstream NOTICE file, which these derived works must carry, is reproduced
+in third_party/typst/NOTICE. Both files are taken from Typst v0.15.1.
+
+Every file derived from Typst starts with a header that names the upstream
+file and release, keeps Typst's copyright line and states that Folio modified
+it (Apache License 2.0, section 4(b)), for example:
+
+    // Derived from typst-syntax v0.15.1, crates/typst-syntax/src/lexer.rs.
+    // Copyright The Typst Project Developers. Licensed under Apache-2.0
+    // (third_party/typst/LICENSE). Modified for Folio.

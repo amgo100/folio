@@ -1,0 +1,17 @@
+[package]
+name = "folio-component"
+description = "Extension-point traits, component registry and the interface types shared with layout and rendering"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Components reach the compiler only through this crate (SPEC §2.2, §3), so it
+# must not depend on any other workspace crate except those allowed in
+# tests/dependency_direction.rs. Dev-dependencies are exempt: the conformance
+# suite runs against `folio`.
+[dependencies]
+
+[lints]
+workspace = true
