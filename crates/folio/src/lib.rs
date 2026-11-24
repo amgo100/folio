@@ -26,6 +26,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod diag;
 mod world;
 
 use std::fmt::{self, Display, Formatter};
@@ -35,7 +36,7 @@ use rayon::prelude::*;
 
 pub use folio_component::{Name, Registry, Target};
 pub use folio_core::db::{Bytes, Compiled, FontFile};
-pub use folio_core::diag::{Diagnostic, Severity};
+pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::project::{Lockfile, Manifest, ProjectError, ProjectPath};
 pub use folio_syntax::{FileId, Source};
 
@@ -58,7 +59,7 @@ pub fn compile(
     catch(|| {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
-        folio_core::db::compile(db, build).clone()
+        folio_core::db::compile(db, build)
     })
 }
 

@@ -10,8 +10,10 @@ use ecow::{EcoString, EcoVec};
 use folio_component::{Name, Registry, Target};
 use folio_core::db::{Bytes, DataFile, Durability, FontFile, Project, SourceFile};
 use folio_core::project::{Lockfile, Manifest, ProjectError, ProjectPath};
-use folio_syntax::{FileId, Source};
+use folio_syntax::{FileId, Lines, Source};
 use salsa::Setter;
+
+use crate::diag::Files;
 
 /// Everything a compilation reads: the manifest and lockfile, sources, data
 /// files, fonts and components (SPEC §2.2). It owns the query database that
@@ -34,6 +36,10 @@ pub struct World {
     db: Database,
     project: Project,
     ids: Arc<FileIds>,
+    /// The text of `folio.toml` and of `folio.lock`, which diagnostics
+    /// point into.
+    manifest_text: Lines<String>,
+    lockfile_text: Option<Lines<String>>,
 }
 
 /// What a world reports to the hook set with [`WorldBuilder::on_event`], for
@@ -87,7 +93,12 @@ impl WorldBuilder {
 
     /// Builds the world from the text of `folio.toml` and of `folio.lock`,
     /// if the project has one. Fails with every error in either file.
+    ///
+    /// The errors point into the two files by byte range; to show them,
+    /// resolve them against a [`TextFiles`](crate::diag::TextFiles) that
+    /// holds both texts under [`World::MANIFEST`] and [`World::LOCKFILE`].
     pub fn build(self, manifest: &str, lockfile: Option<&str>) -> Result<World, Vec<ProjectError>> {
+        let (manifest_text, lockfile_text) = (manifest, lockfile);
         let manifest = Manifest::parse(manifest, World::MANIFEST);
         let lockfile = parse_lockfile(lockfile);
         let (manifest, lockfile) = match (manifest, lockfile) {
@@ -124,6 +135,8 @@ impl WorldBuilder {
             db,
             project,
             ids: Arc::default(),
+            manifest_text: Lines::new(manifest_text.to_owned()),
+            lockfile_text: lockfile_text.map(|text| Lines::new(text.to_owned())),
         })
     }
 }
@@ -169,8 +182,16 @@ impl World {
     /// Replaces the manifest with the text of `folio.toml`. Fails with every
     /// error in it and keeps the old manifest. A manifest equal to the
     /// current one changes nothing.
+    ///
+    /// The errors point into the new text by byte range, which the world
+    /// does not keep: resolve them against a
+    /// [`TextFiles`](crate::diag::TextFiles) that holds it under
+    /// [`World::MANIFEST`], not against the world.
     pub fn set_manifest(&mut self, text: &str) -> Result<(), Vec<ProjectError>> {
         let manifest = Manifest::parse(text, Self::MANIFEST)?;
+        if self.manifest_text.text() != text {
+            self.manifest_text = Lines::new(text.to_owned());
+        }
         if &manifest != self.manifest() {
             self.project
                 .set_manifest(&mut self.db)
@@ -182,8 +203,14 @@ impl World {
 
     /// Replaces the lockfile with the text of `folio.lock`, or removes it.
     /// Fails with every error in it and keeps the old lockfile.
+    ///
+    /// The errors point into the new text by byte range, which the world
+    /// does not keep: resolve them against a
+    /// [`TextFiles`](crate::diag::TextFiles) that holds it under
+    /// [`World::LOCKFILE`], not against the world.
     pub fn set_lockfile(&mut self, text: Option<&str>) -> Result<(), Vec<ProjectError>> {
         let lockfile = parse_lockfile(text)?;
+        self.lockfile_text = text.map(|text| Lines::new(text.to_owned()));
         if &lockfile != self.lockfile() {
             self.project
                 .set_lockfile(&mut self.db)
@@ -393,6 +420,27 @@ impl World {
         ids.by_path.insert(path.clone(), id);
         ids.paths.push(path.clone());
         Ok(id)
+    }
+}
+
+/// The sources the world has now, `folio.toml` and `folio.lock`. Resolve
+/// the diagnostics of a compilation before editing the world: an edit can
+/// renumber the spans of the text it changes.
+impl Files for World {
+    fn path(&self, id: FileId) -> Option<EcoString> {
+        World::path(self, id).map(EcoString::from)
+    }
+
+    fn source(&self, id: FileId) -> Option<Source> {
+        World::source(self, World::path(self, id)?)
+    }
+
+    fn lines(&self, id: FileId) -> Option<Lines<String>> {
+        match id {
+            Self::MANIFEST => Some(self.manifest_text.clone()),
+            Self::LOCKFILE => self.lockfile_text.clone(),
+            _ => Files::source(self, id).map(|source| source.lines().clone()),
+        }
     }
 }
 

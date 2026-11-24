@@ -146,6 +146,7 @@ The table is the target structure. Development starts with fewer crates and spli
 - **Inputs and keys**: the inputs are the manifest, the lockfile, sources, data files, fonts and the component registry, which the host sets through `folio::World`. The variant and the target are keys of the per-variant queries, not inputs. A query that reads neither runs once for all variants, and the variants of one revision compile in parallel, each on its own database handle.
 - **Early cutoff**: when a query re-runs and returns a value equal to its previous one, the queries that depend on it are not re-run. The convergence short-circuit of page layout, below, relies on this.
 - **Cancellation**: a new edit cancels the queries still running for the previous revision, so the editor, the preview and the language server never wait for stale work.
+- **Diagnostics** are side outputs of queries, not part of their results. A query reports them as it runs, and a front end collects those of a query and of every query it depends on, each query's once. A query whose result is unchanged after an edit is therefore cut off even when its diagnostics changed.
 - **Durability**: bundled fonts, the standard library and first-party components are marked as rarely changing, so the validity check after an edit skips the queries that depend only on them.
 - Parsing is incremental at the CST level: an edit reparses the smallest enclosing block and reuses untouched nodes.
 - Evaluation is memoised per function call with argument hashing.
@@ -1112,6 +1113,8 @@ The live target renders slides and pages from fragments as display lists, in Fol
 ## 12. Tooling and Folio Studio
 
 All tools are front ends to the same library: the command line, the browser preview, the language server and the Folio Studio desktop editor build documents identically when their compiler version matches the project's pin (§2.4).
+
+They show the same diagnostics. A diagnostic has a severity, an optional code naming its lint (`override-literal`), a message, a primary span, secondary spans with their own messages, hints, and quick fixes as source edits. Spans stay span numbers (§2.3) until a front end shows them: the command line renders them with source excerpts, and other front ends receive them as JSON with paths, byte ranges, lines and columns.
 
 ### 12.1 Command line
 

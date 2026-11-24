@@ -28,6 +28,13 @@
 //! the variant therefore runs once for all variants, and every variant of a
 //! revision can be compiled at the same time on its own database handle
 //! (SPEC §2.1).
+//!
+//! # Diagnostics
+//!
+//! Queries report problems as they find them ([`diag::report`]) rather than
+//! returning them, so a query whose result is unchanged after an edit is cut
+//! off even when its diagnostics changed. [`compile`] runs a build and
+//! collects the diagnostics of every query the build depends on.
 
 // salsa generates the constructors, builders and setters of inputs and
 // interned structs.
@@ -45,7 +52,7 @@ use folio_syntax::{DiagSpan, Source, Span, SyntaxKind, SyntaxNode};
 pub use salsa::Durability;
 
 use crate::component::ComponentHost;
-use crate::diag::Diagnostic;
+use crate::diag::{self, Diagnostic, Reported};
 use crate::project::{Lockfile, Manifest, Name, ProjectPath, Spanned};
 
 /// The database that the compile queries run in. The `folio` crate provides
@@ -168,27 +175,26 @@ pub struct Dependency {
     pub span: Span,
 }
 
-/// The files of one build: the entry file, its stylesheets, and every file
-/// they name literally, in the order they were found.
-#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
-pub struct BuildFiles {
-    /// The files found.
-    pub files: EcoVec<SourceFile>,
-    /// Files that are named but not in the project.
-    pub missing: EcoVec<Diagnostic>,
-}
-
-/// What compiling a build produces.
+/// What the build query ([`build_output`]) produces.
 ///
 /// The stages after parsing (SPEC §2.1) are not wired in yet, so a build
-/// collects its files and their diagnostics, checks its variant and target
-/// against the manifest, and hosts its components.
+/// collects its files, checks them, checks its variant and target against
+/// the manifest, and hosts its components.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+pub struct BuildOutput {
+    /// The source files the build read, in the order they were found. A
+    /// watcher recompiles when one of them changes.
+    pub sources: EcoVec<ProjectPath>,
+}
+
+/// What compiling a build produces: its output and its diagnostics.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Compiled {
     /// The source files the build read, in the order they were found. A
     /// watcher recompiles when one of them changes.
     pub sources: EcoVec<ProjectPath>,
-    /// Every problem found, errors and warnings.
+    /// Every problem found, errors and warnings, in the order the queries
+    /// that reported them first ran.
     pub diagnostics: EcoVec<Diagnostic>,
 }
 
@@ -235,24 +241,28 @@ pub fn dependencies(db: &dyn Db, file: SourceFile) -> EcoVec<Dependency> {
     deps
 }
 
-/// The syntax errors and warnings of a source, and the literal import paths
-/// in it that leave the project.
-#[salsa::tracked(returns(ref))]
-pub fn file_diagnostics(db: &dyn Db, file: SourceFile) -> EcoVec<Diagnostic> {
+/// Reports the syntax errors and warnings of a source, and the literal
+/// import paths in it that leave the project.
+///
+/// A language server collects them for one file with
+/// `check_source::accumulated::<Reported>(db, file)`.
+#[salsa::tracked]
+pub fn check_source(db: &dyn Db, file: SourceFile) {
     let path = file.path(db);
     let root = file.source(db).root();
     let (errors, warnings) = root.errors_and_warnings();
-    let mut diags: EcoVec<Diagnostic> =
-        errors.into_iter().chain(warnings).map(Into::into).collect();
+    for diag in errors.into_iter().chain(warnings) {
+        diag::report(db, diag.into());
+    }
     for_each_import(root, &mut |text, span| {
         if path.join(text).is_none() {
-            diags.push(
+            diag::report(
+                db,
                 Diagnostic::error(span, eco_format!("`{text}` is not a path in the project"))
                     .with_hint("Folio reads files only inside the project directory"),
             );
         }
     });
-    diags
 }
 
 /// Calls `f` with the text and span of every literal import path in a tree.
@@ -280,9 +290,11 @@ fn for_each_import(node: &SyntaxNode, f: &mut impl FnMut(&str, Span)) {
 }
 
 /// The files of a build, found from its entry file and stylesheets (the
-/// project's, then the variant's overlays).
+/// project's, then the variant's overlays), and every file they name
+/// literally, in the order they were found. Reports the files that are named
+/// but not in the project.
 #[salsa::tracked(returns(ref))]
-pub fn build_files(db: &dyn Db, build: Build<'_>) -> BuildFiles {
+pub fn build_files(db: &dyn Db, build: Build<'_>) -> EcoVec<SourceFile> {
     let project = build.project(db);
     let manifest = project.manifest(db);
     let mut roots: Vec<&Spanned<ProjectPath>> = vec![&manifest.project.entry];
@@ -291,7 +303,7 @@ pub fn build_files(db: &dyn Db, build: Build<'_>) -> BuildFiles {
         roots.extend(&variant.styles);
     }
 
-    let mut out = BuildFiles::default();
+    let mut out = EcoVec::new();
     let mut seen = HashSet::new();
     let mut queue: VecDeque<(ProjectPath, DiagSpan)> =
         roots.iter().map(|r| (r.v.clone(), r.span)).collect();
@@ -300,13 +312,14 @@ pub fn build_files(db: &dyn Db, build: Build<'_>) -> BuildFiles {
             continue;
         }
         let Some(file) = source_file(db, project, path.clone()) else {
-            out.missing.push(
+            diag::report(
+                db,
                 Diagnostic::error(span, eco_format!("file `{}` not found", path.as_str()))
                     .with_hint("Folio reads `.fol` and `.fsty` files inside the project"),
             );
             continue;
         };
-        out.files.push(file);
+        out.push(file);
         for dep in dependencies(db, file) {
             queue.push_back((dep.path.clone(), dep.span.into()));
         }
@@ -315,37 +328,61 @@ pub fn build_files(db: &dyn Db, build: Build<'_>) -> BuildFiles {
 }
 
 /// The components a project uses, with their templates parsed and names
-/// resolved through the lockfile's bindings.
+/// resolved through the lockfile's bindings, or `None` after reporting why
+/// they cannot be hosted.
 ///
 /// Reads only the registry (durable) and the manifest and lockfile, so an
 /// edit to a source does not re-run or even re-validate it.
 #[salsa::tracked(returns(ref))]
-pub fn component_host(db: &dyn Db, project: Project) -> Result<ComponentHost, EcoVec<Diagnostic>> {
-    ComponentHost::new(
+pub fn component_host(db: &dyn Db, project: Project) -> Option<ComponentHost> {
+    let host = ComponentHost::new(
         project.components(db),
         &project.manifest(db).components,
         &project.lockfile(db).bindings,
-    )
-    .map_err(|errors| errors.into_iter().map(Into::into).collect())
+    );
+    match host {
+        Ok(host) => Some(host),
+        Err(errors) => {
+            for error in errors {
+                diag::report(db, error.into());
+            }
+            None
+        }
+    }
 }
 
-/// Compiles one build.
+/// Builds one variant for one target, reporting the problems it finds.
 #[salsa::tracked(returns(ref))]
-pub fn compile(db: &dyn Db, build: Build<'_>) -> Compiled {
+pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     let project = build.project(db);
-    let mut diagnostics = check_build(project.manifest(db), build.target(db), build.variant(db));
+    for diagnostic in check_build(project.manifest(db), build.target(db), build.variant(db)) {
+        diag::report(db, diagnostic);
+    }
 
     let files = build_files(db, build);
-    diagnostics.extend(files.missing.iter().cloned());
-    for &file in &files.files {
-        diagnostics.extend(file_diagnostics(db, file).iter().cloned());
+    for &file in files {
+        check_source(db, file);
     }
-    if let Err(errors) = component_host(db, project) {
-        diagnostics.extend(errors.iter().cloned());
-    }
+    component_host(db, project);
 
+    BuildOutput {
+        sources: files.iter().map(|f| f.path(db).clone()).collect(),
+    }
+}
+
+/// Compiles one build: runs [`build_output`] and collects the diagnostics
+/// that it and every query it depends on reported, each query's once.
+///
+/// This is not a query, and must not be called from one: reading
+/// diagnostics is not tracked.
+pub fn compile(db: &dyn Db, build: Build<'_>) -> Compiled {
+    let output = build_output(db, build);
+    let diagnostics = build_output::accumulated::<Reported>(db, build)
+        .into_iter()
+        .map(|reported| reported.0.clone())
+        .collect();
     Compiled {
-        sources: files.files.iter().map(|f| f.path(db).clone()).collect(),
+        sources: output.sources.clone(),
         diagnostics,
     }
 }
