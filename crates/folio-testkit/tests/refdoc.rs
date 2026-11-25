@@ -2,7 +2,7 @@
 //! their make-up, and fill the pages they are meant to.
 
 use folio::{BuildMode, Target};
-use folio_testkit::refdoc::{self, Spec};
+use folio_testkit::refdoc::{self, Edit, Spec};
 
 /// Compiles a generated document and returns its number of pages.
 fn pages(spec: &Spec) -> usize {
@@ -61,5 +61,72 @@ fn fills_its_pages() {
             got.abs_diff(target) <= slack,
             "a document meant for {target} pages has {got}: re-tune refdoc::CHARS_PER_PAGE"
         );
+    }
+}
+
+#[test]
+fn variants() {
+    let spec = Spec::pages(2);
+    let project = refdoc::generate_variants(&spec);
+    assert_eq!(project.name, "refdoc-2-variants");
+    // Without the answers, the document is `generate`'s.
+    let plain = refdoc::generate(&spec);
+    let main = &project.sources["main.fol"];
+    let without: String = main
+        .split_inclusive("\n\n")
+        .filter(|chunk| !chunk.starts_with("#if variant"))
+        .collect();
+    assert_eq!(without, plain.sources["main.fol"]);
+    assert_eq!(
+        project.sources["main.fol"]
+            .matches("#if variant != \"exam\"")
+            .count(),
+        spec.pages
+    );
+    let world = project.world(BuildMode::Ci);
+    let builds = world.builds();
+    let names: Vec<_> = builds
+        .iter()
+        .map(|(v, t)| (v.as_ref().map(|v| v.to_string()), *t))
+        .collect();
+    let expected: Vec<_> = refdoc::VARIANTS
+        .iter()
+        .map(|v| (Some(v.to_string()), Target::Pdf))
+        .collect();
+    assert_eq!(names, expected);
+    let mut lengths = Vec::new();
+    for output in folio::compile_builds(&world, builds) {
+        let compiled = output.result.unwrap();
+        let errors: Vec<_> = compiled
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .map(|d| d.message.to_string())
+            .collect();
+        assert!(errors.is_empty(), "{:?}: {errors:?}", output.variant);
+        let text = folio::text(&world, Target::Pdf, output.variant.as_ref())
+            .unwrap()
+            .unwrap();
+        lengths.push(text.paragraphs.len());
+    }
+    // The exam hides the answers that the other two show.
+    assert_eq!(lengths[0] + spec.pages, lengths[1]);
+    assert_eq!(lengths[1], lengths[2]);
+}
+
+#[test]
+fn edits() {
+    let project = refdoc::generate(&Spec::M0_EXIT);
+    let word = Edit::word(&project);
+    assert_eq!(&project.sources[&word.path][word.range.clone()], "The");
+    let style = Edit::style(&project);
+    assert_eq!(&project.sources[&style.path][style.range.clone()], "11pt");
+    let mut world = project.world(BuildMode::Ci);
+    for edit in [word, style] {
+        world
+            .edit_source(&edit.path, edit.range, edit.with)
+            .unwrap();
+        let pages = folio::pages(&world, Target::Pdf, None).unwrap();
+        assert!(pages.is_some_and(|p| !p.pages.is_empty()));
     }
 }

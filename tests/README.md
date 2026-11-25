@@ -105,15 +105,46 @@ and tables are stand-ins of about their size until math (M1) and tables
 `refdoc::CHARS_PER_PAGE` if `cargo test -p folio-testkit --test refdoc`
 says the page count is off.
 
+`refdoc::generate_variants` generates the same document with three
+variants (`exam`, `markscheme` with a stylesheet overlay that sets it at
+10pt, `teacher`) and an answer at the end of every page that only the last
+two show (they run a little longer); the exam is `refdoc::generate`'s
+document unchanged. `refdoc::Edit` holds the edits the benchmarks make:
+a word in the middle, and the body's font size.
+
 The instruction-count benchmarks (`cargo bench -p folio-testkit --bench compile`):
 
 | Benchmark | What it runs |
 | --- | --- |
 | `compile_cold m0_exit` | The M0 exit check: the ten-page document from source to PDF in a fresh world. |
 | `compile_cold exam`, `notes` | Corpus documents from source to PDF in a fresh world. |
-| `recompile_after_edit m0_exit` | The ten-page document recompiled after a word is added in its middle. |
+| `recompile_after_edit m0_exit` | The ten-page document recompiled to PDF after a word in its middle is replaced by a longer one. |
+| `preview_after_edit reference` | The preview path: the reference document laid out again to its pages, without emit, after a word in its middle is replaced by a longer one. |
+| `restyle reference` | The preview path after a stylesheet edit: the reference document's body font size changes from 11pt to 12pt. |
+| `compile_variants one`, `three` | The ten-page document with three variants from source to PDF in a fresh world: the teacher's variant alone, and all three one after another. |
 | `parse reference` | Parsing the reference document's markup. |
 
-`folio-wall` (`scripts/bench.sh --wall`) times the M0 exit check and the
-reference document's full compile and edit, and reports the 95th
-percentile against the limits.
+Callgrind counts only the benchmark's own thread. Paragraphs that
+`folio-text` shapes several at a time run on its shaping thread, so a full
+compile's and a stylesheet edit's counts leave most shaping out; the
+wall-clock times include it. The preview benchmarks go through one
+function, `preview`, to point at a query that stops at the pages once
+there is one.
+
+`folio-wall` (`scripts/bench.sh --wall`) prints three tables, each against
+the limits of SPEC §14.1 and §15:
+
+- scenarios, each run 20 times after a warm-up and judged by its 95th
+  percentile: the M0 exit check (gated: 200 ms); the reference document's
+  full compile, one-word edit to PDF, one-word edit to the pages (the
+  preview of the M1 exit check: 80 ms), stylesheet edit, and the ratio of
+  three variants in parallel to the teacher's variant alone (all but the
+  M0 exit check are release criteria and only reported);
+- stages of the reference document's PDF build: the median and 95th
+  percentile of applying the edit, `evaluate`, `document`, `style`,
+  `text`, `lines`, `pages` and emit (with the build's checks), for a full
+  compile, a one-word edit and a stylesheet edit, measured by calling the
+  public queries in pipeline order;
+- typing: one character every 100 ms into a paragraph in the middle of the
+  reference document (40 by default, `--keystrokes N`), each timed from
+  the edit to the pages, against the M1 exit check's 80 ms.
