@@ -35,6 +35,6 @@ strong { font-weight: bold; }
 emph { font-style: italic; }
 
 // Code in a monospaced face, slightly smaller so that it does not look
-// heavier than the text around it. New Computer Modern sets the
-// characters Source Code Pro lacks, such as mathematical symbols.
+// heavier than the text around it. New Computer Modern, the initial
+// font, sets the characters Source Code Pro lacks.
 raw { font: "Source Code Pro", "New Computer Modern"; font-size: 0.9em; }
