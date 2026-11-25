@@ -142,7 +142,8 @@ fn early_cutoff_on_a_whitespace_edit() {
     // are cut off, but the missing file is reported, once, though both the
     // file set and evaluation find it. Evaluation turns the include into
     // an error marker (SPEC §12.2), a new node that is matched against the
-    // rules; the rest of the document still compiles.
+    // rules; the rest of the document still compiles. The PDF shows the
+    // marker, so the build query runs again.
     let edited = format!("{edited}#include \"questions/q2.fol\"\n");
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
@@ -154,6 +155,7 @@ fn early_cutoff_on_a_whitespace_edit() {
             "check_source",
             "source_file",
             "match_node",
+            "compile_build",
             EVAL
         ])
     );
@@ -201,14 +203,21 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         compiled.diagnostics
     );
     assert!(compiled.output.is_some());
-    // The marker is a new node, matched against the rules.
+    // The marker is a new node, matched against the rules, and the PDF
+    // shows it, so the build query runs again.
     assert_eq!(
         logged.take(),
-        set(&["dependencies", "check_source", "match_node", EVAL])
+        set(&[
+            "dependencies",
+            "check_source",
+            "match_node",
+            "compile_build",
+            EVAL
+        ])
     );
 
     // Fixing it removes the diagnostic, again without re-running the build's
-    // checks.
+    // checks; the PDF loses the marker.
     logged.world.set_source("main.fol", MAIN).unwrap();
     let compiled = logged.compile("exam");
     assert!(
@@ -216,7 +225,10 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         "{:?}",
         compiled.diagnostics
     );
-    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
+    assert_eq!(
+        logged.take(),
+        set(&["dependencies", "check_source", "compile_build", EVAL])
+    );
 
     // A diagnostic of a file that two builds share is reported by one
     // query, and each build collects it once.

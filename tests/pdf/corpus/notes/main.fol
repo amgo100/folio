@@ -1,0 +1,54 @@
+#doc(title: [Waves and Oscillations], subject: "A-level Physics, Year 12 notes")
+
+= Simple harmonic motion
+
+An oscillator moves with _simple harmonic motion_ when its acceleration is proportional to its displacement from a fixed point and always directed towards that point. The defining equation is written as "a equals minus omega squared x", and every characteristic of the motion follows from it.
+
+The period of a simple harmonic oscillator does not depend on its amplitude. This property, called isochronism, made the pendulum the most accurate timekeeper of the seventeenth and eighteenth centuries.#sidenote[Huygens built the first pendulum clock in 1656; it kept time to within a minute a day.]
+
+== Energy in the oscillator
+
+The total energy of an undamped oscillator is constant. It is exchanged continuously between kinetic and potential forms:
+
+- at the equilibrium position the kinetic energy is greatest;
+- at maximum displacement the potential energy is greatest;
+- at every point the two add up to the same total.
+
+=== Damping
+
+Real oscillators lose energy to their surroundings. The three regimes of damping are:
+
+/ Light damping: the amplitude decreases exponentially and the oscillator completes many cycles.
+/ Critical damping: the system returns to equilibrium in the shortest possible time without overshooting.
+/ Heavy damping: the system returns to equilibrium slowly, again without oscillating.
+
+= Waves
+
+A progressive wave transfers energy, but not matter, from one place to another. Its speed, frequency and wavelength are related by the wave equation.
+
+#figure[A displacement–distance graph of a transverse wave shows its amplitude and wavelength; a displacement–time graph shows its period.][Two views of one wave]
+
+To measure the speed of sound in air, follow these steps:
+
++ set up a loudspeaker and two microphones connected to an oscilloscope;
++ move one microphone until the two traces are in phase again;
++ record the distance moved, which is one wavelength;
++ multiply the wavelength by the frequency of the signal generator.
+
+The calculation can be checked with a short program:
+
+```python
+frequency = 2000.0
+wavelength = 0.171
+print(frequency * wavelength)
+```
+
+Interference, diffraction and polarisation are the phenomena that distinguish waves from streams of particles. Only transverse waves can be polarised, which is why polarisation was the decisive evidence that light is a transverse wave. Incomprehensibly long words such as electromagnetically, counterintuitively and characteristically need hyphenation in narrow justified columns.
+
+== Stationary waves
+
+A stationary wave forms when two progressive waves of the same frequency and amplitude travel in opposite directions and superpose. Points that never move are nodes; points of maximum amplitude are antinodes. The distance between adjacent nodes is half a wavelength.
+
+Stationary waves on a string fixed at both ends have a node at each end, so only certain wavelengths fit: the fundamental, whose wavelength is twice the length of the string, and its harmonics. The frequency of the fundamental depends on the tension in the string, its length and its mass per unit length.
+
+In a pipe closed at one end there is a node at the closed end and an antinode at the open end, so only odd harmonics are present. An open pipe has antinodes at both ends and supports every harmonic.

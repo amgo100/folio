@@ -117,14 +117,14 @@ fn compiles_end_to_end_to_pdf() {
     );
     let pdf = compiled.output.expect("a PDF");
     assert!(pdf.starts_with(b"%PDF-1.7\n"));
-    assert!(pdf.ends_with(b"%%EOF\n"));
+    assert!(pdf.ends_with(b"%%EOF"));
 
     // One page in the PDF per page laid out.
     let exam = Name::new("exam").unwrap();
     let pages = folio::pages(&logged.world, Target::Pdf, Some(&exam))
         .unwrap()
         .unwrap();
-    let count = pdf.windows(12).filter(|w| w == b"/Type /Page ").count();
+    let count = pdf.windows(11).filter(|w| w == b"/Type/Page/").count();
     assert_eq!(count, pages.pages.len());
 
     // Every stage ran once, and so did the build's queries.
@@ -154,9 +154,8 @@ fn an_edit_to_one_paragraph_reruns_only_what_depends_on_it() {
     // renumbered the spans of the file's nodes, which the styled tree
     // records, so every stage from Style to Emit runs once; matching finds
     // every node's rules memoised, and the cascade, the fonts and the
-    // component host are not touched. The PDF is the same (its pages are
-    // blank until the PDF writer draws them), so the build query is cut
-    // off.
+    // component host are not touched. The PDF shows the new word, so the
+    // build query runs again too.
     let edited = Q2.replace("pushed", "pulled");
     logged
         .world
@@ -170,7 +169,7 @@ fn an_edit_to_one_paragraph_reruns_only_what_depends_on_it() {
             ("dependencies check_source", 1),
             // `questions/q2.fol` and `main.fol`.
             ("eval_file", 2),
-            ("evaluate document check_fonts", 1),
+            ("evaluate document check_fonts compile_build", 1),
             (STAGES, 1),
         ])
     );

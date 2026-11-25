@@ -1,0 +1,7 @@
+page { page-size: A5; margin-top: 18mm; margin-bottom: 18mm; margin-inner: 16mm; margin-outer: 16mm; }
+doc { font: "Source Serif 4"; font-size: 10.5pt; justify: true; hyphenate: true; }
+heading { font: "Source Sans 3"; space-before: 10pt; space-after: 4pt; keep-with-next: true; }
+heading[level=1] { font-size: 15pt; }
+heading[level=2] { font-size: 12.5pt; }
+raw { font: "Source Code Pro"; font-size: 9pt; }
+figure { space-before: 8pt; space-after: 8pt; }

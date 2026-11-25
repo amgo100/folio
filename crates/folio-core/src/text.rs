@@ -69,6 +69,12 @@ pub struct TextBlock {
     pub style: ComputedStyle,
     /// The element, or the element whose part the block is.
     pub span: Span,
+    /// The name of that element: what the block is, for the writers that
+    /// tag output by meaning, such as PDF's structure tree (SPEC §11.1).
+    pub element: QualifiedName,
+    /// For a part, the content field it holds; `None` for the element's own
+    /// block.
+    pub part: Option<Name>,
     /// What it holds, in order.
     pub children: EcoVec<TextFlow>,
 }
@@ -264,11 +270,14 @@ struct Piece {
 }
 
 impl Collector<'_> {
-    /// Opens a block of a style.
-    fn open(&mut self, style: &ComputedStyle, span: Span) {
+    /// Opens a block of a style: the box of an element, or of its part
+    /// `part`.
+    fn open(&mut self, style: &ComputedStyle, element: &Element, part: Option<Name>) {
         self.blocks.push(TextBlock {
             style: style.clone(),
-            span,
+            span: element.span,
+            element: element.name.clone(),
+            part,
             children: EcoVec::new(),
         });
     }
@@ -285,7 +294,7 @@ impl Collector<'_> {
     /// Collects the paragraphs of an element and its descendants, in a
     /// block of the element's.
     fn element(&mut self, element: &Element, node: &StyledNode) {
-        self.open(&node.style, element.span);
+        self.open(&node.style, element, None);
         let owner = self.own(element);
         self.element_content(element, node);
         self.owner = owner;
@@ -332,11 +341,11 @@ impl Collector<'_> {
                     Child::Part(..) => None,
                 });
                 self.content(content, &node.style, element.span, &mut body_kids);
-            } else if Name::new(key).is_some()
+            } else if let Some(field) = Name::new(key)
                 && let Some((part, part_node)) = parts.next()
             {
                 let mut part_kids = content_elements(part).zip(part_node.children.iter());
-                self.open(&part_node.style, element.span);
+                self.open(&part_node.style, element, Some(field));
                 self.content(part, &part_node.style, element.span, &mut part_kids);
                 self.close();
             }
