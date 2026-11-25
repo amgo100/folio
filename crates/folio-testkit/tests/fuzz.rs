@@ -153,8 +153,19 @@ fn incremental_edits_decode_within_the_text() {
         assert!(text.is_char_boundary(edit.range.end));
         assert!(edit.range.end - edit.range.start <= 15 * 4);
     }
-    // A snippet index past the end inserts nothing.
-    assert_eq!(fuzz::Edits::edit(sources, edits.ops[1]).with, "");
+    // A snippet index wraps; one past the last snippet inserts nothing.
+    let mut op = edits.ops[1];
+    op[0] = 0;
+    let path = fuzz::Edits::edit(sources, op).path;
+    let snippets = if path.ends_with(".fsty") {
+        fuzz::SHEET_SNIPPETS
+    } else {
+        fuzz::CONTENT_SNIPPETS
+    };
+    op[4] = u8::try_from(snippets.len()).unwrap();
+    assert_eq!(fuzz::Edits::edit(sources, op).with, "");
+    op[4] = u8::try_from(snippets.len() + 1).unwrap();
+    assert_eq!(fuzz::Edits::edit(sources, op).with, snippets[0]);
     // At most MAX_EDITS edits.
     let long = vec![1; 1 + 5 * (fuzz::MAX_EDITS + 3)];
     assert_eq!(

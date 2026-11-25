@@ -409,8 +409,9 @@ impl Edits {
     /// edit starts (two bytes, little-endian, wrapped to the text's
     /// length in characters), how many characters it removes (up to 15),
     /// and what it inserts (an index into [`CONTENT_SNIPPETS`] or
-    /// [`SHEET_SNIPPETS`]; past its end, nothing). Bytes left over are
-    /// ignored. `None` without a project byte.
+    /// [`SHEET_SNIPPETS`], wrapped to one more than its length, which
+    /// inserts nothing). Bytes left over are ignored. `None` without a
+    /// project byte.
     pub fn decode(data: &[u8]) -> Option<Self> {
         let (&first, rest) = data.split_first()?;
         // Read once: the fuzzer runs the target many times a second.
@@ -448,7 +449,7 @@ impl Edits {
             path: path.clone(),
             range: boundaries[start]..boundaries[end],
             with: snippets
-                .get(usize::from(snippet))
+                .get(usize::from(snippet) % (snippets.len() + 1))
                 .copied()
                 .unwrap_or("")
                 .to_string(),
@@ -489,8 +490,9 @@ impl Edits {
             applied.push(edit);
             let incremental = compile_builds(&world, &builds);
             let fresh_project = corpus::Project {
+                name: self.project.name.clone(),
+                manifest: self.project.manifest.clone(),
                 sources: sources.clone(),
-                ..self.project.clone()
             };
             let fresh_world = fresh_project.world(BuildMode::Ci);
             let fresh = compile_builds(&fresh_world, &builds);

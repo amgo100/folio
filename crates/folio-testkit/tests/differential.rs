@@ -11,7 +11,8 @@
 //! fuzz test replays its seed corpus.
 //!
 //! `FOLIO_DIFFERENTIAL_CASES` sets how many random sequences run (default
-//! 12) and `FOLIO_DIFFERENTIAL_SEED` the first seed (default 0), so that a
+//! 12) and `FOLIO_DIFFERENTIAL_SEED` the first seed (by default the one
+//! after the seeds of the fuzz target's seed corpus), so that a
 //! longer run can explore further and a failing sequence can be rerun
 //! alone.
 
