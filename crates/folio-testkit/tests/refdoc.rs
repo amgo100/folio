@@ -63,3 +63,45 @@ fn fills_its_pages() {
         );
     }
 }
+
+#[test]
+fn variants() {
+    let spec = Spec::pages(2);
+    let project = refdoc::generate_variants(&spec);
+    assert_eq!(project.name, "refdoc-2-variants");
+    assert_eq!(
+        project.sources["main.fol"]
+            .matches("#if variant != \"exam\"")
+            .count(),
+        spec.pages
+    );
+    let world = project.world(BuildMode::Ci);
+    let builds = world.builds();
+    let names: Vec<_> = builds
+        .iter()
+        .map(|(v, t)| (v.as_ref().map(|v| v.to_string()), *t))
+        .collect();
+    let expected: Vec<_> = refdoc::VARIANTS
+        .iter()
+        .map(|v| (Some(v.to_string()), Target::Pdf))
+        .collect();
+    assert_eq!(names, expected);
+    let mut lengths = Vec::new();
+    for output in folio::compile_builds(&world, builds) {
+        let compiled = output.result.unwrap();
+        let errors: Vec<_> = compiled
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .map(|d| d.message.to_string())
+            .collect();
+        assert!(errors.is_empty(), "{:?}: {errors:?}", output.variant);
+        let text = folio::text(&world, Target::Pdf, output.variant.as_ref())
+            .unwrap()
+            .unwrap();
+        lengths.push(text.paragraphs.len());
+    }
+    // The exam hides the answers that the other two show.
+    assert_eq!(lengths[0] + spec.pages, lengths[1]);
+    assert_eq!(lengths[1], lengths[2]);
+}

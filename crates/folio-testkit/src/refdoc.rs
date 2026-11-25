@@ -92,6 +92,28 @@ figure { space-before: 8pt; space-after: 8pt; }
 terms-item { space-before: 2pt; }
 ";
 
+/// The variants of [`generate_variants`]'s project, as the exam and mark
+/// scheme of SPEC §6.1 with a third that shares the mark scheme's answers.
+pub const VARIANTS: [&str; 3] = ["exam", "markscheme", "teacher"];
+
+/// The manifest of [`generate_variants`]'s project: [`VARIANTS`], each
+/// built as PDF, the mark scheme with a stylesheet overlay.
+const VARIANTS_MANIFEST: &str = "\
+[variants.exam]
+targets = [\"pdf\"]
+
+[variants.markscheme]
+targets = [\"pdf\"]
+styles = [\"styles/markscheme.fsty\"]
+
+[variants.teacher]
+targets = [\"pdf\"]
+";
+
+/// The mark scheme's overlay: answers set smaller, so that it paginates
+/// differently from the exam.
+const MARKSCHEME_STYLESHEET: &str = "doc { font-size: 10pt; }\n";
+
 /// Generates a document: its project, named `reference` for
 /// [`Spec::REFERENCE`] and `refdoc-{pages}` otherwise.
 pub fn generate(spec: &Spec) -> Project {
@@ -100,22 +122,33 @@ pub fn generate(spec: &Spec) -> Project {
     } else {
         format!("refdoc-{}", spec.pages)
     };
-    let mut generator = Generator {
-        rng: Rng(0x5eed_f011_0b00_00c5),
-        out: String::new(),
-        figure: 0,
-        equation: 0,
-        table: 0,
-    };
-    generator.document(spec);
     Project {
         name,
         manifest: MANIFEST.into(),
         sources: BTreeMap::from([
-            ("main.fol".to_string(), generator.out),
+            ("main.fol".to_string(), Generator::new(false).document(spec)),
             ("styles/reference.fsty".to_string(), STYLESHEET.to_string()),
         ]),
     }
+}
+
+/// Generates a document with the three [`VARIANTS`] (SPEC §6): the
+/// document of [`generate`] with an answer after the running text of every
+/// page that only the mark scheme and teacher variants show. Its project
+/// is named as [`generate`]'s with `-variants` appended.
+pub fn generate_variants(spec: &Spec) -> Project {
+    let mut project = generate(spec);
+    project.name.push_str("-variants");
+    project.manifest.push('\n');
+    project.manifest.push_str(VARIANTS_MANIFEST);
+    project
+        .sources
+        .insert("main.fol".into(), Generator::new(true).document(spec));
+    project.sources.insert(
+        "styles/markscheme.fsty".into(),
+        MARKSCHEME_STYLESHEET.into(),
+    );
+    project
 }
 
 /// How many of `total` items fall on page `page` of `pages`, spread evenly.
@@ -241,10 +274,24 @@ struct Generator {
     figure: usize,
     equation: usize,
     table: usize,
+    /// Whether every page ends with an answer that the exam variant hides.
+    answers: bool,
 }
 
 impl Generator {
-    fn document(&mut self, spec: &Spec) {
+    fn new(answers: bool) -> Self {
+        Self {
+            rng: Rng(0x5eed_f011_0b00_00c5),
+            out: String::new(),
+            figure: 0,
+            equation: 0,
+            table: 0,
+            answers,
+        }
+    }
+
+    /// Writes the document and returns its markup.
+    fn document(mut self, spec: &Spec) -> String {
         let _ = writeln!(
             self.out,
             "#doc(title: [Reference document], subject: \"{} pages, generated for benchmarks\")\n",
@@ -288,7 +335,23 @@ impl Generator {
                     _ => {}
                 }
             }
+            if self.answers {
+                self.answer(page);
+            }
         }
+        self.out
+    }
+
+    /// An answer to the page's questions, shown by every variant but the
+    /// exam.
+    fn answer(&mut self, page: usize) {
+        let sentences = [self.sentence(), self.sentence()];
+        let _ = writeln!(
+            self.out,
+            "#if variant != \"exam\" [\n  Answer {}: {}\n]\n",
+            page + 1,
+            sentences.join(" ")
+        );
     }
 
     /// A heading of a level.
