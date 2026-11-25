@@ -186,17 +186,25 @@ impl OutputPattern {
         self.0.contains(&format!("{{{placeholder}}}"))
     }
 
-    /// The path of one output file.
-    pub fn resolve(&self, stem: &str, variant: &str, ext: &str) -> EcoString {
+    /// The path of one output file. `variant` is `None` for a project
+    /// without variants, which leaves `{variant}` out together with one
+    /// separator (`-`, `_`, `.` or `/`): the one after it when it starts a
+    /// path segment, the one before it otherwise. So
+    /// `out/{stem}-{variant}.{ext}` gives `out/main.pdf`.
+    pub fn resolve(&self, stem: &str, variant: Option<&str>, ext: &str) -> EcoString {
+        let pattern = match variant {
+            Some(_) => self.0.clone(),
+            None => without_variant(&self.0),
+        };
         // One pass, so braces in a substituted value are left alone.
         let mut out = EcoString::new();
-        let mut rest = self.0.as_str();
+        let mut rest = pattern.as_str();
         while let Some(open) = rest.find('{') {
             out.push_str(&rest[..open]);
             let close = rest[open..].find('}').map_or(rest.len(), |c| open + c);
             out.push_str(match &rest[open + 1..close] {
                 "stem" => stem,
-                "variant" => variant,
+                "variant" => variant.unwrap_or_default(),
                 "ext" => ext,
                 other => other,
             });
@@ -243,6 +251,27 @@ impl OutputPattern {
         })?;
         Ok(Self(path.as_str().into()))
     }
+}
+
+/// An output pattern with every `{variant}` left out, with the separator
+/// after it when it starts a path segment, or the one before it otherwise.
+fn without_variant(pattern: &str) -> EcoString {
+    const SEPARATORS: &[char] = &['-', '_', '.', '/'];
+    let mut out = EcoString::new();
+    let mut rest = pattern;
+    while let Some(at) = rest.find("{variant}") {
+        let before = &rest[..at];
+        let after = &rest[at + "{variant}".len()..];
+        if before.is_empty() || before.ends_with('/') {
+            out.push_str(before);
+            rest = after.strip_prefix(SEPARATORS).unwrap_or(after);
+        } else {
+            out.push_str(before.strip_suffix(SEPARATORS).unwrap_or(before));
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 impl Default for OutputPattern {
@@ -348,6 +377,18 @@ impl Manifest {
         self.numbering_groups
             .iter()
             .find(|g| g.variants.iter().any(|v| v.v.as_str() == variant))
+    }
+
+    /// The path, relative to the project, that a build of a variant for a
+    /// target writes its output to (SPEC §6.4): `[output] path` with the
+    /// entry file's stem, the variant and the target's extension. `None`
+    /// when the target writes no file. `variant` is `None` for a project
+    /// without variants.
+    pub fn output_path(&self, variant: Option<&Name>, target: Target) -> Option<EcoString> {
+        let ext = target.extension()?;
+        let stem = self.project.entry.v.stem();
+        let variant = variant.map(Name::as_str);
+        Some(self.output.path.v.resolve(stem, variant, ext))
     }
 }
 

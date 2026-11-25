@@ -51,12 +51,12 @@ pub use folio_core::fonts::{Face, FontRun, Fonts, Pin};
 pub use folio_core::layout;
 pub use folio_core::layout::{Line, LineRef, Lines, Page, PageMaster, Pages, ParagraphLayout};
 pub use folio_core::model;
-pub use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
+pub use folio_core::project::{Date, Lockfile, Manifest, OutputPattern, ProjectError, ProjectPath};
 pub use folio_core::style;
 pub use folio_core::text::{SegmentStyle, Text, TextBlock, TextFlow, TextParagraph, TextSource};
 pub use folio_fonts::{
     BUNDLED_FAMILIES, FaceKey, FontCache, FontFile, FontHash, FontOrigin, FontStyle, FontVariant,
-    SystemFont, bundled as bundled_fonts, project_fonts, system_fonts,
+    PROJECT_FONT_DIR, SystemFont, bundled as bundled_fonts, project_fonts, system_fonts,
 };
 pub use folio_syntax::{FileId, NodeId, Source, Span};
 pub use folio_text::{
@@ -257,9 +257,19 @@ pub fn pages(
 /// ([`World::builds`]), in parallel, each on its own handle of the world.
 /// Queries that do not read the variant or target run once and are shared.
 pub fn compile_all(world: &World) -> Vec<Output> {
+    compile_builds(world, world.builds())
+}
+
+/// Compiles builds of the world's document, each a variant (`None` only
+/// for a project without variants) and a target, as [`compile_all`] does:
+/// in parallel, each on its own handle of the world. The outputs are in
+/// the order of the builds.
+pub fn compile_builds(
+    world: &World,
+    builds: impl IntoIterator<Item = (Option<Name>, Target)>,
+) -> Vec<Output> {
     // A handle is not `Sync`, so each build takes its own.
-    let builds: Vec<_> = world
-        .builds()
+    let builds: Vec<_> = builds
         .into_iter()
         .map(|build| (world.clone(), build))
         .collect();
@@ -276,7 +286,7 @@ pub fn compile_all(world: &World) -> Vec<Output> {
         .collect()
 }
 
-/// The result of one build of [`compile_all`].
+/// The result of one build of [`compile_all`] or [`compile_builds`].
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Output {
     /// The variant, or `None` for a project without variants.

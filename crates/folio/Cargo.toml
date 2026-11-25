@@ -14,6 +14,7 @@ folio-fonts.workspace = true
 folio-pdf.workspace = true
 folio-syntax.workspace = true
 folio-text.workspace = true
+clap.workspace = true
 codespan-reporting.workspace = true
 ecow = { workspace = true, features = ["serde"] }
 rayon.workspace = true

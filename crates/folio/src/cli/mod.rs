@@ -1,0 +1,259 @@
+//! The commands of SPEC §12.1 and their arguments. `folio build` is
+//! implemented; the other commands, and the flags of `folio build` for
+//! later features, are parsed and rejected as not yet supported.
+
+mod build;
+mod project;
+
+use std::ffi::OsString;
+use std::io::IsTerminal;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use folio::{Date, Target};
+
+/// The exit code of a build or check that found errors.
+const FAILURE: u8 = 1;
+/// The exit code of a command line that cannot be run: arguments that do
+/// not parse, or a command or flag that is not supported yet. clap exits
+/// with it too.
+const USAGE: u8 = 2;
+
+/// Folio compiles one semantic source into PDF, DOCX, PPTX and live
+/// presentations.
+#[derive(Debug, Parser)]
+#[command(name = "folio", version = folio::VERSION)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Build outputs: every variant and target the manifest declares, or
+    /// those chosen
+    Build(BuildArgs),
+    /// Create a project from a template or package (not yet supported)
+    New(Later),
+    /// Rebuild incrementally and serve the live preview (not yet supported)
+    Watch(Later),
+    /// Run the live presentation with presenter view (not yet supported)
+    Present(Later),
+    /// Report diagnostics without writing output (not yet supported)
+    Check(Later),
+    /// Format `.fol` and `.fsty` files canonically (not yet supported)
+    Fmt(Later),
+    /// Move a local override into a stylesheet (not yet supported)
+    Promote(Later),
+    /// Print elements as JSON (not yet supported)
+    Query(Later),
+    /// List the available components (not yet supported)
+    Components(Later),
+    /// Install a compiler version (not yet supported)
+    Toolchain(Later),
+}
+
+impl Command {
+    /// The command's name, for a command that is not supported yet.
+    fn later(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Build(_) => return None,
+            Self::New(_) => "new",
+            Self::Watch(_) => "watch",
+            Self::Present(_) => "present",
+            Self::Check(_) => "check",
+            Self::Fmt(_) => "fmt",
+            Self::Promote(_) => "promote",
+            Self::Query(_) => "query",
+            Self::Components(_) => "components",
+            Self::Toolchain(_) => "toolchain",
+        })
+    }
+}
+
+/// The arguments of a command that is not supported yet, whatever they
+/// are.
+#[derive(Debug, Args)]
+struct Later {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+    _args: Vec<OsString>,
+}
+
+/// The arguments of `folio build`.
+#[derive(Debug, Args)]
+pub(crate) struct BuildArgs {
+    /// Build only this variant; repeat for several
+    #[arg(long = "variant", value_name = "VARIANT")]
+    pub(crate) variants: Vec<String>,
+
+    /// Build only for this target; repeat for several
+    #[arg(long = "target", value_name = "TARGET", value_parser = parse_target)]
+    pub(crate) targets: Vec<Target>,
+
+    /// The date that scripts see as `today`, such as 2026-11-24; it
+    /// replaces `project.today` of folio.toml
+    #[arg(long, value_name = "DATE", value_parser = parse_date)]
+    pub(crate) today: Option<Date>,
+
+    /// The project directory, which holds folio.toml [default: the current
+    /// directory or the nearest one above it that holds folio.toml]
+    #[arg(long, value_name = "DIR")]
+    pub(crate) root: Option<PathBuf>,
+
+    /// Build with this compiler instead of the version folio.toml pins;
+    /// `current` is the running one
+    #[arg(long, value_name = "VERSION", value_parser = ["current"])]
+    pub(crate) compiler: Option<String>,
+
+    /// When to colour diagnostics
+    #[arg(long, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
+    pub(crate) color: Color,
+
+    /// Force strict mode for this build, or with `report` list violations
+    /// (not yet supported)
+    #[arg(
+        long,
+        value_name = "report",
+        num_args = 0..=1,
+        require_equals = true,
+        value_parser = ["report"],
+    )]
+    pub(crate) strict: Option<Option<String>>,
+
+    /// Require alt text (not yet supported)
+    #[arg(long)]
+    pub(crate) strict_a11y: bool,
+}
+
+impl BuildArgs {
+    /// The first flag given that is not supported yet.
+    fn later(&self) -> Option<&'static str> {
+        if self.strict.is_some() {
+            Some("--strict")
+        } else if self.strict_a11y {
+            Some("--strict-a11y")
+        } else {
+            None
+        }
+    }
+}
+
+/// When to colour diagnostics.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
+pub(crate) enum Color {
+    /// When standard error is a terminal and `NO_COLOR` is not set
+    Auto,
+    /// Always
+    Always,
+    /// Never
+    Never,
+}
+
+impl Color {
+    /// Whether to colour what is written to standard error.
+    pub(crate) fn enabled(self) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::Auto => {
+                std::io::stderr().is_terminal()
+                    && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+            }
+        }
+    }
+}
+
+/// A target as the manifest writes it.
+fn parse_target(text: &str) -> Result<Target, String> {
+    Target::from_name(text).ok_or_else(|| {
+        let names: Vec<_> = Target::ALL.iter().map(|t| t.as_str()).collect();
+        format!("the targets are {}", names.join(", "))
+    })
+}
+
+/// A date as TOML writes it.
+fn parse_date(text: &str) -> Result<Date, String> {
+    Date::parse(text).ok_or_else(|| "expected a date such as 2026-11-24".into())
+}
+
+/// Runs the command line.
+pub(crate) fn run() -> ExitCode {
+    let cli = Cli::parse();
+    let later = match &cli.command {
+        Command::Build(args) => args.later().map(|flag| format!("`folio build {flag}`")),
+        command => command.later().map(|name| format!("`folio {name}`")),
+    };
+    if let Some(what) = later {
+        eprintln!("error: {what} is not yet supported");
+        return ExitCode::from(USAGE);
+    }
+    match cli.command {
+        Command::Build(args) => build::build(&args),
+        _ => unreachable!("every other command is rejected above"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::*;
+
+    #[test]
+    fn arguments_are_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn build_flags() {
+        let parse = |args: &[&str]| {
+            let mut all = vec!["folio", "build"];
+            all.extend(args);
+            match Cli::try_parse_from(all).map(|cli| cli.command) {
+                Ok(Command::Build(args)) => Ok(args),
+                Ok(other) => panic!("{other:?}"),
+                Err(error) => Err(error.kind()),
+            }
+        };
+        let args = parse(&[
+            "--variant",
+            "exam",
+            "--variant",
+            "markscheme",
+            "--target",
+            "pdf",
+            "--today",
+            "2026-11-24",
+        ])
+        .unwrap();
+        assert_eq!(args.variants, ["exam", "markscheme"]);
+        assert_eq!(args.targets, [Target::Pdf]);
+        assert_eq!(args.today.unwrap().to_string(), "2026-11-24");
+        assert_eq!(args.later(), None);
+
+        assert!(parse(&["--target", "html"]).is_err());
+        assert!(parse(&["--today", "2026-02-30"]).is_err());
+        assert!(parse(&["--compiler", "1.2.0"]).is_err());
+        assert_eq!(parse(&["--compiler", "current"]).unwrap().later(), None);
+
+        assert_eq!(parse(&["--strict"]).unwrap().later(), Some("--strict"));
+        assert_eq!(
+            parse(&["--strict=report"]).unwrap().later(),
+            Some("--strict")
+        );
+        assert!(parse(&["--strict=lax"]).is_err());
+        assert_eq!(
+            parse(&["--strict-a11y"]).unwrap().later(),
+            Some("--strict-a11y")
+        );
+    }
+
+    #[test]
+    fn later_commands_take_any_arguments() {
+        let cli = Cli::try_parse_from(["folio", "check", "--leaks", "--report", "overrides"]);
+        assert_eq!(cli.unwrap().command.later(), Some("check"));
+        let cli = Cli::try_parse_from(["folio", "watch"]);
+        assert_eq!(cli.unwrap().command.later(), Some("watch"));
+    }
+}
