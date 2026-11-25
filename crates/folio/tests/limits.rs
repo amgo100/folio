@@ -46,7 +46,11 @@ fn values_that_are_not_finite_are_errors() {
     for (sheet, property, what) in [
         ("doc { font-size: 1e308pt * 10; }", "font-size", "length"),
         ("paragraph { indent: -1e308pt * 10; }", "indent", "length"),
-        ("page { page-size: 1e308pt * 10 100mm; }", "page-size", "length"),
+        (
+            "page { page-size: 1e308pt * 10 100mm; }",
+            "page-size",
+            "length",
+        ),
         ("paragraph { widows: 1e308 * 10; }", "widows", "number"),
     ] {
         let world = build(sheet);
@@ -114,14 +118,19 @@ fn page_sizes_outside_pdf_limits_are_clamped_with_a_warning() {
 fn page_sizes_within_pdf_limits_are_kept_without_a_warning() {
     for (sheet, size) in [
         ("", (595.2755905511812, 841.8897637795276)),
-        ("page { page-size: A3; }", (841.8897637795276, 1190.5511811023623)),
+        (
+            "page { page-size: A3; }",
+            (841.8897637795276, 1190.5511811023623),
+        ),
         ("page { page-size: 14400pt 3pt; }", (14_400.0, 3.0)),
     ] {
         let world = build(sheet);
         assert_eq!(page_size(&world), size, "{sheet}");
         let diags = diagnostics(&world);
         assert!(
-            !diags.iter().any(|(_, m, _)| m.starts_with("this page size")),
+            !diags
+                .iter()
+                .any(|(_, m, _)| m.starts_with("this page size")),
             "{sheet}: {diags:?}"
         );
     }
