@@ -19,7 +19,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{Abs, Name, PropertyType, Value};
+use folio_component::{Abs, Name, PropertyType, Ratio, Scalar, Value};
 use folio_syntax::ast::{self, AstNode};
 use folio_syntax::{Span, SyntaxNode};
 
@@ -72,12 +72,17 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
         V::Auto => Value::Auto,
         V::Bool(v) => Value::Bool(*v),
         V::Int(v) => Value::Int(*v),
-        V::Float(v) => Value::Number(*v),
-        V::Length(length) => Value::Length(length.abs + length.em.at(font_size)),
-        V::Angle(angle) => Value::Angle(angle.0),
-        V::Ratio(ratio) => Value::Ratio(*ratio),
-        V::Fraction(fr) => Value::Fraction(fr.0),
-        V::Duration(d) => Value::Duration(d.0),
+        V::Float(v) => Value::Number(Scalar::new(finite(v.get(), "number")?)),
+        // Added as floats, so that a sum that is not a number (`inf - inf`)
+        // is not first made zero, as a length makes it.
+        V::Length(length) => Value::Length(Abs::pt(finite(
+            length.abs.to_pt() + length.em.get() * font_size.to_pt(),
+            "length",
+        )?)),
+        V::Angle(angle) => Value::Angle(Scalar::new(finite(angle.0.get(), "angle")?)),
+        V::Ratio(ratio) => Value::Ratio(Ratio::new(finite(ratio.get(), "ratio")?)),
+        V::Fraction(fr) => Value::Fraction(Scalar::new(finite(fr.0.get(), "fraction")?)),
+        V::Duration(d) => Value::Duration(Scalar::new(finite(d.0.get(), "duration")?)),
         V::Color(color) => Value::Color(*color),
         V::Str(text) => Value::Str(text.clone()),
         V::Array(items) => Value::Array(
@@ -105,6 +110,20 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
             ));
         }
     })
+}
+
+/// A number of a property value, if it is finite: an infinite length or
+/// number, such as `1e308pt * 10` or a huge `em` length at a large font
+/// size, would reach layout and the PDF writer (SPEC §14.2). A
+/// declaration whose value is not finite is an error where the stylesheet
+/// declares it; one that only overflows at an element's font size is left
+/// out there, as a value that does not fit its property is.
+fn finite(value: f64, what: &str) -> Result<f64, EcoString> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(eco_format!("this {what} is not finite"))
+    }
 }
 
 /// Coerces a computed value to a property's type where it is written in
@@ -365,7 +384,7 @@ impl<'a> Values<'a> {
             ast::Expr::Auto(_) => value(eval::Value::Auto),
             ast::Expr::Bool(v) => value(eval::Value::Bool(v.get())),
             ast::Expr::Int(v) => value(eval::Value::Int(v.get())),
-            ast::Expr::Float(v) => value(eval::Value::Float(folio_component::Scalar::new(v.get()))),
+            ast::Expr::Float(v) => value(eval::Value::Float(Scalar::new(v.get()))),
             ast::Expr::Numeric(v) => {
                 let (number, unit) = v.get();
                 value(eval::numeric(number, unit))
@@ -377,8 +396,7 @@ impl<'a> Values<'a> {
             }
             ast::Expr::Ratio(ratio) => {
                 let (a, b) = ratio.get();
-                let number =
-                    |v| Declared::Value(eval::Value::Float(folio_component::Scalar::new(v)));
+                let number = |v| Declared::Value(eval::Value::Float(Scalar::new(v)));
                 Ok(Declared::List(EcoVec::from([number(a), number(b)])))
             }
             ast::Expr::TokenName(token) => self.tokens.get(self, token.get(), span),
