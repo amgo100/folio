@@ -108,6 +108,9 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("type", type_),
 ];
 
+/// The `calc` module. Its transcendental functions come from `libm`, not
+/// the platform's maths library, so that they give the same bits on every
+/// platform (SPEC §2.4).
 const CALC: &[(&str, NativeFn)] = &[
     ("calc.abs", calc_abs),
     ("calc.ceil", calc_ceil),
@@ -555,19 +558,19 @@ fn calc_sqrt(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 }
 
 fn calc_exp(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    unary_float(args, f64::exp)
+    unary_float(args, libm::exp)
 }
 
 fn calc_sin(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    angle_or_number(args, f64::sin)
+    angle_or_number(args, libm::sin)
 }
 
 fn calc_cos(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    angle_or_number(args, f64::cos)
+    angle_or_number(args, libm::cos)
 }
 
 fn calc_tan(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    angle_or_number(args, f64::tan)
+    angle_or_number(args, libm::tan)
 }
 
 fn angle_or_number(args: &mut Args, f: fn(f64) -> f64) -> EvalResult<Value> {
@@ -593,8 +596,8 @@ fn calc_log(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     }
     real(
         match base {
-            Some(base) => x.log(base),
-            None => x.log10(),
+            Some(base) => libm::log(x) / libm::log(base),
+            None => libm::log10(x),
         },
         span,
     )
@@ -614,7 +617,7 @@ fn calc_pow(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
                 .ok_or_else(|| "the result is too large".into())
                 .at(span)
         }
-        _ => real(as_f64(&base).powf(as_f64(&exp)), span),
+        _ => real(libm::pow(as_f64(&base), as_f64(&exp)), span),
     }
 }
 
@@ -649,7 +652,7 @@ fn calc_round(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
         None | Some(0) => rounding(args, f64::round),
         Some(digits) => {
             let x = as_f64(&num(args, "value")?);
-            let factor = 10f64.powi(i32::try_from(digits.clamp(-300, 300)).unwrap_or(0));
+            let factor = libm::pow(10.0, digits.clamp(-300, 300) as f64);
             real((x * factor).round() / factor, span)
         }
     }

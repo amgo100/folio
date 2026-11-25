@@ -210,7 +210,10 @@ fn badness(ratio: f64) -> f64 {
     if ratio < -1.0 {
         INF_BAD
     } else {
-        (100.0 * ratio.abs().powi(3)).min(INF_BAD)
+        // Multiplied out rather than `powi`, whose rounding varies by
+        // platform (SPEC §2.4).
+        let r = ratio.abs();
+        (100.0 * r * r * r).min(INF_BAD)
     }
 }
 
@@ -426,7 +429,8 @@ pub fn demerits(
         let overflow = measure.overflow();
         OVERFULL_DEMERITS * (1.0 + overflow * overflow)
     } else {
-        (LINE_PENALTY + measure.badness()).powi(2)
+        let d = LINE_PENALTY + measure.badness();
+        d * d
     };
     if end.kind != BreakKind::Mandatory {
         if end.penalty >= 0.0 {

@@ -103,9 +103,9 @@ krilla 0.8.2 writes no `/Trans` (its page settings have none); PDF/A and PDF/UA 
 
 ## Test corpus (§11.1)
 
-`corpus/` holds the documents that Folio's PDF output is checked with (issue #32): `notes` (three A5 pages of physics notes: headings at three levels, all three kinds of list, a sidenote, a figure with a caption, a code block, hyphenation across a page break), `exam` (two A4 pages of an exam paper: instructions, numbered questions), and `polish` (Polish text with its quotation marks, hyphenation and a line that repeats an explicit hyphen).
+`corpus/` holds the documents that Folio's PDF output is checked with (issue #32): `notes` (three A5 pages of physics notes: headings at three levels, all three kinds of list, a sidenote, a figure with a caption, a code block, hyphenation across a page break), `exam` (an exam paper in two variants: the paper, two A4 pages of instructions and numbered questions, also built for DOCX, which has no writer yet; and its mark scheme, which adds answers computed with `calc` and sets the text smaller), and `polish` (Polish text with its quotation marks, hyphenation and a line that repeats an explicit hyphen).
 
-`cargo test -p folio --test pdf` compiles each, checks that krilla's PDF/UA-1 validator accepted it, that it has the structure elements, metadata and bookmarks it should, and that it compiles to the same bytes in a new world. That test is part of `scripts/check.sh`. With `FOLIO_PDF_OUT=<dir>` it also writes each PDF and the text a reader should extract from it (the document's paragraphs, one per line).
+`cargo test -p folio --test pdf` compiles each, in every variant it builds as PDF (written as `<project>-<variant>.pdf`), checks that krilla's PDF/UA-1 validator accepted it, that it has the structure elements, metadata and bookmarks it should, and that it compiles to the same bytes in a new world. That test is part of `scripts/check.sh`, as is `cargo test -p folio --test determinism`, which builds the corpus in two differently set up processes, compares the bytes, and compares their digests with the recorded ones (§2.4). With `FOLIO_PDF_OUT=<dir>` it also writes each PDF and the text a reader should extract from it (the document's paragraphs, one per line).
 
 ```
 python tests/pdf/corpus.py [--verapdf <command>] [--pdftotext <command>] [--out <dir>]
