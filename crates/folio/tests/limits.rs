@@ -1,7 +1,7 @@
 //! Limits on property values that would otherwise reach layout and the PDF
-//! writer out of range, found by fuzzing past the style stage (SPEC §11.1,
-//! §14.2): lengths, numbers and ratios that are not finite, and page sizes
-//! outside PDF's limits.
+//! writer out of range, the suspects of fuzzing past the style stage (SPEC
+//! §11.1, §14.2), whose `compile` target and seeds cover them too: values
+//! that are not finite, and page sizes outside PDF's limits.
 
 use folio::{Severity, Target, World, diag};
 
@@ -52,6 +52,12 @@ fn values_that_are_not_finite_are_errors() {
             "length",
         ),
         ("paragraph { widows: 1e308 * 10; }", "widows", "number"),
+        // Not a number, which a length would make zero.
+        (
+            "paragraph { indent: -1e308pt * 10 + 1e308em * 10; }",
+            "indent",
+            "length",
+        ),
     ] {
         let world = build(sheet);
         let diags = diagnostics(&world);
@@ -134,4 +140,31 @@ fn page_sizes_within_pdf_limits_are_kept_without_a_warning() {
             "{sheet}: {diags:?}"
         );
     }
+}
+
+#[test]
+fn the_page_size_warning_points_at_the_declaration_that_set_it() {
+    // Neither a `page-size` on another element nor an invalid one that
+    // comes later set the page's size.
+    let world = build(
+        "page { page-size: 20000pt 100mm; }\n\
+         heading { page-size: A4; }\n\
+         page { page-size: 1e308pt * 10 100mm; }\n",
+    );
+    let diags = diagnostics(&world);
+    let warning = diags
+        .iter()
+        .find(|(_, message, _)| message.starts_with("this page size"))
+        .unwrap_or_else(|| panic!("no warning in {diags:?}"));
+    assert_eq!(warning.2, "page-size: 20000pt 100mm;");
+}
+
+#[test]
+fn margins_wider_than_the_page_leave_the_body_on_it() {
+    let world = build("page { page-size: 2pt 2pt; margin-inner: 20mm; margin-top: 20mm; }\n");
+    let pages = folio::pages(&world, Target::Pdf, None).unwrap().unwrap();
+    let master = pages.master;
+    assert_eq!(page_size(&world), (3.0, 3.0));
+    assert!(master.body.origin.x < master.size.width);
+    assert!(master.body.origin.y < master.size.height);
 }

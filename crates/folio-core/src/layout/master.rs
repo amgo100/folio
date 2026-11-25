@@ -67,9 +67,21 @@ impl PageMaster {
         let requested = size;
         let size = Size::new(clamp(size.width), clamp(size.height));
         let clamped = (size != requested).then_some(requested);
-        let margin = |name: &str| length(page, props, name).max(Abs::zero());
-        let (top, bottom) = (margin("margin-top"), margin("margin-bottom"));
-        let (inner, outer) = (margin("margin-inner"), margin("margin-outer"));
+        // A margin as wide as the page leaves the body a point inside it,
+        // where content is still drawn on the page.
+        let margin = |name: &str, side: Abs| {
+            length(page, props, name)
+                .max(Abs::zero())
+                .min(side - Abs::pt(1.0))
+        };
+        let (top, bottom) = (
+            margin("margin-top", size.height),
+            margin("margin-bottom", size.height),
+        );
+        let (inner, outer) = (
+            margin("margin-inner", size.width),
+            margin("margin-outer", size.width),
+        );
         let body = Size::new(
             (size.width - inner - outer).max(Abs::pt(1.0)),
             (size.height - top - bottom).max(Abs::pt(1.0)),

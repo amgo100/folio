@@ -43,6 +43,7 @@ use crate::diag::{self, Diagnostic};
 use crate::fonts::fonts;
 use crate::pipeline::step_styled;
 use crate::span_map::source_ref;
+use crate::style::{DeclValue, NodeName, NodeView, Position, Subject};
 use crate::text::text;
 
 /// How much a page's emptiness costs: an empty page would cost this much.
@@ -173,9 +174,10 @@ fn blank(master: &PageMaster) -> Fragment {
     page
 }
 
-/// Reports a page size outside PDF's limits (SPEC §11.1), at the last
-/// `page-size` declaration of the cascade, or at the document when the
-/// size is the default.
+/// Reports a page size outside PDF's limits (SPEC §11.1), at the
+/// `page-size` declaration that set it: the last valid one of the rules
+/// that match the page, as the style stage matches them; or at the
+/// document when the size is the default.
 fn report_page_size(
     db: &dyn Db,
     build: Build<'_>,
@@ -185,11 +187,27 @@ fn report_page_size(
 ) {
     let cascade = crate::style::cascade(db, build);
     let page_size = cascade.properties.builtin("page-size");
+    let page = NodeView {
+        subject: Subject {
+            name: NodeName::Page,
+            classes: EcoVec::new(),
+            label: None,
+            fields: EcoVec::new(),
+        },
+        pos: Position::default(),
+        prev: EcoVec::new(),
+        children: EcoVec::new(),
+    };
     let span = cascade
         .rules
         .iter()
+        .filter(|rule| rule.selector.matches(&[&page]))
         .flat_map(|rule| &rule.declarations)
-        .rfind(|decl| decl.prop == page_size)
+        .rfind(|decl| {
+            decl.prop == page_size
+                && matches!(&decl.value, DeclValue::Value(value)
+                    if crate::style::compute(value, Abs::pt(10.0)).is_ok())
+        })
         .map_or(root, |decl| decl.span);
     let side = |a: Abs| {
         if a.to_pt().abs() < 1e6 {

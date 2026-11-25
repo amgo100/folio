@@ -73,14 +73,16 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
         V::Bool(v) => Value::Bool(*v),
         V::Int(v) => Value::Int(*v),
         V::Float(v) => Value::Number(Scalar::new(finite(v.get(), "number")?)),
+        // Added as floats, so that a sum that is not a number (`inf - inf`)
+        // is not first made zero, as a length makes it.
         V::Length(length) => Value::Length(Abs::pt(finite(
-            (length.abs + length.em.at(font_size)).to_pt(),
+            length.abs.to_pt() + length.em.get() * font_size.to_pt(),
             "length",
         )?)),
-        V::Angle(angle) => Value::Angle(angle.0),
+        V::Angle(angle) => Value::Angle(Scalar::new(finite(angle.0.get(), "angle")?)),
         V::Ratio(ratio) => Value::Ratio(Ratio::new(finite(ratio.get(), "ratio")?)),
-        V::Fraction(fr) => Value::Fraction(fr.0),
-        V::Duration(d) => Value::Duration(d.0),
+        V::Fraction(fr) => Value::Fraction(Scalar::new(finite(fr.0.get(), "fraction")?)),
+        V::Duration(d) => Value::Duration(Scalar::new(finite(d.0.get(), "duration")?)),
         V::Color(color) => Value::Color(*color),
         V::Str(text) => Value::Str(text.clone()),
         V::Array(items) => Value::Array(
