@@ -80,7 +80,11 @@ pub struct Pages {
     /// a hash of what the page shows, its geometry, glyphs and paint, and
     /// the faces its glyph runs name by index, that leaves out the sources
     /// its fragments and glyphs name. Two pages that look the same have
-    /// the same hash, whatever their sources' span numbers.
+    /// the same hash, whatever their sources' span numbers. A face counts
+    /// by where its file is, its names and its file's length, not its
+    /// bytes: a font file replaced in place by one of the same length and
+    /// names leaves the hashes as they were, so a watcher draws every page
+    /// again when a font file changes.
     pub hashes: EcoVec<u64>,
 }
 

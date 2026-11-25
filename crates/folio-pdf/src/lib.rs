@@ -496,6 +496,9 @@ struct Writer<'a> {
 /// allow, as the validator would report it.
 #[derive(Default)]
 struct Dry {
+    /// Whether to check the glyphs: only for a document with a title,
+    /// which alone can claim PDF/UA-1.
+    glyphs: bool,
     /// Glyphs that are their font's `.notdef`, in the order drawn.
     notdef: Vec<ValidationError>,
     /// Glyphs whose text, where each is first shown, is not a valid
@@ -576,7 +579,10 @@ impl<'a> Writer<'a> {
             tagger: Tagger::new(document.structure),
             warnings: Vec::new(),
             last: None,
-            dry: dry.then(Dry::default),
+            dry: dry.then(|| Dry {
+                glyphs: document.info.title.is_some(),
+                ..Dry::default()
+            }),
         }
     }
 }
@@ -659,8 +665,11 @@ impl Writer<'_> {
             return;
         };
         if let Some(dry) = &mut self.dry {
-            let last_resort = name(&font, &self.names) == "LastResort";
-            dry.run(run, &font, last_resort);
+            // Only a document with a title can claim PDF/UA-1.
+            if dry.glyphs {
+                let last_resort = name(&font, &self.names) == "LastResort";
+                dry.run(run, &font, last_resort);
+            }
             let id = surface.start_tagged(ContentTag::Span(SpanTag::empty()));
             surface.end_tagged();
             self.tagger.content(node, id);

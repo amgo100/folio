@@ -18,11 +18,11 @@
 //! `preview_after_edit` and `restyle` count the preview path (SPEC §14.1,
 //! the M1 exit check of §15): the reference document laid out again after
 //! an edit, up to its pages and without emit. Both go through [`preview`].
-//! `check_after_edit` counts the check path of the same one-word edit
-//! (SPEC §12.1, `folio check`): every stage before Emit and the PDF
-//! writer's check, which give a build's diagnostics without its file. `compile_variants` counts the ten-page
-//! document with three variants: the teacher's variant alone, and all
-//! three.
+//! `check_after_edit` counts the check path of the same one-word edit (SPEC
+//! §12.1, `folio check`): every stage before Emit and the PDF writer's
+//! check, which give a build's diagnostics without its file.
+//! `compile_variants` counts the ten-page document with three variants: the
+//! teacher's variant alone, and all three.
 //!
 //! Callgrind counts only the benchmark function's thread. Paragraphs that
 //! `folio-text` shapes several at a time run on its shaping thread, so
