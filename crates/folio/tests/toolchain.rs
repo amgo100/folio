@@ -38,12 +38,27 @@ impl FakeChannel {
         let channel = Self {
             dir: tempfile::tempdir().unwrap(),
         };
-        let info = format!("version = 1\nsecurity-fixes-from = \"{security_fixes_from}\"\n");
+        channel.publish(1, security_fixes_from);
+        channel
+    }
+
+    /// Publishes a `channel.toml` with a serial, signed with the channel's
+    /// key, and returns its text.
+    fn publish(&self, serial: u64, security_fixes_from: &str) -> String {
+        let info = format!(
+            "version = 1\nserial = {serial}\nsecurity-fixes-from = \"{security_fixes_from}\"\n"
+        );
+        self.publish_text(&info);
+        info
+    }
+
+    /// Publishes the text of a `channel.toml`, signed with the channel's
+    /// key.
+    fn publish_text(&self, info: &str) {
         // The file is signed under its name, not under the path of its
         // latest copy.
         let signature = sign(&key(), "channel.toml", info.as_bytes());
-        channel.put_signed(&Channel::info_path(), info.as_bytes(), &signature);
-        channel
+        self.put_signed(&Channel::info_path(), info.as_bytes(), &signature);
     }
 
     /// Writes a file of the channel, with its signature by `key`.
@@ -263,7 +278,11 @@ fn bad_signatures_are_rejected() {
     let channel = FakeChannel::new("0.0.0");
     channel.release("77.0.0", FAKE_COMPILER);
     let info = channel.dir.path().join(Channel::info_path());
-    fs::write(&info, "version = 1\nsecurity-fixes-from = \"0.0.1\"\n").unwrap();
+    fs::write(
+        &info,
+        "version = 1\nserial = 1\nsecurity-fixes-from = \"0.0.1\"\n",
+    )
+    .unwrap();
     rejected(install(&channel, "77.0.0", &toolchains), "channel.toml");
 
     assert_eq!(files(cache.path()), Vec::<PathBuf>::new());
@@ -333,6 +352,7 @@ fn stores_what_the_channel_says_of_security_fixes() {
     let toolchains = Toolchains::new(cache.path().join("toolchains"));
     let installed = install(&channel, "77.0.0", &toolchains).unwrap();
     let info = ChannelInfo {
+        serial: 1,
         security_fixes_from: Version::new(80, 0, 0),
     };
     assert_eq!(installed.info.as_ref(), Some(&info));
@@ -348,11 +368,89 @@ fn stores_what_the_channel_says_of_security_fixes() {
 }
 
 #[test]
+fn refuses_an_older_channel_file() {
+    let channel = FakeChannel::new("0.0.0");
+    channel.release("77.0.0", FAKE_COMPILER);
+    channel.release("78.0.0", FAKE_COMPILER);
+    channel.release("79.0.0", FAKE_COMPILER);
+    let cache = tempfile::tempdir().unwrap();
+    let toolchains = Toolchains::new(cache.path().join("toolchains"));
+    let keys = [key().verifying_key()];
+    let old = fs::read(channel.dir.path().join(Channel::info_path())).unwrap();
+    let old_signature = fs::read(
+        channel
+            .dir
+            .path()
+            .join(format!("{}.sig", Channel::info_path())),
+    )
+    .unwrap();
+
+    // A newer channel file raises the floor.
+    channel.publish(2, "78.0.0");
+    install(&channel, "77.0.0", &toolchains).unwrap();
+    assert_eq!(toolchains.channel_info(&keys).unwrap().serial, 2);
+
+    // The older one, validly signed, is refused before the binary is
+    // downloaded, and the stored floor stays.
+    channel.put_signed(&Channel::info_path(), &old, &old_signature);
+    match install(&channel, "78.0.0", &toolchains) {
+        Err(
+            e @ InstallError::ChannelReplayed {
+                serial: 1,
+                stored: 2,
+            },
+        ) => {
+            assert!(e.to_string().contains("older than serial 2"), "{e}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(toolchains.get(&Version::new(78, 0, 0)), None);
+    let info = toolchains.channel_info(&keys).unwrap();
+    assert_eq!(
+        (info.serial, info.security_fixes_from),
+        (2, Version::new(78, 0, 0))
+    );
+
+    // So is a file with the same serial and other contents.
+    channel.publish(2, "0.0.0");
+    assert!(matches!(
+        install(&channel, "78.0.0", &toolchains),
+        Err(InstallError::ChannelReplayed {
+            serial: 2,
+            stored: 2
+        })
+    ));
+    assert_eq!(toolchains.get(&Version::new(78, 0, 0)), None);
+
+    // The same file again is accepted, and so is a later one.
+    channel.publish(2, "78.0.0");
+    install(&channel, "78.0.0", &toolchains).unwrap();
+    channel.publish(5, "79.0.0");
+    install(&channel, "79.0.0", &toolchains).unwrap();
+    let info = toolchains.channel_info(&keys).unwrap();
+    assert_eq!(
+        (info.serial, info.security_fixes_from),
+        (5, Version::new(79, 0, 0))
+    );
+}
+
+#[test]
 fn reads_channel_files() {
-    let info = ChannelInfo::parse("version = 1\nsecurity-fixes-from = \"1.4.0\"\nnews = 3\n");
-    assert_eq!(info.unwrap().security_fixes_from, Version::new(1, 4, 0));
-    assert!(ChannelInfo::parse("version = 2\nsecurity-fixes-from = \"1.4.0\"\n").is_err());
-    assert!(ChannelInfo::parse("version = 1\n").is_err());
-    assert!(ChannelInfo::parse("version = 1\nsecurity-fixes-from = \"1.4\"\n").is_err());
+    let info =
+        ChannelInfo::parse("version = 1\nserial = 3\nsecurity-fixes-from = \"1.4.0\"\nnews = 3\n")
+            .unwrap();
+    assert_eq!(info.serial, 3);
+    assert_eq!(info.security_fixes_from, Version::new(1, 4, 0));
+    let floor = "security-fixes-from = \"1.4.0\"\n";
+    assert!(ChannelInfo::parse(&format!("version = 2\nserial = 3\n{floor}")).is_err());
+    assert!(ChannelInfo::parse("version = 1\nserial = 3\n").is_err());
+    assert!(
+        ChannelInfo::parse("version = 1\nserial = 3\nsecurity-fixes-from = \"1.4\"\n").is_err()
+    );
+    // The serial is required, and is a whole number that is not negative.
+    assert!(ChannelInfo::parse(&format!("version = 1\n{floor}")).is_err());
+    assert!(ChannelInfo::parse(&format!("version = 1\nserial = -1\n{floor}")).is_err());
+    assert!(ChannelInfo::parse(&format!("version = 1\nserial = 1.5\n{floor}")).is_err());
+    assert!(ChannelInfo::parse(&format!("version = 1\nserial = \"3\"\n{floor}")).is_err());
     assert!(ChannelInfo::parse("version = ").is_err());
 }

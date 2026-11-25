@@ -9,7 +9,7 @@ use std::process::{Command, ExitCode};
 
 use clap::{Args, Subcommand};
 use folio::diag::TextFiles;
-use folio::toolchain::{self, Channel, Curl, Toolchains};
+use folio::toolchain::{self, Channel, Curl, InstallError, Toolchains};
 use folio::{Diagnostic, Manifest, World};
 use folio_syntax::DiagSpan;
 use semver::Version;
@@ -116,6 +116,13 @@ fn install(args: &InstallArgs) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        Err(e @ InstallError::ChannelReplayed { .. }) => fail(
+            e.to_string(),
+            &[
+                "try again later or on another network; if it keeps happening, tell the Folio \
+               project",
+            ],
+        ),
         Err(e) => fail(e.to_string(), &[]),
     }
 }
