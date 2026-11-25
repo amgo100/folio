@@ -447,11 +447,28 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
     let pdf = build.target(db) == Target::Pdf;
 
     let mut chains: HashMap<Request, EcoVec<usize>> = HashMap::new();
-    // The requests whose families were checked, which is done at the first
-    // text set in them that has a glyph to draw.
-    let mut checked: HashSet<Request> = HashSet::new();
     let mut unknown: HashSet<EcoString> = HashSet::new();
+    // The requests whose families were checked, and the faces.
+    let mut checked: HashSet<Request> = HashSet::new();
     let mut used: HashSet<usize> = HashSet::new();
+    // Requests and faces met only at segments of spaces and invisible
+    // characters so far, with where. They are checked there only if no
+    // text with a glyph to draw asks for them, so a diagnostic points at
+    // text rather than at a blank where it can.
+    let mut blank_requests: Vec<(Request, Span)> = Vec::new();
+    let mut blank_faces: Vec<(usize, Span)> = Vec::new();
+    let mut check_request = |request: &Request, chain: &[usize], span: Span| {
+        for family in &request.families {
+            if fonts.select(family, request.variant).is_none()
+                && unknown.insert(family.to_lowercase())
+            {
+                report_unknown(db, fonts, family, span);
+            }
+        }
+        if chain.is_empty() {
+            report_no_chain(db, request, span);
+        }
+    };
     for paragraph in &text.paragraphs {
         let string = paragraph.paragraph.text.as_str();
         let segments = &paragraph.paragraph.segments;
@@ -476,31 +493,30 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
                         .collect()
                 })
                 .clone();
-            // Spaces and invisible characters need no glyph: a chain that
-            // only they ask for is not reported, though the face that sets
-            // them still decides their width.
+            // Spaces need no glyph but are set in a face all the same,
+            // which gives their width; without one, layout drops them.
             let visible = string[range.clone()].chars().any(|c| !ignorable(c));
-            if visible && checked.insert(request.clone()) {
-                for family in &request.families {
-                    if fonts.select(family, request.variant).is_none()
-                        && unknown.insert(family.to_lowercase())
-                    {
-                        report_unknown(db, fonts, family, span());
-                    }
-                }
-                if chain.is_empty() {
-                    report_no_chain(db, &request, span());
+            if !checked.contains(&request) {
+                if visible {
+                    checked.insert(request.clone());
+                    check_request(&request, &chain, span());
+                } else if !blank_requests.iter().any(|(r, _)| *r == request) {
+                    blank_requests.push((request.clone(), span()));
                 }
             }
             if chain.is_empty() {
                 continue;
             }
             match info.face {
-                Some(face) => {
-                    if used.insert(face) {
+                Some(face) if !used.contains(&face) => {
+                    if visible {
+                        used.insert(face);
                         check_face(db, &fonts.faces[face], span(), mode, strict, pdf);
+                    } else if !blank_faces.iter().any(|(f, _)| *f == face) {
+                        blank_faces.push((face, span()));
                     }
                 }
+                Some(_) => {}
                 None => {
                     for (i, c) in string[range.clone()].char_indices() {
                         if ignorable(c) {
@@ -521,6 +537,16 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
         }
         for (chain, span, chars) in missing {
             report_missing(db, fonts, &chain, &chars, span);
+        }
+    }
+    for (request, span) in blank_requests {
+        if !checked.contains(&request) {
+            check_request(&request, &chains[&request], span);
+        }
+    }
+    for (face, span) in blank_faces {
+        if !used.contains(&face) {
+            check_face(db, &fonts.faces[face], span, mode, strict, pdf);
         }
     }
 }

@@ -609,12 +609,50 @@ fn a_build_that_is_not_laid_out_checks_fonts_but_not_shaping_settings() {
 }
 
 #[test]
-fn spaces_alone_do_not_ask_for_a_font() {
+fn spaces_are_set_in_a_font_too() {
     // The space between the two words is set in the document's chain,
-    // which has no font; it needs no glyph, so nothing is reported.
+    // which has no font, so layout would drop it.
     let compiled = compile(&world(
         "doc { font: \"Nonexistent\"; }\nstrong { font: \"Source Serif 4\"; }\n",
         "*Hi* *there*\n",
     ));
-    assert_eq!(messages(&compiled), []);
+    assert_eq!(
+        messages(&compiled),
+        [
+            (
+                Severity::Warning,
+                "the font family `Nonexistent` is not available".into()
+            ),
+            (
+                Severity::Error,
+                "no font of the `font` chain is available: `Nonexistent`".into()
+            ),
+        ]
+    );
+
+    // A system font that sets the spaces and some text is reported at the
+    // text, wherever the spaces come first.
+    let dir = tempfile::tempdir().unwrap();
+    let mut world = World::builder()
+        .mode(BuildMode::Ci)
+        .build(MANIFEST, None)
+        .unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            "doc { font: \"Local Serif\"; }\nstrong { font: \"Source Serif 4\"; }\n",
+        )
+        .unwrap();
+    let text = "*Hi* *there*\n\nPlain text.\n";
+    world.set_source("main.fol", text).unwrap();
+    world.set_system_fonts([local_serif(dir.path())]);
+    let compiled = compile(&world);
+    let error = only(&compiled);
+    assert!(
+        error
+            .message
+            .ends_with("is a system font, so the output depends on this machine")
+    );
+    let location = folio::diag::locate(&world, error.span).unwrap();
+    assert_eq!(&text[location.bytes], "Plain text.");
 }
