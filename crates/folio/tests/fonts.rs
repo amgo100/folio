@@ -542,3 +542,68 @@ fn checks_the_fonts_of_raw_text_links_and_quotation_marks() {
         ]
     );
 }
+
+#[test]
+fn missing_glyphs_are_reported_at_each_node_that_has_them() {
+    let world = world(
+        "doc { font: \"Source Serif 4\"; }\n",
+        "The symbols 漢 and *字* are missing.\n",
+    );
+    let compiled = compile(&world);
+    let errors: Vec<(String, String)> = compiled
+        .diagnostics
+        .iter()
+        .map(|d| {
+            let location = folio::diag::locate(&world, d.span).unwrap();
+            let source = world.source("main.fol").unwrap();
+            (
+                d.message.to_string(),
+                source.text()[location.bytes].to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        errors,
+        [
+            (
+                "no font of the `font` chain has a glyph for `漢` (U+6F22)".into(),
+                "The symbols 漢 and".into()
+            ),
+            (
+                "no font of the `font` chain has a glyph for `字` (U+5B57)".into(),
+                "字".into()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_build_that_is_not_laid_out_checks_fonts_but_not_shaping_settings() {
+    let manifest = format!("{MANIFEST}\n[variants.exam]\ntargets = [\"pdf\", \"docx\"]\n");
+    let mut world = World::new(&manifest).unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            "doc { font: \"Source Serif 4\"; lang: \"xx\"; hyphenate: true; }\n",
+        )
+        .unwrap();
+    world.set_source("main.fol", "Code `漢` here.\n").unwrap();
+    let exam = folio::Name::new("exam").unwrap();
+    let missing = "no font of the `font` chain has a glyph for `漢` (U+6F22)";
+    let docx = folio::compile(&world, Target::Docx, Some(&exam)).unwrap();
+    let docx: Vec<String> = messages(&docx).into_iter().map(|(_, m)| m).collect();
+    assert_eq!(docx.len(), 2, "{docx:?}");
+    assert_eq!(docx[0], missing);
+    assert!(docx[1].starts_with("DOCX output is not implemented yet"));
+    let pdf = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(
+        messages(&pdf),
+        [
+            (Severity::Error, missing.into()),
+            (
+                Severity::Warning,
+                "there are no hyphenation patterns for the language `xx`".into()
+            ),
+        ]
+    );
+}

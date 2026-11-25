@@ -452,13 +452,15 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
     for paragraph in &text.paragraphs {
         let string = paragraph.paragraph.text.as_str();
         let segments = &paragraph.paragraph.segments;
-        // The characters no font has, by chain, with where the first is.
-        let mut missing: Vec<(EcoVec<usize>, Vec<char>, Span)> = Vec::new();
+        // The characters no font has, by chain and by the source node they
+        // are the text of, in order.
+        let mut missing: Vec<(EcoVec<usize>, Span, Vec<char>)> = Vec::new();
         for (segment, info) in segments.iter().zip(&paragraph.segments) {
             if !matches!(segment.kind, SegmentKind::Text { .. }) {
                 continue;
             }
-            let span = segment_span(paragraph, string, segment.range.clone());
+            let range = segment.range.clone();
+            let span = || segment_span(paragraph, string, range.clone());
             let request = Request::of(&info.style, props);
             let chain = chains.entry(request.clone()).or_insert_with(|| {
                 let mut chain = EcoVec::new();
@@ -467,13 +469,13 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
                         Some(face) => chain.push(face),
                         None => {
                             if unknown.insert(family.to_lowercase()) {
-                                report_unknown(db, fonts, family, span);
+                                report_unknown(db, fonts, family, span());
                             }
                         }
                     }
                 }
                 if chain.is_empty() {
-                    report_no_chain(db, &request, span);
+                    report_no_chain(db, &request, span());
                 }
                 chain
             });
@@ -483,22 +485,26 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
             match info.face {
                 Some(face) => {
                     if used.insert(face) {
-                        check_face(db, &fonts.faces[face], span, mode, strict, pdf);
+                        check_face(db, &fonts.faces[face], span(), mode, strict, pdf);
                     }
                 }
                 None => {
-                    let i = match missing.iter().position(|(c, ..)| c == chain) {
-                        Some(i) => i,
-                        None => {
-                            missing.push((chain.clone(), Vec::new(), span));
-                            missing.len() - 1
+                    for (i, c) in string[range.clone()].char_indices() {
+                        if ignorable(c) {
+                            continue;
                         }
-                    };
-                    let chars = &mut missing[i].1;
-                    for c in string[segment.range.clone()]
-                        .chars()
-                        .filter(|&c| !ignorable(c))
-                    {
+                        let at = source_span(paragraph, range.start + i).unwrap_or(paragraph.span);
+                        let group = match missing
+                            .iter()
+                            .position(|(ch, sp, _)| ch == chain && *sp == at)
+                        {
+                            Some(k) => k,
+                            None => {
+                                missing.push((chain.clone(), at, Vec::new()));
+                                missing.len() - 1
+                            }
+                        };
+                        let chars = &mut missing[group].2;
                         if !chars.contains(&c) {
                             chars.push(c);
                         }
@@ -506,30 +512,30 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
                 }
             }
         }
-        for (chain, chars, span) in missing {
-            if !chars.is_empty() {
-                report_missing(db, fonts, &chain, &chars, span);
-            }
+        for (chain, span, chars) in missing {
+            report_missing(db, fonts, &chain, &chars, span);
         }
     }
+}
+
+/// The source node whose text a byte of a paragraph's text is, if any.
+fn source_span(paragraph: &CollectedParagraph, at: usize) -> Option<Span> {
+    paragraph
+        .sources
+        .iter()
+        .find(|s| s.range.contains(&at))
+        .map(|s| s.span)
 }
 
 /// Where to report a problem with a segment of a paragraph: the source of
 /// its first character that has a glyph, else of its first character, else
 /// the element whose content the paragraph is.
 fn segment_span(paragraph: &CollectedParagraph, text: &str, range: Range<usize>) -> Span {
-    let source = |at: usize| {
-        paragraph
-            .sources
-            .iter()
-            .find(|s| s.range.contains(&at))
-            .map(|s| s.span)
-    };
     text[range.clone()]
         .char_indices()
         .find(|&(_, c)| !ignorable(c))
-        .and_then(|(i, _)| source(range.start + i))
-        .or_else(|| source(range.start))
+        .and_then(|(i, _)| source_span(paragraph, range.start + i))
+        .or_else(|| source_span(paragraph, range.start))
         .unwrap_or(paragraph.span)
 }
 

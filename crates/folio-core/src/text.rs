@@ -32,7 +32,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{BODY, ElementKind, Name, QualifiedName, Value};
+use folio_component::{BODY, ElementKind, Name, QualifiedName, Target, Value};
 use folio_syntax::Span;
 use folio_text::{Feature, Lang, OBJECT, Paragraph, Segment, SegmentKind, Shaped, TextFont};
 
@@ -218,9 +218,11 @@ pub struct CollectedParagraph {
 /// fonts by fallback but not shaped, or `None` when the document could not
 /// be styled. Every build checks the fonts of their segments
 /// ([`crate::fonts::check_fonts`]); the targets that are laid out shape
-/// them ([`text()`]). Reports `features` that are not OpenType feature
-/// settings, `lang` values that are not language tags, and
-/// `hyphenate: true` for a language without hyphenation patterns.
+/// them ([`text()`]). For those targets, reports `features` that are not
+/// OpenType feature settings, `lang` values that are not language tags,
+/// and `hyphenate: true` for a language without hyphenation patterns:
+/// what shaping and breaking read, which DOCX and PPTX leave to Word and
+/// PowerPoint.
 #[salsa::tracked(returns(ref))]
 pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
     let project = build.project(db);
@@ -239,6 +241,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         chains: HashMap::new(),
         settings: HashMap::new(),
         reported: HashSet::new(),
+        report: matches!(build.target(db), Target::Pdf | Target::Live),
         pending: Vec::new(),
         blocks: Vec::new(),
         root: None,
@@ -273,6 +276,9 @@ struct Collector<'a> {
     settings: HashMap<ComputedStyle, Settings>,
     /// Values already reported, so each is reported once per build.
     reported: HashSet<EcoString>,
+    /// Whether to report values that shaping and breaking cannot use: only
+    /// for the targets Folio lays out.
+    report: bool,
     pending: Vec<CollectedParagraph>,
     /// The blocks being collected, innermost last.
     blocks: Vec<TextBlock>,
@@ -666,7 +672,7 @@ impl Collector<'_> {
     }
 
     fn report_once(&mut self, key: EcoString, diagnostic: Diagnostic) {
-        if self.reported.insert(key) {
+        if self.report && self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
     }
