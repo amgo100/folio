@@ -162,6 +162,6 @@ fn incremental_edits_decode_within_the_text() {
         fuzz::MAX_EDITS
     );
     // The same seed gives the same input.
-    assert_eq!(fuzz::incremental_input(7), fuzz::incremental_input(7));
-    assert_ne!(fuzz::incremental_input(7), fuzz::incremental_input(8));
+    assert_eq!(fuzz::differential_input(7), fuzz::differential_input(7));
+    assert_ne!(fuzz::differential_input(7), fuzz::differential_input(8));
 }

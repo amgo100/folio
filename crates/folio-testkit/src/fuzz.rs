@@ -13,13 +13,15 @@
 //! | `reparse` | an edit to markup or a stylesheet | incremental reparsing equals a full parse; node identities follow the edit |
 //! | `style` | content and a stylesheet | evaluation, the cascade and selector matching finish without a panic |
 //! | `nesting` | wrappers and how often to apply each | a script that nests values that deeply compiles to PDF on a small stack, or reports the nesting limit, without a panic or an overflow |
-//! | `incremental` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs and diagnostics of a world built afresh from the same texts |
+//! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs and diagnostics of a world built afresh from the same texts |
 //!
 //! A target panics when a check fails; libFuzzer records the input.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use folio::{BuildMode, Limits, Name, Target, World};
 use folio_syntax::{NodeIds, Source, SyntaxNode, parse, parse_stylesheet};
@@ -36,7 +38,7 @@ pub const TARGETS: &[(&str, Body)] = &[
     ("reparse", reparse),
     ("style", style),
     ("nesting", nesting),
-    ("incremental", incremental),
+    ("differential", differential),
 ];
 
 /// The regression inputs of a target: `fuzz/regressions/<target>/`.
@@ -307,7 +309,7 @@ edition = \"2027\"
 compiler = \"0.0.0\"
 ";
 
-/// What [`incremental`] inserts into content: markup that opens and closes
+/// What [`differential`] inserts into content: markup that opens and closes
 /// blocks, scripts, references and labels, words, and breaks, so that
 /// random edits restructure the document as well as reflow it.
 pub const CONTENT_SNIPPETS: &[&str] = &[
@@ -346,7 +348,7 @@ pub const CONTENT_SNIPPETS: &[&str] = &[
     "A sentence long enough to move a line break or two further down the page. ",
 ];
 
-/// What [`incremental`] inserts into stylesheets: rules, declarations of
+/// What [`differential`] inserts into stylesheets: rules, declarations of
 /// properties that layout reads, and the punctuation that opens and
 /// closes them.
 pub const SHEET_SNIPPETS: &[&str] = &[
@@ -375,11 +377,11 @@ pub const SHEET_SNIPPETS: &[&str] = &[
     "space-after: 30pt;",
 ];
 
-/// How many edits [`incremental`] applies at most, so that one input stays
+/// How many edits [`differential`] applies at most, so that one input stays
 /// within a few seconds.
 pub const MAX_EDITS: usize = 6;
 
-/// An edit of [`incremental`], as [`Edits::decode`] reads it.
+/// An edit of [`differential`], as [`Edits::decode`] reads it.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SourceEdit {
     /// The source edited, by path in the project.
@@ -391,7 +393,7 @@ pub struct SourceEdit {
 }
 
 /// A corpus project and a sequence of edits to its sources, which
-/// [`incremental`] applies one at a time.
+/// [`differential`] applies one at a time.
 #[derive(Debug, Clone)]
 pub struct Edits {
     /// The project.
@@ -411,8 +413,10 @@ impl Edits {
     /// ignored. `None` without a project byte.
     pub fn decode(data: &[u8]) -> Option<Self> {
         let (&first, rest) = data.split_first()?;
-        let mut projects = corpus::projects();
-        let project = projects.swap_remove(usize::from(first) % projects.len());
+        // Read once: the fuzzer runs the target many times a second.
+        static PROJECTS: OnceLock<Vec<corpus::Project>> = OnceLock::new();
+        let projects = PROJECTS.get_or_init(corpus::projects);
+        let project = projects[usize::from(first) % projects.len()].clone();
         let ops = rest
             .chunks_exact(5)
             .take(MAX_EDITS)
@@ -422,7 +426,7 @@ impl Edits {
     }
 
     /// The edit an op makes to the current texts of the project's sources.
-    pub fn edit(sources: &std::collections::BTreeMap<String, String>, op: [u8; 5]) -> SourceEdit {
+    pub fn edit(sources: &BTreeMap<String, String>, op: [u8; 5]) -> SourceEdit {
         let [file, lo, hi, len, snippet] = op;
         let (path, text) = sources
             .iter()
@@ -531,16 +535,16 @@ fn compile_builds(world: &World, builds: &[(Option<Name>, Target)]) -> Vec<Built
 /// Edits a corpus project in place ([`Edits::decode`] reads the bytes) and
 /// checks every build after each edit against a fresh compile
 /// ([`Edits::check`]).
-pub fn incremental(data: &[u8]) {
+pub fn differential(data: &[u8]) {
     if let Some(edits) = Edits::decode(data) {
         edits.check();
     }
 }
 
-/// Random inputs of [`incremental`], from a seed: a project and
+/// Random inputs of [`differential`], from a seed: a project and
 /// [`MAX_EDITS`] edits, for the property test and the seed corpus. The
 /// same seed gives the same bytes on every platform.
-pub fn incremental_input(seed: u64) -> Vec<u8> {
+pub fn differential_input(seed: u64) -> Vec<u8> {
     // SplitMix64: small, and its output depends on nothing but the seed.
     let mut state = seed;
     let mut next = move || {
@@ -558,8 +562,8 @@ pub fn incremental_input(seed: u64) -> Vec<u8> {
     out
 }
 
-/// How many random inputs of [`incremental`] the seed corpus holds.
-pub const INCREMENTAL_SEEDS: u64 = 4;
+/// How many random inputs of [`differential`] the seed corpus holds.
+pub const DIFFERENTIAL_SEEDS: u64 = 4;
 
 /// The seed corpus of every target, as (target, file name, bytes): the
 /// documents and stylesheets of `tests/corpus` and of the parser's corpus
@@ -613,11 +617,11 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
         .flat_map(|i| [u8::try_from(i).expect("few wrappers"), 7])
         .collect();
     out.push(("nesting", "mixed.bin".into(), mixed));
-    for seed in 0..INCREMENTAL_SEEDS {
+    for seed in 0..DIFFERENTIAL_SEEDS {
         out.push((
-            "incremental",
+            "differential",
             format!("random-{seed}.bin"),
-            incremental_input(seed),
+            differential_input(seed),
         ));
     }
     for (name, text) in &contents {
