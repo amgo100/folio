@@ -112,6 +112,11 @@ fn fuzz_crate_matches_harnesses() {
     expected.sort();
     assert_eq!(files, expected);
     for (name, _) in TARGETS {
+        // Cargo forbids binaries named after its own directories.
+        assert!(
+            !["build", "deps", "examples", "incremental"].contains(name),
+            "cargo forbids a binary named {name}"
+        );
         let body =
             fs::read_to_string(fuzz.join("fuzz_targets").join(format!("{name}.rs"))).unwrap();
         assert!(
