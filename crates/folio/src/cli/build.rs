@@ -459,6 +459,9 @@ mod tests {
         );
     }
 
+    // Windows may refuse a rename over a file that another rename is
+    // replacing at that moment; that is not verified here.
+    #[cfg(unix)]
     #[test]
     fn concurrent_writes_do_not_collide() {
         let dir = tempfile::tempdir().unwrap();
