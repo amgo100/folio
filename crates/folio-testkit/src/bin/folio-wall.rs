@@ -8,7 +8,7 @@
 //!
 //! Each scenario runs once to warm up, then `N` times (20 by default).
 //! `--check` exits with an error when a scenario that is gated exceeds its
-//! hard limit; the others are release criteria (M10) and are reported
+//! hard limit; the others are release criteria (M8, 1.0) and are reported
 //! only. Timings mean something only on the reference machine of SPEC
 //! §14.1 and in an optimised build: `scripts/bench.sh --wall` runs this
 //! with `--release --check`.
