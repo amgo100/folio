@@ -5,14 +5,14 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use ecow::{EcoString, EcoVec, eco_format};
+use ecow::{EcoString, eco_format};
 use folio_component::{Color, QualifiedName, Scalar};
 use folio_syntax::Span;
 
 use super::content::Content;
 use super::error::{At, EvalError, EvalResult, StrResult, bail};
 use super::ops::{self, a_type};
-use super::value::{Arg, Args, Array, Dict, Func, Module, NativeFunc, Scope, Value};
+use super::value::{Applied, Arg, Args, Array, Dict, Func, Module, NativeFunc, Scope, Value};
 use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
 use crate::db::{Bytes, data_file, source_file};
@@ -851,12 +851,10 @@ pub(crate) fn call_method(
         },
         Value::Func(func) if name == "with" => {
             let applied = std::mem::take(&mut args.items);
-            Value::Func(Func::With(std::sync::Arc::new((
+            args.changed();
+            Value::Func(Func::With(std::sync::Arc::new(Applied::new(
                 func,
-                Args {
-                    span: args.span,
-                    items: applied,
-                },
+                Args::new(args.span, applied),
             ))))
         }
         Value::Args(a) => match name {
@@ -1010,9 +1008,9 @@ fn slice_bounds(args: &mut Args, len: usize, span: Span) -> EvalResult<(usize, u
 
 /// Calls a function with one or two values as positional arguments.
 fn call_with(vm: &mut Vm<'_>, func: &Func, values: &[Value], span: Span) -> EvalResult<Value> {
-    let args = Args {
+    let args = Args::new(
         span,
-        items: values
+        values
             .iter()
             .map(|value| Arg {
                 span,
@@ -1021,7 +1019,7 @@ fn call_with(vm: &mut Vm<'_>, func: &Func, values: &[Value], span: Span) -> Eval
                 value: value.clone(),
             })
             .collect(),
-    };
+    );
     vm.call(func.clone(), args, span)
 }
 
@@ -1192,7 +1190,7 @@ fn array_method(
                     .iter()
                     .enumerate()
                     .map(|(i, v)| {
-                        Value::Array(EcoVec::from([
+                        Value::Array(Array::from([
                             Value::Int(start.saturating_add(i as i64)),
                             v.clone(),
                         ]))
@@ -1207,7 +1205,7 @@ fn array_method(
                 items
                     .iter()
                     .zip(other.iter())
-                    .map(|(a, b)| Value::Array(EcoVec::from([a.clone(), b.clone()])))
+                    .map(|(a, b)| Value::Array(Array::from([a.clone(), b.clone()])))
                     .collect(),
             )
         }
@@ -1246,7 +1244,7 @@ fn dict_method(dict: Dict, name: &str, args: &mut Args, span: Span) -> EvalResul
         "values" => Value::Array(dict.iter().map(|(_, v)| v.clone()).collect()),
         "pairs" => Value::Array(
             dict.iter()
-                .map(|(k, v)| Value::Array(EcoVec::from([Value::Str(k.clone()), v.clone()])))
+                .map(|(k, v)| Value::Array(Array::from([Value::Str(k.clone()), v.clone()])))
                 .collect(),
         ),
         _ => bail!(span, "a dictionary has no method `{name}`"),

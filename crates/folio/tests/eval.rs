@@ -885,6 +885,68 @@ fn deep_expressions_in_deep_calls_do_not_exhaust_the_stack() {
     assert_eq!(text, "0");
 }
 
+/// The text of `main`, which must finish within a time no exponential or
+/// quadratic evaluation of it would.
+fn quick_text(main: &str, seconds: u64) -> String {
+    let main = main.to_owned();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || send.send(text(&main)));
+    receive
+        .recv_timeout(std::time::Duration::from_secs(seconds))
+        .expect("evaluation finishes in time")
+}
+
+#[test]
+fn values_that_share_parts_are_hashed_and_compared_once_per_part() {
+    // Each loop doubles a value by holding it twice, which makes a tree of
+    // 2^60 nodes from 60 distinct ones. A call hashes its arguments, and
+    // `==` compares two such values built apart.
+    let cases = [
+        "#let a = (1,)\n#for i in range(60) { a = (a, a) }\n#f(a)",
+        "#let a = (x: 1)\n#for i in range(60) { a = (x: a, y: a) }\n#f(a)",
+        "#let a = sink()\n#for i in range(60) { a = sink(a, a) }\n#f(a)",
+        "#let g = strong\n#for i in range(45) { g = g.with(g) }\n#f(g)",
+        "#let c = [x]\n#for i in range(60) { c = strong(c) + strong(c) }\n#f(c)",
+        "#let a = (1,)\n#for i in range(60) { a = (a, a) }\n#let g() = a\n#f(g)",
+    ];
+    for case in cases {
+        let main = format!("#let f(x) = 1\n#let sink(..a) = a\n{case}\n");
+        assert_eq!(quick_text(&main, 30), "1", "{case}");
+    }
+    let compare = |init_a: &str, init_b: &str, wrap: &str| {
+        let main = format!(
+            "#let a = {init_a}\n#let b = {init_b}\n\
+             #for i in range(60) {{ a = {wa}; b = {wb} }}\n#(a == b)\n",
+            wa = wrap.replace('v', "a"),
+            wb = wrap.replace('v', "b"),
+        );
+        quick_text(&main, 30)
+    };
+    assert_eq!(compare("(1,)", "(1,)", "(v, v)"), "true");
+    assert_eq!(compare("(1,)", "(2,)", "(v, v)"), "false");
+    // `==` compares `1` and `1.0` as equal, and content strictly.
+    assert_eq!(compare("(1,)", "(1.0,)", "(x: v, y: v)"), "true");
+    assert_eq!(compare("[x]", "[y]", "strong(v) + strong(v)"), "false");
+    // Within one comparison, arrays found equal by `==` are not therefore
+    // equal where content holds them, which compares them strictly. The
+    // contents are made by one call site, so only the arrays differ.
+    let main = "#let w(v) = strong(override: (x: v))[x]\n\
+                #let a = ((1,), (1,))\n#let b = ((1.0,), (1.0,))\n\
+                #(a == b) #(w(a) == w(a)) #((a, w(a)) == (b, w(b)))\n";
+    assert_eq!(text(main), "true true false");
+}
+
+#[test]
+fn changing_an_array_in_a_loop_takes_linear_time() {
+    // The method's target is not held while the array changes in place,
+    // which would copy all of it on every call.
+    let main = "#let a = ()\n#for i in range(20000) { a.push((i,)) }\n\
+                #while a.len() > 1 { let _ = a.pop() }\n\
+                #let d = (:)\n#for i in range(20000) { d.insert(\"k\", (i,)) }\n\
+                #a.len() #d.len()\n";
+    assert_eq!(quick_text(main, 30), "1 1");
+}
+
 // ---- Components ----
 
 /// A component that provides one element, `question`.

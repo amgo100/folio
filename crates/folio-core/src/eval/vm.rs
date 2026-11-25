@@ -17,7 +17,7 @@ use super::ops::{self, a_type};
 use super::value::{
     Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module, Scope, Value,
 };
-use super::{Cost, Limits, Mode, eval_file_for, globals, reachable, today};
+use super::{Cost, Limits, MAX_NESTING, Mode, eval_file_for, globals, reachable, today};
 use crate::component::Reason;
 use crate::db::{Db, Project, component_host, source_file};
 use crate::project::ProjectPath;
@@ -407,7 +407,11 @@ impl<'a> Vm<'a> {
     }
 
     fn markup_expr(&mut self, expr: ast::Expr<'_>) -> EvalResult<Content> {
-        self.nest(|vm| vm.markup_expr_inner(expr))
+        let content = self.nest(|vm| vm.markup_expr_inner(expr))?;
+        if content.depth() > MAX_NESTING {
+            return Err(nesting_exceeded(expr.span(), "content is").into());
+        }
+        Ok(content)
     }
 
     fn markup_expr_inner(&mut self, expr: ast::Expr<'_>) -> EvalResult<Content> {
@@ -549,11 +553,21 @@ impl<'a> Vm<'a> {
 
     // ---- Code ----
 
-    /// Evaluates an expression.
+    /// Evaluates an expression. A value that nests more than
+    /// [`MAX_NESTING`] deep is an error at the expression that made it.
     pub(crate) fn expr(&mut self, expr: ast::Expr<'_>) -> EvalResult<Value> {
         let span = expr.span();
         self.step(span)?;
-        self.nest(|vm| vm.expr_inner(expr))
+        let value = self.nest(|vm| vm.expr_inner(expr))?;
+        if value.depth() > MAX_NESTING {
+            let what = match &value {
+                Value::Content(_) => "content is".into(),
+                Value::Args(_) => "arguments are".into(),
+                v => eco_format!("{} is", a_type(v.type_name())),
+            };
+            return Err(nesting_exceeded(span, &what).into());
+        }
+        Ok(value)
     }
 
     /// Runs `f`, which recurses into a nested expression, on a new stack
@@ -806,7 +820,7 @@ impl<'a> Vm<'a> {
             }
         }
         self.alloc(
-            Value::Array(EcoVec::new()).shallow_size() * out.len() as u64,
+            Value::Array(Array::new()).shallow_size() * out.len() as u64,
             array.span(),
         )?;
         Ok(Value::Array(out))
@@ -865,12 +879,19 @@ impl<'a> Vm<'a> {
             }
             Assign => {
                 let value = self.expr(binary.rhs())?;
-                *self.access(binary.lhs(), true)? = value;
+                self.assign(binary.lhs(), true, value, span)?;
                 Ok(Value::None)
             }
             AddAssign | SubAssign | MulAssign | DivAssign => {
                 let rhs = self.expr(binary.rhs())?;
-                let lhs = std::mem::take(self.access(binary.lhs(), false)?);
+                // The result is at most as deep as the deeper operand, and
+                // the place already holds the left one, so checking the
+                // right one here means that putting the result back cannot
+                // fail and leave the place empty.
+                let incoming = rhs.depth();
+                let lhs = self.mutate(binary.lhs(), false, incoming, span, |place| {
+                    Ok(std::mem::take(place))
+                })?;
                 let op = match op {
                     AddAssign => Add,
                     SubAssign => Sub,
@@ -878,7 +899,7 @@ impl<'a> Vm<'a> {
                     _ => Div,
                 };
                 let value = self.apply(op, lhs, rhs, span)?;
-                *self.access(binary.lhs(), false)? = value;
+                self.assign(binary.lhs(), false, value, span)?;
                 Ok(Value::None)
             }
             Eq | Neq | Lt | Leq | Gt | Geq | In | NotIn => {
@@ -933,37 +954,72 @@ impl<'a> Vm<'a> {
         .at(span)
     }
 
-    /// The place an assignment or a mutating method changes: a variable, a
-    /// dictionary field, or an item (`x.at(i)`). A plain assignment
-    /// (`insert`) adds a missing dictionary field; anything else needs it.
-    fn access<'s>(&'s mut self, expr: ast::Expr<'_>, insert: bool) -> EvalResult<&'s mut Value> {
+    /// Assigns a value to a place: a variable, a dictionary field or an
+    /// item. A plain assignment (`insert`) adds a missing dictionary field.
+    fn assign(
+        &mut self,
+        expr: ast::Expr<'_>,
+        insert: bool,
+        value: Value,
+        span: Span,
+    ) -> EvalResult<()> {
+        let depth = value.depth();
+        self.mutate(expr, insert, depth, span, |place| {
+            *place = value;
+            Ok(())
+        })
+    }
+
+    /// Changes the place an assignment or a mutating method changes: a
+    /// variable, a dictionary field, or an item (`x.at(i)`). A plain
+    /// assignment (`insert`) adds a missing dictionary field; anything else
+    /// needs it.
+    ///
+    /// `f` changes the place so that it is at most `incoming` deep. The
+    /// arrays and dictionaries on the way to it then nest one more each, so
+    /// a change that would nest the variable more than [`MAX_NESTING`] deep
+    /// is an error at `span`, and nothing changes. Each array and dictionary
+    /// on the way updates its depth after the change.
+    fn mutate<R>(
+        &mut self,
+        expr: ast::Expr<'_>,
+        insert: bool,
+        incoming: u32,
+        span: Span,
+        f: impl FnOnce(&mut Value) -> EvalResult<R>,
+    ) -> EvalResult<R> {
+        let mut steps = Vec::new();
+        let root = self.place(expr, insert, &mut steps)?;
+        let levels = u32::try_from(steps.len()).unwrap_or(u32::MAX);
+        if incoming.saturating_add(levels) > MAX_NESTING {
+            return Err(nesting_exceeded(span, "this would make a value that is").into());
+        }
+        let value = self.scopes.get_mut(root.get()).at(root.span())?;
+        descend(value, &steps, f)
+    }
+
+    /// Finds the variable a place is in, evaluating the keys on the way,
+    /// and appends the steps from the variable to the place to `steps`.
+    fn place<'s>(
+        &mut self,
+        expr: ast::Expr<'s>,
+        insert: bool,
+        steps: &mut Vec<Step>,
+    ) -> EvalResult<ast::Ident<'s>> {
         match expr {
             ast::Expr::Ident(ident) => {
                 if self.scopes.get(ident.get()).is_none() && self.poisoned.contains(ident.get()) {
                     return Err(Stop::Reported);
                 }
-                self.scopes.get_mut(ident.get()).at(ident.span())
+                self.scopes.get_mut(ident.get()).at(ident.span())?;
+                Ok(ident)
             }
-            ast::Expr::Parenthesized(p) => self.access(p.expr(), insert),
+            ast::Expr::Parenthesized(p) => self.place(p.expr(), insert, steps),
             ast::Expr::FieldAccess(access) => {
+                let root = self.place(access.target(), false, steps)?;
                 let field = access.field();
-                match self.access(access.target(), false)? {
-                    Value::Dict(dict) => {
-                        if !insert && dict.get(field.get()).is_none() {
-                            bail!(
-                                field.span(),
-                                "dictionary does not contain key {:?}",
-                                field.get()
-                            );
-                        }
-                        Ok(dict.get_or_insert_mut(field.get().clone()))
-                    }
-                    v => bail!(
-                        field.span(),
-                        "cannot change the fields of {}",
-                        a_type(v.type_name())
-                    ),
-                }
+                steps.push(Step::Field(field.get().clone(), field.span(), insert));
+                Ok(root)
             }
             ast::Expr::FuncCall(call) => {
                 let span = call.span();
@@ -976,25 +1032,9 @@ impl<'a> Vm<'a> {
                 let mut args = self.args(call.args(), span, false)?;
                 let key: Value = args.expect("index or key")?;
                 args.finish()?;
-                match self.access(access.target(), false)? {
-                    Value::Array(items) => {
-                        let Value::Int(i) = key else {
-                            bail!(span, "expected an integer index");
-                        };
-                        let index = library::index(items.len(), i).at(span)?;
-                        Ok(&mut items.make_mut()[index])
-                    }
-                    Value::Dict(dict) => {
-                        let Value::Str(key) = key else {
-                            bail!(span, "expected a string key");
-                        };
-                        match dict.get_mut(&key) {
-                            Some(value) => Ok(value),
-                            None => bail!(span, "dictionary does not contain key {key:?}"),
-                        }
-                    }
-                    v => bail!(span, "cannot change the items of {}", a_type(v.type_name())),
-                }
+                let root = self.place(access.target(), false, steps)?;
+                steps.push(Step::At(key, span));
+                Ok(root)
             }
             _ => bail!(expr.span(), "cannot change a temporary value"),
         }
@@ -1014,10 +1054,17 @@ impl<'a> Vm<'a> {
                 _ => false,
             };
             if mutates && library::is_mutating_method(name) {
+                // The copy of the target would share the array's or the
+                // dictionary's storage, and changing it in place would then
+                // copy all of it.
+                drop(target);
                 let args = self.args(call.args(), span, false)?;
                 self.alloc(16, span)?;
-                let target = self.access(access.target(), false)?;
-                return library::call_mutating(target, name, args, span);
+                // What the method adds is at most as deep as its arguments.
+                let incoming = args.depth();
+                return self.mutate(access.target(), false, incoming, span, |target| {
+                    library::call_mutating(target, name, args, span)
+                });
             }
             let func = match &target {
                 Value::Module(module) => match module.scope().get(name) {
@@ -1137,7 +1184,7 @@ impl<'a> Vm<'a> {
                 },
             }
         }
-        Ok(Args { span, items })
+        Ok(Args::new(span, items))
     }
 
     fn call_value(&mut self, callee: Value, args: Args, span: Span) -> EvalResult<Value> {
@@ -1160,11 +1207,9 @@ impl<'a> Vm<'a> {
             Func::Element(name) => self.instantiate(&name, args, span).map(Value::Content),
             Func::Slot(slot) => self.slot(&slot.0, &slot.1, args, span),
             Func::With(with) => {
-                let (func, applied) = &*with;
-                let mut all = applied.clone();
-                all.span = args.span;
-                all.items.extend(args.items);
-                self.call(func.clone(), all, span)
+                let mut items = with.args().items.clone();
+                items.extend(args.items);
+                self.call(with.func().clone(), Args::new(args.span, items), span)
             }
         }
     }
@@ -1271,7 +1316,7 @@ impl<'a> Vm<'a> {
                 if bind {
                     bail!(expr.span(), "cannot bind to this expression");
                 }
-                *self.access(expr, true)? = value;
+                self.assign(expr, true, value, expr.span())?;
             }
             ast::Pattern::Placeholder(_) => {}
             ast::Pattern::Parenthesized(p) => self.pattern(p.pattern(), value, bind)?,
@@ -1294,7 +1339,7 @@ impl<'a> Vm<'a> {
                 self.define(ident.get().clone(), value);
             }
         } else if let Some(expr) = spread.sink_expr() {
-            *self.access(expr, true)? = value;
+            self.assign(expr, true, value, expr.span())?;
         }
         Ok(())
     }
@@ -1437,7 +1482,7 @@ impl<'a> Vm<'a> {
             Value::Array(items) => items,
             Value::Dict(dict) => dict
                 .iter()
-                .map(|(k, v)| Value::Array(EcoVec::from([Value::Str(k.clone()), v.clone()])))
+                .map(|(k, v)| Value::Array(Array::from([Value::Str(k.clone()), v.clone()])))
                 .collect(),
             Value::Str(s) => s.chars().map(|c| Value::Str(c.into())).collect(),
             Value::Args(args) => args.items.into_iter().map(|arg| arg.value).collect(),
@@ -1583,12 +1628,70 @@ impl<'a> Vm<'a> {
     }
 }
 
+/// A step from a variable to the place an assignment changes.
+enum Step {
+    /// A dictionary field, added if it is missing and the flag is set.
+    Field(EcoString, Span, bool),
+    /// An item: `.at(key)`.
+    At(Value, Span),
+}
+
+/// Follows the steps from a value to a place and changes it with `f`. Each
+/// array and dictionary on the way updates its depth after the change.
+fn descend<R>(
+    value: &mut Value,
+    steps: &[Step],
+    f: impl FnOnce(&mut Value) -> EvalResult<R>,
+) -> EvalResult<R> {
+    let Some((step, rest)) = steps.split_first() else {
+        return f(value);
+    };
+    match (step, value) {
+        (Step::Field(field, span, insert), Value::Dict(dict)) => {
+            match dict.update(field, *insert, |place| descend(place, rest, f)) {
+                Some(result) => result,
+                None => bail!(*span, "dictionary does not contain key {field:?}"),
+            }
+        }
+        (Step::Field(_, span, _), v) => {
+            bail!(
+                *span,
+                "cannot change the fields of {}",
+                a_type(v.type_name())
+            )
+        }
+        (Step::At(key, span), Value::Array(items)) => {
+            let Value::Int(i) = key else {
+                bail!(*span, "expected an integer index");
+            };
+            let index = library::index(items.len(), *i).at(*span)?;
+            items.update(index, |place| descend(place, rest, f))
+        }
+        (Step::At(key, span), Value::Dict(dict)) => {
+            let Value::Str(key) = key else {
+                bail!(*span, "expected a string key");
+            };
+            match dict.update(key, false, |place| descend(place, rest, f)) {
+                Some(result) => result,
+                None => bail!(*span, "dictionary does not contain key {key:?}"),
+            }
+        }
+        (Step::At(_, span), v) => {
+            bail!(
+                *span,
+                "cannot change the items of {}",
+                a_type(v.type_name())
+            )
+        }
+    }
+}
+
 /// The element a function makes, directly or with arguments applied.
 fn element_of(value: &Value) -> Option<&QualifiedName> {
     fn func(f: &Func) -> Option<&QualifiedName> {
         match f {
             Func::Element(name) => Some(name),
-            Func::With(with) => func(&with.0),
+            Func::With(with) => func(with.func()),
             _ => None,
         }
     }
@@ -1652,7 +1755,7 @@ impl Vm<'_> {
                 value,
             })
             .collect();
-        self.instantiate(&name, Args { span, items }, span)
+        self.instantiate(&name, Args::new(span, items), span)
     }
 
     /// A field of a value: `dict.key`, `module.name`, `heading.level`. A
@@ -1760,6 +1863,14 @@ fn memory_exceeded(span: Span, limits: Limits) -> EvalError {
     .with_hint("check for a string, array or content that keeps growing")
 }
 
+fn nesting_exceeded(span: Span, what: &str) -> EvalError {
+    EvalError::new(
+        span,
+        eco_format!("{what} nested more than {MAX_NESTING} deep"),
+    )
+    .with_hint("check for a loop that wraps a value in itself")
+}
+
 fn depth_exceeded(span: Span, limits: Limits) -> EvalError {
     EvalError::new(
         span,
@@ -1861,7 +1972,9 @@ impl Args {
     /// Takes the first positional argument.
     pub(crate) fn eat(&mut self) -> Option<Arg> {
         let index = self.items.iter().position(|arg| arg.name.is_none())?;
-        Some(self.items.remove(index))
+        let arg = self.items.remove(index);
+        self.changed();
+        Some(arg)
     }
 
     /// Takes the first positional argument, converted, if there is one.
@@ -1889,6 +2002,7 @@ impl Args {
             .position(|arg| arg.name.as_deref() == Some(name) && arg.scope.is_none())
         {
             let arg = self.items.remove(index);
+            self.changed();
             found = Some(T::from_value(arg.value).at(arg.span)?);
         }
         Ok(found)
@@ -1917,10 +2031,8 @@ impl Args {
             }
         }
         self.items = rest;
-        Args {
-            span: self.span,
-            items: sink,
-        }
+        self.changed();
+        Args::new(self.span, sink)
     }
 
     /// Fails at the first argument nobody took.

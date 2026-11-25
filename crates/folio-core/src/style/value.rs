@@ -593,7 +593,7 @@ impl<'a> Values<'a> {
                 }
             }
         }
-        let args = Args { span, items };
+        let args = Args::new(span, items);
         eval::call_function(self.db, self.project, self.file.clone(), func, args, span)
             .map(Declared::Value)
             .map_err(Fail::Error)

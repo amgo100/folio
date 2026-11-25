@@ -9,7 +9,7 @@
 //! or the element's slots. Each problem is an error at the argument, or at
 //! the call when an argument is missing.
 
-use ecow::{EcoString, EcoVec, eco_format};
+use ecow::{EcoString, eco_format};
 use folio_component::{
     BODY, Body, ContentKind, ElementKind, ElementSchema, FieldType, LAYOUT_HINTS, Name,
     QualifiedName, Target, UNIVERSAL_FIELDS, Value as Constant,
@@ -19,7 +19,7 @@ use folio_syntax::{Span, is_valid_label_literal_id};
 use super::content::{Content, Element, Node, Slot};
 use super::error::{EvalError, EvalResult, StrResult, bail};
 use super::ops::a_type;
-use super::value::{Angle, Arg, Args, Dict, Duration, Fraction, Length, Value};
+use super::value::{Angle, Arg, Args, Array, Dict, Duration, Fraction, Length, Value};
 use super::vm::Vm;
 use crate::db::data_file;
 use crate::model::{self, schema};
@@ -352,7 +352,7 @@ impl Vm<'_> {
         };
         Ok(Universal::Field(match (field, value) {
             ("class", Value::Str(text)) => {
-                let names: EcoVec<Value> = text
+                let names: Array = text
                     .split_whitespace()
                     .map(|n| Value::Str(n.into()))
                     .collect();
@@ -518,7 +518,7 @@ fn coerce(ty: &FieldType, value: Value, span: Span) -> StrResult<Value> {
             return Err(eco_format!("a reference is a label; write `<{text}>`"));
         }
         (FieldType::Array(item), Value::Array(items)) => {
-            let mut out = EcoVec::with_capacity(items.len());
+            let mut out = Array::with_capacity(items.len());
             for (i, v) in items.iter().enumerate() {
                 out.push(coerce(item, v.clone(), span).map_err(|m| eco_format!("item {i}: {m}"))?);
             }
