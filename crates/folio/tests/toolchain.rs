@@ -432,6 +432,31 @@ fn refuses_an_older_channel_file() {
         (info.serial, info.security_fixes_from),
         (5, Version::new(79, 0, 0))
     );
+    // The file and its signature are stored together, in one file.
+    let stored = toolchains.dir().join("channel.toml.signed");
+    assert!(stored.is_file());
+    assert!(!toolchains.dir().join("channel.toml").exists());
+    assert!(!toolchains.dir().join("channel.toml.sig").exists());
+
+    // A stored copy whose signature this compiler cannot check, signed with
+    // a retired key, say, still refuses older copies, but gives no floor.
+    fs::write(
+        &stored,
+        "0123\nversion = 1\nserial = 9\nsecurity-fixes-from = \"79.0.0\"\n",
+    )
+    .unwrap();
+    assert_eq!(toolchains.channel_info(&keys), None);
+    channel.release("80.0.0", FAKE_COMPILER);
+    assert!(matches!(
+        install(&channel, "80.0.0", &toolchains),
+        Err(InstallError::ChannelReplayed {
+            serial: 5,
+            stored: 9
+        })
+    ));
+    channel.publish(1_000, "79.0.0");
+    install(&channel, "80.0.0", &toolchains).unwrap();
+    assert_eq!(toolchains.channel_info(&keys).unwrap().serial, 1_000);
 }
 
 #[test]
@@ -452,5 +477,7 @@ fn reads_channel_files() {
     assert!(ChannelInfo::parse(&format!("version = 1\nserial = -1\n{floor}")).is_err());
     assert!(ChannelInfo::parse(&format!("version = 1\nserial = 1.5\n{floor}")).is_err());
     assert!(ChannelInfo::parse(&format!("version = 1\nserial = \"3\"\n{floor}")).is_err());
+    let info = ChannelInfo::parse(&format!("version = 1\nserial = 1_200\n{floor}"));
+    assert_eq!(info.unwrap().serial, 1200);
     assert!(ChannelInfo::parse("version = ").is_err());
 }

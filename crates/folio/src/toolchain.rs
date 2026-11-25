@@ -57,7 +57,9 @@ pub const SECURITY_FIXES_FROM: Version = Version::new(0, 0, 0);
 
 /// The local toolchain cache: one directory per installed version, named
 /// by the version, holding its `folio` binary, and the last `channel.toml`
-/// that [`install`] verified, with its signature.
+/// that [`install`] verified, with its signature, in one file
+/// (`channel.toml.signed`: the signature on the first line, then the file),
+/// so that the two are replaced together.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Toolchains {
     dir: PathBuf,
@@ -98,17 +100,28 @@ impl Toolchains {
     /// The last `channel.toml` that [`install`] stored, if its signature
     /// verifies with one of `keys`.
     pub fn channel_info(&self, keys: &[VerifyingKey]) -> Option<ChannelInfo> {
-        self.stored_channel(keys).map(|(_, info)| info)
+        let (signature, bytes) = self.stored_channel()?;
+        verify(keys, CHANNEL_FILE, &bytes, &signature).ok()?;
+        ChannelInfo::parse(std::str::from_utf8(&bytes).ok()?).ok()
     }
 
-    /// The bytes and contents of the last `channel.toml` that [`install`]
-    /// stored, if its signature verifies with one of `keys`.
-    fn stored_channel(&self, keys: &[VerifyingKey]) -> Option<(Vec<u8>, ChannelInfo)> {
-        let bytes = fs::read(self.dir.join(CHANNEL_FILE)).ok()?;
-        let signature = fs::read(self.dir.join(format!("{CHANNEL_FILE}.sig"))).ok()?;
-        verify(keys, CHANNEL_FILE, &bytes, &signature).ok()?;
+    /// The signature and bytes of the last `channel.toml` that [`install`]
+    /// stored, unverified.
+    fn stored_channel(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        let mut stored = fs::read(self.dir.join(STORED_CHANNEL_FILE)).ok()?;
+        let end = stored.iter().position(|&b| b == b'\n')?;
+        let bytes = stored.split_off(end + 1);
+        Some((stored, bytes))
+    }
+
+    /// The serial and bytes of the last `channel.toml` that [`install`]
+    /// stored. Its signature is not checked: the cache is the user's own,
+    /// and the serial serves only to refuse older copies, so a copy signed
+    /// with a key that this compiler no longer trusts still counts.
+    fn stored_serial(&self) -> Option<(u64, Vec<u8>)> {
+        let (_, bytes) = self.stored_channel()?;
         let info = ChannelInfo::parse(std::str::from_utf8(&bytes).ok()?).ok()?;
-        Some((bytes, info))
+        Some((info.serial, bytes))
     }
 }
 
@@ -127,6 +140,10 @@ pub fn security_fixes_from(toolchains: Option<&Toolchains>) -> Version {
 
 /// The name of the channel's file about its releases.
 const CHANNEL_FILE: &str = "channel.toml";
+
+/// The name of the file in the toolchain cache that holds the last
+/// `channel.toml` installed, with its signature ([`Toolchains`]).
+const STORED_CHANNEL_FILE: &str = "channel.toml.signed";
 
 /// What a channel says about its releases in `channel.toml`:
 ///
@@ -164,7 +181,9 @@ impl ChannelInfo {
             return Err(format!("expected `version = {}`", Self::FORMAT));
         }
         let serial = match get("serial") {
-            Some(DeValue::Integer(i)) => u64::from_str_radix(i.as_str(), i.radix()).ok(),
+            Some(DeValue::Integer(i)) => {
+                u64::from_str_radix(&i.as_str().replace('_', ""), i.radix()).ok()
+            }
             _ => None,
         };
         let serial = serial.ok_or("expected `serial`, a whole number that is not negative")?;
@@ -393,14 +412,12 @@ pub fn install(
         .map_err(|e| e.to_string())
         .and_then(ChannelInfo::parse)
         .map_err(InstallError::ChannelInfo)?;
-    let stored = toolchains.stored_channel(&channel.keys);
-    if let Some((stored_bytes, stored)) = &stored
-        && (info.serial < stored.serial
-            || (info.serial == stored.serial && info_bytes != *stored_bytes))
+    if let Some((stored, stored_bytes)) = toolchains.stored_serial()
+        && (info.serial < stored || (info.serial == stored && info_bytes != stored_bytes))
     {
         return Err(InstallError::ChannelReplayed {
             serial: info.serial,
-            stored: stored.serial,
+            stored,
         });
     }
     let binary_path = Channel::binary_path(version);
@@ -448,27 +465,45 @@ pub fn install(
     // The channel's word on security fixes, for later builds, which verify
     // it again when they read it. The version is installed whether or not
     // this is stored: without it, builds know only what they were released
-    // with. A newer copy stored meanwhile by another install stays.
-    let newer = toolchains
-        .stored_channel(&channel.keys)
-        .is_some_and(|(_, stored)| stored.serial > info.serial);
-    let files = [
-        (CHANNEL_FILE.to_owned(), &info_bytes[..]),
-        (format!("{CHANNEL_FILE}.sig"), &info_signature[..]),
-    ];
-    for (name, bytes) in files.into_iter().filter(|_| !newer) {
-        let temporary = dir.join(format!(".{name}.{}", std::process::id()));
-        let stored =
-            fs::write(&temporary, bytes).and_then(|()| fs::rename(&temporary, dir.join(&name)));
-        if stored.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-    }
+    // with.
+    store_channel(dir, &info, &info_bytes, &info_signature);
     Ok(Installed {
         path,
         already: false,
         info: Some(info),
     })
+}
+
+/// Stores a verified `channel.toml` and its signature in the toolchain
+/// cache in `dir`, unless the copy stored there already is as new. A lock
+/// file keeps concurrent installs from storing an older copy over a newer
+/// one between the check and the write; one file holds both, so the copy
+/// and its signature are replaced together. Fails silently.
+fn store_channel(dir: &Path, info: &ChannelInfo, bytes: &[u8], signature: &[u8]) {
+    let Ok(lock) = fs::File::create(dir.join(".channel.lock")) else {
+        return;
+    };
+    if lock.lock().is_err() {
+        return;
+    }
+    let toolchains = Toolchains::new(dir);
+    if toolchains
+        .stored_serial()
+        .is_some_and(|(stored, _)| stored >= info.serial)
+    {
+        return;
+    }
+    let Ok(signature) = std::str::from_utf8(signature) else {
+        return;
+    };
+    let mut contents = format!("{}\n", signature.trim()).into_bytes();
+    contents.extend_from_slice(bytes);
+    let temporary = dir.join(format!(".{STORED_CHANNEL_FILE}.{}", std::process::id()));
+    let stored = fs::write(&temporary, &contents)
+        .and_then(|()| fs::rename(&temporary, dir.join(STORED_CHANNEL_FILE)));
+    if stored.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
 }
 
 /// Lets the owner run a file.
