@@ -29,6 +29,13 @@ impl EvalError {
         }
     }
 
+    /// Whether it or a call in its trace has a detached span: one that
+    /// points nowhere, like the spans of arguments that a call's key
+    /// leaves out.
+    pub(crate) fn has_detached_span(&self) -> bool {
+        self.span.is_detached() || self.trace.iter().any(|point| point.span.is_detached())
+    }
+
     /// Adds a hint.
     pub fn with_hint(mut self, hint: impl Into<EcoString>) -> Self {
         self.hints.push(hint.into());

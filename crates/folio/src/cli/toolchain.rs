@@ -9,7 +9,7 @@ use std::process::{Command, ExitCode};
 
 use clap::{Args, Subcommand};
 use folio::diag::TextFiles;
-use folio::toolchain::{self, Channel, Curl, Toolchains};
+use folio::toolchain::{self, Channel, Curl, InstallError, Toolchains};
 use folio::{Diagnostic, Manifest, World};
 use folio_syntax::DiagSpan;
 use semver::Version;
@@ -116,6 +116,25 @@ fn install(args: &InstallArgs) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        Err(e @ InstallError::ChannelReplayed { serial, stored }) => {
+            let what = if serial < stored {
+                "lowered the serial"
+            } else {
+                "published other contents under the same serial"
+            };
+            let reset = format!(
+                "if the Folio project says it {what}, delete `{}`",
+                toolchains.stored_channel_path().display()
+            );
+            fail(
+                e.to_string(),
+                &[
+                    "try again later or on another network; if it keeps happening, tell the \
+                     Folio project",
+                    &reset,
+                ],
+            )
+        }
         Err(e) => fail(e.to_string(), &[]),
     }
 }
@@ -132,7 +151,7 @@ fn project_pin(root: Option<&Path>) -> Result<Version, String> {
 
 /// Hands the command line (`args`, without the program name) to the
 /// compiler version that a project's manifest pins, when the command builds
-/// a project, the pin is another version, it is installed, and
+/// or checks a project, the pin is another version, it is installed, and
 /// `--compiler current` was not given. Returns the exit status of the
 /// pinned version, or `None` when this version runs the command.
 ///
@@ -142,7 +161,7 @@ fn project_pin(root: Option<&Path>) -> Result<Version, String> {
 /// version knows still reach it. A pin this version cannot run is reported
 /// by [`check`] once the manifest is parsed.
 pub(crate) fn dispatch(args: &[OsString]) -> Option<ExitCode> {
-    if args.first()?.to_str()? != "build" {
+    if !matches!(args.first()?.to_str()?, "build" | "check") {
         return None;
     }
     let mut root = None;

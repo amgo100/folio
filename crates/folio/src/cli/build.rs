@@ -1,5 +1,7 @@
 //! `folio build` (SPEC §12.1): builds the variants and targets of a project
-//! and writes their outputs where `[output] path` says (SPEC §6.4).
+//! and writes their outputs where `[output] path` says (SPEC §6.4). `folio
+//! check` runs the same command without emitting or writing anything
+//! ([`Mode::Check`]).
 
 use std::collections::HashSet;
 use std::fs;
@@ -8,26 +10,55 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use ecow::EcoVec;
 use folio::diag::{self, Files, Resolved, TextFiles};
 use folio::{
-    Compiled, Diagnostic, FontCache, Manifest, Name, ProjectPath, Target, World, compile_builds,
+    Cancelled, Compiled, Diagnostic, FontCache, Manifest, Name, ProjectPath, Target, World,
+    check_builds, compile_builds,
 };
 use folio_syntax::DiagSpan;
 use serde::Serialize;
 
 use super::project::{self, LOCKFILE, MANIFEST};
-use super::{BuildArgs, DiagnosticsFormat, FAILURE, toolchain};
+use super::{DiagnosticsFormat, FAILURE, ProjectArgs, toolchain};
+
+/// What a command does with the builds it chooses.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub(super) enum Mode {
+    /// `folio build`: compile them and write their outputs.
+    Build,
+    /// `folio check`: check them ([`folio::check`]) and write nothing.
+    Check,
+}
 
 /// Runs `folio build`.
-pub(crate) fn build(args: &BuildArgs) -> ExitCode {
+pub(crate) fn build(args: &ProjectArgs) -> ExitCode {
+    run_command(args, Mode::Build)
+}
+
+/// Runs `folio build` or `folio check`.
+pub(super) fn run_command(args: &ProjectArgs, mode: Mode) -> ExitCode {
     let mut report = Report::new(args);
-    let status = run(args, &mut report);
+    let status = run(args, mode, &mut report);
     report.finish();
     status
 }
 
-/// Builds, reporting what it finds to `report`.
-fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
+/// A build's diagnostics, and what compiling or checking it gave; or how it
+/// failed.
+type Outcome = Result<(EcoVec<Diagnostic>, Done), Cancelled>;
+
+/// What a build gave.
+enum Done {
+    /// It was compiled.
+    Compiled(Compiled),
+    /// It was checked: whether it has errors, and whether compiling it
+    /// would give a file to write.
+    Checked { errors: bool, writes: bool },
+}
+
+/// Builds or checks, reporting what it finds to `report`.
+fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
     let mut fail = |message: String| {
         report.diagnostics(&TextFiles::new(), &[error(message)]);
         ExitCode::from(FAILURE)
@@ -86,45 +117,85 @@ fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
         world.set_today(Some(today));
     }
 
-    let outputs = if diagnostics.iter().any(Diagnostic::is_error) {
-        Vec::new()
-    } else {
-        compile_builds(&world, builds)
-    };
+    let outputs: Vec<(Option<Name>, Target, Outcome)> =
+        if diagnostics.iter().any(Diagnostic::is_error) {
+            Vec::new()
+        } else {
+            match mode {
+                Mode::Build => compile_builds(&world, builds)
+                    .into_iter()
+                    .map(|o| {
+                        let result = o.result.map(|c| (c.diagnostics.clone(), Done::Compiled(c)));
+                        (o.variant, o.target, result)
+                    })
+                    .collect(),
+                Mode::Check => check_builds(&world, builds)
+                    .into_iter()
+                    .map(|o| {
+                        let result = o.result.map(|c| {
+                            let errors = c.has_errors();
+                            let writes = c.writes;
+                            (c.diagnostics, Done::Checked { errors, writes })
+                        });
+                        (o.variant, o.target, result)
+                    })
+                    .collect(),
+            }
+        };
 
     // A diagnostic of a file that several builds read is shown once.
     let mut seen: HashSet<Diagnostic> = diagnostics.iter().cloned().collect();
     // Each build, in the manifest's order, with what it compiled to, or
     // `None` when it failed.
     let mut written = Vec::new();
-    for output in outputs {
-        let name = build_name(output.variant.as_ref(), output.target);
-        let path = world
-            .manifest()
-            .output_path(output.variant.as_ref(), output.target);
-        let compiled = match output.result {
-            Ok(compiled) => compiled,
+    for (variant, target, result) in outputs {
+        let name = build_name(variant.as_ref(), target);
+        let path = world.manifest().output_path(variant.as_ref(), target);
+        let (found, compiled) = match result {
+            Ok(outcome) => outcome,
             Err(cancelled) => {
-                diagnostics.push(error(format!("the build of {name} failed: {cancelled}")));
-                written.push((output.variant, output.target, path, None));
+                let what = match mode {
+                    Mode::Build => "build",
+                    Mode::Check => "check",
+                };
+                diagnostics.push(error(format!("the {what} of {name} failed: {cancelled}")));
+                written.push((variant, target, path, None));
                 continue;
             }
         };
-        for diagnostic in &compiled.diagnostics {
+        for diagnostic in &found {
             if seen.insert(diagnostic.clone()) {
                 diagnostics.push(diagnostic.clone());
             }
         }
-        written.push((output.variant, output.target, path, Some(compiled)));
+        written.push((variant, target, path, Some(compiled)));
     }
     report.diagnostics(&world, &diagnostics);
 
     let mut failed = diagnostics.iter().any(Diagnostic::is_error);
     for (variant, target, path, compiled) in written {
         let build = |path: Option<&str>, status| Build::new(&variant, target, path, status);
-        let Some(compiled) = compiled else {
-            report.build(build(path.as_deref(), Status::Failed));
-            continue;
+        let compiled = match compiled {
+            None => {
+                let path = (mode == Mode::Build).then_some(path).flatten();
+                report.build(build(path.as_deref(), Status::Failed));
+                continue;
+            }
+            // A check writes nothing, but finds what would stop the write.
+            Some(Done::Checked { errors, writes }) => {
+                let path = path.as_deref().filter(|_| writes);
+                let status = match check_write(&root, path, errors) {
+                    Ok(()) => Status::Checked,
+                    Err(message) => {
+                        report.diagnostics(&world, &[error(message)]);
+                        failed = true;
+                        Status::Failed
+                    }
+                };
+                report.build(build(None, status));
+                continue;
+            }
+            Some(Done::Compiled(compiled)) => compiled,
         };
         match write(&root, path.as_deref(), &compiled) {
             Ok(Written::File(path)) => report.build(build(Some(&path), Status::Written)),
@@ -150,7 +221,7 @@ fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
 fn select(
     manifest: &Manifest,
     declared: &[(Option<Name>, Target)],
-    args: &BuildArgs,
+    args: &ProjectArgs,
 ) -> Result<Vec<(Option<Name>, Target)>, Diagnostic> {
     let names = || -> String {
         let names: Vec<_> = manifest
@@ -242,9 +313,34 @@ fn write(root: &Path, path: Option<&str>, compiled: &Compiled) -> Result<Written
         return Ok(Written::Skipped(path));
     }
     let message = |e: io::Error| format!("cannot write `{path}`: {e}");
-    let (root, file) = resolve(root, &path).map_err(message)?;
+    let (root, file) = resolve(root, &path, true).map_err(message)?;
     replace(&root, &file, bytes).map_err(message)?;
     Ok(Written::File(path))
+}
+
+/// Finds what would stop [`write`] from placing a build's output at `path`
+/// in the project, for `folio check`, without writing or creating
+/// anything: a path that is not in the project, and for a build without
+/// errors (`errors`), a directory on the way that a link places outside
+/// the project or that is not a directory. What only writing finds, such
+/// as a directory where the file would go or one that cannot be written
+/// to, is not checked. `path` is `None` when the build would write no
+/// file.
+fn check_write(root: &Path, path: Option<&str>, errors: bool) -> Result<(), String> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let Some(path) = ProjectPath::new(path) else {
+        return Err(format!(
+            "the output path `{path}` is not a path in the project"
+        ));
+    };
+    if errors {
+        return Ok(());
+    }
+    resolve(root, path.as_str(), false)
+        .map(|_| ())
+        .map_err(|e| format!("cannot write `{path}`: {e}"))
 }
 
 /// The count in the names of temporary files, which tells apart the writes
@@ -253,10 +349,11 @@ static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
 /// The file on disk that the output at `path`, a project path, is written
 /// to, with the project directory: the directories on the way are created
-/// if they are missing, and symbolic links among them are followed only to
+/// if they are missing (unless `create` is false, when they are left
+/// missing), and symbolic links among them are followed only to
 /// directories inside the project. A link at the file itself is replaced,
 /// not followed.
-fn resolve(root: &Path, path: &str) -> io::Result<(PathBuf, PathBuf)> {
+fn resolve(root: &Path, path: &str, create: bool) -> io::Result<(PathBuf, PathBuf)> {
     let root = root.canonicalize()?;
     let (dirs, name) = path.rsplit_once('/').unwrap_or(("", path));
     let mut dir = root.clone();
@@ -266,19 +363,23 @@ fn resolve(root: &Path, path: &str) -> io::Result<(PathBuf, PathBuf)> {
             walked.push('/');
         }
         walked.push_str(component);
-        dir = enter(&root, &dir.join(component), &walked)?;
+        dir = enter(&root, &dir.join(component), &walked, create)?;
     }
     Ok((root, dir.join(name)))
 }
 
 /// The directory to go on from at `next`, which the project path `walked`
-/// names: `next` itself, created if it is missing, or the target of a link
-/// there when that is a directory in the project at `root`.
-fn enter(root: &Path, next: &Path, walked: &str) -> io::Result<PathBuf> {
+/// names: `next` itself, created if it is missing (or left missing, unless
+/// `create`), or the target of a link there when that is a directory in
+/// the project at `root`.
+fn enter(root: &Path, next: &Path, walked: &str, create: bool) -> io::Result<PathBuf> {
     let not_dir = || io::Error::other(format!("`{walked}` is not a directory"));
     let mut created = false;
     loop {
         match fs::symlink_metadata(next) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound && !create => {
+                return Ok(next.to_owned());
+            }
             Err(e) if e.kind() == io::ErrorKind::NotFound && !created => {
                 // Another build may create it, or put a link there, in the
                 // meantime: then what is there now is checked.
@@ -363,16 +464,17 @@ fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
-/// Where `folio build` reports what it found and did: to standard error,
-/// as it goes, with source excerpts; or, with `--diagnostics json`, as one
-/// JSON document written when the command ends (`docs/diagnostics-json.md`).
+/// Where `folio build` and `folio check` report what they found and did:
+/// to standard error, as it goes, with source excerpts; or, with
+/// `--diagnostics json`, as one JSON document written when the command
+/// ends (`docs/diagnostics-json.md`).
 struct Report {
     color: bool,
     /// The document being collected, with `--diagnostics json`.
     json: Option<Document>,
 }
 
-/// The JSON document of `folio build --diagnostics json`, which
+/// The JSON document of `--diagnostics json`, which
 /// `docs/diagnostics-json.md` describes.
 #[derive(Debug, Default, Serialize)]
 struct Document {
@@ -420,13 +522,15 @@ enum Status {
     None,
     /// The build or the write failed; a diagnostic says why.
     Failed,
+    /// The build was checked (`folio check`), which writes no output.
+    Checked,
 }
 
 impl Report {
     /// The version of [`Document`]'s shape.
     const VERSION: u32 = 1;
 
-    fn new(args: &BuildArgs) -> Self {
+    fn new(args: &ProjectArgs) -> Self {
         Self {
             color: args.color.enabled(),
             json: (args.diagnostics == DiagnosticsFormat::Json).then(|| Document {
@@ -492,11 +596,11 @@ mod tests {
         compiler = \"0.0.0\"\n\n[variants.exam]\ntargets = [\"pdf\", \"docx\"]\n\n\
         [variants.markscheme]\ntargets = [\"pdf\"]\n";
 
-    fn args(flags: &[&str]) -> BuildArgs {
+    fn args(flags: &[&str]) -> ProjectArgs {
         let mut all = vec!["folio", "build"];
         all.extend(flags);
         match Cli::parse_from(all).command {
-            Command::Build(args) => args,
+            Command::Build(args) => args.project,
             other => panic!("{other:?}"),
         }
     }

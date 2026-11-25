@@ -71,6 +71,10 @@ fn a_data_file_is_listed_and_an_edit_rebuilds() {
         ]
     );
 
+    // A check, which a watcher runs, lists the same files.
+    let checked = folio::check(&world, Target::Pdf, None).unwrap();
+    assert_eq!(checked.files, compiled.files);
+
     // An event for a file the world already has as it is changes nothing.
     let update = loader
         .update(

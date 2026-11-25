@@ -76,6 +76,10 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | `style` | Evaluating content and matching a stylesheet's selectors against it finishes without a panic, within small evaluation limits. |
 | `nesting` | A script that nests content, arrays, dictionaries, closures and arguments by applying wrappers in loops compiles to PDF on a 2 MiB stack, or stops at the nesting limit, without a panic or a stack overflow. |
 | `differential` | After each edit of a random sequence to a corpus project's content and stylesheets, applied in place through `World::edit_source`, every build has the outputs, the diagnostics and the span maps of its pages (spans resolved to byte ranges) of a world built afresh from the same texts. It catches stale results in the memoised queries and in the shaping, line-break and page caches, which live outside salsa. |
+| `document` | Evaluating content markup and building its document tree, with no stylesheet, finishes without a panic. |
+| `compile` | A whole build of content with a stylesheet generated from the property registry (each three bytes a selector, a property and a value of its type, among them huge, zero, negative and non-finite lengths and numbers, and page sizes past PDF's limits) goes through pages and the PDF writer without a panic. |
+| `manifest` | Reading a `folio.toml` finishes without a panic, and every build of a valid one compiles a small document. |
+| `lockfile` | Reading a `folio.lock` beside a fixed manifest finishes without a panic, and a valid one compiles. |
 
 The `differential` harness also runs as a property test on stable:
 `cargo test -p folio-testkit --test differential` checks 12 random
@@ -116,6 +120,7 @@ The instruction-count benchmarks (`cargo bench -p folio-testkit --bench compile`
 | `compile_cold exam`, `notes` | Corpus documents from source to PDF in a fresh world. |
 | `recompile_after_edit m0_exit` | The ten-page document recompiled to PDF after a word in its middle is replaced by a longer one. |
 | `preview_after_edit reference` | The preview path: the reference document laid out again to its pages, without emit, after a word in its middle is replaced by a longer one. |
+| `check_after_edit reference` | The check path (`folio check`): the reference document checked again after the same one-word edit, every stage before Emit and the PDF writer's check, without writing the PDF. |
 | `restyle reference` | The preview path after a stylesheet edit: the reference document's body font size changes from 11pt to 12pt. |
 | `compile_variants one`, `three` | The ten-page document with three variants from source to PDF in a fresh world: the teacher's variant alone, and all three one after another. |
 | `parse reference` | Parsing the reference document's markup. |
@@ -124,8 +129,9 @@ Callgrind counts only the benchmark's own thread. Paragraphs that
 `folio-text` shapes several at a time run on its shaping thread, so a full
 compile's and a stylesheet edit's counts leave most shaping out; the
 wall-clock times include it. The preview benchmarks go through one
-function, `preview`, to point at a query that stops at the pages once
-there is one.
+function, `preview`, which stops at the pages; the check benchmarks call
+`folio::check`, which also runs the PDF writer's check and gathers the
+diagnostics.
 
 `folio-wall` (`scripts/bench.sh --wall`) prints three tables, each against
 the limits of SPEC §14.1 and §15:
@@ -133,7 +139,8 @@ the limits of SPEC §14.1 and §15:
 - scenarios, each run 20 times after a warm-up and judged by its 95th
   percentile: the M0 exit check (gated: 200 ms); the reference document's
   full compile, one-word edit to PDF, one-word edit to the pages (the
-  preview of the M1 exit check: 80 ms), stylesheet edit, and the ratio of
+  preview of the M1 exit check: 80 ms), one-word edit checked without
+  emit (reported only), stylesheet edit, and the ratio of
   three variants in parallel to the teacher's variant alone (all but the
   M0 exit check are release criteria and only reported);
 - stages of the reference document's PDF build: the median and 95th
