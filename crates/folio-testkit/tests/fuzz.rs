@@ -112,3 +112,14 @@ fn fuzz_crate_matches_harnesses() {
         );
     }
 }
+
+#[test]
+fn edits_with_a_nul_do_not_encode() {
+    let edit = Edit {
+        stylesheet: false,
+        text: "a\0b".into(),
+        range: 0..1,
+        with: String::new(),
+    };
+    assert_eq!(edit.encode(), None);
+}

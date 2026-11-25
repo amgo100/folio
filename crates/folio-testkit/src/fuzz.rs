@@ -121,9 +121,12 @@ impl Edit {
     }
 
     /// The bytes that [`Edit::decode`] reads as this edit, if its range is on
-    /// character boundaries of a text of at most 65,535 characters and it
-    /// spans at most 15 characters.
+    /// character boundaries of a text of at most 65,535 characters without
+    /// a NUL, and it spans at most 15 characters.
     pub fn encode(&self) -> Option<Vec<u8>> {
+        if self.text.contains('\0') {
+            return None;
+        }
         let first = self.text.get(..self.range.start)?.chars().count();
         let len = self.text.get(self.range.clone())?.chars().count();
         let first = u16::try_from(first).ok()?;

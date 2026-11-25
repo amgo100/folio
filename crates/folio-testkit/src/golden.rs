@@ -73,6 +73,9 @@ fn diff(expected: &str, actual: &str) -> String {
         .zip(&actual)
         .position(|(a, b)| a != b)
         .unwrap_or(expected.len().min(actual.len()));
+    if first == expected.len() && first == actual.len() {
+        return "the lines are equal: the texts differ in line endings or a final newline\n".into();
+    }
     let from = first.saturating_sub(3);
     let mut out = format!("first difference at line {}\n", first + 1);
     for (sign, lines) in [("-", &expected), ("+", &actual)] {

@@ -66,7 +66,11 @@ home="$root/target/gungraun-gate"
 worktree="$root/target/bench-base"
 base_target="$root/target/bench-base-target"
 rm -rf "$home"
-cleanup() { git worktree remove --force "$worktree" >/dev/null 2>&1 || true; }
+# A worktree that a `cargo clean` deleted is still registered until pruned.
+cleanup() {
+    git worktree remove --force "$worktree" >/dev/null 2>&1 || true
+    git worktree prune
+}
 trap cleanup EXIT
 cleanup
 

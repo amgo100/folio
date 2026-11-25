@@ -109,9 +109,9 @@ fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             name: "reference-full",
-            what: "100 pages, full compile in a fresh world",
+            what: "100 pages, full compile in a fresh world in a warm process",
             bounds: Bounds {
-                source: "warm full compile (§14.1)",
+                source: "warm full compile (§14.1), the world's caches empty",
                 target: Some(Duration::from_millis(400)),
                 limit: Duration::from_secs(1),
                 gated: false,
