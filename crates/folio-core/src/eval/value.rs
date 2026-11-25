@@ -1184,7 +1184,7 @@ impl Debug for Closure {
 /// A function with some arguments already applied: `f.with(x)`. Its hash
 /// is cached, because a function can be applied to itself, `f.with(f)`, and
 /// a chain of those holds one function many times.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct Applied {
     func: Func,
     args: Args,
@@ -1212,6 +1212,25 @@ impl Applied {
     }
 }
 
+impl PartialEq for Applied {
+    fn eq(&self, other: &Self) -> bool {
+        if std::ptr::eq(self, other) {
+            return true;
+        }
+        if self.hash.differ(&other.hash) {
+            return false;
+        }
+        compare_once(
+            std::ptr::from_ref(self) as usize,
+            std::ptr::from_ref(other) as usize,
+            Equality::Strict,
+            || self.func == other.func && self.args == other.args,
+        )
+    }
+}
+
+impl Eq for Applied {}
+
 impl Hash for Applied {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.hash.write(state, |mut state| {
@@ -1226,7 +1245,7 @@ impl Hash for Applied {
 /// Their hash is cached, because a function can return its arguments
 /// (`let f(..a) = a`), which can then be the arguments of another call
 /// many times over: `f(a, a)`. A change to the arguments forgets it.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Args {
     /// The span of the whole call.
     pub span: Span,
@@ -1266,6 +1285,28 @@ impl Args {
         self.depth.0
     }
 }
+
+impl PartialEq for Args {
+    fn eq(&self, other: &Self) -> bool {
+        if self.span != other.span
+            || self.items.len() != other.items.len()
+            || self.hash.differ(&other.hash)
+        {
+            return false;
+        }
+        if self.items.as_ptr() == other.items.as_ptr() {
+            return true;
+        }
+        compare_once(
+            self.items.as_ptr() as usize,
+            other.items.as_ptr() as usize,
+            Equality::Strict,
+            || self.items == other.items,
+        )
+    }
+}
+
+impl Eq for Args {}
 
 impl Hash for Args {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -1416,9 +1457,9 @@ mod tests {
 
     #[test]
     fn a_change_forgets_the_cached_hash() {
-        // An array that holds arrays caches its hash; after each change it
-        // hashes as an array made with the new items does, and so do its
-        // clones made before the change keep the old hash.
+        // An array that holds arrays caches its hash. After each change it
+        // hashes as a new array with the same items does, while a clone made
+        // before the change keeps the old hash.
         let mut array = Array::from([nested(2), nested(2)]);
         let before = hash_of(&array);
         let clone = array.clone();
@@ -1482,6 +1523,40 @@ mod tests {
         // Hashes once computed tell unequal values apart at once.
         assert_ne!(hash_of(&a), hash_of(&b));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn arguments_and_applied_functions_built_alike_compare_once_per_part() {
+        // Arguments that hold the arguments before them twice, and
+        // functions applied to themselves, each 2^60 parts as trees.
+        let args = |value: &Value| {
+            let arg = Arg {
+                span: Span::detached(),
+                name: None,
+                scope: None,
+                value: value.clone(),
+            };
+            Args::new(Span::detached(), EcoVec::from([arg.clone(), arg]))
+        };
+        let applied = |func: &Func| {
+            let args = args(&Value::Func(func.clone()));
+            Func::With(Arc::new(Applied::new(func.clone(), args)))
+        };
+        let strong = || Func::Element(QualifiedName::unqualified(Name::new("strong").unwrap()));
+        let (mut a, mut b, mut c) = (Value::Int(1), Value::Int(1), Value::Int(2));
+        let (mut f, mut g) = (strong(), strong());
+        for _ in 0..60 {
+            a = Value::Args(args(&a));
+            b = Value::Args(args(&b));
+            c = Value::Args(args(&c));
+            f = applied(&f);
+            g = applied(&g);
+        }
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(f, g);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_eq!(hash_of(&f), hash_of(&g));
     }
 
     #[test]
