@@ -83,6 +83,20 @@ fn style_splits_content_and_stylesheet() {
     );
 }
 
+#[test]
+fn nesting_scripts_apply_wrappers_in_loops() {
+    let script = fuzz::nesting_script(&[0, 3, 7, 2, 9]);
+    assert_eq!(
+        script,
+        "#let sink(..a) = a\n#let v = [x]\n\
+         #for i in range(3) { v = [*#v*] }\n\
+         #for i in range(2) { v = (v,) }\n\
+         #v\n"
+    );
+    // A wrapper index wraps around.
+    assert!(fuzz::nesting_script(&[255, 1]).contains(fuzz::WRAPPERS[255 % fuzz::WRAPPERS.len()]));
+}
+
 /// The fuzz crate, which only nightly Rust builds, has a target for each
 /// harness, and each calls its harness.
 #[test]

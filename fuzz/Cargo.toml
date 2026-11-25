@@ -48,3 +48,10 @@ path = "fuzz_targets/style.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "nesting"
+path = "fuzz_targets/nesting.rs"
+test = false
+doc = false
+bench = false

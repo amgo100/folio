@@ -74,6 +74,7 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | `stylesheet` | Parsing a stylesheet is lossless. |
 | `reparse` | An incremental reparse after an edit equals a full parse, and node identities follow the edit. |
 | `style` | Evaluating content and matching a stylesheet's selectors against it finishes without a panic, within small evaluation limits. |
+| `nesting` | A script that nests content, arrays, dictionaries, closures and arguments by applying wrappers in loops compiles to PDF on a 2 MiB stack, or stops at the nesting limit, without a panic or a stack overflow. |
 
 When a target fails, libFuzzer writes the input to `fuzz/artifacts/<target>/`.
 Reproduce it with `cargo +nightly fuzz run <target> <file>`, fix the bug,

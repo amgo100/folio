@@ -12,6 +12,7 @@
 //! | `stylesheet` | a stylesheet | the parse is lossless |
 //! | `reparse` | an edit to markup or a stylesheet | incremental reparsing equals a full parse; node identities follow the edit |
 //! | `style` | content and a stylesheet | evaluation, the cascade and selector matching finish without a panic |
+//! | `nesting` | wrappers and how often to apply each | a script that nests values that deeply compiles to PDF on a small stack, or reports the nesting limit, without a panic or an overflow |
 //!
 //! A target panics when a check fails; libFuzzer records the input.
 
@@ -33,6 +34,7 @@ pub const TARGETS: &[(&str, Body)] = &[
     ("stylesheet", stylesheet),
     ("reparse", reparse),
     ("style", style),
+    ("nesting", nesting),
 ];
 
 /// The regression inputs of a target: `fuzz/regressions/<target>/`.
@@ -237,6 +239,72 @@ pub fn style(data: &[u8]) {
     let _ = folio::styles(&world, Target::Pdf, Some(&variant));
 }
 
+/// The ways [`nesting`] wraps a value `v` once: in content, in an array or
+/// a dictionary, in a closure, in a function's arguments, and by changing
+/// a place in an array or a dictionary. None repeats `v`, which would make
+/// the value grow exponentially rather than nest.
+pub const WRAPPERS: &[&str] = &[
+    "[*#v*]",
+    "[_#v _]",
+    "[- #v]",
+    "[+ #v]",
+    "[/ t: #v]",
+    "figure([#v])",
+    "strong(override: (space-before: v))[x]",
+    "(v,)",
+    "(x: v)",
+    "() => v",
+    "strong.with(v)",
+    "sink(v)",
+    "{ let a = (); a.push(v); a }",
+    "{ let d = (x: none); d.x = v; d }",
+    "{ let a = (none,); a.at(0) = v; a }",
+];
+
+/// The script [`nesting`] compiles: for each pair of bytes, a wrapper of
+/// [`WRAPPERS`] (the first byte) applied in a loop as many times as the
+/// second byte says, so that a few bytes nest a value past the limit; then
+/// the value shown.
+pub fn nesting_script(data: &[u8]) -> String {
+    let mut script = String::from("#let sink(..a) = a\n#let v = [x]\n");
+    for pair in data.chunks_exact(2) {
+        let wrapper = WRAPPERS[usize::from(pair[0]) % WRAPPERS.len()];
+        let times = pair[1];
+        script.push_str(&format!("#for i in range({times}) {{ v = {wrapper} }}\n"));
+    }
+    script.push_str("#v\n");
+    script
+}
+
+/// Compiles a script that nests values deeply ([`nesting_script`]) to a
+/// PDF, on a thread with the stack of the threads that compile builds in
+/// parallel. Any nesting is either within the limit, and goes through
+/// every stage, or an error where it is made.
+pub fn nesting(data: &[u8]) {
+    let script = nesting_script(data);
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let mut world = World::builder()
+                .limits(STYLE_LIMITS)
+                .build(NESTING_MANIFEST, None)
+                .expect("the fuzz manifest is valid");
+            world.set_source("main.fol", &script).expect("a valid path");
+            let _ = folio::compile(&world, Target::Pdf, None);
+        })
+        .expect("a thread starts")
+        .join()
+        .expect("compiling does not panic");
+}
+
+/// The manifest of the world [`nesting`] builds.
+const NESTING_MANIFEST: &str = "\
+[project]
+entry = \"main.fol\"
+edition = \"2027\"
+compiler = \"0.0.0\"
+";
+
 /// The seed corpus of every target, as (target, file name, bytes): the
 /// documents and stylesheets of `tests/corpus` and of the parser's corpus
 /// in `crates/folio-syntax/tests/corpus`, encoded for each target.
@@ -280,6 +348,15 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
         bytes.extend(project_sheets.into_bytes());
         out.push(("style", format!("{}.bin", project.name), bytes));
     }
+    // Each wrapper past the nesting limit, and all of them in turn.
+    for (i, _) in WRAPPERS.iter().enumerate() {
+        let wrapper = u8::try_from(i).expect("few wrappers");
+        out.push(("nesting", format!("wrapper-{i}.bin"), vec![wrapper, 255]));
+    }
+    let mixed: Vec<u8> = (0..WRAPPERS.len())
+        .flat_map(|i| [u8::try_from(i).expect("few wrappers"), 7])
+        .collect();
+    out.push(("nesting", "mixed.bin".into(), mixed));
     for (name, text) in &contents {
         out.push(("markup", name.clone(), text.as_bytes().to_vec()));
     }

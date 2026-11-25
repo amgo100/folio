@@ -10,7 +10,8 @@
 //! sections at headings, belong to the document model
 //! ([`crate::model`]), which reads this tree.
 
-use std::fmt::Write;
+use std::fmt::{self, Debug, Formatter, Write};
+use std::hash::{Hash, Hasher};
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{ElementKind, Name, QualifiedName};
@@ -19,8 +20,14 @@ use folio_syntax::{Span, SyntaxNode};
 use super::value::{Dict, Value};
 
 /// A sequence of content nodes.
-#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
-pub struct Content(EcoVec<Node>);
+///
+/// It caches its depth ([`Content::depth`]). Equality, hashing and debug
+/// output are those of its nodes.
+#[derive(Clone, Default)]
+pub struct Content {
+    nodes: EcoVec<Node>,
+    depth: u32,
+}
 
 impl Content {
     /// No content.
@@ -30,36 +37,49 @@ impl Content {
 
     /// Content of one node.
     pub fn node(node: Node) -> Self {
-        Self(EcoVec::from([node]))
+        Self {
+            depth: node.depth(),
+            nodes: EcoVec::from([node]),
+        }
     }
 
     /// The nodes, in order.
     pub fn nodes(&self) -> &[Node] {
-        &self.0
+        &self.nodes
+    }
+
+    /// How deeply the content nests: as deeply as its deepest node. Text,
+    /// spaces and breaks are `0` deep, and an element or a slot one more
+    /// than its deepest field or its body ([`Value::depth`]). Nested
+    /// elements are therefore as deep as they nest: `strong[*x*]` is 2
+    /// deep.
+    pub fn depth(&self) -> u32 {
+        self.depth
     }
 
     /// The number of nodes at the top level.
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.nodes.len()
     }
 
     /// Whether there are no nodes.
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.nodes.is_empty()
     }
 
     /// Appends the nodes of other content.
     pub(crate) fn extend(&mut self, other: Content) {
-        if self.0.is_empty() {
+        if self.nodes.is_empty() {
             *self = other;
         } else {
-            self.0.extend(other.0);
+            self.depth = self.depth.max(other.depth);
+            self.nodes.extend(other.nodes);
         }
     }
 
     /// The element this content is, if it is one element.
     pub fn as_element(&self) -> Option<&Element> {
-        match self.0.as_slice() {
+        match self.nodes.as_slice() {
             [Node::Element(element)] => Some(element),
             _ => None,
         }
@@ -67,18 +87,19 @@ impl Content {
 
     /// Removes spaces at the end.
     pub(crate) fn trim_end_spaces(&mut self) {
-        while matches!(self.0.last(), Some(Node::Space(_))) {
-            self.0.pop();
+        while matches!(self.nodes.last(), Some(Node::Space(_))) {
+            self.nodes.pop();
         }
     }
 
-    /// The last element, skipping spaces, to attach a label to.
+    /// The last element, skipping spaces, to attach a label to. Only its
+    /// label may be changed, since the content caches its depth.
     pub(crate) fn last_element_mut(&mut self) -> Option<&mut Element> {
         let index = self
-            .0
+            .nodes
             .iter()
             .rposition(|node| !matches!(node, Node::Space(_)))?;
-        match &mut self.0.make_mut()[index] {
+        match &mut self.nodes.make_mut()[index] {
             Node::Element(element) => Some(element),
             _ => None,
         }
@@ -94,7 +115,7 @@ impl Content {
     }
 
     fn write_plain(&self, out: &mut EcoString) {
-        for node in &self.0 {
+        for node in &self.nodes {
             match node {
                 Node::Text { text, .. } => out.push_str(text),
                 Node::Space(_) | Node::Linebreak(_) | Node::Parbreak(_) => out.push(' '),
@@ -116,7 +137,7 @@ impl Content {
     /// `[heading(level: 2, body: [Forces]) <sec>, parbreak, "A ball"]`.
     pub fn repr(&self) -> EcoString {
         let mut out = EcoString::from("[");
-        for (i, node) in self.0.iter().enumerate() {
+        for (i, node) in self.nodes.iter().enumerate() {
             if i > 0 {
                 out.push_str(", ");
             }
@@ -153,7 +174,29 @@ impl Content {
 
 impl FromIterator<Node> for Content {
     fn from_iter<T: IntoIterator<Item = Node>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+        let nodes: EcoVec<Node> = iter.into_iter().collect();
+        let depth = nodes.iter().map(Node::depth).max().unwrap_or(0);
+        Self { nodes, depth }
+    }
+}
+
+impl PartialEq for Content {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes == other.nodes
+    }
+}
+
+impl Eq for Content {}
+
+impl Hash for Content {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.nodes.hash(state);
+    }
+}
+
+impl Debug for Content {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Content").field(&self.nodes).finish()
     }
 }
 
@@ -189,6 +232,18 @@ pub enum Node {
     /// A scoped rule (`#rule question { .. }`, SPEC §5.4), kept as syntax
     /// for the style stage. It applies to the enclosing element.
     Rule(SyntaxNode),
+}
+
+impl Node {
+    /// How deeply the node nests: one more than an element's deepest field
+    /// or a slot's body, and `0` for any other node.
+    pub fn depth(&self) -> u32 {
+        match self {
+            Self::Element(element) => element.fields.depth(),
+            Self::Slot(slot) => slot.body.depth().saturating_add(1),
+            _ => 0,
+        }
+    }
 }
 
 /// A slot's sub-block: `#solution[..]` in the body of `#example[..]`.

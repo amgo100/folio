@@ -174,6 +174,24 @@ impl Value {
         }
     }
 
+    /// How deeply the value nests (SPEC §4.4): `0` for a value that holds
+    /// no other values, and one more than its deepest part for an array, a
+    /// dictionary, arguments, a closure, a function with arguments applied,
+    /// and an element or slot in content. Content is as deep as its deepest
+    /// node, and a module as its deepest binding or its content. Every
+    /// value caches its depth, so this takes constant time.
+    pub fn depth(&self) -> u32 {
+        match self {
+            Self::Content(c) => c.depth(),
+            Self::Array(a) => a.depth(),
+            Self::Dict(d) => d.depth(),
+            Self::Func(f) => f.depth(),
+            Self::Args(a) => a.depth(),
+            Self::Module(m) => m.depth(),
+            _ => 0,
+        }
+    }
+
     /// The number of bytes a value takes, as the memory limit counts them
     /// (SPEC §4.4): the length of a string, and a fixed size per item of an
     /// array, dictionary or content sequence. Items are not counted
@@ -192,6 +210,29 @@ impl Value {
     }
 }
 
+/// A cached depth, which equality, hashing and debug output ignore: it
+/// follows from the value that holds it.
+#[derive(Copy, Clone)]
+struct Depth(u32);
+
+impl PartialEq for Depth {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Depth {}
+
+impl Hash for Depth {
+    fn hash<H: Hasher>(&self, _: &mut H) {}
+}
+
+impl Debug for Depth {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Writes a float as code would: `1.0`, `0.25`, `1e30`.
 pub(crate) fn repr_float(v: f64) -> String {
     if v.is_infinite() {
@@ -201,7 +242,179 @@ pub(crate) fn repr_float(v: f64) -> String {
 }
 
 /// An array of values.
-pub type Array = EcoVec<Value>;
+///
+/// It caches its depth ([`Value::depth`]), which its methods keep exact.
+/// Equality, hashing and debug output are those of its items.
+#[derive(Clone)]
+pub struct Array {
+    items: EcoVec<Value>,
+    depth: u32,
+}
+
+impl Array {
+    /// An empty array.
+    pub fn new() -> Self {
+        Self {
+            items: EcoVec::new(),
+            depth: 1,
+        }
+    }
+
+    /// An empty array with room for `capacity` items.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            items: EcoVec::with_capacity(capacity),
+            depth: 1,
+        }
+    }
+
+    /// How deeply the array nests: one more than its deepest item.
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// The items.
+    pub fn as_slice(&self) -> &[Value] {
+        &self.items
+    }
+
+    /// Appends an item.
+    pub fn push(&mut self, value: Value) {
+        self.depth = self.depth.max(value.depth().saturating_add(1));
+        self.items.push(value);
+    }
+
+    /// Inserts an item at an index, shifting the ones after it.
+    pub fn insert(&mut self, index: usize, value: Value) {
+        self.depth = self.depth.max(value.depth().saturating_add(1));
+        self.items.insert(index, value);
+    }
+
+    /// Removes and returns the last item.
+    pub fn pop(&mut self) -> Option<Value> {
+        let value = self.items.pop()?;
+        self.removed(value.depth());
+        Some(value)
+    }
+
+    /// Removes and returns the item at an index.
+    pub fn remove(&mut self, index: usize) -> Value {
+        let value = self.items.remove(index);
+        self.removed(value.depth());
+        value
+    }
+
+    /// Changes the item at an index in place, and returns what `f`
+    /// returns.
+    pub(crate) fn update<R>(&mut self, index: usize, f: impl FnOnce(&mut Value) -> R) -> R {
+        let item = &mut self.items.make_mut()[index];
+        let before = item.depth();
+        let result = f(item);
+        let after = item.depth();
+        self.depth = self.depth.max(after.saturating_add(1));
+        if after < before {
+            self.removed(before);
+        }
+        result
+    }
+
+    /// Restores the depth after an item of depth `depth` was removed or
+    /// made shallower: only an item at the greatest depth can lower it.
+    fn removed(&mut self, depth: u32) {
+        if depth.saturating_add(1) == self.depth {
+            self.depth = depth_of(self.items.iter());
+        }
+    }
+}
+
+/// One more than the deepest of some values.
+pub(crate) fn depth_of<'a>(values: impl IntoIterator<Item = &'a Value>) -> u32 {
+    values
+        .into_iter()
+        .map(Value::depth)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+impl Default for Array {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::ops::Deref for Array {
+    type Target = [Value];
+
+    fn deref(&self) -> &[Value] {
+        &self.items
+    }
+}
+
+impl PartialEq for Array {
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items
+    }
+}
+
+impl Eq for Array {}
+
+impl Hash for Array {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.items.hash(state);
+    }
+}
+
+impl Debug for Array {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.items.fmt(f)
+    }
+}
+
+impl From<EcoVec<Value>> for Array {
+    fn from(items: EcoVec<Value>) -> Self {
+        let depth = depth_of(items.iter());
+        Self { items, depth }
+    }
+}
+
+impl<const N: usize> From<[Value; N]> for Array {
+    fn from(items: [Value; N]) -> Self {
+        Self::from(EcoVec::from(items))
+    }
+}
+
+impl FromIterator<Value> for Array {
+    fn from_iter<T: IntoIterator<Item = Value>>(iter: T) -> Self {
+        Self::from(iter.into_iter().collect::<EcoVec<_>>())
+    }
+}
+
+impl Extend<Value> for Array {
+    fn extend<T: IntoIterator<Item = Value>>(&mut self, iter: T) {
+        for value in iter {
+            self.push(value);
+        }
+    }
+}
+
+impl IntoIterator for Array {
+    type Item = Value;
+    type IntoIter = ecow::vec::IntoIter<Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Array {
+    type Item = &'a Value;
+    type IntoIter = std::slice::Iter<'a, Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
 
 /// A length: an absolute part and a part relative to the font size,
 /// `2em + 3pt`.
@@ -280,8 +493,12 @@ impl Duration {
 ///
 /// Two dictionaries are equal only when their pairs are in the same order,
 /// because iteration order is visible to scripts.
-#[derive(Clone, Default)]
-pub struct Dict(Arc<IndexMap<EcoString, Value>>);
+#[derive(Clone)]
+pub struct Dict {
+    map: Arc<IndexMap<EcoString, Value>>,
+    /// One more than the deepest value, kept exact by the methods.
+    depth: u32,
+}
 
 impl Dict {
     /// An empty dictionary.
@@ -289,51 +506,94 @@ impl Dict {
         Self::default()
     }
 
+    /// How deeply the dictionary nests: one more than its deepest value.
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+
     /// The number of pairs.
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.map.len()
     }
 
     /// Whether there are no pairs.
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.map.is_empty()
     }
 
     /// The value of a key.
     pub fn get(&self, key: &str) -> Option<&Value> {
-        self.0.get(key)
+        self.map.get(key)
     }
 
     /// The pairs, in insertion order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&EcoString, &Value)> {
-        self.0.iter()
+        self.map.iter()
     }
 
     /// Inserts a pair, replacing the value of an existing key in place.
     pub fn insert(&mut self, key: EcoString, value: Value) {
-        Arc::make_mut(&mut self.0).insert(key, value);
+        self.depth = self.depth.max(value.depth().saturating_add(1));
+        if let Some(old) = Arc::make_mut(&mut self.map).insert(key, value) {
+            self.removed(old.depth());
+        }
     }
 
     /// Removes a key, keeping the order of the others.
     pub fn remove(&mut self, key: &str) -> Option<Value> {
-        Arc::make_mut(&mut self.0).shift_remove(key)
+        let value = Arc::make_mut(&mut self.map).shift_remove(key)?;
+        self.removed(value.depth());
+        Some(value)
     }
 
-    /// The value of a key, to change it, inserting `none` first if the key
-    /// is missing.
-    pub(crate) fn get_or_insert_mut(&mut self, key: EcoString) -> &mut Value {
-        Arc::make_mut(&mut self.0).entry(key).or_default()
+    /// Changes the value of a key in place, inserting `none` first if the
+    /// key is missing and `insert` is true, and returns what `f` returns;
+    /// `None` if the key is missing and `insert` is false.
+    pub(crate) fn update<R>(
+        &mut self,
+        key: &str,
+        insert: bool,
+        f: impl FnOnce(&mut Value) -> R,
+    ) -> Option<R> {
+        let map = Arc::make_mut(&mut self.map);
+        if !map.contains_key(key) {
+            if !insert {
+                return None;
+            }
+            map.insert(key.into(), Value::None);
+        }
+        let value = map.get_mut(key).expect("the key was inserted");
+        let before = value.depth();
+        let result = f(value);
+        let after = value.depth();
+        self.depth = self.depth.max(after.saturating_add(1));
+        if after < before {
+            self.removed(before);
+        }
+        Some(result)
     }
 
-    /// The value of a key, to change it.
-    pub(crate) fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
-        Arc::make_mut(&mut self.0).get_mut(key)
+    /// Restores the depth after a value of depth `depth` was removed or
+    /// made shallower: only a value at the greatest depth can lower it.
+    fn removed(&mut self, depth: u32) {
+        if depth.saturating_add(1) == self.depth {
+            self.depth = depth_of(self.map.values());
+        }
+    }
+}
+
+impl Default for Dict {
+    fn default() -> Self {
+        Self {
+            map: Arc::default(),
+            depth: 1,
+        }
     }
 }
 
 impl PartialEq for Dict {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0) || self.0.iter().eq(other.0.iter())
+        Arc::ptr_eq(&self.map, &other.map) || self.map.iter().eq(other.map.iter())
     }
 }
 
@@ -341,8 +601,8 @@ impl Eq for Dict {}
 
 impl Hash for Dict {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_usize(self.0.len());
-        for pair in self.0.iter() {
+        state.write_usize(self.map.len());
+        for pair in self.map.iter() {
             pair.hash(state);
         }
     }
@@ -350,13 +610,18 @@ impl Hash for Dict {
 
 impl Debug for Dict {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_map().entries(self.0.iter()).finish()
+        f.debug_map().entries(self.map.iter()).finish()
     }
 }
 
 impl FromIterator<(EcoString, Value)> for Dict {
     fn from_iter<T: IntoIterator<Item = (EcoString, Value)>>(iter: T) -> Self {
-        Self(Arc::new(iter.into_iter().collect()))
+        let map: IndexMap<EcoString, Value> = iter.into_iter().collect();
+        let depth = depth_of(map.values());
+        Self {
+            map: Arc::new(map),
+            depth,
+        }
     }
 }
 
@@ -404,6 +669,8 @@ struct ModuleRepr {
     scope: Scope,
     content: Content,
     failed: BTreeSet<EcoString>,
+    /// The depth of its deepest binding or of its content.
+    depth: Depth,
 }
 
 impl Module {
@@ -420,12 +687,26 @@ impl Module {
         content: Content,
         failed: BTreeSet<EcoString>,
     ) -> Self {
+        let depth = scope
+            .iter()
+            .map(|(_, value)| value.depth())
+            .max()
+            .unwrap_or(0)
+            .max(content.depth());
         Self(Arc::new(ModuleRepr {
             name: name.into(),
             scope,
             content,
             failed,
+            depth: Depth(depth),
         }))
+    }
+
+    /// How deeply the module nests: as deeply as its deepest binding or its
+    /// content. A module adds no depth of its own, because modules nest
+    /// only through imports, which the depth limit of calls bounds.
+    pub fn depth(&self) -> u32 {
+        self.0.depth.0
     }
 
     /// The module's name: a file's stem, or the namespace.
@@ -482,6 +763,17 @@ impl Func {
             Self::Element(name) => Some(eco_format!("{name}")),
             Self::Slot(slot) => Some(slot.1.as_str().into()),
             Self::With(inner) => inner.0.name(),
+        }
+    }
+
+    /// How deeply the function nests: a closure's depth, one more than the
+    /// deeper of the function and the arguments for a function with
+    /// arguments applied, and `0` otherwise.
+    pub fn depth(&self) -> u32 {
+        match self {
+            Self::Closure(c) => c.depth(),
+            Self::With(with) => with.0.depth().max(with.1.depth()).saturating_add(1),
+            Self::Native(_) | Self::Element(_) | Self::Slot(_) => 0,
         }
     }
 
@@ -548,6 +840,8 @@ struct ClosureRepr {
     captured: Scope,
     /// The values of its named parameters' defaults, in order.
     defaults: EcoVec<Value>,
+    /// One more than the deepest value it captured or holds as a default.
+    depth: Depth,
 }
 
 impl Closure {
@@ -558,12 +852,14 @@ impl Closure {
         captured: Scope,
         defaults: EcoVec<Value>,
     ) -> Self {
+        let depth = depth_of(captured.iter().map(|(_, v)| v).chain(defaults.iter()));
         let repr = ClosureRepr {
             node,
             file,
             name,
             captured,
             defaults,
+            depth: Depth(depth),
         };
         let mut state = DefaultHasher::new();
         repr.hash(&mut state);
@@ -593,6 +889,12 @@ impl Closure {
     /// The values of its named parameters' defaults, in order.
     pub fn defaults(&self) -> &[Value] {
         &self.0.1.defaults
+    }
+
+    /// How deeply the closure nests: one more than the deepest value it
+    /// captured or holds as a default.
+    pub fn depth(&self) -> u32 {
+        self.0.1.depth.0
     }
 }
 
@@ -626,7 +928,33 @@ pub struct Args {
     /// The span of the whole call.
     pub span: Span,
     /// The arguments, positional and named, in order.
-    pub items: EcoVec<Arg>,
+    pub(crate) items: EcoVec<Arg>,
+    /// One more than the deepest value, as the arguments were made. Taking
+    /// arguments leaves it an upper bound; arguments that are a value are
+    /// never changed, so theirs is exact.
+    depth: Depth,
+}
+
+impl Args {
+    /// Arguments of a call.
+    pub fn new(span: Span, items: EcoVec<Arg>) -> Self {
+        let depth = depth_of(items.iter().map(|arg| &arg.value));
+        Self {
+            span,
+            items,
+            depth: Depth(depth),
+        }
+    }
+
+    /// The arguments, positional and named, in order.
+    pub fn items(&self) -> &[Arg] {
+        &self.items
+    }
+
+    /// How deeply the arguments nest: one more than the deepest value.
+    pub fn depth(&self) -> u32 {
+        self.depth.0
+    }
 }
 
 /// One argument of a call.
@@ -641,4 +969,109 @@ pub struct Arg {
     pub scope: Option<EcoString>,
     /// The value.
     pub value: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An array nested `depth` deep: `((..),)`.
+    fn nested(depth: u32) -> Value {
+        let mut value = Value::Array(Array::new());
+        for _ in 1..depth {
+            value = Value::Array(Array::from([value]));
+        }
+        value
+    }
+
+    #[test]
+    fn values_count_their_depth() {
+        assert_eq!(Value::Int(1).depth(), 0);
+        assert_eq!(nested(1).depth(), 1);
+        assert_eq!(nested(5).depth(), 5);
+        let dict: Dict = [("x".into(), nested(3)), ("y".into(), Value::None)]
+            .into_iter()
+            .collect();
+        assert_eq!(dict.depth(), 4);
+        assert_eq!(Dict::new().depth(), 1);
+        let args = Args::new(
+            Span::detached(),
+            EcoVec::from([Arg {
+                span: Span::detached(),
+                name: None,
+                scope: None,
+                value: nested(2),
+            }]),
+        );
+        assert_eq!(args.depth(), 3);
+        let with = Func::With(Arc::new((
+            Func::Element(QualifiedName::unqualified(Name::new("strong").unwrap())),
+            args,
+        )));
+        assert_eq!(with.depth(), 4);
+    }
+
+    #[test]
+    fn arrays_keep_their_depth_exact() {
+        let mut array = Array::new();
+        array.push(Value::Int(1));
+        assert_eq!(array.depth(), 1);
+        array.push(nested(4));
+        array.insert(0, nested(2));
+        assert_eq!(array.depth(), 5);
+        // Removing the deepest item lowers the depth; another does not.
+        assert_eq!(array.remove(0), nested(2));
+        assert_eq!(array.depth(), 5);
+        assert_eq!(array.pop(), Some(nested(4)));
+        assert_eq!(array.depth(), 1);
+        // A change in place, deeper and then shallower.
+        array.update(0, |item| *item = nested(6));
+        assert_eq!(array.depth(), 7);
+        array.update(0, |item| *item = Value::None);
+        assert_eq!(array.depth(), 1);
+        // Two items at the greatest depth: removing one keeps it.
+        let mut array = Array::from([nested(3), nested(3)]);
+        array.pop();
+        assert_eq!(array.depth(), 4);
+        // Extending and collecting count every item.
+        array.extend([nested(8)]);
+        assert_eq!(array.depth(), 9);
+        let collected: Array = array.iter().cloned().collect();
+        assert_eq!(collected.depth(), 9);
+    }
+
+    #[test]
+    fn dictionaries_keep_their_depth_exact() {
+        let mut dict = Dict::new();
+        dict.insert("a".into(), nested(3));
+        dict.insert("b".into(), nested(1));
+        assert_eq!(dict.depth(), 4);
+        // Replacing the deepest value with a shallower one lowers it.
+        dict.insert("a".into(), Value::Int(0));
+        assert_eq!(dict.depth(), 2);
+        // A change in place, inserting the key when asked.
+        assert_eq!(dict.update("c", false, |_| ()), None);
+        assert_eq!(dict.update("c", true, |v| *v = nested(5)), Some(()));
+        assert_eq!(dict.depth(), 6);
+        assert_eq!(dict.remove("c"), Some(nested(5)));
+        assert_eq!(dict.depth(), 2);
+        assert_eq!(dict.remove("b"), Some(nested(1)));
+        assert_eq!(dict.depth(), 1);
+    }
+
+    #[test]
+    fn depth_is_not_part_of_equality_or_hashing() {
+        // A value made in place equals one made at once, and hashes alike.
+        let mut a = Array::from([nested(4)]);
+        a.update(0, |item| *item = Value::Int(1));
+        let b = Array::from([Value::Int(1)]);
+        assert_eq!(a, b);
+        let hash = |v: &Array| {
+            let mut state = DefaultHasher::new();
+            v.hash(&mut state);
+            state.finish()
+        };
+        assert_eq!(hash(&a), hash(&b));
+        assert_eq!(a.depth(), b.depth());
+    }
 }

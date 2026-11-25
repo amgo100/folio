@@ -64,6 +64,15 @@
 //! dictionaries and content grow by, which bounds what a script can
 //! allocate.
 //!
+//! Values nest at most [`MAX_NESTING`] deep: content in content, arrays in
+//! arrays, closures that capture closures. Every value caches its depth
+//! ([`Value::depth`]), so the check is cheap; an expression whose value
+//! would nest more deeply is an error, and so is an assignment or a
+//! mutating method that would nest the variable it changes more deeply,
+//! which then changes nothing. Values are hashed, compared and dropped
+//! recursively, and so is content in the stages after evaluation, so this
+//! limit at the source is what keeps all of them within the stack.
+//!
 //! Imports cannot form a cycle: import paths are string literals, and an
 //! import of a file that imports, directly or not, the importing file is an
 //! error. The depth of a call is part of its key, so a recursive call is a
@@ -97,6 +106,20 @@ use self::vm::Vm;
 use crate::db::{Db, Project, SourceFile, dependencies, source_file};
 use crate::diag;
 use crate::project::{Date, ProjectPath};
+
+/// How deeply a value may nest (SPEC §4.4): content in content, arrays in
+/// arrays, and so on, as [`Value::depth`] counts it. A value that would nest
+/// more deeply is an error at the expression that makes it.
+///
+/// Unlike [`Limits`], this is not for the host to set. Hashing, comparing
+/// and dropping a value, and the stages after evaluation, walk it
+/// recursively, so the limit is what keeps them within the stack of a
+/// thread: 2 MiB for the threads that compile builds in parallel, in a
+/// debug build too. The deepest walk is the PDF structure tree's, which
+/// nests three tags for each level of a nested list and is serialised
+/// recursively by `krilla`; it overflows such a thread at about 145 levels.
+/// No document nests nearly as deeply as the limit.
+pub const MAX_NESTING: u32 = 100;
 
 /// The limits of evaluation (SPEC §4.4, §14.3). A host sets them on the
 /// world; the defaults suit any document.
