@@ -1138,17 +1138,17 @@ The live target renders slides and pages from fragments as display lists, in Fol
 
 All tools are front ends to the same library: the command line, the browser preview, the language server and the Folio Studio desktop editor build documents identically when their compiler version matches the project's pin (§2.4).
 
-They show the same diagnostics. A diagnostic has a severity, an optional code naming its lint (`override-literal`), a message, a primary span, secondary spans with their own messages, hints, and quick fixes as source edits. Spans stay span numbers (§2.3) until a front end shows them: the command line renders them with source excerpts, and other front ends receive them as JSON with paths, byte ranges, lines and columns.
+They show the same diagnostics. A diagnostic has a severity, an optional code naming its lint (`override-literal`), a message, a primary span, secondary spans with their own messages, hints, and quick fixes as source edits. Spans stay span numbers (§2.3) until a front end shows them: the command line renders them with source excerpts, or writes them as JSON with `--diagnostics json`, and other front ends receive them as JSON with paths, byte ranges, lines and columns. The JSON document of the command line is versioned and described in `docs/diagnostics-json.md`; programs, such as AI coding agents (§15), read it instead of the excerpts. It is one document, written when the command ends, with a `version`, the diagnostics, and each build with what became of its output (written, skipped, none or failed). New fields may appear in it without a new version; removing or renaming a field, or changing its meaning, raises the version.
 
 ### 12.1 Command line
 
 | Command | Purpose |
 | --- | --- |
 | `folio new <template>` | Create a project from a template or package |
-| `folio build [--variant v] [--target t] [--today date] [--strict]` | Build outputs; all declared variants by default |
+| `folio build [--variant v] [--target t] [--today date] [--strict] [--diagnostics human\|json]` | Build outputs; all declared variants by default |
 | `folio watch` | Rebuild incrementally and serve the live preview |
 | `folio present` | Run the live presentation with presenter view |
-| `folio check [--layout] [--leaks] [--report overrides]` | Diagnostics without output |
+| `folio check [--layout] [--leaks] [--report overrides] [--diagnostics human\|json]` | Diagnostics without output |
 | `folio fmt` | Canonical formatting of `.fol` and `.fsty` files |
 | `folio promote <file:line>` | Move a local override into a stylesheet |
 | `folio query <selector>` | Print elements as JSON, such as all questions with their marks |
@@ -1157,7 +1157,7 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 
 - A command works on the project whose `folio.toml` is in the current directory or the nearest directory above it, or in the directory given with `--root`.
 - `folio build` reads every file of the project except hidden ones, the font directory and the files its builds write. It follows symbolic links only to files and directories inside the project. `--variant` and `--target` may be repeated, and narrow the builds the manifest declares; a variant the manifest does not declare is an error. `--today` sets the date that scripts see as `today` (§4.4), in place of `project.today`. `--compiler current` is described in §2.4.
-- Diagnostics go to standard error with source excerpts (§12). A build with errors writes no output, so a file in `out/` is always from a build without errors; outputs are replaced whole, through a temporary file whose name no other write uses. Writes follow symbolic links only to directories inside the project, and an output whose directory a link would place outside it is an error; a link at an output itself is replaced by the file. The exit status is 1 when any build has errors, and 2 when the command line cannot be run.
+- Diagnostics go to standard error with source excerpts (§12). With `--diagnostics json`, `folio build` writes instead one JSON document to standard error when it ends: its diagnostics and what became of each build's output (`docs/diagnostics-json.md`). `folio check` takes the same flag. A build with errors writes no output, so a file in `out/` is always from a build without errors; outputs are replaced whole, through a temporary file whose name no other write uses. Writes follow symbolic links only to directories inside the project, and an output whose directory a link would place outside it is an error; a link at an output itself is replaced by the file. The exit status is 1 when any build has errors, and 2 when the command line cannot be run.
 
 ### 12.2 Watch and preview
 
