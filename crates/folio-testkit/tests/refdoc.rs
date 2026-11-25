@@ -2,7 +2,7 @@
 //! their make-up, and fill the pages they are meant to.
 
 use folio::{BuildMode, Target};
-use folio_testkit::refdoc::{self, Spec};
+use folio_testkit::refdoc::{self, Edit, Spec};
 
 /// Compiles a generated document and returns its number of pages.
 fn pages(spec: &Spec) -> usize {
@@ -112,4 +112,21 @@ fn variants() {
     // The exam hides the answers that the other two show.
     assert_eq!(lengths[0] + spec.pages, lengths[1]);
     assert_eq!(lengths[1], lengths[2]);
+}
+
+#[test]
+fn edits() {
+    let project = refdoc::generate(&Spec::M0_EXIT);
+    let word = Edit::word(&project);
+    assert_eq!(&project.sources[&word.path][word.range.clone()], "The");
+    let style = Edit::style(&project);
+    assert_eq!(&project.sources[&style.path][style.range.clone()], "11pt");
+    let mut world = project.world(BuildMode::Ci);
+    for edit in [word, style] {
+        world
+            .edit_source(&edit.path, edit.range, edit.with)
+            .unwrap();
+        let pages = folio::pages(&world, Target::Pdf, None).unwrap();
+        assert!(pages.is_some_and(|p| !p.pages.is_empty()));
+    }
 }

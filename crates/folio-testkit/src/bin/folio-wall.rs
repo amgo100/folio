@@ -28,13 +28,12 @@
 
 #![forbid(unsafe_code)]
 
-use std::ops::Range;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use folio::{BuildMode, Name, Target, World};
 use folio_testkit::corpus::Project;
-use folio_testkit::refdoc::{self, Spec};
+use folio_testkit::refdoc::{self, Edit, Spec};
 
 /// What a scenario is measured against.
 #[derive(Debug, Copy, Clone)]
@@ -66,24 +65,11 @@ struct Scenario {
 /// Prepares a run of a scenario, outside the timing.
 type Setup = fn() -> Prepared;
 
-/// An edit to a source file.
-#[derive(Debug, Clone)]
-struct Edit {
-    /// The file, relative to the project's root.
-    path: String,
-    /// The bytes it replaces.
-    range: Range<usize>,
-    /// What it puts in their place.
-    with: &'static str,
-}
-
-impl Edit {
-    /// Applies the edit to a world.
-    fn apply(&self, world: &mut World) {
-        world
-            .edit_source(&self.path, self.range.clone(), self.with)
-            .expect("a valid edit");
-    }
+/// Applies an edit to a world.
+fn apply(edit: &Edit, world: &mut World) {
+    world
+        .edit_source(&edit.path, edit.range.clone(), edit.with)
+        .expect("a valid edit");
 }
 
 /// What a scenario's setup prepares.
@@ -92,41 +78,6 @@ enum Prepared {
     Project(Project),
     /// A compiled world and an edit to make to it.
     Compiled(World, Edit),
-}
-
-/// A one-word edit: the first word of the first paragraph after the middle
-/// of the entry file, "The", becomes "This", so that its paragraph and
-/// the pages after it may reflow.
-fn word_edit(project: &Project) -> Edit {
-    let text = &project.sources["main.fol"];
-    let middle = text.ceil_char_boundary(text.len() / 2);
-    let start = text[middle..]
-        .find("\n\nThe ")
-        .map(|i| middle + i + 2)
-        .expect("a paragraph after the middle");
-    Edit {
-        path: "main.fol".into(),
-        range: start..start + 3,
-        with: "This",
-    }
-}
-
-/// A stylesheet edit (SPEC §14.1): the body's font size, 11pt, becomes
-/// 12pt, so that every page reflows.
-fn style_edit(project: &Project) -> Edit {
-    let path = "styles/reference.fsty";
-    let text = &project.sources[path];
-    let rule = text.find("doc {").expect("a rule for the body");
-    let start = rule
-        + text[rule..]
-            .find("font-size: 11pt")
-            .expect("the body's font size")
-        + "font-size: ".len();
-    Edit {
-        path: path.into(),
-        range: start..start + "11pt".len(),
-        with: "12pt",
-    }
 }
 
 /// A world of a project that has compiled its PDF, and an edit to make.
@@ -166,7 +117,7 @@ fn recompile_after_edit(prepared: Prepared) -> usize {
     let Prepared::Compiled(mut world, edit) = prepared else {
         unreachable!("set up as a compiled world")
     };
-    edit.apply(&mut world);
+    apply(&edit, &mut world);
     let compiled = folio::compile(&world, Target::Pdf, None).expect("not cancelled");
     compiled.output.map_or(0, |bytes| bytes.len())
 }
@@ -176,7 +127,7 @@ fn preview_after_edit(prepared: Prepared) -> usize {
     let Prepared::Compiled(mut world, edit) = prepared else {
         unreachable!("set up as a compiled world")
     };
-    edit.apply(&mut world);
+    apply(&edit, &mut world);
     preview(&world)
 }
 
@@ -220,19 +171,21 @@ fn reference_project() -> Prepared {
 
 /// The reference document, compiled, with a one-word edit to make.
 fn reference_word_edit() -> Prepared {
-    compiled(refdoc::generate(&Spec::REFERENCE), word_edit)
+    compiled(refdoc::generate(&Spec::REFERENCE), Edit::word)
 }
 
 /// The reference document, compiled, with a stylesheet edit to make.
 fn reference_style_edit() -> Prepared {
-    compiled(refdoc::generate(&Spec::REFERENCE), style_edit)
+    compiled(refdoc::generate(&Spec::REFERENCE), Edit::style)
 }
 
-/// The bounds of the preview after an edit (SPEC §14.1, the M1 exit check
-/// of §15).
+/// The bounds of the preview after an edit: the M1 exit check of SPEC §15,
+/// the preview updated within 80 ms of an edit. The edits here may reflow
+/// the pages after them, so the 30 ms target of §14.1 for an edit inside
+/// one paragraph does not apply.
 const PREVIEW: Bounds = Bounds {
-    source: "preview after an edit: M1 exit (§15), §14.1",
-    target: Some(Duration::from_millis(30)),
+    source: "preview within 80 ms of an edit: M1 exit (§15)",
+    target: None,
     limit: Duration::from_millis(80),
     gated: false,
 };
@@ -299,14 +252,14 @@ fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             name: "variants-one",
-            what: "100 pages, the teacher variant of three, in a fresh world",
-            bounds: Some(WARM_FULL),
+            what: "100 pages and answers, the teacher variant of three, in a fresh world",
+            bounds: None,
             setup: || Prepared::Project(refdoc::generate_variants(&Spec::REFERENCE)),
             run: compile_one_variant,
         },
         Scenario {
             name: "variants-three",
-            what: "100 pages, three variants in parallel, in a fresh world",
+            what: "100 pages and answers, three variants in parallel, in a fresh world",
             bounds: None,
             setup: || Prepared::Project(refdoc::generate_variants(&Spec::REFERENCE)),
             run: compile_variants,
@@ -339,7 +292,7 @@ fn stage_times(prepared: Prepared) -> [Duration; STAGES.len()] {
     let (world, edit) = match prepared {
         Prepared::Project(project) => (project.world(BuildMode::Build), Duration::ZERO),
         Prepared::Compiled(mut world, edit) => {
-            let took = time(|| edit.apply(&mut world));
+            let took = time(|| apply(&edit, &mut world));
             (world, took)
         }
     };
@@ -445,7 +398,11 @@ fn main() -> ExitCode {
     let world = reference.world(BuildMode::Build);
     println!(
         "reference document: {} pages (meant for {}), {} threads",
-        preview(&world),
+        // Tolerant here, so that the M0 exit check still runs when the
+        // reference document cannot be laid out.
+        folio::pages(&world, Target::Pdf, None)
+            .expect("not cancelled")
+            .map_or(0, |pages| pages.pages.len()),
         Spec::REFERENCE.pages,
         std::thread::available_parallelism().map_or(1, |n| n.get())
     );
@@ -558,12 +515,11 @@ fn main() -> ExitCode {
     let p95 = percentile(&times, 95);
     println!(
         "\ntyping: {keystrokes} characters, one every {} ms, edit to pages: median {}, p95 {}, \
-         max {}, target {}, limit {}: {}, {}",
+         max {}, limit {}: {}, {}",
         KEYSTROKE.as_millis(),
         ms(percentile(&times, 50)),
         ms(p95),
         ms(*times.last().expect("a keystroke")),
-        ms(bounds.target.expect("a target")),
         ms(bounds.limit),
         status(p95, bounds),
         bounds.source,

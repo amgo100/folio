@@ -30,8 +30,8 @@
 //! shapes one paragraph on the calling thread, keep it. Gungraun also turns
 //! counting on and off on entering and leaving any function of a
 //! benchmark's wrapper module, a closure that the body defines and does
-//! not inline included, so the bodies here use loops rather than closures
-//! for their work. Issue #234 tracks counting the shaping thread.
+//! not inline included, so the bodies here do their work in loops rather
+//! than closures (the small closures that only read a length are inlined). Issue #234 tracks counting the shaping thread.
 
 // Gungraun's macros expand to paths the first lint calls redundant, and to
 // public items without documentation.
@@ -42,7 +42,7 @@ use std::ops::Range;
 
 use folio::{BuildMode, Name, Target, World};
 use folio_testkit::corpus::{self, Project};
-use folio_testkit::refdoc::{self, Spec};
+use folio_testkit::refdoc::{self, Edit, Spec};
 use gungraun::prelude::*;
 use gungraun::{Callgrind, EventKind};
 
@@ -87,19 +87,9 @@ fn compiled(project: Project) -> (World, String, Range<usize>) {
     let (variant, target) = first_build(&world);
     folio::compile(&world, target, variant.as_ref()).expect("not cancelled");
     let entry = world.manifest().project.entry.v.to_string();
-    let range = middle_word(&project.sources[&entry]);
-    (world, entry, range)
-}
-
-/// The range of "The", the first word of the first paragraph that starts
-/// after the middle of a text.
-fn middle_word(text: &str) -> Range<usize> {
-    let middle = text.ceil_char_boundary(text.len() / 2);
-    let start = text[middle..]
-        .find("\n\nThe ")
-        .map(|i| middle + i + 2)
-        .expect("a paragraph after the middle");
-    start..start + 3
+    let edit = Edit::word(&project);
+    assert_eq!(edit.path, entry);
+    (world, entry, edit.range)
 }
 
 /// The M0 exit document, compiled, with a word to edit.
@@ -133,52 +123,45 @@ fn preview(world: &World) -> usize {
         .len()
 }
 
-/// A world of the reference document laid out to its pages, and an edit:
-/// the file, the range it replaces and what replaces it.
-type Previewed = (World, String, Range<usize>, &'static str);
-
-/// The reference document laid out, with a one-word edit in its middle:
-/// "The" becomes "This", so that the pages after it may reflow.
-fn previewed_word_edit() -> Previewed {
+/// The reference document laid out to its pages, and an edit to make.
+fn previewed(edit: fn(&Project) -> Edit) -> (World, Edit) {
     let project = refdoc::generate(&Spec::REFERENCE);
     let world = project.world(BuildMode::Build);
     preview(&world);
-    let range = middle_word(&project.sources["main.fol"]);
-    (world, "main.fol".into(), range, "This")
+    let edit = edit(&project);
+    (world, edit)
 }
 
-/// The reference document laid out, with a stylesheet edit (SPEC §14.1):
-/// the body's font size, 11pt, becomes 12pt, so that every page reflows.
-fn previewed_style_edit() -> Previewed {
-    let project = refdoc::generate(&Spec::REFERENCE);
-    let world = project.world(BuildMode::Build);
-    preview(&world);
-    let path = "styles/reference.fsty";
-    let text = &project.sources[path];
-    let rule = text.find("doc {").expect("a rule for the body");
-    let start = rule
-        + text[rule..]
-            .find("font-size: 11pt")
-            .expect("the body's font size")
-        + "font-size: ".len();
-    (world, path.into(), start..start + 4, "12pt")
+/// The reference document laid out, with a one-word edit in its middle.
+fn previewed_word_edit() -> (World, Edit) {
+    previewed(Edit::word)
+}
+
+/// The reference document laid out, with the body's font size changed.
+fn previewed_style_edit() -> (World, Edit) {
+    previewed(Edit::style)
 }
 
 // Lays the reference document out again after an edit: the preview path,
 // with the memoised queries and the shaping, line and page caches warm.
 #[library_benchmark]
 #[bench::reference(setup = previewed_word_edit)]
-fn preview_after_edit((mut world, path, range, with): Previewed) -> usize {
-    world.edit_source(&path, range, with).expect("a valid edit");
+fn preview_after_edit((mut world, edit): (World, Edit)) -> usize {
+    world
+        .edit_source(&edit.path, edit.range, edit.with)
+        .expect("a valid edit");
     black_box(preview(&world))
 }
 
 // Lays the reference document out again after its body's font size
-// changes in the stylesheet: every paragraph is shaped and broken again.
+// changes in the stylesheet: every paragraph is set at the new size and
+// broken again, and every page reflows.
 #[library_benchmark]
 #[bench::reference(setup = previewed_style_edit)]
-fn restyle((mut world, path, range, with): Previewed) -> usize {
-    world.edit_source(&path, range, with).expect("a valid edit");
+fn restyle((mut world, edit): (World, Edit)) -> usize {
+    world
+        .edit_source(&edit.path, edit.range, edit.with)
+        .expect("a valid edit");
     black_box(preview(&world))
 }
 
@@ -186,7 +169,8 @@ fn restyle((mut world, path, range, with): Previewed) -> usize {
 /// shows everything and shares its styles with the exam.
 const ONE_VARIANT: &[&str] = &["teacher"];
 
-/// The ten-page document with three variants, and the variants to compile.
+/// The ten-page document with three variants (and answers, which make two
+/// of them a little longer), and the variants to compile.
 fn m0_exit_variants(variants: &'static [&'static str]) -> (Project, &'static [&'static str]) {
     (refdoc::generate_variants(&Spec::M0_EXIT), variants)
 }

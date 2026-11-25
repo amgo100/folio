@@ -135,7 +135,8 @@ pub fn generate(spec: &Spec) -> Project {
 /// Generates a document with the three [`VARIANTS`] (SPEC §6): the
 /// document of [`generate`], which the exam variant shows unchanged, with
 /// an answer after the running text of every page that only the mark
-/// scheme and teacher variants show. Its project
+/// scheme and teacher variants show. The answers are added to the page's
+/// text, so those two variants run a little longer than `spec.pages`. Its project
 /// is named as [`generate`]'s with `-variants` appended.
 pub fn generate_variants(spec: &Spec) -> Project {
     let mut project = generate(spec);
@@ -150,6 +151,55 @@ pub fn generate_variants(spec: &Spec) -> Project {
         MARKSCHEME_STYLESHEET.into(),
     );
     project
+}
+
+/// An edit to a generated document's sources, for the benchmarks: the
+/// same edit for the instruction counts and the wall-clock times.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Edit {
+    /// The file, relative to the project's root.
+    pub path: String,
+    /// The bytes it replaces.
+    pub range: std::ops::Range<usize>,
+    /// What it puts in their place.
+    pub with: &'static str,
+}
+
+impl Edit {
+    /// A one-word edit: "The", the first word of the first paragraph that
+    /// starts after the middle of `main.fol`, becomes "This", so that its
+    /// paragraph and the pages after it may reflow.
+    pub fn word(project: &Project) -> Self {
+        let text = &project.sources["main.fol"];
+        let middle = text.ceil_char_boundary(text.len() / 2);
+        let start = text[middle..]
+            .find("\n\nThe ")
+            .map(|i| middle + i + 2)
+            .expect("a paragraph after the middle");
+        Self {
+            path: "main.fol".into(),
+            range: start..start + "The".len(),
+            with: "This",
+        }
+    }
+
+    /// A stylesheet edit (SPEC §14.1): the body's font size, 11pt, becomes
+    /// 12pt, so that every page reflows.
+    pub fn style(project: &Project) -> Self {
+        let path = "styles/reference.fsty";
+        let text = &project.sources[path];
+        let rule = text.find("doc {").expect("a rule for the body");
+        let start = rule
+            + text[rule..]
+                .find("font-size: 11pt")
+                .expect("the body's font size")
+            + "font-size: ".len();
+        Self {
+            path: path.into(),
+            range: start..start + "11pt".len(),
+            with: "12pt",
+        }
+    }
 }
 
 /// How many of `total` items fall on page `page` of `pages`, spread evenly.

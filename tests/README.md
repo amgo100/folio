@@ -94,7 +94,9 @@ says the page count is off.
 `refdoc::generate_variants` generates the same document with three
 variants (`exam`, `markscheme` with a stylesheet overlay that sets it at
 10pt, `teacher`) and an answer at the end of every page that only the last
-two show; the exam is `refdoc::generate`'s document unchanged.
+two show (they run a little longer); the exam is `refdoc::generate`'s
+document unchanged. `refdoc::Edit` holds the edits the benchmarks make:
+a word in the middle, and the body's font size.
 
 The instruction-count benchmarks (`cargo bench -p folio-testkit --bench compile`):
 
@@ -121,10 +123,9 @@ the limits of SPEC §14.1 and §15:
 - scenarios, each run 20 times after a warm-up and judged by its 95th
   percentile: the M0 exit check (gated: 200 ms); the reference document's
   full compile, one-word edit to PDF, one-word edit to the pages (the
-  preview of the M1 exit check: 80 ms), stylesheet edit, the teacher's
-  variant of three and all three in parallel, with the ratio of three
-  variants to the teacher's (the others are release criteria and only
-  reported);
+  preview of the M1 exit check: 80 ms), stylesheet edit, and the ratio of
+  three variants in parallel to the teacher's variant alone (all but the
+  M0 exit check are release criteria and only reported);
 - stages of the reference document's PDF build: the median and 95th
   percentile of applying the edit, `evaluate`, `document`, `style`,
   `text`, `lines`, `pages` and emit (with the build's checks), for a full
@@ -132,4 +133,4 @@ the limits of SPEC §14.1 and §15:
   public queries in pipeline order;
 - typing: one character every 100 ms into a paragraph in the middle of the
   reference document (40 by default, `--keystrokes N`), each timed from
-  the edit to the pages, against the preview limit.
+  the edit to the pages, against the M1 exit check's 80 ms.
