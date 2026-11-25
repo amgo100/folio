@@ -61,8 +61,15 @@ pub(crate) fn build(args: &BuildArgs) -> ExitCode {
     };
     diagnostics.extend(check_compiler(world.manifest(), args.compiler.is_some()));
 
-    let output_dir = project::output_dir(world.manifest().output.path.v.as_str());
-    let loaded = project::read_files(&root, output_dir, &mut diagnostics)
+    // The outputs of every build, which are not inputs of the next.
+    let outputs: Vec<_> = world
+        .builds()
+        .iter()
+        .filter_map(|(variant, target)| world.manifest().output_path(variant.as_ref(), *target))
+        .filter_map(|path| ProjectPath::new(&path))
+        .collect();
+    let outputs: Vec<&str> = outputs.iter().map(ProjectPath::as_str).collect();
+    let loaded = project::read_files(&root, &outputs, &mut diagnostics)
         .map_err(|e| format!("cannot read the project directory: {e}"))
         .and_then(|files| {
             project::load(&mut world, files, &mut diagnostics).map_err(|e| e.to_string())
@@ -170,8 +177,11 @@ fn select(
         .cloned()
         .collect();
     if builds.is_empty() {
-        let targets: Vec<_> = args.targets.iter().map(|t| format!("`{t}`")).collect();
-        let error = error(format!("nothing to build for {}", targets.join(", ")));
+        let chosen: Vec<_> = match args.targets.is_empty() {
+            true => args.variants.iter().map(|v| format!("`{v}`")).collect(),
+            false => args.targets.iter().map(|t| format!("`{t}`")).collect(),
+        };
+        let error = error(format!("nothing to build for {}", chosen.join(", ")));
         return Err(if manifest.variants.is_empty() {
             error.with_hint("a project without variants is built once, for PDF")
         } else {

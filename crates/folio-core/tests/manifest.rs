@@ -255,6 +255,9 @@ fn output_paths_without_variants() {
     assert_eq!(resolve("{variant}/{stem}.{ext}"), "main.pdf");
     assert_eq!(resolve("out/{variant}-{stem}.{ext}"), "out/main.pdf");
     assert_eq!(resolve("out/{stem}.{ext}"), "out/main.pdf");
+    assert_eq!(resolve("out/{stem}/{variant}.{ext}"), "out/main/main.pdf");
+    assert_eq!(resolve("{variant}.{ext}"), "main.pdf");
+    assert_eq!(resolve("out/{variant}.{ext}"), "out/main.pdf");
 
     let m = parse(&format!(
         "{PROJECT}\n[variants.exam]\ntargets = [\"pdf\", \"live\"]\n"

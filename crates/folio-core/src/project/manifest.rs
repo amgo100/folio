@@ -189,7 +189,8 @@ impl OutputPattern {
     /// The path of one output file. `variant` is `None` for a project
     /// without variants, which leaves `{variant}` out together with one
     /// separator (`-`, `_`, `.` or `/`): the one after it when it starts a
-    /// path segment, the one before it otherwise. So
+    /// path segment, the one before it otherwise; but where that would leave
+    /// a file name without a stem, `{variant}` becomes `{stem}`. So
     /// `out/{stem}-{variant}.{ext}` gives `out/main.pdf`.
     pub fn resolve(&self, stem: &str, variant: Option<&str>, ext: &str) -> EcoString {
         let pattern = match variant {
@@ -255,6 +256,8 @@ impl OutputPattern {
 
 /// An output pattern with every `{variant}` left out, with the separator
 /// after it when it starts a path segment, or the one before it otherwise.
+/// A `{variant}` that would leave a file name without a stem, as in
+/// `out/{variant}.{ext}`, becomes `{stem}` instead.
 fn without_variant(pattern: &str) -> EcoString {
     const SEPARATORS: &[char] = &['-', '_', '.', '/'];
     let mut out = EcoString::new();
@@ -262,7 +265,13 @@ fn without_variant(pattern: &str) -> EcoString {
     while let Some(at) = rest.find("{variant}") {
         let before = &rest[..at];
         let after = &rest[at + "{variant}".len()..];
-        if before.is_empty() || before.ends_with('/') {
+        let starts_segment = before.is_empty() || before.ends_with('/');
+        let names_file = after.starts_with('.') && !after.contains('/');
+        if starts_segment && names_file {
+            out.push_str(before);
+            out.push_str("{stem}");
+            rest = after;
+        } else if starts_segment {
             out.push_str(before);
             rest = after.strip_prefix(SEPARATORS).unwrap_or(after);
         } else {
