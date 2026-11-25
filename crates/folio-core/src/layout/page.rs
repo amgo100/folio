@@ -31,12 +31,14 @@
 //! shows, computed once when it is assembled. It leaves out the sources
 //! that fragments and glyphs name, whose span numbers a reparse may
 //! renumber, so a page that looks the same after an edit has the same hash
-//! wherever its source moved, and a watcher sends only the pages whose
-//! hash changed (§2.3).
+//! wherever its source moved, and a watcher draws again only the pages
+//! whose hash changed ([`Pages::changed`]); of the others, those whose
+//! sources changed need only their span maps sent ([`Pages::remapped`])
+//! (§2.3).
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -45,7 +47,7 @@ use folio_component::{Abs, Fragment, FragmentItem, Path, Point, Shape, Size, Sou
 use folio_syntax::Span;
 
 use super::flow::{
-    Boundary, Caches, Constraint, Flow, Item, KEEP, Leaf, Origin, Part, Shared, Walk,
+    Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, Part, Shared, Walk,
 };
 use super::lines;
 use super::master::{BlockBox, PageMaster};
@@ -84,12 +86,31 @@ pub struct Pages {
 impl Pages {
     /// The indices of the pages that differ from those of `before` by
     /// their content hash: pages whose hash changed, and pages that
-    /// `before` did not have.
+    /// `before` did not have. These are the pages a watcher draws again.
+    /// Pages that `before` had beyond the last of these are gone, which
+    /// their numbers tell.
     pub fn changed(&self, before: &Pages) -> Vec<usize> {
         self.hashes
             .iter()
             .enumerate()
             .filter(|&(i, hash)| before.hashes.get(i) != Some(hash))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The indices of the pages that show what the same page of `before`
+    /// showed, by their content hash, but name other sources: an edit
+    /// renumbered the spans of what they show, or moved it to another
+    /// file. A watcher need not draw them again, but must send their new
+    /// span maps, or clicks on them would lead to the old sources.
+    pub fn remapped(&self, before: &Pages) -> Vec<usize> {
+        self.pages
+            .iter()
+            .zip(&before.pages)
+            .enumerate()
+            .filter(|&(i, (page, old))| {
+                self.hashes.get(i) == before.hashes.get(i) && page.fragment != old.fragment
+            })
             .map(|(i, _)| i)
             .collect()
     }
@@ -200,7 +221,7 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
 /// baselines and break data, its glyph runs and its shapes, without the
 /// sources that fragments, glyphs and shapes name.
 fn content_hash(fragment: &Fragment) -> u64 {
-    fn walk(fragment: &Fragment, h: &mut DefaultHasher) {
+    fn walk(fragment: &Fragment, h: &mut Fx) {
         fragment.size.hash(h);
         fragment.first_baseline.hash(h);
         fragment.last_baseline.hash(h);
@@ -236,7 +257,7 @@ fn content_hash(fragment: &Fragment) -> u64 {
             }
         }
     }
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = Fx::default();
     walk(fragment, &mut hasher);
     hasher.finish()
 }

@@ -155,6 +155,7 @@ fn an_edit_that_does_not_reflow_changes_one_page_hash() {
     assert_ne!(after.hashes[0], before.hashes[0]);
     assert_eq!(after.hashes[1..], before.hashes[1..]);
     assert_eq!(after.changed(&before), [0]);
+    assert!(!after.remapped(&before).contains(&0));
 
     // Back as it was, the first page hashes as it did.
     world
@@ -182,7 +183,12 @@ fn page_hashes_leave_out_sources() {
     moved.set_source("chapter.fol", &text).unwrap();
     let after = folio::pages(&moved, Target::Pdf, None).unwrap().unwrap();
     assert_eq!(after.pages.len(), before.pages.len());
-    // The pages name other sources, but show the same.
+    // The pages name other sources, but show the same: a watcher sends
+    // their span maps and draws none of them again.
     assert_ne!(after.pages[1], before.pages[1]);
     assert_eq!(after.hashes, before.hashes);
+    assert!(after.changed(&before).is_empty());
+    let all: Vec<usize> = (0..after.pages.len()).collect();
+    assert_eq!(after.remapped(&before), all);
+    assert!(before.remapped(&before).is_empty());
 }

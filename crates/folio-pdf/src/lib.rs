@@ -256,6 +256,7 @@ pub fn preflight(document: &Document<'_>) -> Preflight {
     // gives: they come from one page of a document that is never written.
     let settings = SerializeSettings {
         enable_tagging: true,
+        compress_content_streams: false,
         ..SerializeSettings::default()
     };
     let mut scratch = krilla::Document::new_with(settings);
@@ -307,6 +308,10 @@ pub fn write(document: &Document<'_>) -> Result<Written, Error> {
 /// found: a document that the check expects to claim PDF/UA-1 is written
 /// under the validator, and any other once, without the claim. `checked`
 /// must be the check of this document.
+///
+/// The warnings of the result are those of `checked`, in their order,
+/// followed by any that only writing found: the reasons not to claim
+/// PDF/UA-1 that the check did not foresee, each once.
 pub fn write_checked(document: &Document<'_>, checked: &Preflight) -> Result<Written, Error> {
     let mut warnings = checked.warnings.clone();
     // PDF/UA requires a title, which documents need not have: one without
@@ -489,9 +494,10 @@ struct Dry {
     /// Glyphs whose text, where each is first shown, is not a valid
     /// mapping to Unicode, in that order.
     unmapped: Vec<ValidationError>,
-    /// The glyphs shown so far, by font: the first showing of a glyph
-    /// gives its ToUnicode mapping.
-    mapped: HashSet<(FontId, u16)>,
+    /// The glyphs shown so far, a set of glyph ids for each font: the
+    /// first showing of a glyph gives its ToUnicode mapping. A document
+    /// uses few fonts, so they are searched in order.
+    mapped: Vec<(FontId, Vec<u64>)>,
     /// The errors found, to report each once.
     seen: HashSet<ValidationError>,
 }
@@ -516,9 +522,20 @@ impl Dry {
                 self.notdef.push(error);
             }
         }
-        if !self.mapped.insert((id, glyph)) {
+        let index = match self.mapped.iter().position(|(f, _)| *f == id) {
+            Some(index) => index,
+            None => {
+                self.mapped
+                    .push((id, vec![0; usize::from(u16::MAX) / 64 + 1]));
+                self.mapped.len() - 1
+            }
+        };
+        let bits = &mut self.mapped[index].1;
+        let (word, bit) = (usize::from(glyph) / 64, 1u64 << (glyph % 64));
+        if bits[word] & bit != 0 {
             return;
         }
+        bits[word] |= bit;
         let gid = GlyphId::new(u32::from(glyph));
         // The validator names the last such character.
         let invalid = text

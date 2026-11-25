@@ -485,18 +485,14 @@ impl Shared {
     /// there is one. `now` is the page cache's clock.
     pub(super) fn paragraph(&self, info: ParagraphInfo, now: u64) -> Arc<ParagraphInfo> {
         // The shaped paragraph and its lines are shared by their caches,
-        // so they are keyed by pointer; equality still compares them by
-        // content where the pointers differ.
-        let mut hasher = DefaultHasher::new();
+        // so they are keyed by pointer, with where the paragraph is; the
+        // rest is compared only among paragraphs with that key. Equality
+        // still compares the shared parts by content where the pointers
+        // differ.
+        let mut hasher = Fx::default();
         (Arc::as_ptr(&info.shaped) as usize).hash(&mut hasher);
         (Arc::as_ptr(&info.layout) as usize).hash(&mut hasher);
         info.slot.hash(&mut hasher);
-        info.leading.hash(&mut hasher);
-        info.indent.hash(&mut hasher);
-        info.widows.hash(&mut hasher);
-        info.orphans.hash(&mut hasher);
-        info.segments.hash(&mut hasher);
-        info.sources.hash(&mut hasher);
         info.span.hash(&mut hasher);
         intern(&self.paragraphs, hasher.finish(), info, now)
     }
@@ -504,7 +500,7 @@ impl Shared {
     /// A block's box, as the `Arc` of an equal one from a recent flow if
     /// there is one.
     pub(super) fn block(&self, block: Arc<BlockBox>, now: u64) -> Arc<BlockBox> {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = Fx::default();
         block.hash(&mut hasher);
         let key = hasher.finish();
         let mut map = lock(&self.blocks);
@@ -543,6 +539,62 @@ fn intern<T: Eq>(map: &Interned<T>, key: u64, value: T, now: u64) -> Arc<T> {
     let value = Arc::new(value);
     bucket.push((value.clone(), now));
     value
+}
+
+/// A fast hasher for hashes kept in memory, such as change detection and
+/// lookup keys, never written out: each word is mixed in by a rotation,
+/// an exclusive or and a multiplication by an odd constant, as rustc's
+/// `FxHasher` does. Each step is a bijection of the state for a given word
+/// and of the word for a given state, so two inputs of the same length
+/// that differ in one word always hash differently.
+#[derive(Debug, Copy, Clone, Default)]
+pub(super) struct Fx(u64);
+
+impl Fx {
+    const K: u64 = 0x517c_c1b7_2722_0a95;
+
+    fn mix(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::K);
+    }
+}
+
+impl Hasher for Fx {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.mix(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut word = [0; 8];
+            word[..rest.len()].copy_from_slice(rest);
+            self.mix(u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u8(&mut self, n: u8) {
+        self.mix(u64::from(n));
+    }
+
+    fn write_u16(&mut self, n: u16) {
+        self.mix(u64::from(n));
+    }
+
+    fn write_u32(&mut self, n: u32) {
+        self.mix(u64::from(n));
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.mix(n);
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.mix(n as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 /// Locks a mutex. A thread that panicked while holding it left its map
