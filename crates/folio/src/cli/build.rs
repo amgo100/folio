@@ -313,8 +313,10 @@ fn outside(walked: &str) -> io::Error {
 /// Replaces `file` whole with `bytes`, through a temporary file beside it
 /// whose name no other write uses: it holds this process's id and a count,
 /// and is created only if nothing, not even a symbolic link, has that name.
-/// A directory on the way that was swapped for a link out of the project at
-/// `root` after [`resolve`] checked it is noticed before the rename.
+/// The temporary file is synced before the rename, which goes through the
+/// file's canonical directory once that is checked to be in the project at
+/// `root`: this narrows, but does not close, the window in which another
+/// process could swap a directory on the way for a link out of the project.
 fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     let pid = std::process::id();
@@ -331,24 +333,26 @@ fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
             Err(e) => return Err(e),
         }
     };
-    let inside = || -> io::Result<()> {
-        let dir = temporary.canonicalize()?;
-        match dir.parent() {
-            Some(dir) if dir.starts_with(root) => Ok(()),
-            _ => Err(io::Error::other(
-                "a directory on the way was replaced by a link out of the project",
-            )),
-        }
-    };
-    out.write_all(bytes)
+    // Where the temporary file really is, which the rename and the clean-up
+    // go through, so a directory swapped after the check is not followed.
+    let mut placed = temporary.clone();
+    let result = out
+        .write_all(bytes)
+        .and_then(|()| out.sync_all())
         .and_then(|()| {
             drop(out);
-            inside()?;
-            fs::rename(&temporary, file)
-        })
-        .inspect_err(|_| {
-            let _ = fs::remove_file(&temporary);
-        })
+            placed = temporary.canonicalize()?;
+            match placed.parent() {
+                Some(dir) if dir.starts_with(root) => fs::rename(&placed, dir.join(&*name)),
+                _ => Err(io::Error::other(
+                    "a directory on the way was replaced by a link out of the project",
+                )),
+            }
+        });
+    if result.is_err() {
+        let _ = fs::remove_file(&placed);
+    }
+    result
 }
 
 /// An error that points at no source.
