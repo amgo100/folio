@@ -192,3 +192,40 @@ fn page_hashes_leave_out_sources() {
     assert_eq!(after.remapped(&before), all);
     assert!(before.remapped(&before).is_empty());
 }
+
+/// The baselines of the glyph runs of a page, from the top.
+fn baselines(fragment: &folio::Fragment, y: f64, out: &mut Vec<f64>) {
+    for (pos, item) in &fragment.items {
+        let y = y + pos.y.to_pt();
+        match item {
+            folio::FragmentItem::Group(group) => baselines(group, y, out),
+            folio::FragmentItem::Text(_) => out.push(y),
+            folio::FragmentItem::Shape { .. } => {}
+        }
+    }
+}
+
+/// Paragraphs that are equal in every way, as those a loop makes, are
+/// still two paragraphs: they are set a paragraph apart, as two that
+/// differ only in their source are, though the flow shares equal
+/// paragraphs between revisions.
+#[test]
+fn equal_paragraphs_stay_apart() {
+    let lines = |main: &str| {
+        let mut world = World::new(MANIFEST).unwrap();
+        world.set_source("main.fol", main).unwrap();
+        let pages = folio::pages(&world, Target::Pdf, None).unwrap().unwrap();
+        let mut out = Vec::new();
+        baselines(&pages.pages[0].fragment, 0.0, &mut out);
+        out
+    };
+    let looped = lines("#for i in range(2) [\n\nSame text.\n\n]\n");
+    let written = lines("Same text.\n\nSame text.\n");
+    assert_eq!(looped.len(), 2, "{looped:?}");
+    assert_eq!(written.len(), 2, "{written:?}");
+    let gap = |b: &[f64]| b[1] - b[0];
+    assert!(
+        (gap(&looped) - gap(&written)).abs() < 1e-6,
+        "{looped:?} {written:?}"
+    );
+}

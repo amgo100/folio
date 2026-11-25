@@ -476,9 +476,10 @@ fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
-/// Where `folio build` and `folio check` report what they found and did: to standard error,
-/// as it goes, with source excerpts; or, with `--diagnostics json`, as one
-/// JSON document written when the command ends (`docs/diagnostics-json.md`).
+/// Where `folio build` and `folio check` report what they found and did:
+/// to standard error, as it goes, with source excerpts; or, with
+/// `--diagnostics json`, as one JSON document written when the command
+/// ends (`docs/diagnostics-json.md`).
 struct Report {
     color: bool,
     /// The document being collected, with `--diagnostics json`.

@@ -768,7 +768,9 @@ impl Builder<'_> {
         let mut out = Boundary::default();
         let prev = self.prev.as_ref();
 
-        // Two lines of one paragraph.
+        // Two lines of one paragraph: the next line of the same shared
+        // paragraph. Equal paragraphs share one `Arc` (`Shared`), so two
+        // paragraphs in a row may too; the line numbers tell them apart.
         if let (
             Some(Leaf::Line {
                 paragraph: a,
@@ -780,6 +782,7 @@ impl Builder<'_> {
             }),
         ) = (prev, next)
             && Arc::ptr_eq(a, b)
+            && *j == *i + 1
             && events.is_empty()
         {
             let lines = &a.layout.lines;
