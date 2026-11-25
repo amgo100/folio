@@ -8,20 +8,28 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use folio::diag::{Files, TextFiles};
+use folio::diag::{self, Files, Resolved, TextFiles};
 use folio::{
     Compiled, Diagnostic, FontCache, Manifest, Name, ProjectPath, Target, World, compile_builds,
 };
 use folio_syntax::DiagSpan;
+use serde::Serialize;
 
 use super::project::{self, LOCKFILE, MANIFEST};
-use super::{BuildArgs, FAILURE, toolchain};
+use super::{BuildArgs, DiagnosticsFormat, FAILURE, toolchain};
 
 /// Runs `folio build`.
 pub(crate) fn build(args: &BuildArgs) -> ExitCode {
-    let color = args.color.enabled();
-    let fail = |message: String| {
-        print(&TextFiles::new(), &[error(message)], color);
+    let mut report = Report::new(args);
+    let status = run(args, &mut report);
+    report.finish();
+    status
+}
+
+/// Builds, reporting what it finds to `report`.
+fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
+    let mut fail = |message: String| {
+        report.diagnostics(&TextFiles::new(), &[error(message)]);
         ExitCode::from(FAILURE)
     };
 
@@ -49,7 +57,7 @@ pub(crate) fn build(args: &BuildArgs) -> ExitCode {
                 files.insert(World::LOCKFILE, LOCKFILE, lockfile);
             }
             let errors: Vec<Diagnostic> = errors.into_iter().map(Diagnostic::from).collect();
-            print(&files, &errors, color);
+            report.diagnostics(&files, &errors);
             return ExitCode::from(FAILURE);
         }
     };
@@ -59,7 +67,7 @@ pub(crate) fn build(args: &BuildArgs) -> ExitCode {
     let builds = match select(world.manifest(), &world.builds(), args) {
         Ok(builds) => builds,
         Err(error) => {
-            print(&world, &[error], color);
+            report.diagnostics(&world, &[error]);
             return ExitCode::from(FAILURE);
         }
     };
@@ -99,12 +107,22 @@ pub(crate) fn build(args: &BuildArgs) -> ExitCode {
     // A diagnostic of a file that several builds read is shown once.
     let mut seen: HashSet<Diagnostic> = diagnostics.iter().cloned().collect();
     let mut written = Vec::new();
+    let mut failures = Vec::new();
     for output in outputs {
         let name = build_name(output.variant.as_ref(), output.target);
         let compiled = match output.result {
             Ok(compiled) => compiled,
             Err(cancelled) => {
                 diagnostics.push(error(format!("the build of {name} failed: {cancelled}")));
+                let path = world
+                    .manifest()
+                    .output_path(output.variant.as_ref(), output.target);
+                failures.push(Build::new(
+                    &output.variant,
+                    output.target,
+                    path.as_deref(),
+                    Status::Failed,
+                ));
                 continue;
             }
         };
@@ -116,23 +134,26 @@ pub(crate) fn build(args: &BuildArgs) -> ExitCode {
         let path = world
             .manifest()
             .output_path(output.variant.as_ref(), output.target);
-        written.push((name, path, compiled));
+        written.push((output.variant, output.target, path, compiled));
     }
-    print(&world, &diagnostics, color);
+    report.diagnostics(&world, &diagnostics);
 
     let mut failed = diagnostics.iter().any(Diagnostic::is_error);
-    for (name, path, compiled) in written {
+    for (variant, target, path, compiled) in written {
+        let build = |path: Option<&str>, status| Build::new(&variant, target, path, status);
         match write(&root, path.as_deref(), &compiled) {
-            Ok(Written::File(path)) => eprintln!("wrote {path}"),
-            Ok(Written::Nothing) => {}
-            Ok(Written::Skipped(path)) => {
-                eprintln!("did not write {path}: the build of {name} has errors");
-            }
+            Ok(Written::File(path)) => report.build(build(Some(&path), Status::Written)),
+            Ok(Written::Nothing) => report.build(build(path.as_deref(), Status::None)),
+            Ok(Written::Skipped(path)) => report.build(build(Some(&path), Status::Skipped)),
             Err(message) => {
-                print(&world, &[error(message)], color);
+                report.diagnostics(&world, &[error(message)]);
+                report.build(build(path.as_deref(), Status::Failed));
                 failed = true;
             }
         }
+    }
+    for build in failures {
+        report.build(build);
     }
     if failed {
         ExitCode::from(FAILURE)
@@ -197,6 +218,11 @@ fn select(
 
 /// A build as the messages of `folio build` name it: `exam (pdf)`.
 fn build_name(variant: Option<&Name>, target: Target) -> String {
+    build_name_text(variant.map(Name::as_str), target.as_str())
+}
+
+/// [`build_name`] of a variant and target given by name.
+fn build_name_text(variant: Option<&str>, target: &str) -> String {
     match variant {
         Some(variant) => format!("{variant} ({target})"),
         None => format!("the document ({target})"),
@@ -355,6 +381,114 @@ fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
+/// Where `folio build` reports what it found and did: to standard error,
+/// as it goes, with source excerpts; or, with `--diagnostics json`, as one
+/// JSON document written when the command ends (`docs/diagnostics-json.md`).
+struct Report {
+    color: bool,
+    /// The document being collected, with `--diagnostics json`.
+    json: Option<Document>,
+}
+
+/// The JSON document of `folio build --diagnostics json`, which
+/// `docs/diagnostics-json.md` describes.
+#[derive(Debug, Default, Serialize)]
+struct Document {
+    /// The version of the document's shape.
+    version: u32,
+    /// The diagnostics, in the order the terminal shows them.
+    diagnostics: Vec<Resolved>,
+    /// The builds that were compiled, and what became of their outputs.
+    builds: Vec<Build>,
+}
+
+/// A build in the JSON document, and what became of its output.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+struct Build {
+    /// The variant, or `None` for a project without variants.
+    variant: Option<String>,
+    /// The target, as the manifest names it.
+    target: &'static str,
+    /// The output's path in the project, if the build has one.
+    path: Option<String>,
+    /// What became of the output.
+    status: Status,
+}
+
+impl Build {
+    fn new(variant: &Option<Name>, target: Target, path: Option<&str>, status: Status) -> Self {
+        Self {
+            variant: variant.as_ref().map(|v| v.as_str().to_owned()),
+            target: target.as_str(),
+            path: path.map(str::to_owned),
+            status,
+        }
+    }
+}
+
+/// What became of a build's output.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Status {
+    /// It was written.
+    Written,
+    /// It was not written, because the build has errors.
+    Skipped,
+    /// The target writes no file, or has no writer yet.
+    None,
+    /// The build or the write failed; a diagnostic says why.
+    Failed,
+}
+
+impl Report {
+    /// The version of [`Document`]'s shape.
+    const VERSION: u32 = 1;
+
+    fn new(args: &BuildArgs) -> Self {
+        Self {
+            color: args.color.enabled(),
+            json: (args.diagnostics == DiagnosticsFormat::Json).then(|| Document {
+                version: Self::VERSION,
+                ..Document::default()
+            }),
+        }
+    }
+
+    /// Reports diagnostics, with their spans resolved against `files`.
+    fn diagnostics(&mut self, files: &dyn Files, diagnostics: &[Diagnostic]) {
+        match &mut self.json {
+            Some(document) => document
+                .diagnostics
+                .extend(diagnostics.iter().map(|d| diag::resolve(files, d))),
+            None => print(files, diagnostics, self.color),
+        }
+    }
+
+    /// Reports what became of a build's output.
+    fn build(&mut self, build: Build) {
+        let Some(document) = &mut self.json else {
+            let name = build_name_text(build.variant.as_deref(), build.target);
+            match (build.status, &build.path) {
+                (Status::Written, Some(path)) => eprintln!("wrote {path}"),
+                (Status::Skipped, Some(path)) => {
+                    eprintln!("did not write {path}: the build of {name} has errors");
+                }
+                _ => {}
+            }
+            return;
+        };
+        document.builds.push(build);
+    }
+
+    /// Ends the report: writes the JSON document, if there is one.
+    fn finish(self) {
+        if let Some(document) = self.json {
+            let json = serde_json::to_string_pretty(&document).expect("the report serialises");
+            eprintln!("{json}");
+        }
+    }
+}
+
 /// An error that points at no source.
 pub(super) fn error(message: String) -> Diagnostic {
     Diagnostic::error(DiagSpan::detached(), message)
@@ -362,7 +496,7 @@ pub(super) fn error(message: String) -> Diagnostic {
 
 /// Prints diagnostics to standard error.
 pub(super) fn print(files: &dyn Files, diagnostics: &[Diagnostic], color: bool) {
-    eprint!("{}", folio::diag::render(files, diagnostics, color));
+    eprint!("{}", diag::render(files, diagnostics, color));
 }
 
 #[cfg(test)]
