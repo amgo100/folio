@@ -78,18 +78,17 @@ impl Logged {
     }
 }
 
-/// The queries that evaluate a variant whose entry file changed, written as
-/// one name for [`set`]: the file's evaluation, the variant's, its
-/// document tree, and the build's check of it, which returns the same and so
-/// cuts the build off; and the styling of the tree, which finds every node's
-/// match memoised and returns the same, so the build's check of the styles
-/// is cut off too. The check of the fonts the text is set in reads the text
-/// itself, so it runs again whenever the document changes, and so does the
-/// text stage: its paragraphs record the spans of their text, which the
-/// reparse renumbered (their shaping is memoised apart). Line breaking reads
-/// the text, and runs again too, but its lines hold no spans, so it returns
-/// the same lines and the build's check of them is cut off.
-const EVAL: &str = "eval_file evaluate document check_document styles check_fonts text lines pages";
+/// The queries that run when a variant's entry file changed, written as one
+/// name for [`set`]: the file's evaluation, the variant's, and its document
+/// tree; the styling of the tree, which finds every node's match memoised
+/// but records the spans of the nodes, which the reparse renumbered, so the
+/// stages that pass the styled tree on run too (Select, Sequence, Resolve
+/// and Step styling); the check of the fonts the text is set in; the text
+/// stage, whose paragraphs record the spans of their text (their shaping is
+/// memoised apart); line and page breaking, which read the text; and Emit,
+/// which reads the pages.
+const EVAL: &str = "eval_file evaluate document styles select sequence resolve step_style \
+                    check_fonts text lines pages emit";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {
@@ -128,28 +127,22 @@ fn early_cutoff_on_a_whitespace_edit() {
 
     // Whitespace in a paragraph: the file is reparsed and its two
     // per-file queries re-run, but return what they returned before, so the
-    // file set of the build and the build itself are not re-run. The file is
-    // evaluated again, because its text spans changed, and so are the
-    // stages that carry those spans to the pages' glyphs (SPEC §12.2).
+    // file set of the build and the build's checks are not re-run. The file
+    // is evaluated again, because its text spans changed, and so are the
+    // stages that carry those spans to the pages' glyphs (SPEC §12.2). The
+    // PDF is the same, so the build query is cut off.
     let edited = MAIN.replace("ball is", "ball   is");
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(after, before);
-    assert_eq!(
-        logged.take(),
-        set(&[
-            "dependencies",
-            "check_source",
-            "check_styles",
-            "check_pages",
-            EVAL
-        ])
-    );
+    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
 
     // An edit that changes the imports re-runs the file set. The file it
-    // adds does not exist, so the set is the same and the build is cut off,
-    // but the missing file is reported, once, though both the file set and
-    // evaluation find it.
+    // adds does not exist, so the set is the same and the build's checks
+    // are cut off, but the missing file is reported, once, though both the
+    // file set and evaluation find it. Evaluation turns the include into
+    // an error marker (SPEC §12.2), a new node that is matched against the
+    // rules; the rest of the document still compiles.
     let edited = format!("{edited}#include \"questions/q2.fol\"\n");
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
@@ -160,13 +153,11 @@ fn early_cutoff_on_a_whitespace_edit() {
             "dependencies",
             "check_source",
             "source_file",
-            // Evaluation fails, so there is no document to style or lay
-            // out.
-            "check_styles",
-            "check_pages",
+            "match_node",
             EVAL
         ])
     );
+    assert!(after.output.is_some());
     assert_eq!(after.diagnostics.len(), 1);
     assert_eq!(
         after.diagnostics[0].message,
@@ -193,9 +184,10 @@ fn diagnostics_change_while_the_build_is_cut_off() {
     logged.take();
 
     // An unclosed call in a paragraph: the file's check reports it, but its
-    // imports are the same, so the build query is not re-run, and the
-    // diagnostic is still collected. Evaluation stops at the syntax error
-    // without adding errors of its own.
+    // imports are the same, so the build's checks are not re-run, and the
+    // diagnostic is still collected. Evaluation turns the call into an
+    // error marker without adding errors of its own, and the rest of the
+    // document still compiles (SPEC §12.2).
     let broken = MAIN.replace("A ball", "#box( A ball");
     logged.world.set_source("main.fol", &broken).unwrap();
     let compiled = logged.compile("exam");
@@ -208,20 +200,15 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         "{:?}",
         compiled.diagnostics
     );
-    // The document is gone, so the build's checks of the styles and the
-    // pages re-run.
+    assert!(compiled.output.is_some());
+    // The marker is a new node, matched against the rules.
     assert_eq!(
         logged.take(),
-        set(&[
-            "dependencies",
-            "check_source",
-            "check_styles",
-            "check_pages",
-            EVAL
-        ])
+        set(&["dependencies", "check_source", "match_node", EVAL])
     );
 
-    // Fixing it removes the diagnostic, again without re-running the build.
+    // Fixing it removes the diagnostic, again without re-running the build's
+    // checks.
     logged.world.set_source("main.fol", MAIN).unwrap();
     let compiled = logged.compile("exam");
     assert!(
@@ -229,16 +216,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         "{:?}",
         compiled.diagnostics
     );
-    assert_eq!(
-        logged.take(),
-        set(&[
-            "dependencies",
-            "check_source",
-            "check_styles",
-            "check_pages",
-            EVAL
-        ])
-    );
+    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
 
     // A diagnostic of a file that two builds share is reported by one
     // query, and each build collects it once.

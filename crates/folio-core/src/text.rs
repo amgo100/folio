@@ -37,8 +37,9 @@ use crate::diag::{self, Diagnostic};
 use crate::eval::{self, Content, Element, Node};
 use crate::fonts::{Fonts, Request, fonts};
 use crate::model::document;
+use crate::pipeline::step_styled;
 use crate::style::{
-    Child, ComputedStyle, Properties, StyledNode, content_elements, styled_children, styles,
+    Child, ComputedStyle, Properties, StyledNode, content_elements, styled_children,
 };
 
 pub use folio_text::Cache;
@@ -156,7 +157,7 @@ impl TextSource {
 #[salsa::tracked(returns(ref))]
 pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
     let project = build.project(db);
-    let styled = styles(db, build).as_ref()?;
+    let styled = step_styled(db, build)?;
     let doc = document(db, project, build.variant(db).clone()).as_ref()?;
     let fonts = fonts(db, project);
     let default_lang =

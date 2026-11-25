@@ -1,6 +1,6 @@
 //! The values scripts compute with (SPEC §4.4).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Debug, Formatter, Write};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -403,15 +403,28 @@ struct ModuleRepr {
     name: EcoString,
     scope: Scope,
     content: Content,
+    failed: BTreeSet<EcoString>,
 }
 
 impl Module {
     /// A module with a name, bindings and content.
     pub fn new(name: impl Into<EcoString>, scope: Scope, content: Content) -> Self {
+        Self::partial(name, scope, content, BTreeSet::new())
+    }
+
+    /// A module of a file that was evaluated around failures: `failed`
+    /// holds the names that a failed `let` or import would have bound.
+    pub(crate) fn partial(
+        name: impl Into<EcoString>,
+        scope: Scope,
+        content: Content,
+        failed: BTreeSet<EcoString>,
+    ) -> Self {
         Self(Arc::new(ModuleRepr {
             name: name.into(),
             scope,
             content,
+            failed,
         }))
     }
 
@@ -428,6 +441,17 @@ impl Module {
     /// The content of the file.
     pub fn content(&self) -> &Content {
         &self.0.content
+    }
+
+    /// Whether the module would bind a name but for a failure, which was
+    /// reported where it happened.
+    pub fn failed(&self, name: &str) -> bool {
+        self.0.failed.contains(name)
+    }
+
+    /// The names the module would bind but for failures.
+    pub(crate) fn failed_names(&self) -> &BTreeSet<EcoString> {
+        &self.0.failed
     }
 }
 

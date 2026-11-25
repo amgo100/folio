@@ -27,6 +27,25 @@
 //!   Code that never reads `variant`, including the functions it calls, is
 //!   evaluated once for every variant.
 //!
+//! # Partial evaluation
+//!
+//! Compilation is partial (SPEC §12.2): a construct of a file's markup that
+//! fails becomes an error marker in its place, an `error` element whose
+//! body shows `[error]` and whose span is the construct's, and the rest of
+//! the file is still evaluated. A construct fails when it does not parse,
+//! when its code has a syntax error (`check_source` reports both, and code
+//! is not evaluated around syntax errors), or when evaluating it is an
+//! error, which the file's query reports with its trace. Only a file's own
+//! markup recovers: markup inside code fails as a whole, so an error in a
+//! function reaches the markup that called it. The variables that a failed
+//! `let` or import would have bound are poisoned, and using one fails
+//! without an error of its own, and so does a closure that uses one. A
+//! label after a construct that failed is dropped. Exceeding the step or
+//! memory limit is not recovered from, since everything after it would
+//! fail too; nor are errors outside markup, such as a `break` outside a
+//! loop. The depth limit is: the next construct starts at the file's
+//! depth again.
+//!
 //! # Sandbox
 //!
 //! Scripts read files only through the database: sources and data files of
@@ -182,20 +201,23 @@ fn eval_file(
     let source = file.source(db);
     let path = file.path(db).clone();
     let mut vm = Vm::new(db, project, path.clone(), mode, depth, Scope::default());
-    // Syntax errors are reported by `check_source`; evaluating around them
-    // would only add errors that follow from them.
-    let outcome = if source.root().diagnosis().errors {
-        Err(Stop::Reported)
-    } else {
-        match source.root().cast::<ast::Markup<'_>>() {
-            Some(markup) => vm.module(markup, path.stem()),
-            None => Err(EvalError::new(
-                source.root().span(),
-                "only content files (`.fol`) can be evaluated",
-            )
-            .into()),
-        }
+    // The file's markup compiles around what fails (see the module docs).
+    vm.recover = true;
+    let outcome = match source.root().cast::<ast::Markup<'_>>() {
+        Some(markup) => vm.module(markup, path.stem()),
+        None => Err(EvalError::new(
+            source.root().span(),
+            "only content files (`.fol`) can be evaluated",
+        )
+        .into()),
     };
+    // An evaluation for all variants that read `variant` is done again for
+    // the build's variant, which reports the same errors.
+    if !matches!(outcome, Err(Stop::NeedsVariant)) {
+        for error in vm.recovered {
+            diag::report(db, error.into());
+        }
+    }
     Memo {
         outcome,
         cost: vm.cost,

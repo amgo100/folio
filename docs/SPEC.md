@@ -1156,7 +1156,7 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 - The viewer receives display lists over a websocket and draws them on a canvas with the same renderer as Folio Studio; only pages whose content changed are sent, and visible pages are laid out first.
 - Display lists travel in one compact, versioned binary format, defined in `folio-render` and used unchanged by the preview websocket, Folio Studio's `MessagePort` and live clients (§10.6).
 - Clicking in the preview jumps to the source, and moving the cursor in the editor scrolls the preview, through span maps kept in every fragment.
-- Compilation is partial: failing constructs become error markers in place and the rest renders. Only when nothing can be produced, for example when a stylesheet does not parse, do the last good pages stay on screen with an error banner.
+- Compilation is partial: failing constructs become error markers in place and the rest renders. An error marker is a built-in inline `error` element that shows `[error]` and points at the construct; stylesheets style it like any element. A construct of a file's markup fails when it does not parse or when evaluating it is an error; markup inside code does not recover, so an error in a function marks the call that reached it. A variable whose `let` or import failed marks its uses, and the functions that use it, without reporting them again. Exceeding the step or memory limit of evaluation (§4.4) is not recovered from. Only when nothing can be produced, for example when a stylesheet does not parse, do the last good pages stay on screen with an error banner.
 - Output files are written on save or after one second idle, not on every keystroke.
 
 ### 12.3 Language server

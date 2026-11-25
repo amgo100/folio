@@ -34,8 +34,9 @@
 //!
 //! Queries report problems as they find them ([`diag::report`]) rather than
 //! returning them, so a query whose result is unchanged after an edit is cut
-//! off even when its diagnostics changed. [`compile`] runs a build and
-//! collects the diagnostics of every query the build depends on.
+//! off even when its diagnostics changed. The `folio` crate's compile query
+//! runs a build through every stage (see [`crate::pipeline`]) and collects
+//! the diagnostics of every query the build depends on.
 
 // salsa generates the constructors, builders and setters of inputs and
 // interned structs.
@@ -53,7 +54,7 @@ use folio_syntax::{DiagSpan, Source, Span, SyntaxKind, SyntaxNode};
 pub use salsa::Durability;
 
 use crate::component::ComponentHost;
-use crate::diag::{self, Diagnostic, Reported};
+use crate::diag::{self, Diagnostic};
 use crate::eval::Limits;
 use crate::project::{Date, Lockfile, Manifest, Name, ProjectPath, Spanned};
 pub use folio_fonts::{FontFile, SystemFont};
@@ -210,35 +211,14 @@ pub struct Dependency {
     pub span: Span,
 }
 
-/// What the build query ([`build_output`]) produces.
-///
-/// The stages after the document model (SPEC §2.1) are not wired in yet,
-/// so a build collects its files, checks them, checks its variant and
-/// target against the manifest, hosts its components, and builds the
-/// document tree.
+/// What the build query ([`build_output`]) produces: what a build reads,
+/// checked. The stages that turn it into output are queries of their own
+/// (see [`crate::pipeline`]).
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct BuildOutput {
     /// The source files the build read, in the order they were found. A
     /// watcher recompiles when one of them changes.
     pub sources: EcoVec<ProjectPath>,
-}
-
-/// What compiling a build produces: its output and its diagnostics.
-#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
-pub struct Compiled {
-    /// The source files the build read, in the order they were found. A
-    /// watcher recompiles when one of them changes.
-    pub sources: EcoVec<ProjectPath>,
-    /// Every problem found, errors and warnings, in the order the queries
-    /// that reported them first ran.
-    pub diagnostics: EcoVec<Diagnostic>,
-}
-
-impl Compiled {
-    /// Whether any diagnostic is an error.
-    pub fn has_errors(&self) -> bool {
-        self.diagnostics.iter().any(Diagnostic::is_error)
-    }
 }
 
 /// The source file at a path, if the project has one.
@@ -388,7 +368,10 @@ pub fn component_host(db: &dyn Db, project: Project) -> Option<ComponentHost> {
     }
 }
 
-/// Builds one variant for one target, reporting the problems it finds.
+/// Checks what one variant for one target reads: that the manifest declares
+/// the variant for the target, the build's files and their syntax, the
+/// components, and the fonts its text is set in. Reports the problems it
+/// finds.
 #[salsa::tracked(returns(ref))]
 pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     let project = build.project(db);
@@ -401,59 +384,10 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
         check_source(db, file);
     }
     component_host(db, project);
-    check_document(db, project, build.variant(db).clone());
-    check_styles(db, build);
     crate::fonts::check_fonts(db, build);
-    check_pages(db, build);
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),
-    }
-}
-
-/// Builds the document tree of a variant for its diagnostics. No stage
-/// reads the tree yet, so the build depends on this instead of on
-/// [`document`](crate::model::document), and is not re-run when an edit
-/// changes only the content.
-#[salsa::tracked]
-fn check_document(db: &dyn Db, project: Project, variant: Option<Name>) {
-    crate::model::document(db, project, variant);
-}
-
-/// Styles the document of a build for its diagnostics. Like
-/// [`check_document`], it stands in for the stages that will read the
-/// styled tree.
-#[salsa::tracked]
-fn check_styles(db: &dyn Db, build: Build<'_>) {
-    crate::style::styles(db, build);
-}
-
-/// Shapes the paragraphs of a build and breaks them into lines for their
-/// diagnostics. Like [`check_document`], it stands in for the page
-/// builder, which will read the lines.
-#[salsa::tracked]
-fn check_pages(db: &dyn Db, build: Build<'_>) {
-    crate::layout::pages(db, build);
-}
-
-/// Compiles one build: runs [`build_output`] and collects the diagnostics
-/// that it and every query it depends on reported, each query's once. A
-/// diagnostic that two queries report alike, such as a missing imported file
-/// that both the file search and evaluation find, is kept once.
-///
-/// This is not a query, and must not be called from one: reading
-/// diagnostics is not tracked.
-pub fn compile(db: &dyn Db, build: Build<'_>) -> Compiled {
-    let output = build_output(db, build);
-    let mut seen = HashSet::new();
-    let diagnostics = build_output::accumulated::<Reported>(db, build)
-        .into_iter()
-        .filter(|reported| seen.insert(&reported.0))
-        .map(|reported| reported.0.clone())
-        .collect();
-    Compiled {
-        sources: output.sources.clone(),
-        diagnostics,
     }
 }
 

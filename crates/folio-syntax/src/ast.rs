@@ -241,6 +241,15 @@ node! {
 impl<'a> Markup<'a> {
     /// The expressions.
     pub fn exprs(self) -> impl DoubleEndedIterator<Item = Expr<'a>> {
+        self.items().filter_map(|item| match item {
+            MarkupItem::Expr(expr) => Some(expr),
+            MarkupItem::Error(_) => Option::None,
+        })
+    }
+
+    /// The expressions, and the error nodes between them, in order: what an
+    /// evaluator that compiles around syntax errors reads.
+    pub fn items(self) -> impl DoubleEndedIterator<Item = MarkupItem<'a>> {
         let mut was_stmt = false;
         self.0
             .children()
@@ -251,8 +260,20 @@ impl<'a> Markup<'a> {
                 was_stmt = kind.is_stmt();
                 keep
             })
-            .filter_map(Expr::cast_with_space)
+            .filter_map(|node| match node.kind() {
+                SyntaxKind::Error => Some(MarkupItem::Error(node)),
+                _ => Expr::cast_with_space(node).map(MarkupItem::Expr),
+            })
     }
+}
+
+/// An item of markup: an expression, or a node that does not parse.
+#[derive(Debug, Copy, Clone, Hash)]
+pub enum MarkupItem<'a> {
+    /// An expression.
+    Expr(Expr<'a>),
+    /// An error node.
+    Error(&'a SyntaxNode),
 }
 
 /// An expression in markup, math or code.

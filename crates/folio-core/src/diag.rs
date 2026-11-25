@@ -17,12 +17,13 @@
 //! Queries do not return their diagnostics: they [`report`] them, and a
 //! front end collects those of a query and of every query it depends on with
 //! the query's generated `accumulated::<Reported>` function, outside queries
-//! ([`crate::db::compile`] does this for a build). Diagnostics are salsa accumulator values, stored with the
-//! memo of the query that reported them, so a query that re-runs replaces its
-//! own diagnostics, and one that does not re-run keeps them. Because they are
-//! not part of a query's return value, a query whose result is unchanged
-//! after an edit is cut off even when its diagnostics changed, and collecting
-//! still sees the new ones.
+//! (`folio::compile` does this for a build). Diagnostics are salsa
+//! accumulator values, stored with the memo of the query that reported
+//! them, so a query that re-runs replaces its own diagnostics, and one that
+//! does not re-run keeps them. Because they are not part of a query's
+//! return value, a query whose result is unchanged after an edit is cut off
+//! even when its diagnostics changed, and collecting still sees the new
+//! ones.
 
 use std::fmt::{self, Display, Formatter};
 

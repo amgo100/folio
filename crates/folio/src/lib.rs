@@ -22,23 +22,28 @@
 //! let exam = Name::new("exam").unwrap();
 //! let compiled = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
 //! assert!(!compiled.has_errors());
+//! assert!(compiled.output.unwrap().starts_with(b"%PDF-"));
 //! ```
 
 #![forbid(unsafe_code)]
 
 pub mod diag;
+mod pipeline;
 pub mod span_map;
 mod world;
 
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::panic::AssertUnwindSafe;
 
+use ecow::EcoVec;
+use folio_core::diag::Reported;
 use rayon::prelude::*;
 
 pub use folio_component::{
     Abs, Fragment, FragmentItem, GlyphRun, Name, Point, Ratio, Registry, Size, SourceRef, Target,
 };
-pub use folio_core::db::{BuildMode, Bytes, Compiled};
+pub use folio_core::db::{BuildMode, Bytes};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::eval;
 pub use folio_core::eval::Limits;
@@ -65,11 +70,16 @@ pub use self::world::{Event, World, WorldBuilder, WorldError};
 /// output (SPEC §2.4).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Compiles a variant of the world's document for a target. The variant is
-/// `None` only for a project that declares no variants.
+/// Compiles a variant of the world's document for a target, through
+/// every stage of SPEC §2.1. The variant is `None` only for a project that
+/// declares no variants.
 ///
-/// Problems in the document are diagnostics in the result. Fails only when
-/// an edit to the world cancels the compilation.
+/// Problems in the document are diagnostics in the result. Compilation is
+/// partial (SPEC §12.2): a construct that fails becomes an error marker in
+/// place and the rest still compiles, so a target that writes a file has
+/// output unless nothing could be produced, as when the entry file is
+/// missing ([`Compiled::output`] says which targets write none yet). Fails
+/// only when an edit to the world cancels the compilation.
 pub fn compile(
     world: &World,
     target: Target,
@@ -78,8 +88,44 @@ pub fn compile(
     catch(|| {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
-        folio_core::db::compile(db, build)
+        let built = pipeline::compile_build(db, build);
+        // A diagnostic that two queries report alike, such as a missing
+        // imported file that both the file search and evaluation find, is
+        // kept once.
+        let mut seen = HashSet::new();
+        let diagnostics = pipeline::compile_build::accumulated::<Reported>(db, build)
+            .into_iter()
+            .filter(|reported| seen.insert(&reported.0))
+            .map(|reported| reported.0.clone())
+            .collect();
+        Compiled {
+            sources: built.sources.clone(),
+            output: built.output.clone(),
+            diagnostics,
+        }
     })
+}
+
+/// What compiling a build produces: its output and its diagnostics.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+pub struct Compiled {
+    /// The source files the build read, in the order they were found. A
+    /// watcher recompiles when one of them changes.
+    pub sources: EcoVec<ProjectPath>,
+    /// The file the target writes: a PDF for [`Target::Pdf`]. `None` when
+    /// the document could not be styled, or the target writes no file or
+    /// has no writer yet (DOCX and PPTX until M4 and M5, live until M7).
+    pub output: Option<Bytes>,
+    /// Every problem found, errors and warnings, in the order the queries
+    /// that reported them first ran.
+    pub diagnostics: EcoVec<Diagnostic>,
+}
+
+impl Compiled {
+    /// Whether any diagnostic is an error.
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics.iter().any(Diagnostic::is_error)
+    }
 }
 
 /// Evaluates a variant of the world's document into its content tree

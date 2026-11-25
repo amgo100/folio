@@ -394,13 +394,167 @@ error: cannot divide by zero
 }
 
 #[test]
-fn syntax_errors_stop_evaluation_quietly() {
+fn syntax_errors_add_no_errors_of_their_own() {
     // Only the syntax error is reported, not errors that follow from it.
     let messages = messages("#let f(x = \n#f(1)\n");
     assert!(
         messages.iter().all(|m| !m.contains("unknown variable")),
         "{messages:?}"
     );
+}
+
+/// The content of the build without variants, which has errors, and the
+/// first lines of its diagnostics.
+fn partial(files: &[(&str, &str)]) -> (String, Vec<String>) {
+    let logged = Logged::new(MANIFEST, files);
+    let messages = logged
+        .errors()
+        .lines()
+        .filter(|l| l.starts_with("error") || l.starts_with("warning"))
+        .map(str::to_owned)
+        .collect();
+    let content = folio::evaluate(&logged.world, None)
+        .unwrap()
+        .expect("the document evaluates around its errors");
+    (content.repr().to_string(), messages)
+}
+
+#[test]
+fn failing_constructs_become_error_markers() {
+    // An error in a paragraph: a marker in its place, and the rest of the
+    // file still evaluates (SPEC §12.2).
+    let (repr, messages) = partial(&[("main.fol", "A #(1 + \"a\") b.\n\nNext.\n")]);
+    assert_eq!(
+        repr,
+        "[\"A\", space, error(message: \"cannot add an int and a str\", body: \
+         [\"[error]\"]), space, \"b.\", parbreak, \"Next.\", space]"
+    );
+    assert_eq!(messages, ["error: cannot add an int and a str"]);
+
+    // A syntax error in code, which runs on to the stray bracket, and the
+    // bracket: a marker each, and only the syntax errors are reported.
+    let (repr, messages) = partial(&[("main.fol", "A #f(1, b.\n\nNext ] here.\n")]);
+    assert_eq!(
+        repr,
+        "[\"A\", space, error(message: \"this does not parse\", body: [\"[error]\"]), \
+         space, error(message: \"this does not parse\", body: [\"[error]\"]), space, \
+         \"here.\", space]"
+    );
+    assert!(messages.iter().all(|m| !m.contains("unknown variable")));
+
+    // A heading keeps its marker inside it.
+    let (repr, _) = partial(&[("main.fol", "= Forces #x\n")]);
+    assert!(
+        repr.starts_with("[heading(level: 1, body: [\"Forces\", space, error("),
+        "{repr}"
+    );
+}
+
+#[test]
+fn a_failed_binding_fails_its_uses_quietly() {
+    // The `let` fails and is reported; its uses become markers without
+    // errors of their own, and the other bindings still work.
+    let (repr, messages) = partial(&[(
+        "main.fol",
+        "#let x = 1 + \"a\"\n#let y = 2\n#x #y #(x + 1) #{ x = 3 }\n",
+    )]);
+    assert_eq!(messages, ["error: cannot add an int and a str"]);
+    assert_eq!(repr.matches("error(").count(), 4, "{repr}");
+    assert!(repr.contains("\"2\""), "{repr}");
+
+    // A function that uses it fails where it is made and where it is
+    // called, quietly; a failed binding shadows a global of its name.
+    let (repr, messages) = partial(&[(
+        "main.fol",
+        "#let x = 1 / 0\n#let f() = x\n#f() #let calc = 1 / 0\n#calc.max(1, 2)\n",
+    )]);
+    assert_eq!(
+        messages,
+        [
+            "error: cannot divide by zero",
+            "error: cannot divide by zero"
+        ]
+    );
+    assert_eq!(repr.matches("error(").count(), 5, "{repr}");
+    assert!(!repr.contains("\"2\""), "{repr}");
+
+    // A label after a construct that failed is dropped, not given to the
+    // marker.
+    let (repr, messages) = partial(&[("main.fol", "#f(1) <a>\n")]);
+    assert_eq!(messages, ["error: unknown variable: f"]);
+    assert!(!repr.contains("<a>"), "{repr}");
+
+    // Across files: the importer neither reports the missing binding nor
+    // loses the ones that work.
+    let (repr, messages) = partial(&[
+        (
+            "main.fol",
+            "#import \"lib.fol\": a, b\n#import \"lib.fol\"\n#a #b #lib.a\n",
+        ),
+        ("lib.fol", "#let a = 1 / 0\n#let b = 2\n"),
+    ]);
+    assert_eq!(messages, ["error: cannot divide by zero"]);
+    assert!(repr.contains("\"2\""), "{repr}");
+    assert_eq!(repr.matches("error(").count(), 2, "{repr}");
+}
+
+#[test]
+fn errors_in_functions_fail_the_markup_that_calls_them() {
+    // Markup inside code does not recover: the error reaches the call in
+    // the file's markup, with its trace, and the call becomes the marker.
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            ("main.fol", "#import \"lib.fol\": f\nBefore #f(0) after.\n"),
+            ("lib.fol", "#let f(x) = [Result: #(1 / x)]\n"),
+        ],
+    );
+    let compiled = folio::compile(&logged.world, Target::Pdf, None).unwrap();
+    assert_eq!(compiled.diagnostics.len(), 1);
+    let error = &compiled.diagnostics[0];
+    assert_eq!(error.message, "cannot divide by zero");
+    assert_eq!(error.related.len(), 1);
+    assert!(compiled.output.is_some());
+    let content = folio::evaluate(&logged.world, None).unwrap().unwrap();
+    assert_eq!(
+        plain(&content),
+        "Before [error] after.",
+        "{}",
+        content.repr()
+    );
+
+    // A label that cannot attach is reported, and the markup goes on.
+    let (repr, messages) = partial(&[("main.fol", "Text <a> more *b* <b> <c>\n")]);
+    assert_eq!(
+        messages,
+        [
+            "error: a label must follow an element",
+            "error: this element already has a label"
+        ]
+    );
+    assert!(repr.contains("strong(body: [\"b\"]) <b>"), "{repr}");
+}
+
+#[test]
+fn going_too_deep_is_recovered_from() {
+    let (repr, messages) = partial(&[("main.fol", "#let f(n) = f(n + 1)\n#f(0) More.\n")]);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(messages[0].contains("nested more than"), "{messages:?}");
+    assert!(repr.contains("\"More.\""), "{repr}");
+}
+
+#[test]
+fn exceeding_a_limit_is_not_recovered_from() {
+    // Everything after the loop would exceed the limit too.
+    let logged = limited(
+        SMALL,
+        &[("main.fol", "#while true {}\nMore text #(1 + 1).\n")],
+    );
+    let compiled = folio::compile(&logged.world, Target::Pdf, None).unwrap();
+    assert_eq!(compiled.diagnostics.len(), 1, "{:?}", compiled.diagnostics);
+    let content = folio::evaluate(&logged.world, None).unwrap();
+    assert!(content.is_none(), "{:?}", content.map(|c| c.repr()));
+    assert!(compiled.output.is_none());
 }
 
 #[test]

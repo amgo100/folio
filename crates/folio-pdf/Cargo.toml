@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 folio-component.workspace = true
+folio-fonts.workspace = true
 
 
 [lints]

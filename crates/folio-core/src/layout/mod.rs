@@ -81,7 +81,8 @@ pub use self::paragraph::{
 use crate::db::{Build, Db, Project};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
-use crate::style::{ComputedStyle, Properties, styles};
+use crate::pipeline::step_styled;
+use crate::style::{ComputedStyle, Properties};
 use crate::text::{TextParagraph, TextSource, text};
 
 /// How long total fit may take for a paragraph on the editor's typing path
@@ -112,7 +113,7 @@ pub struct Lines {
 #[salsa::tracked(returns(ref))]
 pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let text = text(db, build).as_ref()?;
-    let styled = styles(db, build).as_ref()?;
+    let styled = step_styled(db, build)?;
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
 

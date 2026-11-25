@@ -1,6 +1,6 @@
 //! The interpreter: evaluates markup, expressions and patterns in a scope.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
@@ -8,7 +8,7 @@ use folio_component::{Abs, BODY, Body, Em, Name, QualifiedName, Ratio, Scalar, U
 use folio_syntax::Span;
 use folio_syntax::ast::{self, AstNode, Unit};
 
-use super::captures::captures;
+use super::captures::{captures, free_variables};
 use super::content::{Content, Node};
 use super::element;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
@@ -58,6 +58,26 @@ pub(crate) struct Vm<'a> {
     /// imports it made.
     pub(crate) cost: Cost,
     flow: Option<Flow>,
+    /// Whether markup turns a construct that fails into an error marker
+    /// instead of failing (SPEC §12.2). It is set for a file's own markup
+    /// and cleared inside code, so that an error in a function reaches the
+    /// markup that called it, with its trace.
+    pub(crate) recover: bool,
+    /// The errors that markup turned into markers, which the file's query
+    /// reports.
+    pub(crate) recovered: Vec<EvalError>,
+    /// The variables that a `let` or an import that failed would have
+    /// bound. Reading one fails without another error, since the failure
+    /// was reported where it happened.
+    poisoned: BTreeSet<EcoString>,
+}
+
+/// What an error marker shows (SPEC §12.2).
+const MARKER: &str = "[error]";
+
+/// Whether an element is an error marker.
+fn is_marker(element: &super::content::Element) -> bool {
+    element.name.namespace.is_none() && element.name.name.as_str() == "error"
 }
 
 /// The variables of an evaluation: the captured variables of a closure,
@@ -119,6 +139,9 @@ impl<'a> Vm<'a> {
             limits: *project.limits(db),
             cost: Cost::default(),
             flow: None,
+            recover: false,
+            recovered: Vec::new(),
+            poisoned: BTreeSet::new(),
         }
     }
 
@@ -173,7 +196,8 @@ impl<'a> Vm<'a> {
             None => {}
         }
         let scope = self.scopes.layers.pop().unwrap_or_default();
-        Ok(Module::new(name, scope.into(), content))
+        let failed = std::mem::take(&mut self.poisoned);
+        Ok(Module::partial(name, scope.into(), content, failed))
     }
 
     /// Binds a closure's parameters to the arguments and evaluates its body.
@@ -239,7 +263,7 @@ impl<'a> Vm<'a> {
     fn markup(&mut self, markup: ast::Markup<'_>) -> EvalResult<Content> {
         let (content, label) = self.markup_labelled(markup)?;
         if let Some(label) = label {
-            return Err(label_without_element(label.span()).into());
+            self.tolerate(label_without_element(label.span()))?;
         }
         Ok(content)
     }
@@ -251,34 +275,135 @@ impl<'a> Vm<'a> {
         markup: ast::Markup<'s>,
     ) -> EvalResult<(Content, Option<ast::Label<'s>>)> {
         let mut out = Content::new();
-        let exprs: Vec<ast::Expr<'s>> = markup.exprs().collect();
-        for (i, &expr) in exprs.iter().enumerate() {
+        let items: Vec<ast::MarkupItem<'s>> = markup.items().collect();
+        for (i, &item) in items.iter().enumerate() {
+            let expr = match item {
+                ast::MarkupItem::Expr(expr) => expr,
+                // `check_source` reports the error.
+                ast::MarkupItem::Error(node) => {
+                    if !self.recover {
+                        return Err(Stop::Reported);
+                    }
+                    out.extend(self.marker("this does not parse".into(), node.span())?);
+                    continue;
+                }
+            };
             if let ast::Expr::Label(label) = expr {
                 out.trim_end_spaces();
                 match out.last_element_mut() {
+                    // The construct the label was for failed, and was
+                    // reported; a reference to the label must not find its
+                    // marker.
+                    Some(element) if is_marker(element) => {}
                     Some(element) if element.label.is_some() => {
-                        bail!(label.span(), "this element already has a label");
+                        self.tolerate(EvalError::new(
+                            label.span(),
+                            "this element already has a label",
+                        ))?;
                     }
                     Some(element) => element.label = Some(label.get().into()),
                     None => {
-                        let trailing = exprs[i + 1..]
+                        let trailing = items[i + 1..]
                             .iter()
-                            .all(|e| matches!(e, ast::Expr::Space(_)));
-                        if !trailing {
-                            return Err(label_without_element(label.span()).into());
+                            .all(|item| matches!(item, ast::MarkupItem::Expr(ast::Expr::Space(_))));
+                        if trailing {
+                            return Ok((out, Some(label)));
                         }
-                        return Ok((out, Some(label)));
+                        self.tolerate(label_without_element(label.span()))?;
                     }
                 }
                 continue;
             }
-            let content = self.markup_expr(expr)?;
+            let content = match self.markup_expr(expr) {
+                Ok(content) => content,
+                Err(stop) => self.recover_from(stop, expr)?,
+            };
             out.extend(content);
             if self.flow.is_some() {
                 break;
             }
         }
         Ok((out, None))
+    }
+
+    /// Records an error in markup that need not stop it: a file's own
+    /// markup reports it and goes on, and markup inside code fails.
+    fn tolerate(&mut self, error: EvalError) -> EvalResult<()> {
+        if !self.recover {
+            return Err(error.into());
+        }
+        self.recovered.push(error);
+        Ok(())
+    }
+
+    /// Turns a construct of a file's markup that failed into an error
+    /// marker in its place (SPEC §12.2), or passes the failure on: in
+    /// markup inside code; when the evaluation must start again for the
+    /// build's variant; and when the step or memory limit was exceeded,
+    /// since everything after it would fail too. The depth limit is
+    /// recovered from: the constructs after the one that went too deep
+    /// start again at the file's depth. The variables that a failed `let` or
+    /// import would have bound are poisoned, so their uses fail without
+    /// errors of their own.
+    fn recover_from(&mut self, stop: Stop, expr: ast::Expr<'_>) -> EvalResult<Content> {
+        let exhausted = self.cost.steps > self.limits.steps || self.cost.bytes > self.limits.memory;
+        if !self.recover || exhausted {
+            return Err(stop);
+        }
+        let message: EcoString = match stop {
+            Stop::NeedsVariant => return Err(stop),
+            Stop::Error(error) => {
+                let message = error.message.clone();
+                self.recovered.push(*error);
+                message
+            }
+            Stop::Reported if expr.to_untyped().diagnosis().errors => "this does not parse".into(),
+            Stop::Reported => "this depends on something that failed".into(),
+        };
+        match expr {
+            ast::Expr::LetBinding(binding) => {
+                for ident in binding.kind().bindings() {
+                    self.poisoned.insert(ident.get().clone());
+                }
+            }
+            ast::Expr::ModuleImport(import) => {
+                if let Some(name) = import.new_name() {
+                    self.poisoned.insert(name.get().clone());
+                }
+                match import.imports() {
+                    Some(ast::Imports::Items(items)) => {
+                        for item in items.iter() {
+                            self.poisoned.insert(item.bound_name().get().clone());
+                        }
+                    }
+                    None if import.new_name().is_none() => {
+                        if let Ok(name) = import.bare_name() {
+                            self.poisoned.insert(name);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        // A failed construct leaves no `break`, `continue` or `return`.
+        self.flow = None;
+        self.marker(message, expr.span())
+    }
+
+    /// An error marker for a construct that failed with a message.
+    fn marker(&mut self, message: EcoString, span: Span) -> EvalResult<Content> {
+        // Text without a node stands for the marker, whose span is the
+        // construct's.
+        let body = Content::node(Node::Text {
+            text: MARKER.into(),
+            span: Span::detached(),
+        });
+        self.builtin(
+            "error",
+            [("message", Value::Str(message)), ("body", body.into())],
+            span,
+        )
     }
 
     fn markup_expr(&mut self, expr: ast::Expr<'_>) -> EvalResult<Content> {
@@ -409,8 +534,15 @@ impl<'a> Vm<'a> {
                 )?
             }
             _ => {
-                let value = self.expr(expr)?;
-                display(value, span)
+                // Code is not evaluated around its syntax errors, which
+                // `check_source` reports.
+                if expr.to_untyped().diagnosis().errors {
+                    return Err(Stop::Reported);
+                }
+                let recover = std::mem::replace(&mut self.recover, false);
+                let value = self.expr(expr);
+                self.recover = recover;
+                display(value?, span)
             }
         })
     }
@@ -603,6 +735,10 @@ impl<'a> Vm<'a> {
         let name = ident.get();
         if let Some(value) = self.scopes.get(name) {
             return Ok(value.clone());
+        }
+        // A failed binding shadows what the name would otherwise mean.
+        if self.poisoned.contains(name) {
+            return Err(Stop::Reported);
         }
         match name.as_str() {
             "variant" => return self.variant(),
@@ -802,7 +938,12 @@ impl<'a> Vm<'a> {
     /// (`insert`) adds a missing dictionary field; anything else needs it.
     fn access<'s>(&'s mut self, expr: ast::Expr<'_>, insert: bool) -> EvalResult<&'s mut Value> {
         match expr {
-            ast::Expr::Ident(ident) => self.scopes.get_mut(ident.get()).at(ident.span()),
+            ast::Expr::Ident(ident) => {
+                if self.scopes.get(ident.get()).is_none() && self.poisoned.contains(ident.get()) {
+                    return Err(Stop::Reported);
+                }
+                self.scopes.get_mut(ident.get()).at(ident.span())
+            }
             ast::Expr::Parenthesized(p) => self.access(p.expr(), insert),
             ast::Expr::FieldAccess(access) => {
                 let field = access.field();
@@ -881,6 +1022,7 @@ impl<'a> Vm<'a> {
             let func = match &target {
                 Value::Module(module) => match module.scope().get(name) {
                     Some(func) => Some(func.clone()),
+                    None if module.failed(name) => return Err(Stop::Reported),
                     None => bail!(
                         access.field().span(),
                         "module `{}` does not contain `{name}`",
@@ -1076,7 +1218,19 @@ impl<'a> Vm<'a> {
                 defaults.push(self.expr(named.expr())?);
             }
         }
-        let captured = captures(closure, |name| self.scopes.get(name).cloned());
+        // A closure that uses a variable whose binding failed fails too, so
+        // that its calls add no errors of their own.
+        let free = free_variables(closure);
+        let own = closure.name().map(|name| name.get().as_str());
+        let poisoned = free.iter().any(|name| {
+            Some(name.as_str()) != own
+                && self.scopes.get(name).is_none()
+                && self.poisoned.contains(name)
+        });
+        if poisoned {
+            return Err(Stop::Reported);
+        }
+        let captured = captures(free, |name| self.scopes.get(name).cloned());
         let closure = Closure::new(
             closure.to_untyped().clone(),
             self.file.clone(),
@@ -1328,14 +1482,23 @@ impl<'a> Vm<'a> {
                 for (name, value) in module.scope().iter() {
                     self.define(name.clone(), value.clone());
                 }
+                for name in module.failed_names() {
+                    self.poisoned.insert(name.clone());
+                }
             }
             Some(ast::Imports::Items(items)) => {
-                for item in items.iter() {
+                'items: for item in items.iter() {
                     let mut value = Value::Module(module.clone());
                     for ident in item.path().iter() {
                         value = match value {
                             Value::Module(m) => match m.scope().get(ident.get()) {
                                 Some(v) => v.clone(),
+                                // A binding that failed in the module fails
+                                // where it is used, without another error.
+                                None if m.failed(ident.get()) => {
+                                    self.poisoned.insert(item.bound_name().get().clone());
+                                    continue 'items;
+                                }
                                 None => bail!(
                                     ident.span(),
                                     "module `{}` does not contain `{}`",
@@ -1524,6 +1687,7 @@ fn field(target: Value, name: &str, span: Span) -> EvalResult<Value> {
         },
         Value::Module(module) => match module.scope().get(name) {
             Some(value) => Ok(value.clone()),
+            None if module.failed(name) => Err(Stop::Reported),
             None => bail!(span, "module `{}` does not contain `{name}`", module.name()),
         },
         Value::Content(content) => match content.as_element() {

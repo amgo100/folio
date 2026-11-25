@@ -12,24 +12,27 @@ use folio_syntax::{SyntaxKind, SyntaxNode};
 
 use super::value::Value;
 
-/// Finds the free variables of a closure, and looks up those that the
+/// Looks up the free variables of a closure ([`free_variables`]) that the
 /// defining scope has with `lookup`. Variables it does not have are
 /// globals, or are defined at call time (the closure's own name), or are
 /// errors that the call reports.
 pub(crate) fn captures(
-    closure: ast::Closure<'_>,
+    free: BTreeSet<EcoString>,
     lookup: impl Fn(&str) -> Option<Value>,
 ) -> BTreeMap<EcoString, Value> {
+    free.into_iter()
+        .filter_map(|name| lookup(&name).map(|value| (name, value)))
+        .collect()
+}
+
+/// The variables a closure's body and defaults use but do not bind.
+pub(crate) fn free_variables(closure: ast::Closure<'_>) -> BTreeSet<EcoString> {
     let mut visitor = Visitor {
         bound: vec![BTreeSet::new()],
         free: BTreeSet::new(),
     };
     visitor.closure(closure);
-    visitor
-        .free
-        .into_iter()
-        .filter_map(|name| lookup(&name).map(|value| (name, value)))
-        .collect()
+    visitor.free
 }
 
 struct Visitor {
