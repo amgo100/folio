@@ -515,9 +515,9 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Compiles a rule that applies, as [`Self::compile_rule`], and warns
-    /// about its declarations that have no effect yet
-    /// ([`Self::lint_rule`]).
+    /// Compiles a rule, as [`Self::compile_rule`], without the warnings of
+    /// [`Self::lint_rule`]: for a scoped rule in content, which is compiled
+    /// before it is known to apply.
     pub(super) fn rule<'s>(
         &self,
         values: &Values<'_>,
@@ -527,9 +527,7 @@ impl<'a> Compiler<'a> {
         order: u32,
         span: Span,
     ) -> Compiled {
-        let out = self.compile_rule(values, selectors, declarations, origin, order, span);
-        self.lint_rule(&out);
-        out
+        self.compile_rule(values, selectors, declarations, origin, order, span)
     }
 
     /// Compiles a rule: one rule per selector, sharing the declarations.

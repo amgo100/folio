@@ -238,8 +238,9 @@ impl Properties {
 /// every float, ask for nothing. Each entry goes with the work that reads
 /// the property: numbering and references with counters (#44), `display`
 /// with variants and visibility (SPEC §6.3), `template` with render
-/// templates (§5.3), and the others with page, table and float layout
-/// (§7.1, §7.3, §7.4). Properties of other targets (slides, animation,
+/// templates (§5.3), and the others with pages and running elements
+/// (§7.1, §7.8), the baseline grid (§7.3), tables (§7.4), floats (§7.5),
+/// margin notes (§7.6) and text wrap (§7.7). Properties of other targets (slides, animation,
 /// export) and of drawings are not listed: a static or PDF build ignores
 /// them by design.
 pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Option<&'static str> {
