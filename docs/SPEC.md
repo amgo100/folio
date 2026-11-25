@@ -574,6 +574,7 @@ Local overrides change the look of one object or passage without editing a style
 
 - **Hints** are the per-instance layout decisions: `placement`, `side`, `width`, `wrap-shape`, grid `column-tracks`, `break-before`, `keep-with-next`.
 - **Scoping**: overrides can be limited to a variant or target (`override@markscheme: (...)`, `#rule @target pptx figure { ... }`).
+- **Rank on one element**: an element's own declarations rank by form, not by the order its fields are written in, weakest first: hints, scoped hints (`width@markscheme: ...`), the override attribute, scoped override attributes (`override@markscheme: (...)`). A scoped form is more specific than its unscoped form, so it wins in the variant or target it names. `#figure(override: (width: 40%), width: 30%)` gets 40%.
 - **Tracking**: every override in content is listed by `folio check --report overrides`, shown by the language server, and marked in the editor. A raw literal such as `rgb("d62728")` triggers the lint `override-literal`, suggesting a token.
 - **Promotion**: `folio promote` or the editor moves an override out of content, either into a class rule (the content gets `class:`) or into an id rule in the overrides stylesheet, adding a stable generated label if the element has none.
 
