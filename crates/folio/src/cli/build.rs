@@ -14,7 +14,7 @@ use folio::{
 use folio_syntax::DiagSpan;
 
 use super::project::{self, LOCKFILE, MANIFEST};
-use super::{BuildArgs, FAILURE};
+use super::{BuildArgs, FAILURE, toolchain};
 
 /// Runs `folio build`.
 pub(crate) fn build(args: &BuildArgs) -> ExitCode {
@@ -32,6 +32,11 @@ pub(crate) fn build(args: &BuildArgs) -> ExitCode {
         Ok(text) => text,
         Err(e) => return fail(format!("cannot read {MANIFEST}: {e}")),
     };
+    // A project that pins another version is built by that version.
+    let current = args.compiler.is_some();
+    if let Some(status) = toolchain::dispatch(&manifest, current, color) {
+        return status;
+    }
     let lockfile = match project::read_lockfile(&root) {
         Ok(text) => text,
         Err(e) => return fail(format!("cannot read {LOCKFILE}: {e}")),
@@ -59,7 +64,7 @@ pub(crate) fn build(args: &BuildArgs) -> ExitCode {
             return ExitCode::from(FAILURE);
         }
     };
-    diagnostics.extend(check_compiler(world.manifest(), args.compiler.is_some()));
+    diagnostics.extend(toolchain::check(world.manifest(), current));
 
     // The outputs of every build, which are not inputs of the next.
     let outputs: Vec<_> = world
@@ -191,37 +196,6 @@ fn select(
     Ok(builds)
 }
 
-/// Checks the compiler version that the manifest pins (SPEC §2.4). Folio
-/// cannot run another version yet, so a build with another pin fails, as
-/// when the pinned version is not installed, unless `--compiler current`
-/// asks for this one, which is a warning.
-fn check_compiler(manifest: &Manifest, current: bool) -> Option<Diagnostic> {
-    let pinned = &manifest.project.compiler;
-    if pinned.v.to_string() == folio::VERSION {
-        return None;
-    }
-    let version = folio::VERSION;
-    Some(if current {
-        Diagnostic::warning(
-            pinned.span,
-            format!(
-                "building with Folio {version}, not the pinned {}: the output may differ",
-                pinned.v
-            ),
-        )
-    } else {
-        Diagnostic::error(
-            pinned.span,
-            format!(
-                "the project pins compiler {}, but this is Folio {version}",
-                pinned.v
-            ),
-        )
-        .with_hint("Folio cannot install or run other compiler versions yet")
-        .with_hint("`--compiler current` builds with this version instead")
-    })
-}
-
 /// A build as the messages of `folio build` name it: `exam (pdf)`.
 fn build_name(variant: Option<&Name>, target: Target) -> String {
     match variant {
@@ -273,12 +247,12 @@ fn write(root: &Path, path: Option<&str>, compiled: &Compiled) -> Result<Written
 }
 
 /// An error that points at no source.
-fn error(message: String) -> Diagnostic {
+pub(super) fn error(message: String) -> Diagnostic {
     Diagnostic::error(DiagSpan::detached(), message)
 }
 
 /// Prints diagnostics to standard error.
-fn print(files: &dyn Files, diagnostics: &[Diagnostic], color: bool) {
+pub(super) fn print(files: &dyn Files, diagnostics: &[Diagnostic], color: bool) {
     eprint!("{}", folio::diag::render(files, diagnostics, color));
 }
 
@@ -341,16 +315,6 @@ mod tests {
         assert_eq!(selected(plain, &[]).unwrap(), ["the document (pdf)"]);
         assert!(selected(plain, &["--target", "docx"]).is_err());
         assert!(selected(plain, &["--variant", "exam"]).is_err());
-    }
-
-    #[test]
-    fn checks_the_compiler_pin() {
-        let world = World::new(MANIFEST).unwrap();
-        assert_eq!(check_compiler(world.manifest(), false), None);
-        let other = MANIFEST.replace("0.0.0", "99.0.0");
-        let world = World::new(&other).unwrap();
-        assert!(check_compiler(world.manifest(), false).unwrap().is_error());
-        assert!(!check_compiler(world.manifest(), true).unwrap().is_error());
     }
 
     #[test]

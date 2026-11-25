@@ -656,3 +656,25 @@ fn invalid_lockfiles() {
         "unknown key `fonts` in the top level @ fonts\n  hint: did you mean `font`?\n"
     );
 }
+
+#[test]
+fn compiler_pin_is_read_alone() {
+    let pin = |text: &str| Manifest::compiler_pin(text, file()).map(|v| v.v.to_string());
+    assert_eq!(pin(PROJECT).as_deref(), Some("1.2.0"));
+    // A manifest for a newer compiler, with an edition and keys this one
+    // does not know, still names its pin.
+    let newer = "[project]\nentry = \"main.fol\"\nedition = \"2031\"\ncompiler = \"3.0.0\"\n\
+                 colour = true\n\n[slideshow]\nloop = true\n";
+    assert!(Manifest::parse(newer, file()).is_err());
+    let spanned = Manifest::compiler_pin(newer, file()).unwrap();
+    assert_eq!(spanned.v, semver::Version::new(3, 0, 0));
+    let DiagSpanKind::Range { range, .. } = spanned.span.get() else {
+        panic!("{:?}", spanned.span)
+    };
+    assert_eq!(&newer[range], "\"3.0.0\"");
+
+    assert_eq!(pin("[project]\ncompiler = \"current\"\n"), None);
+    assert_eq!(pin("[project]\nentry = \"main.fol\"\n"), None);
+    assert_eq!(pin("project = 3\n"), None);
+    assert_eq!(pin("[project\ncompiler = \"1.2.0\""), None);
+}

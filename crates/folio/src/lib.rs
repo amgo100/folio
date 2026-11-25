@@ -30,6 +30,7 @@
 pub mod diag;
 mod pipeline;
 pub mod span_map;
+pub mod toolchain;
 mod world;
 
 use std::collections::HashSet;
