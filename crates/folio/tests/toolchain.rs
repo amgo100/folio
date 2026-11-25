@@ -164,12 +164,20 @@ fn builds_with_the_pinned_version() {
         manifest.replace("\"2027\"", "\"2031\""),
     )
     .unwrap();
-    let output = folio(dir.path(), cache.path(), &["build", "--target", "pdf"]);
+    // So do flags that this version does not know or does not support.
+    let output = folio(
+        dir.path(),
+        cache.path(),
+        &["build", "--target", "pdf", "--strict", "--from-the-future"],
+    );
     assert_eq!(output.status.code(), Some(7), "{}", stderr(&output));
     let log = fs::read_to_string(dir.path().join("fake.log")).unwrap();
     assert_eq!(
         log,
-        format!("{}\nbuild\n--target\npdf\n", folio::VERSION),
+        format!(
+            "{}\nbuild\n--target\npdf\n--strict\n--from-the-future\n",
+            folio::VERSION
+        ),
         "the pinned version runs with the same arguments"
     );
     assert!(!dir.path().join("out").exists());
@@ -274,6 +282,21 @@ fn bad_signatures_are_rejected() {
         Err(InstallError::Download { .. })
     ));
     assert_eq!(files(cache.path()), Vec::<PathBuf>::new());
+}
+
+#[test]
+fn replaces_what_is_left_of_a_version() {
+    let channel = FakeChannel::new("0.0.0");
+    channel.release("77.0.0", FAKE_COMPILER);
+    let cache = tempfile::tempdir().unwrap();
+    let toolchains = Toolchains::new(cache.path().join("toolchains"));
+    let left = toolchains.dir().join("77.0.0");
+    fs::create_dir_all(&left).unwrap();
+    fs::write(left.join("notes.txt"), "the binary was removed").unwrap();
+    let installed = install(&channel, "77.0.0", &toolchains).unwrap();
+    assert!(!installed.already);
+    assert_eq!(fs::read(&installed.path).unwrap(), FAKE_COMPILER);
+    assert!(!left.join("notes.txt").exists());
 }
 
 #[test]

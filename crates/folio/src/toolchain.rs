@@ -370,6 +370,12 @@ pub fn install(
     let _ = fs::remove_dir_all(&staging);
     let path = toolchains.binary(version);
     let file_name = path.file_name().expect("the binary has a file name");
+    let version_dir = path.parent().expect("the binary is in a directory");
+    // What is left of a version whose binary is gone, which would stop the
+    // new one from being moved into place.
+    if version_dir.exists() {
+        fs::remove_dir_all(version_dir).map_err(io(version_dir))?;
+    }
     let result = (|| {
         fs::create_dir(&staging)?;
         let file = staging.join(file_name);

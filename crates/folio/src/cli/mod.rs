@@ -180,7 +180,13 @@ fn parse_date(text: &str) -> Result<Date, String> {
 
 /// Runs the command line.
 pub(crate) fn run() -> ExitCode {
-    let cli = Cli::parse();
+    let args: Vec<OsString> = std::env::args_os().collect();
+    // Before the arguments are parsed, so that flags only the pinned
+    // version knows reach it.
+    if let Some(status) = toolchain::dispatch(args.get(1..).unwrap_or_default()) {
+        return status;
+    }
+    let cli = Cli::parse_from(args);
     let later = match &cli.command {
         Command::Build(args) => args.later().map(|flag| format!("`folio build {flag}`")),
         command => command.later().map(|name| format!("`folio {name}`")),

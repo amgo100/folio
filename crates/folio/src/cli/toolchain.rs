@@ -4,7 +4,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use clap::{Args, Subcommand};
@@ -47,7 +47,7 @@ struct InstallArgs {
 
     /// The project directory, whose pin to install when no version is given
     #[arg(long, value_name = "DIR")]
-    root: Option<std::path::PathBuf>,
+    root: Option<PathBuf>,
 
     /// When to colour diagnostics
     #[arg(long, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
@@ -130,15 +130,69 @@ fn project_pin(root: Option<&Path>) -> Result<Version, String> {
         .ok_or_else(|| format!("{MANIFEST} pins no valid compiler version"))
 }
 
-/// Hands the command line to the compiler version that a project's
-/// manifest pins, when that is not this version, it is installed, and
+/// Hands the command line (`args`, without the program name) to the
+/// compiler version that a project's manifest pins, when the command builds
+/// a project, the pin is another version, it is installed, and
 /// `--compiler current` was not given. Returns the exit status of the
 /// pinned version, or `None` when this version runs the command.
 ///
-/// Only `project.compiler` is read, so a manifest with keys or an edition
-/// that only the pinned version knows still reaches it. A pin this version
-/// cannot run is reported by [`check`] once the manifest is parsed.
-pub(crate) fn dispatch(manifest: &str, current: bool, color: bool) -> Option<ExitCode> {
+/// It runs before the arguments are parsed and reads only `--root`,
+/// `--compiler` and `--color` from them, and only `project.compiler` from
+/// the manifest, so that flags, keys or an edition that only the pinned
+/// version knows still reach it. A pin this version cannot run is reported
+/// by [`check`] once the manifest is parsed.
+pub(crate) fn dispatch(args: &[OsString]) -> Option<ExitCode> {
+    if args.first()?.to_str()? != "build" {
+        return None;
+    }
+    let mut root = None;
+    let mut current = false;
+    let mut color = Color::Auto;
+    let mut rest = args[1..].iter();
+    while let Some(arg) = rest.next() {
+        let Some(arg) = arg.to_str() else { continue };
+        if arg == "--" {
+            break;
+        }
+        let Some((flag, value)) = arg
+            .strip_prefix("--")
+            .map(|flag| match flag.split_once('=') {
+                Some((flag, value)) => (flag, Some(OsString::from(value))),
+                None => (flag, None),
+            })
+        else {
+            continue;
+        };
+        if !matches!(flag, "root" | "compiler" | "color") {
+            continue;
+        }
+        let Some(value) = value.or_else(|| rest.next().cloned()) else {
+            break;
+        };
+        match flag {
+            "root" => root = Some(PathBuf::from(value)),
+            "compiler" => current = value == "current",
+            _ => {
+                color = match value.to_str() {
+                    Some("always") => Color::Always,
+                    Some("never") => Color::Never,
+                    _ => Color::Auto,
+                }
+            }
+        }
+    }
+    let root = project::find_root(root.as_deref()).ok()?;
+    let manifest = fs::read_to_string(root.join(MANIFEST)).ok()?;
+    dispatch_to_pin(&manifest, args, current, color.enabled())
+}
+
+/// [`dispatch`], given the manifest's text.
+fn dispatch_to_pin(
+    manifest: &str,
+    args: &[OsString],
+    current: bool,
+    color: bool,
+) -> Option<ExitCode> {
     let pin = Manifest::compiler_pin(manifest, World::MANIFEST)?;
     if current || pin.v.to_string() == folio::VERSION || std::env::var_os(DISPATCHED).is_some() {
         return None;
@@ -153,9 +207,7 @@ pub(crate) fn dispatch(manifest: &str, current: bool, color: bool) -> Option<Exi
         print(&files, &[unfixed(pin.span, &pin.v, &floor)], color);
     }
     let mut command = Command::new(&binary);
-    command
-        .args(std::env::args_os().skip(1))
-        .env(DISPATCHED, folio::VERSION);
+    command.args(args).env(DISPATCHED, folio::VERSION);
     Some(run(command, &binary, &pin.v, color))
 }
 
@@ -253,7 +305,8 @@ fn check_pin(
                 pinned.v
             ))
             .with_hint(format!(
-                "remove that directory and run `folio toolchain install {}`",
+                "remove that directory and run `folio toolchain install {}`, or unset \
+                 {DISPATCHED} if it was not set by Folio",
                 pinned.v
             )),
         (_, None) => error

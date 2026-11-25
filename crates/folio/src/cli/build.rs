@@ -32,11 +32,9 @@ pub(crate) fn build(args: &BuildArgs) -> ExitCode {
         Ok(text) => text,
         Err(e) => return fail(format!("cannot read {MANIFEST}: {e}")),
     };
-    // A project that pins another version is built by that version.
+    // A project that pins another installed version was handed to it
+    // before the arguments were parsed (`toolchain::dispatch`).
     let current = args.compiler.is_some();
-    if let Some(status) = toolchain::dispatch(&manifest, current, color) {
-        return status;
-    }
     let lockfile = match project::read_lockfile(&root) {
         Ok(text) => text,
         Err(e) => return fail(format!("cannot read {LOCKFILE}: {e}")),
