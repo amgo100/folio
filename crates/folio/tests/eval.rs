@@ -746,6 +746,84 @@ fn editing_a_function_reevaluates_only_its_callers() {
 }
 
 #[test]
+fn a_library_imported_from_two_depths_is_evaluated_once() {
+    // `lib` is imported by the entry file and by `mid`, which the entry
+    // file imports: at depths 1 and 2.
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            (
+                "main.fol",
+                "#import \"mid.fol\": twice\n#import \"lib.fol\": double\n\
+                 #twice(1) #double(5)\n",
+            ),
+            (
+                "mid.fol",
+                "#import \"lib.fol\": double\n#let twice(x) = double(double(x))\n",
+            ),
+            ("lib.fol", "#let double(x) = x * 2\n"),
+        ],
+    );
+    assert_eq!(logged.text(None), "4 10");
+    let executed = logged.take();
+    assert_eq!(executed.get("eval_file"), Some(&3), "{executed:?}");
+}
+
+#[test]
+fn the_same_call_at_two_sites_is_evaluated_once() {
+    // Two sites in the entry file, and one in a file it imports, which
+    // evaluates at a greater depth.
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            (
+                "main.fol",
+                "#import \"lib.fol\": double, four\n#double(2) #double(2) #four\n",
+            ),
+            ("lib.fol", "#let double(x) = x * 2\n#let four = double(2)\n"),
+        ],
+    );
+    assert_eq!(logged.text(None), "4 4 4");
+    assert_eq!(logged.calls(), 1);
+
+    // An error still points at the site that made it.
+    let report = errors("#let f(x) = x\n#f(1)\n#f(1, 2)\n");
+    assert!(report.contains("unexpected argument"), "{report}");
+    assert!(report.contains("main.fol:3:7"), "{report}");
+
+    // Arguments taken by a sink keep their spans: an error about them
+    // points at the call that passed them.
+    let report = errors("#let f(..a) = a\n#let g(x) = x\n#g(..f(1))\n#g(..f(1, 2))\n");
+    assert!(report.contains("main.fol:4:"), "{report}");
+    assert!(!report.contains("main.fol:3:"), "{report}");
+}
+
+#[test]
+fn calls_near_the_depth_limit_are_exact_at_any_depth() {
+    // `down(n)` recurses n calls deep. A call that fits at one depth is
+    // reused there, and the same call from a deeper import fails where the
+    // limit is reached, as it would without memoisation.
+    let main = "#import \"a.fol\": r\n#let down(n) = if n == 0 { 0 } else { down(n - 1) + 1 }\n\
+                #down(60) #r\n";
+    let (repr, messages) = partial(&[
+        ("main.fol", main),
+        ("a.fol", "#import \"b.fol\": r\n"),
+        ("b.fol", "#import \"c.fol\": r\n"),
+        ("c.fol", "#import \"d.fol\": r\n"),
+        (
+            "d.fol",
+            "#let down(n) = if n == 0 { 0 } else { down(n - 1) + 1 }\n#let r = down(60)\n",
+        ),
+    ]);
+    assert!(repr.starts_with("[\"60\""), "{repr}");
+    assert_eq!(
+        messages,
+        ["error: calls and imports are nested more than 64 deep"],
+        "{repr}"
+    );
+}
+
+#[test]
 fn only_code_that_reads_the_variant_is_evaluated_per_variant() {
     let logged = Logged::new(
         VARIANTS,
