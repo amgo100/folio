@@ -93,8 +93,14 @@ impl Logged {
             .diagnostics
             .iter()
             .filter(|d| {
-                !d.message.contains("not laid out yet")
-                    && !d.message.contains("is not implemented yet")
+                d.severity != folio::Severity::Warning
+                    || !(d
+                        .message
+                        .ends_with("is not laid out yet, so the output leaves it out")
+                        || d.message
+                            .ends_with("are not laid out yet, so the output leaves them out")
+                        || d.message
+                            .ends_with("is not implemented yet, so this declaration has no effect"))
             })
             .cloned()
             .collect();

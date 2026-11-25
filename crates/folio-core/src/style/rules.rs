@@ -242,7 +242,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             .cast::<ast::StyleRule<'_>>()
             .expect("a style rule");
         let values = Values::new(cx.values, pending.file.clone());
-        let compiled = cx.rule(
+        let compiled = cx.compile_rule(
             &values,
             rule.selectors(),
             rule.declarations(),
@@ -251,6 +251,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             rule.span(),
         );
         if pending.applies {
+            cx.lint_rule(&compiled);
             rules.extend(compiled.rules);
             step_rules.extend(compiled.steps);
         }
@@ -514,9 +515,26 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// Compiles a rule that applies, as [`Self::compile_rule`], and warns
+    /// about its declarations that have no effect yet
+    /// ([`Self::lint_rule`]).
+    pub(super) fn rule<'s>(
+        &self,
+        values: &Values<'_>,
+        selectors: ast::SelectorList<'s>,
+        declarations: impl Iterator<Item = ast::Declaration<'s>>,
+        origin: Origin,
+        order: u32,
+        span: Span,
+    ) -> Compiled {
+        let out = self.compile_rule(values, selectors, declarations, origin, order, span);
+        self.lint_rule(&out);
+        out
+    }
+
     /// Compiles a rule: one rule per selector, sharing the declarations.
     /// A selector with an error is left out, after it is reported.
-    pub(super) fn rule<'s>(
+    fn compile_rule<'s>(
         &self,
         values: &Values<'_>,
         selectors: ast::SelectorList<'s>,
@@ -549,18 +567,29 @@ impl<'a> Compiler<'a> {
                 None => out.rules.push(rule),
             }
         }
-        // A rule that is ignored has no effect anyway.
-        if !out.rules.is_empty() || !out.steps.is_empty() {
-            for decl in &declarations {
-                let property = self.properties.get(decl.prop);
-                let value = match &decl.value {
-                    DeclValue::Value(value) => Some(value),
-                    DeclValue::Template(_) => None,
-                };
-                self.lint_not_implemented(property, value, decl.span);
-            }
-        }
         out
+    }
+
+    /// Warns about the declarations of a compiled rule that set a property
+    /// no stage reads yet. Only for a rule that applies to the build: one
+    /// that is ignored, or that another variant or target has, has no
+    /// effect here anyway. Its selectors share the declarations.
+    fn lint_rule(&self, compiled: &Compiled) {
+        let first = compiled
+            .rules
+            .first()
+            .or_else(|| compiled.steps.first().map(|s| &s.rule));
+        let Some(rule) = first else {
+            return;
+        };
+        for decl in &rule.declarations {
+            let property = self.properties.get(decl.prop);
+            let value = match &decl.value {
+                DeclValue::Value(value) => Some(value),
+                DeclValue::Template(_) => None,
+            };
+            self.lint_not_implemented(property, value, decl.span);
+        }
     }
 
     /// Compiles declarations, leaving out those with errors.
@@ -768,7 +797,12 @@ impl<'a> Compiler<'a> {
                     };
                     // Masters by position come with page masters (SPEC
                     // §7.1); until then the page's view has no position.
-                    if out.name == Some(NodeName::Page) {
+                    if out.name == Some(NodeName::Page)
+                        && matches!(
+                            name.get().as_str(),
+                            "first" | "last" | "nth" | "left" | "right"
+                        )
+                    {
                         self.warn(
                             span,
                             eco_format!(

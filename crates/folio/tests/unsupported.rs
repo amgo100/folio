@@ -169,3 +169,22 @@ fn a_reference_to_a_missing_label_suggests_a_close_one() {
         .unwrap();
     assert_eq!(missing.hints[0], "did you mean `<forces>`?");
 }
+
+#[test]
+fn rules_of_other_targets_and_other_pseudo_classes() {
+    // A rule for another target has no effect in this build either way.
+    let world = world(
+        "@target docx { heading { numbering: \"1.\"; } }\n\
+         page:foo { margin-top: 1cm; }\n",
+        "Text.\n",
+    );
+    let messages: Vec<String> = compile(&world, Target::Pdf)
+        .diagnostics
+        .iter()
+        .map(|d| d.message.to_string())
+        .collect();
+    assert_eq!(
+        messages,
+        ["unknown pseudo-class `:foo`; the rule is ignored"]
+    );
+}

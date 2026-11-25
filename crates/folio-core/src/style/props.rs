@@ -248,7 +248,8 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
     }
     if let Some(value) = value
         && (*value == property.initial
-            || matches!(value, Value::Keyword(k) if k.as_str() == "here"))
+            || (property.name.name.as_str() == "placement"
+                && matches!(value, Value::Keyword(k) if k.as_str() == "here")))
     {
         return None;
     }
