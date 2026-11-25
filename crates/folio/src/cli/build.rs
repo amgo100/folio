@@ -44,9 +44,18 @@ pub(super) fn run_command(args: &ProjectArgs, mode: Mode) -> ExitCode {
     status
 }
 
-/// A build's diagnostics, and its output when it was compiled; or how it
+/// A build's diagnostics, and what compiling or checking it gave; or how it
 /// failed.
-type Outcome = Result<(EcoVec<Diagnostic>, Option<Compiled>), Cancelled>;
+type Outcome = Result<(EcoVec<Diagnostic>, Done), Cancelled>;
+
+/// What a build gave.
+enum Done {
+    /// It was compiled.
+    Compiled(Compiled),
+    /// It was checked: whether it has errors, and whether compiling it
+    /// would give a file to write.
+    Checked { errors: bool, writes: bool },
+}
 
 /// Builds or checks, reporting what it finds to `report`.
 fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
@@ -128,13 +137,20 @@ fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
                 Mode::Build => compile_builds(&world, builds)
                     .into_iter()
                     .map(|o| {
-                        let result = o.result.map(|c| (c.diagnostics.clone(), Some(c)));
+                        let result = o.result.map(|c| (c.diagnostics.clone(), Done::Compiled(c)));
                         (o.variant, o.target, result)
                     })
                     .collect(),
                 Mode::Check => check_builds(&world, builds)
                     .into_iter()
-                    .map(|o| (o.variant, o.target, o.result.map(|c| (c.diagnostics, None))))
+                    .map(|o| {
+                        let result = o.result.map(|c| {
+                            let errors = c.has_errors();
+                            let writes = c.writes;
+                            (c.diagnostics, Done::Checked { errors, writes })
+                        });
+                        (o.variant, o.target, result)
+                    })
                     .collect(),
             }
         };
@@ -173,15 +189,21 @@ fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
         let build = |path: Option<&str>, status| Build::new(&variant, target, path, status);
         let compiled = match compiled {
             None => {
+                let path = (mode == Mode::Build).then_some(path).flatten();
                 report.build(build(path.as_deref(), Status::Failed));
                 continue;
             }
-            // A check writes nothing.
-            Some(None) => {
+            // A check writes nothing, but finds what would stop the write.
+            Some(Done::Checked { errors, writes }) => {
+                let path = path.as_deref().filter(|_| writes);
+                if let Err(message) = check_write(&root, path, errors) {
+                    report.diagnostics(&world, &[error(message)]);
+                    failed = true;
+                }
                 report.build(build(None, Status::Checked));
                 continue;
             }
-            Some(Some(compiled)) => compiled,
+            Some(Done::Compiled(compiled)) => compiled,
         };
         match write(&root, path.as_deref(), &compiled) {
             Ok(Written::File(path)) => report.build(build(Some(&path), Status::Written)),
@@ -299,9 +321,32 @@ fn write(root: &Path, path: Option<&str>, compiled: &Compiled) -> Result<Written
         return Ok(Written::Skipped(path));
     }
     let message = |e: io::Error| format!("cannot write `{path}`: {e}");
-    let (root, file) = resolve(root, &path).map_err(message)?;
+    let (root, file) = resolve(root, &path, true).map_err(message)?;
     replace(&root, &file, bytes).map_err(message)?;
     Ok(Written::File(path))
+}
+
+/// Finds what would stop [`write`] from writing a build's output to `path`
+/// in the project, for `folio check`, without writing or creating
+/// anything: a path that is not in the project, and for a build without
+/// errors (`errors`), a directory on the way that a link places outside
+/// the project or that is not a directory. `path` is `None` when the build
+/// would write no file.
+fn check_write(root: &Path, path: Option<&str>, errors: bool) -> Result<(), String> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let Some(path) = ProjectPath::new(path) else {
+        return Err(format!(
+            "the output path `{path}` is not a path in the project"
+        ));
+    };
+    if errors {
+        return Ok(());
+    }
+    resolve(root, path.as_str(), false)
+        .map(|_| ())
+        .map_err(|e| format!("cannot write `{path}`: {e}"))
 }
 
 /// The count in the names of temporary files, which tells apart the writes
@@ -310,10 +355,11 @@ static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
 /// The file on disk that the output at `path`, a project path, is written
 /// to, with the project directory: the directories on the way are created
-/// if they are missing, and symbolic links among them are followed only to
+/// if they are missing (unless `create` is false, when they are left
+/// missing), and symbolic links among them are followed only to
 /// directories inside the project. A link at the file itself is replaced,
 /// not followed.
-fn resolve(root: &Path, path: &str) -> io::Result<(PathBuf, PathBuf)> {
+fn resolve(root: &Path, path: &str, create: bool) -> io::Result<(PathBuf, PathBuf)> {
     let root = root.canonicalize()?;
     let (dirs, name) = path.rsplit_once('/').unwrap_or(("", path));
     let mut dir = root.clone();
@@ -323,19 +369,23 @@ fn resolve(root: &Path, path: &str) -> io::Result<(PathBuf, PathBuf)> {
             walked.push('/');
         }
         walked.push_str(component);
-        dir = enter(&root, &dir.join(component), &walked)?;
+        dir = enter(&root, &dir.join(component), &walked, create)?;
     }
     Ok((root, dir.join(name)))
 }
 
 /// The directory to go on from at `next`, which the project path `walked`
-/// names: `next` itself, created if it is missing, or the target of a link
-/// there when that is a directory in the project at `root`.
-fn enter(root: &Path, next: &Path, walked: &str) -> io::Result<PathBuf> {
+/// names: `next` itself, created if it is missing (or left missing, unless
+/// `create`), or the target of a link there when that is a directory in
+/// the project at `root`.
+fn enter(root: &Path, next: &Path, walked: &str, create: bool) -> io::Result<PathBuf> {
     let not_dir = || io::Error::other(format!("`{walked}` is not a directory"));
     let mut created = false;
     loop {
         match fs::symlink_metadata(next) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound && !create => {
+                return Ok(next.to_owned());
+            }
             Err(e) if e.kind() == io::ErrorKind::NotFound && !created => {
                 // Another build may create it, or put a link there, in the
                 // meantime: then what is there now is checked.

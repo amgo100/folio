@@ -117,10 +117,11 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
     catch(|| {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
-        let sources = pipeline::check_build(db, build).clone();
+        let checked = pipeline::check_build(db, build);
         let diagnostics = collect(pipeline::check_build::accumulated::<Reported>(db, build));
         Checked {
-            sources,
+            sources: checked.sources.clone(),
+            writes: checked.writes,
             diagnostics,
         }
     })
@@ -147,6 +148,11 @@ pub struct Checked {
     /// The source files the build read, in the order they were found. A
     /// watcher checks again when one of them changes.
     pub sources: EcoVec<ProjectPath>,
+    /// Whether compiling the build would give a file
+    /// ([`Compiled::output`]): its target has a writer, which only PDF has
+    /// yet, and the document could be styled. An error of the writer
+    /// itself may still leave it without one.
+    pub writes: bool,
     /// Every problem found, errors and warnings, in the order the queries
     /// that reported them first ran.
     pub diagnostics: EcoVec<Diagnostic>,

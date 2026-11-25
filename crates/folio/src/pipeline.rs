@@ -51,36 +51,47 @@ pub(crate) struct Built {
 /// depends on.
 #[salsa::tracked(returns(ref))]
 pub(crate) fn compile_build(db: &dyn Db, build: Build<'_>) -> Built {
-    let sources = check_build(db, build).clone();
+    let sources = check_build(db, build).sources.clone();
     let output = emit(db, build).clone();
     Built { sources, output }
 }
 
+/// What checking a build finds, without its diagnostics.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct Checked {
+    /// The source files the build read.
+    pub sources: EcoVec<ProjectPath>,
+    /// Whether emitting the build would write a file.
+    pub writes: bool,
+}
+
 /// Checks a build without emitting it: checks what it reads
 /// ([`build_output`]) and runs it through every stage before Emit, and for
-/// PDF the writer's check. Returns the source files the build read. Its
-/// diagnostics are those that [`compile_build`] reports, but for the few
-/// that only writing finds: an error of the writer itself, such as a font
-/// it cannot subset, and a reason not to claim PDF/UA-1 that the writer's
-/// check does not foresee.
+/// PDF the writer's check. Its diagnostics are those that
+/// [`compile_build`] reports, but for the few that only writing finds: an
+/// error of the writer itself, such as a font it cannot subset, and a
+/// reason not to claim PDF/UA-1 that the writer's check does not foresee.
 #[salsa::tracked(returns(ref))]
-pub(crate) fn check_build(db: &dyn Db, build: Build<'_>) -> EcoVec<ProjectPath> {
+pub(crate) fn check_build(db: &dyn Db, build: Build<'_>) -> Checked {
     let checked = build_output(db, build);
-    check_target(db, build);
-    checked.sources.clone()
+    let writes = *check_target(db, build);
+    Checked {
+        sources: checked.sources.clone(),
+        writes,
+    }
 }
 
 /// Runs a build through every stage before Emit, and for PDF the writer's
-/// check: whether the document could be styled. A target that has no
-/// writer yet is reported here.
+/// check: whether emitting it would write a file, which only PDF does, and
+/// only when the document could be styled. A target that has no writer
+/// yet is reported here.
 #[salsa::tracked]
 pub(crate) fn check_target(db: &dyn Db, build: Build<'_>) -> bool {
     let target = build.target(db);
     match target {
         Target::Pdf => pdf_check(db, build).is_some(),
         Target::Live => {
-            let styled = pages(db, build).is_some();
-            if styled {
+            if pages(db, build).is_some() {
                 unsupported(
                     db,
                     build,
@@ -88,11 +99,10 @@ pub(crate) fn check_target(db: &dyn Db, build: Build<'_>) -> bool {
                      document out but presents nothing",
                 );
             }
-            styled
+            false
         }
         Target::Docx | Target::Pptx => {
-            let styled = step_styled(db, build).is_some();
-            if styled {
+            if step_styled(db, build).is_some() {
                 let format = target.as_str().to_uppercase();
                 unsupported(
                     db,
@@ -103,7 +113,7 @@ pub(crate) fn check_target(db: &dyn Db, build: Build<'_>) -> bool {
                     ),
                 );
             }
-            styled
+            false
         }
     }
 }

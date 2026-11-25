@@ -109,10 +109,27 @@ impl Pages {
             .zip(&before.pages)
             .enumerate()
             .filter(|&(i, (page, old))| {
-                self.hashes.get(i) == before.hashes.get(i) && page.fragment != old.fragment
+                self.hashes.get(i) == before.hashes.get(i) && !same(&page.fragment, &old.fragment)
             })
             .map(|(i, _)| i)
             .collect()
+    }
+}
+
+/// Whether two fragments are equal: at once where they share their items,
+/// as a page taken from the cache shares them with the page it was, or
+/// else by comparing their content.
+fn same(a: &Fragment, b: &Fragment) -> bool {
+    let shared = a.items.as_ptr() == b.items.as_ptr() && a.items.len() == b.items.len();
+    if shared {
+        a.size == b.size
+            && a.source == b.source
+            && a.first_baseline == b.first_baseline
+            && a.last_baseline == b.last_baseline
+            && a.keep_with_next == b.keep_with_next
+            && a.break_penalty_after == b.break_penalty_after
+    } else {
+        a == b
     }
 }
 

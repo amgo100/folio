@@ -62,7 +62,6 @@ use krilla::metadata::Metadata;
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
 use krilla::paint::{self, Fill, Stroke, StrokeDash};
-use krilla::surface::Location;
 use krilla::surface::Surface;
 use krilla::tagging::{ArtifactType, ContentTag, SpanTag};
 use krilla::text::{GlyphId, KrillaGlyph};
@@ -251,6 +250,14 @@ pub struct Preflight {
 /// `.notdef`, and a glyph whose text, where it is first shown, is no
 /// character or one that PDF/UA-1 does not allow. It costs a small part
 /// of writing, as it neither encodes nor subsets anything.
+///
+/// These are the reasons the content Folio writes today can fail PDF/UA-1.
+/// A document the check expects to fail is written once, without the
+/// validator, so a reason only the validator knows is not reported with
+/// them; content that brings new reasons, such as figures without alt
+/// text, must teach the check to find them. A reason the check misses in
+/// a document it expects to pass is still found, by writing it under the
+/// validator, and costs a second writing.
 pub fn preflight(document: &Document<'_>) -> Preflight {
     // The tagger needs the ids of marked content, which only a surface
     // gives: they come from one page of a document that is never written.
@@ -494,63 +501,61 @@ struct Dry {
     /// Glyphs whose text, where each is first shown, is not a valid
     /// mapping to Unicode, in that order.
     unmapped: Vec<ValidationError>,
-    /// The glyphs shown so far, a set of glyph ids for each font: the
-    /// first showing of a glyph gives its ToUnicode mapping. A document
-    /// uses few fonts, so they are searched in order.
-    mapped: Vec<(FontId, Vec<u64>)>,
+    /// The glyphs shown so far, a set of glyph ids for each font as krilla
+    /// knows it, which keeps one ToUnicode map for each: the first showing
+    /// of a glyph gives its mapping. A document uses few fonts, so they
+    /// are searched in order.
+    mapped: Vec<(krilla::text::Font, Vec<u64>)>,
     /// The errors found, to report each once.
     seen: HashSet<ValidationError>,
 }
 
 impl Dry {
-    /// Notes a glyph `id` of `font` that shows `text` from `location`, as
-    /// the validator checks it: in the content stream, whether it is the
-    /// `.notdef` glyph; in the ToUnicode map, which holds the text of its
-    /// first showing, whether that is a character PDF/UA allows.
-    fn glyph(
-        &mut self,
-        id: FontId,
-        font: &krilla::text::Font,
-        last_resort: bool,
-        glyph: u16,
-        text: &str,
-        location: Option<Location>,
-    ) {
-        if glyph == 0 || last_resort {
-            let error = ValidationError::ContainsNotDefGlyph(font.clone(), location, text.into());
-            if self.seen.insert(error.clone()) {
-                self.notdef.push(error);
-            }
-        }
-        let index = match self.mapped.iter().position(|(f, _)| *f == id) {
+    /// Notes the glyphs of a run set in `font`, as the validator checks
+    /// them: in the content stream, whether each is the `.notdef` glyph;
+    /// in the ToUnicode map, which holds the text of a glyph's first
+    /// showing, whether that is a character PDF/UA allows.
+    fn run(&mut self, run: &GlyphRun, font: &krilla::text::Font, last_resort: bool) {
+        let index = match self.mapped.iter().position(|(f, _)| f == font) {
             Some(index) => index,
             None => {
-                self.mapped
-                    .push((id, vec![0; usize::from(u16::MAX) / 64 + 1]));
+                let none = vec![0; usize::from(u16::MAX) / 64 + 1];
+                self.mapped.push((font.clone(), none));
                 self.mapped.len() - 1
             }
         };
-        let bits = &mut self.mapped[index].1;
-        let (word, bit) = (usize::from(glyph) / 64, 1u64 << (glyph % 64));
-        if bits[word] & bit != 0 {
-            return;
-        }
-        bits[word] |= bit;
-        let gid = GlyphId::new(u32::from(glyph));
-        // The validator names the last such character.
-        let invalid = text
-            .chars()
-            .rev()
-            .find(|&c| matches!(c as u32, 0x0 | 0xFEFF | 0xFFFE));
-        let error = match invalid {
-            Some(c) => ValidationError::InvalidCodepointMapping(font.clone(), gid, c, location),
-            None if text.is_empty() => {
-                ValidationError::NoCodepointMapping(font.clone(), gid, location)
+        for g in run.glyphs.iter() {
+            let text = run.text.get(usize_range(&g.range)).unwrap_or_default();
+            let location = location(g.source.0);
+            if g.id == 0 || last_resort {
+                let error =
+                    ValidationError::ContainsNotDefGlyph(font.clone(), location, text.into());
+                if self.seen.insert(error.clone()) {
+                    self.notdef.push(error);
+                }
             }
-            None => return,
-        };
-        if self.seen.insert(error.clone()) {
-            self.unmapped.push(error);
+            let bits = &mut self.mapped[index].1;
+            let (word, bit) = (usize::from(g.id) / 64, 1u64 << (g.id % 64));
+            if bits[word] & bit != 0 {
+                continue;
+            }
+            bits[word] |= bit;
+            let gid = GlyphId::new(u32::from(g.id));
+            // The validator names the last such character.
+            let invalid = text
+                .chars()
+                .rev()
+                .find(|&c| matches!(c as u32, 0x0 | 0xFEFF | 0xFFFE));
+            let error = match invalid {
+                Some(c) => ValidationError::InvalidCodepointMapping(font.clone(), gid, c, location),
+                None if text.is_empty() => {
+                    ValidationError::NoCodepointMapping(font.clone(), gid, location)
+                }
+                None => continue,
+            };
+            if self.seen.insert(error.clone()) {
+                self.unmapped.push(error);
+            }
         }
     }
 }
@@ -650,17 +655,7 @@ impl Writer<'_> {
         };
         if let Some(dry) = &mut self.dry {
             let last_resort = name(&font, &self.names) == "LastResort";
-            for g in run.glyphs.iter() {
-                let text = run.text.get(usize_range(&g.range)).unwrap_or_default();
-                dry.glyph(
-                    run.font,
-                    &font,
-                    last_resort,
-                    g.id,
-                    text,
-                    location(g.source.0),
-                );
-            }
+            dry.run(run, &font, last_resort);
             let id = surface.start_tagged(ContentTag::Span(SpanTag::empty()));
             surface.end_tagged();
             self.tagger.content(node, id);

@@ -351,3 +351,33 @@ fn checks_write_diagnostics_as_json() {
     );
     assert_eq!(json(&build)["diagnostics"], checked["diagnostics"]);
 }
+
+/// What would stop a build from writing its output stops a check too,
+/// though the check writes nothing.
+#[test]
+fn checks_report_outputs_that_cannot_be_written() {
+    let outside = format!("{MANIFEST}\n[output]\npath = \"../{{stem}}.{{ext}}\"\n");
+    let not_dir = format!("{MANIFEST}\n[output]\npath = \"out/main.pdf/x.pdf\"\n");
+    for (manifest, expected) in [
+        (&outside, "leaves the project"),
+        (&not_dir, "is not a directory"),
+    ] {
+        let dir = project(&[("folio.toml", manifest), ("main.fol", "Text.\n")]);
+        if manifest == &not_dir {
+            fs::create_dir(dir.path().join("out")).unwrap();
+            fs::write(dir.path().join("out/main.pdf"), "").unwrap();
+        }
+        let check = folio(dir.path(), &["check"]);
+        assert_eq!(check.status.code(), Some(1), "{}", stderr(&check));
+        assert!(stderr(&check).contains(expected), "{}", stderr(&check));
+        let build = folio(dir.path(), &["build"]);
+        assert_eq!(build.status.code(), Some(1), "{}", stderr(&build));
+        assert_eq!(stderr(&check), stderr(&build));
+    }
+    // A check creates no directory on the way.
+    let nested = format!("{MANIFEST}\n[output]\npath = \"a/b/{{stem}}.{{ext}}\"\n");
+    let dir = project(&[("folio.toml", &nested), ("main.fol", "Text.\n")]);
+    let check = folio(dir.path(), &["check"]);
+    assert!(check.status.success(), "{}", stderr(&check));
+    assert!(!dir.path().join("a").exists());
+}

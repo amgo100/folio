@@ -5,7 +5,9 @@
 //! builds and the same diagnostics flags, but runs each build only up to
 //! Emit ([`folio::check`]): the document is laid out and, for PDF, the
 //! writer's check runs, so the diagnostics are those of `folio build`, but
-//! no file is written. With `--diagnostics json`, each build of the
+//! no file is written. What would stop an output from being written where
+//! `[output] path` puts it is an error, as for `folio build`, but no
+//! directory is created. With `--diagnostics json`, each build of the
 //! document has the status `checked` and no path.
 
 use std::process::ExitCode;
