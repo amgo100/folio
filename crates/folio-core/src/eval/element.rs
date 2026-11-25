@@ -419,33 +419,33 @@ impl Vm<'_> {
 /// universal fields, in the order of [`UNIVERSAL_FIELDS`], each followed by
 /// its versions limited to a variant or target, by scope. A body of slots
 /// stands as its slots, in declaration order.
-pub(crate) fn canonical_fields(schema: &ElementSchema, fields: Dict) -> Dict {
+pub(crate) fn canonical_fields(schema: &ElementSchema, mut fields: Dict) -> Dict {
     let body: Vec<&str> = match &schema.body {
         Body::Slots(slots) => slots.iter().map(|slot| slot.name.as_str()).collect(),
         Body::None | Body::Content(_) => vec![BODY],
     };
-    let mut order: Vec<&str> = Vec::with_capacity(fields.len());
+    let mut order: Vec<EcoString> = Vec::with_capacity(fields.len());
     for name in &schema.positional {
         match name.as_str() {
-            BODY => order.extend(&body),
-            field => order.push(field),
+            BODY => order.extend(body.iter().map(|&key| key.into())),
+            field => order.push(field.into()),
         }
     }
-    order.extend(schema.fields.iter().map(|decl| decl.name.as_str()));
-    order.extend(&body);
+    order.extend(schema.fields.iter().map(|decl| decl.name.as_str().into()));
+    order.extend(body.iter().map(|&key| key.into()));
     // The scoped fields, which only `override` and the layout hints have.
-    let mut scoped: Vec<(usize, &str)> = fields
+    let mut scoped: Vec<(usize, EcoString)> = fields
         .iter()
         .filter_map(|(key, _)| {
             let (field, _) = key.split_once('@')?;
             let rank = UNIVERSAL_FIELDS.iter().position(|u| *u == field)?;
-            Some((rank, key.as_str()))
+            Some((rank, key.clone()))
         })
         .collect();
     scoped.sort();
     let mut scoped = scoped.into_iter().peekable();
     for (rank, universal) in UNIVERSAL_FIELDS.iter().enumerate() {
-        order.push(universal);
+        order.push((*universal).into());
         while let Some((_, key)) = scoped.next_if(|(r, _)| *r == rank) {
             order.push(key);
         }
@@ -453,17 +453,13 @@ pub(crate) fn canonical_fields(schema: &ElementSchema, fields: Dict) -> Dict {
 
     let mut out = Dict::new();
     for key in order {
-        if out.get(key).is_none()
-            && let Some(value) = fields.get(key)
-        {
-            out.insert(key.into(), value.clone());
+        if let Some(value) = fields.remove(&key) {
+            out.insert(key, value);
         }
     }
     // Every field is one of those; any other keeps the order it came in.
     for (key, value) in fields.iter() {
-        if out.get(key).is_none() {
-            out.insert(key.clone(), value.clone());
-        }
+        out.insert(key.clone(), value.clone());
     }
     out
 }
