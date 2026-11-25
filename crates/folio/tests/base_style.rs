@@ -168,7 +168,14 @@ fn built_in_elements_have_a_readable_look() {
     let raw = first(&styled, "raw");
     assert_eq!(
         get(&styled, raw, "font"),
-        Value::Array([Value::Str("Source Code Pro".into())].into_iter().collect())
+        Value::Array(
+            [
+                Value::Str("Source Code Pro".into()),
+                Value::Str("New Computer Modern".into())
+            ]
+            .into_iter()
+            .collect()
+        )
     );
 }
 

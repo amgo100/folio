@@ -661,7 +661,10 @@ fn equal_styles_share_memory() {
         "= A\n\nOne.\n\nTwo.\n\n= B\n\nThree.\n\n#figure[] #figure(class: \"wide\")[]\n",
         &[(
             "styles/main.fsty",
-            "paragraph { indent: 1pt; color: #f00; } .wide { color: #f00; }\n",
+            // The figures' spaces, which the base stylesheet sets, are
+            // reset to their initial values: an equal group is shared.
+            "paragraph { indent: 1pt; color: #f00; } .wide { color: #f00; }\n\
+             figure { space-before: 0pt; space-after: 0pt; }\n",
         )],
     );
     let styled = styled(&world, "exam", Target::Pdf);
@@ -670,14 +673,12 @@ fn equal_styles_share_memory() {
     assert!(ps[0].style.ptr_eq(&ps[1].style));
     assert!(ps[0].style.ptr_eq(&ps[2].style));
     // Untouched groups are shared with the parent or the initial style.
-    // (The base stylesheet sets the spaces of figures, so the section is
-    // compared with the document.)
     let section = first(&styled, "section");
     let block = folio::style::GroupId::BLOCK;
     let figures = all(&styled, "figure");
     assert!(Arc::ptr_eq(
         section.style.group(block),
-        first(&styled, "doc").style.group(block)
+        figures[0].style.group(block)
     ));
     // Equal groups of different styles are shared.
     let text = folio::style::GroupId::TEXT;
