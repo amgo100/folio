@@ -112,6 +112,11 @@ fn fuzz_crate_matches_harnesses() {
     expected.sort();
     assert_eq!(files, expected);
     for (name, _) in TARGETS {
+        // Cargo forbids binaries named after its own directories.
+        assert!(
+            !["build", "deps", "examples", "incremental"].contains(name),
+            "cargo forbids a binary named {name}"
+        );
         let body =
             fs::read_to_string(fuzz.join("fuzz_targets").join(format!("{name}.rs"))).unwrap();
         assert!(
@@ -136,4 +141,44 @@ fn edits_with_a_nul_do_not_encode() {
         with: String::new(),
     };
     assert_eq!(edit.encode(), None);
+}
+
+#[test]
+fn incremental_edits_decode_within_the_text() {
+    // No project byte, or no edit: nothing to do.
+    assert!(fuzz::Edits::decode(&[]).is_none());
+    assert!(fuzz::Edits::decode(&[0, 1, 2, 3, 4]).is_none());
+    // A project and two edits; trailing bytes are ignored.
+    let edits = fuzz::Edits::decode(&[0, 0, 0xff, 0xff, 15, 0, 1, 3, 0, 2, 200, 9]).unwrap();
+    assert_eq!(edits.ops.len(), 2);
+    let sources = &edits.project.sources;
+    for op in &edits.ops {
+        let edit = fuzz::Edits::edit(sources, *op);
+        let text = &sources[&edit.path];
+        assert!(text.is_char_boundary(edit.range.start));
+        assert!(text.is_char_boundary(edit.range.end));
+        assert!(edit.range.end - edit.range.start <= 15 * 4);
+    }
+    // A snippet index wraps; one past the last snippet inserts nothing.
+    let mut op = edits.ops[1];
+    op[0] = 0;
+    let path = fuzz::Edits::edit(sources, op).path;
+    let snippets = if path.ends_with(".fsty") {
+        fuzz::SHEET_SNIPPETS
+    } else {
+        fuzz::CONTENT_SNIPPETS
+    };
+    op[4] = u8::try_from(snippets.len()).unwrap();
+    assert_eq!(fuzz::Edits::edit(sources, op).with, "");
+    op[4] = u8::try_from(snippets.len() + 1).unwrap();
+    assert_eq!(fuzz::Edits::edit(sources, op).with, snippets[0]);
+    // At most MAX_EDITS edits.
+    let long = vec![1; 1 + 5 * (fuzz::MAX_EDITS + 3)];
+    assert_eq!(
+        fuzz::Edits::decode(&long).unwrap().ops.len(),
+        fuzz::MAX_EDITS
+    );
+    // The same seed gives the same input.
+    assert_eq!(fuzz::differential_input(7), fuzz::differential_input(7));
+    assert_ne!(fuzz::differential_input(7), fuzz::differential_input(8));
 }

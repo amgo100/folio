@@ -39,7 +39,20 @@ pub(crate) type NativeFn = fn(&mut Vm<'_>, &mut Args) -> EvalResult<Value>;
 enum Flow {
     Break(Span),
     Continue(Span),
-    Return(Option<Value>),
+    Return(Span, Option<Value>),
+}
+
+impl Flow {
+    /// The error of a `break`, `continue` or `return` that reached a place
+    /// it cannot leave: `return` outside of a function, the others outside
+    /// of a loop.
+    fn stray(self) -> EvalError {
+        match self {
+            Flow::Break(span) => EvalError::new(span, "cannot break outside of a loop"),
+            Flow::Continue(span) => EvalError::new(span, "cannot continue outside of a loop"),
+            Flow::Return(span, _) => EvalError::new(span, "cannot return outside of a function"),
+        }
+    }
 }
 
 /// The state of one evaluation: of a file, or of one closure call.
@@ -187,13 +200,11 @@ impl<'a> Vm<'a> {
     /// Evaluates a file's markup into a module.
     pub(crate) fn module(&mut self, markup: ast::Markup<'_>, name: &str) -> EvalResult<Module> {
         let content = self.markup(markup)?;
-        match self.flow.take() {
-            Some(Flow::Break(span)) => bail!(span, "cannot break outside of a loop"),
-            Some(Flow::Continue(span)) => bail!(span, "cannot continue outside of a loop"),
-            Some(Flow::Return(_)) => {
-                bail!(markup.span(), "cannot return outside of a function")
-            }
-            None => {}
+        // A file's markup recovers, so it reported a stray `break`,
+        // `continue` or `return` and went on, leaving none here. Should one
+        // reach this point anyway, it fails the file rather than vanishing.
+        if let Some(flow) = self.flow.take() {
+            return Err(flow.stray().into());
         }
         let scope = self.scopes.layers.pop().unwrap_or_default();
         let failed = std::mem::take(&mut self.poisoned);
@@ -249,9 +260,8 @@ impl<'a> Vm<'a> {
         args.finish()?;
         let value = self.expr(syntax.body())?;
         match self.flow.take() {
-            Some(Flow::Return(value)) => Ok(value.unwrap_or_default()),
-            Some(Flow::Break(span)) => bail!(span, "cannot break outside of a loop"),
-            Some(Flow::Continue(span)) => bail!(span, "cannot continue outside of a loop"),
+            Some(Flow::Return(_, value)) => Ok(value.unwrap_or_default()),
+            Some(flow) => Err(flow.stray().into()),
             None => Ok(value),
         }
     }
@@ -315,6 +325,14 @@ impl<'a> Vm<'a> {
                 continue;
             }
             let content = match self.markup_expr(expr) {
+                // A file's own markup is in no loop or function (code turns
+                // recovery off), so a `break`, `continue` or `return` that
+                // reaches it fails the construct it came from, and the
+                // markup goes on (SPEC §12.2).
+                Ok(_) if self.recover && self.flow.is_some() => {
+                    let flow = self.flow.take().expect("checked above");
+                    self.recover_from(flow.stray().into(), expr)?
+                }
                 Ok(content) => content,
                 Err(stop) => self.recover_from(stop, expr)?,
             };
@@ -710,7 +728,7 @@ impl<'a> Vm<'a> {
             }
             ast::Expr::FuncReturn(ret) => {
                 let value = ret.body().map(|body| self.expr(body)).transpose()?;
-                self.flow = Some(Flow::Return(value));
+                self.flow = Some(Flow::Return(span, value));
                 Ok(Value::None)
             }
             ast::Expr::ScopedRule(rule) => Ok(Value::Content(Content::node(Node::Rule(
@@ -898,7 +916,19 @@ impl<'a> Vm<'a> {
                     MulAssign => Mul,
                     _ => Div,
                 };
-                let value = self.apply(op, lhs, rhs, span)?;
+                // The place is empty now, so that a string, array or content
+                // it held grows in place rather than being copied. If the
+                // operation fails, the place gets its value back: with
+                // error recovery, later uses still see it.
+                let value = match self.apply_keeping(op, lhs, rhs, span) {
+                    Ok(value) => value,
+                    Err((stop, lhs)) => {
+                        // The operation's error is the one to report, even
+                        // if finding the place again fails.
+                        let _ = self.assign(binary.lhs(), false, lhs, span);
+                        return Err(stop);
+                    }
+                };
                 self.assign(binary.lhs(), false, value, span)?;
                 Ok(Value::None)
             }
@@ -928,13 +958,58 @@ impl<'a> Vm<'a> {
     /// Applies an arithmetic operator, counting what a concatenation or
     /// repetition allocates before it happens.
     fn apply(&mut self, op: ast::BinOp, lhs: Value, rhs: Value, span: Span) -> EvalResult<Value> {
+        self.charge_op(op, &lhs, &rhs, span)?;
+        Self::operate(op, lhs, rhs, span)
+    }
+
+    /// Applies an arithmetic operator like [`Vm::apply`], but gives the
+    /// left operand back if it fails. A sum that extends the left operand
+    /// in place, which cannot fail once charged, consumes it without a
+    /// copy; any other operation works on a clone, which is cheap for the
+    /// values it applies to or which it replaces anyway.
+    fn apply_keeping(
+        &mut self,
+        op: ast::BinOp,
+        lhs: Value,
+        rhs: Value,
+        span: Span,
+    ) -> Result<Value, (Stop, Value)> {
+        if let Err(stop) = self.charge_op(op, &lhs, &rhs, span) {
+            return Err((stop, lhs));
+        }
+        let in_place = op == ast::BinOp::Add
+            && matches!(
+                (&lhs, &rhs),
+                (
+                    Value::Str(_) | Value::Content(_),
+                    Value::Str(_) | Value::Content(_)
+                ) | (Value::Array(_), Value::Array(_))
+                    | (Value::Dict(_), Value::Dict(_))
+            );
+        if in_place {
+            let result = Self::operate(op, lhs, rhs, span);
+            debug_assert!(result.is_ok(), "a sum in place cannot fail");
+            return result.map_err(|stop| (stop, Value::None));
+        }
+        Self::operate(op, lhs.clone(), rhs, span).map_err(|stop| (stop, lhs))
+    }
+
+    /// Counts what an arithmetic operator allocates against the memory
+    /// limit, before it runs.
+    fn charge_op(
+        &mut self,
+        op: ast::BinOp,
+        lhs: &Value,
+        rhs: &Value,
+        span: Span,
+    ) -> EvalResult<()> {
         let grows = |v: &Value| {
             matches!(
                 v,
                 Value::Str(_) | Value::Array(_) | Value::Content(_) | Value::Dict(_)
             )
         };
-        let bytes = match (op, &lhs, &rhs) {
+        let bytes = match (op, lhs, rhs) {
             (ast::BinOp::Add, a, b) if grows(a) && grows(b) => b.shallow_size(),
             (ast::BinOp::Mul, a, Value::Int(n)) | (ast::BinOp::Mul, Value::Int(n), a)
                 if grows(a) =>
@@ -944,7 +1019,11 @@ impl<'a> Vm<'a> {
             }
             _ => 0,
         };
-        self.alloc(bytes, span)?;
+        self.alloc(bytes, span)
+    }
+
+    /// Runs an arithmetic operator, which the caller has charged for.
+    fn operate(op: ast::BinOp, lhs: Value, rhs: Value, span: Span) -> EvalResult<Value> {
         match op {
             ast::BinOp::Add => ops::add(lhs, rhs),
             ast::BinOp::Sub => ops::sub(lhs, rhs),
@@ -1471,7 +1550,7 @@ impl<'a> Vm<'a> {
                 self.flow = None;
                 false
             }
-            Some(Flow::Return(_)) => true,
+            Some(Flow::Return(..)) => true,
             None => false,
         }
     }

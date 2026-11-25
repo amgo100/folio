@@ -25,12 +25,19 @@
 //! [`signed_message`] for the file: its path in the channel and the SHA-256
 //! hash of its bytes. Signing the path binds a binary to its version and
 //! platform, so a signed binary of one version cannot pass for another.
+//!
+//! Nothing in a signature orders two copies of `channel.toml`, so the file
+//! carries a `serial` that each publish raises. [`install`] refuses a copy
+//! whose serial is lower than that of the copy it stored last, or equal to
+//! it with other bytes, so that an untrusted transport cannot replay an
+//! older, validly signed copy to lower `security-fixes-from`.
 
 use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use semver::Version;
@@ -51,7 +58,9 @@ pub const SECURITY_FIXES_FROM: Version = Version::new(0, 0, 0);
 
 /// The local toolchain cache: one directory per installed version, named
 /// by the version, holding its `folio` binary, and the last `channel.toml`
-/// that [`install`] verified, with its signature.
+/// that [`install`] verified, with its signature, in one file
+/// (`channel.toml.signed`: the signature on the first line, then the file),
+/// so that the two are replaced together.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Toolchains {
     dir: PathBuf,
@@ -92,10 +101,35 @@ impl Toolchains {
     /// The last `channel.toml` that [`install`] stored, if its signature
     /// verifies with one of `keys`.
     pub fn channel_info(&self, keys: &[VerifyingKey]) -> Option<ChannelInfo> {
-        let bytes = fs::read(self.dir.join(CHANNEL_FILE)).ok()?;
-        let signature = fs::read(self.dir.join(format!("{CHANNEL_FILE}.sig"))).ok()?;
+        let (signature, bytes) = self.stored_channel()?;
         verify(keys, CHANNEL_FILE, &bytes, &signature).ok()?;
         ChannelInfo::parse(std::str::from_utf8(&bytes).ok()?).ok()
+    }
+
+    /// The file that holds the last `channel.toml` that [`install`] stored,
+    /// with its signature. Deleting it forgets what the channel said.
+    pub fn stored_channel_path(&self) -> PathBuf {
+        self.dir.join(STORED_CHANNEL_FILE)
+    }
+
+    /// The signature and bytes of the last `channel.toml` that [`install`]
+    /// stored, unverified.
+    fn stored_channel(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        let mut stored = fs::read(self.stored_channel_path()).ok()?;
+        let end = stored.iter().position(|&b| b == b'\n')?;
+        let bytes = stored.split_off(end + 1);
+        Some((stored, bytes))
+    }
+
+    /// The serial and bytes of the last `channel.toml` that [`install`]
+    /// stored, if its signature verifies with one of `keys`. Only the
+    /// serial is read, which every format of the file keeps, so that a copy
+    /// in a later format, stored by a newer compiler, still counts.
+    fn stored_serial(&self, keys: &[VerifyingKey]) -> Option<(u64, Vec<u8>)> {
+        let (signature, bytes) = self.stored_channel()?;
+        verify(keys, CHANNEL_FILE, &bytes, &signature).ok()?;
+        let serial = ChannelInfo::parse_serial(std::str::from_utf8(&bytes).ok()?).ok()?;
+        Some((serial, bytes))
     }
 }
 
@@ -115,14 +149,22 @@ pub fn security_fixes_from(toolchains: Option<&Toolchains>) -> Version {
 /// The name of the channel's file about its releases.
 const CHANNEL_FILE: &str = "channel.toml";
 
+/// The name of the file in the toolchain cache that holds the last
+/// `channel.toml` installed, with its signature ([`Toolchains`]).
+const STORED_CHANNEL_FILE: &str = "channel.toml.signed";
+
 /// What a channel says about its releases in `channel.toml`:
 ///
 /// ```toml
 /// version = 1                     # the file's format
+/// serial = 12                     # raised by each publish of the file
 /// security-fixes-from = "1.0.0"   # the oldest version still fixed
 /// ```
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ChannelInfo {
+    /// Which publish of the file this is: each publish raises it, so that
+    /// an older copy can be told from a newer one ([`install`]).
+    pub serial: u64,
     /// The oldest compiler version that still receives security fixes.
     pub security_fixes_from: Version,
 }
@@ -146,14 +188,36 @@ impl ChannelInfo {
         if format != Some(Self::FORMAT) {
             return Err(format!("expected `version = {}`", Self::FORMAT));
         }
+        let serial = Self::serial(get("serial"))?;
         let floor = match get("security-fixes-from") {
             Some(DeValue::String(text)) => Version::parse(text).ok(),
             _ => None,
         };
         let floor = floor.ok_or("expected `security-fixes-from`, a version")?;
         Ok(Self {
+            serial,
             security_fixes_from: floor,
         })
+    }
+
+    /// The serial of a `channel.toml` in any format: every format keeps
+    /// `serial` with this meaning.
+    fn parse_serial(text: &str) -> Result<u64, String> {
+        use toml::de::DeTable;
+
+        let root = DeTable::parse(text).map_err(|e| e.message().trim_end().to_owned())?;
+        Self::serial(root.get_ref().get("serial").map(|v| v.get_ref()))
+    }
+
+    /// The value of `serial`, a whole number that is not negative.
+    fn serial(value: Option<&toml::de::DeValue<'_>>) -> Result<u64, String> {
+        match value {
+            Some(toml::de::DeValue::Integer(i)) => {
+                u64::from_str_radix(&i.as_str().replace('_', ""), i.radix()).ok()
+            }
+            _ => None,
+        }
+        .ok_or_else(|| "expected `serial`, a whole number that is not negative".into())
     }
 }
 
@@ -280,6 +344,13 @@ pub trait Fetch {
 /// systems ship, over HTTPS only, or from `file://` URLs for a local
 /// channel. It follows redirects only to the same scheme, and uses the
 /// proxy that the environment names.
+///
+/// A transfer gives up when it moves less than 1,000 bytes a second for a
+/// minute, or when it has taken an hour; an hour gets a 100 MB binary
+/// through at 30 kB/s, slower than a crowded school network. A
+/// failed transfer is tried again up to three times, but no try starts
+/// after an hour, so a transfer that never finishes ends after about two
+/// hours.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Curl;
 
@@ -290,30 +361,58 @@ impl Fetch for Curl {
             Some(("file", _)) => "=file",
             _ => return Err("Folio downloads only over HTTPS".into()),
         };
-        let output = Command::new("curl")
-            .args(["--fail", "--silent", "--show-error", "--location"])
-            .args(["--proto", scheme, "--proto-redir", scheme])
-            .args(["--retry", "3", "--connect-timeout", "30"])
-            .args(["--max-filesize", "1073741824"])
-            .arg(url)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| match e.kind() {
-                io::ErrorKind::NotFound => {
-                    "Folio downloads with `curl`, which is not installed".into()
-                }
-                _ => format!("cannot run `curl`: {e}"),
-            })?;
-        if output.status.success() {
-            Ok(output.stdout)
-        } else {
-            let message = String::from_utf8_lossy(&output.stderr);
-            let message = message.trim().trim_start_matches("curl: ");
-            Err(match message {
-                "" => format!("`curl` failed ({})", output.status),
-                message => message.to_owned(),
-            })
-        }
+        // Into a file, not to standard output: curl truncates a file before
+        // it tries a transfer again, but would append a second copy to a
+        // stream. The file is created new, so curl writes to nothing else; a
+        // name left by a process that had the same id is skipped.
+        static DOWNLOADS: AtomicU64 = AtomicU64::new(0);
+        let file = loop {
+            let n = DOWNLOADS.fetch_add(1, Ordering::Relaxed);
+            let file = std::env::temp_dir()
+                .join(format!("folio-download-{}-{n}.part", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file)
+            {
+                Ok(_) => break file,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 1000 => {}
+                Err(e) => return Err(format!("cannot create `{}`: {e}", file.display())),
+            }
+        };
+        let result = curl(url, scheme, &file);
+        let _ = fs::remove_file(&file);
+        result
+    }
+}
+
+/// Downloads a URL with `curl` into a file, and returns its bytes.
+fn curl(url: &str, scheme: &str, file: &Path) -> Result<Vec<u8>, String> {
+    let output = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--location"])
+        .args(["--proto", scheme, "--proto-redir", scheme])
+        .args(["--retry", "3", "--retry-max-time", "3600"])
+        .args(["--connect-timeout", "30", "--max-time", "3600"])
+        .args(["--speed-limit", "1000", "--speed-time", "60"])
+        .args(["--max-filesize", "1073741824"])
+        .arg("--output")
+        .arg(file)
+        .arg(url)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => "Folio downloads with `curl`, which is not installed".into(),
+            _ => format!("cannot run `curl`: {e}"),
+        })?;
+    if output.status.success() {
+        fs::read(file).map_err(|e| format!("cannot read `{}`: {e}", file.display()))
+    } else {
+        let message = String::from_utf8_lossy(&output.stderr);
+        let message = message.trim().trim_start_matches("curl: ");
+        Err(match message {
+            "" => format!("`curl` failed ({})", output.status),
+            message => message.to_owned(),
+        })
     }
 }
 
@@ -336,6 +435,11 @@ pub struct Installed {
 /// signatures verify with one of the channel's keys. The binary appears in
 /// the cache whole or not at all. A version that is installed already is
 /// left as it is.
+///
+/// Refuses, before downloading the binary, a `channel.toml` whose serial
+/// is lower than that of the one stored in `toolchains`, or the same with
+/// other bytes ([`InstallError::ChannelReplayed`]): the transport may be
+/// replaying an older, validly signed copy.
 pub fn install(
     version: &Version,
     channel: &Channel,
@@ -357,6 +461,14 @@ pub fn install(
         .map_err(|e| e.to_string())
         .and_then(ChannelInfo::parse)
         .map_err(InstallError::ChannelInfo)?;
+    if let Some((stored, stored_bytes)) = toolchains.stored_serial(&channel.keys)
+        && (info.serial < stored || (info.serial == stored && info_bytes != stored_bytes))
+    {
+        return Err(InstallError::ChannelReplayed {
+            serial: info.serial,
+            stored,
+        });
+    }
     let binary_path = Channel::binary_path(version);
     let (binary, _) = channel.fetch(fetch, &binary_path, &binary_path)?;
 
@@ -390,6 +502,7 @@ pub fn install(
         let _ = fs::remove_dir_all(&staging);
         // Another install of the same version finished first.
         if let Some(path) = toolchains.get(version) {
+            store_channel(toolchains, channel, &info, &info_bytes, &info_signature);
             return Ok(Installed {
                 path,
                 already: true,
@@ -403,22 +516,57 @@ pub fn install(
     // it again when they read it. The version is installed whether or not
     // this is stored: without it, builds know only what they were released
     // with.
-    for (name, bytes) in [
-        (CHANNEL_FILE.to_owned(), &info_bytes[..]),
-        (format!("{CHANNEL_FILE}.sig"), &info_signature[..]),
-    ] {
-        let temporary = dir.join(format!(".{name}.{}", std::process::id()));
-        let stored =
-            fs::write(&temporary, bytes).and_then(|()| fs::rename(&temporary, dir.join(&name)));
-        if stored.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-    }
+    store_channel(toolchains, channel, &info, &info_bytes, &info_signature);
     Ok(Installed {
         path,
         already: false,
         info: Some(info),
     })
+}
+
+/// Stores a `channel.toml` of `channel`, verified, and its signature in the
+/// toolchain cache, unless the copy stored there already is as new. A lock
+/// file keeps concurrent installs from storing an older copy over a newer
+/// one between the check and the write; where the file system cannot
+/// lock, it stores without one. One file holds both, so the copy and its
+/// signature are replaced together. Fails silently.
+fn store_channel(
+    toolchains: &Toolchains,
+    channel: &Channel,
+    info: &ChannelInfo,
+    bytes: &[u8],
+    signature: &[u8],
+) {
+    let dir = toolchains.dir();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(".channel.lock"));
+    // Held until `lock` is dropped, when the function returns. Where the
+    // file system cannot lock (some network file systems), the copy is
+    // stored without the lock: an unlikely race is better than storing
+    // nothing.
+    if let Ok(lock) = &lock {
+        let _ = lock.lock();
+    }
+    if toolchains
+        .stored_serial(&channel.keys)
+        .is_some_and(|(stored, _)| stored >= info.serial)
+    {
+        return;
+    }
+    let Ok(signature) = std::str::from_utf8(signature) else {
+        return;
+    };
+    let mut contents = format!("{}\n", signature.trim()).into_bytes();
+    contents.extend_from_slice(bytes);
+    let temporary = dir.join(format!(".{STORED_CHANNEL_FILE}.{}", std::process::id()));
+    let stored = fs::write(&temporary, &contents)
+        .and_then(|()| fs::rename(&temporary, dir.join(STORED_CHANNEL_FILE)));
+    if stored.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
 }
 
 /// Lets the owner run a file.
@@ -457,6 +605,15 @@ pub enum InstallError {
     },
     /// The channel's `channel.toml` cannot be read.
     ChannelInfo(String),
+    /// The channel's `channel.toml` is older than the one stored by an
+    /// earlier install, or as old with other contents: it may be an old
+    /// copy replayed by the transport.
+    ChannelReplayed {
+        /// The serial of the downloaded file.
+        serial: u64,
+        /// The serial of the stored file.
+        stored: u64,
+    },
     /// The toolchain cache cannot be written.
     Io {
         /// The path written.
@@ -485,6 +642,17 @@ impl Display for InstallError {
                     "the release channel's {CHANNEL_FILE} is invalid: {message}"
                 )
             }
+            Self::ChannelReplayed { serial, stored } if serial < stored => write!(
+                f,
+                "the release channel's {CHANNEL_FILE} is serial {serial}, older than serial \
+                 {stored} from an earlier install, so it may be an old copy replayed on the way; \
+                 nothing was installed"
+            ),
+            Self::ChannelReplayed { serial, .. } => write!(
+                f,
+                "the release channel's {CHANNEL_FILE} is serial {serial}, as the one from an \
+                 earlier install is, but its contents differ; nothing was installed"
+            ),
             Self::Io { path, error } => write!(f, "cannot write `{}`: {error}", path.display()),
         }
     }
