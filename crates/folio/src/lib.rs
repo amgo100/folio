@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 
 pub mod diag;
+pub mod loader;
 mod pipeline;
 pub mod span_map;
 pub mod toolchain;
@@ -38,13 +39,14 @@ use std::fmt::{self, Display, Formatter};
 use std::panic::AssertUnwindSafe;
 
 use ecow::EcoVec;
+use folio_core::db::Read;
 use folio_core::diag::Reported;
 use rayon::prelude::*;
 
 pub use folio_component::{
     Abs, Fragment, FragmentItem, GlyphRun, Name, Point, Ratio, Registry, Size, SourceRef, Target,
 };
-pub use folio_core::db::{BuildMode, Bytes};
+pub use folio_core::db::{BuildMode, Bytes, FileKind, FileRead};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::eval;
 pub use folio_core::eval::Limits;
@@ -65,7 +67,7 @@ pub use folio_text::{
     Shaped, mark_breaks,
 };
 
-pub use self::world::{Event, World, WorldBuilder, WorldError};
+pub use self::world::{Event, Snapshot, World, WorldBuilder, WorldError};
 
 /// The version of this compiler, which `folio.toml` pins for byte-identical
 /// output (SPEC §2.4).
@@ -99,8 +101,17 @@ pub fn compile(
             .filter(|reported| seen.insert(&reported.0))
             .map(|reported| reported.0.clone())
             .collect();
+        // A file read twice, or read as a source and as data, is listed
+        // where it was first read.
+        let mut read = HashSet::new();
+        let files = pipeline::compile_build::accumulated::<Read>(db, build)
+            .into_iter()
+            .filter(|r| read.insert(&r.0.path))
+            .map(|r| r.0.clone())
+            .collect();
         Compiled {
             sources: built.sources.clone(),
+            files,
             output: built.output.clone(),
             diagnostics,
         }
@@ -113,6 +124,11 @@ pub struct Compiled {
     /// The source files the build read, in the order they were found. A
     /// watcher recompiles when one of them changes.
     pub sources: EcoVec<ProjectPath>,
+    /// Every file the build read or tried to read, with how it read it, in
+    /// the order they were first read: its sources, and the data files and
+    /// images that evaluation read. A file named but missing is listed too.
+    /// A watcher rebuilds when one of them is added, changed or removed.
+    pub files: EcoVec<FileRead>,
     /// The file the target writes: a PDF for [`Target::Pdf`]. `None` when
     /// the document could not be styled, or the target writes no file or
     /// has no writer yet (DOCX and PPTX until M4 and M5, live until M7).

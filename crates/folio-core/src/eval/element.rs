@@ -21,7 +21,7 @@ use super::error::{EvalError, EvalResult, StrResult, bail};
 use super::ops::a_type;
 use super::value::{Angle, Arg, Args, Array, Dict, Duration, Fraction, Length, Value};
 use super::vm::Vm;
-use crate::db::data_file;
+use crate::db::{FileKind, data_file, report_read};
 use crate::model::{self, schema};
 
 /// The universal fields whose value may be written as a bare keyword, as a
@@ -404,6 +404,7 @@ impl Vm<'_> {
                     .into(),
             );
         };
+        report_read(self.db, path.clone(), FileKind::Image);
         if data_file(self.db, self.project, path.clone()).is_none() {
             bail!(span, "file `{}` not found", path.as_str());
         }

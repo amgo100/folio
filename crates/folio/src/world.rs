@@ -1,6 +1,6 @@
 //! The world: everything a compilation reads, held in the query database.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io;
 use std::num::NonZeroU16;
@@ -32,9 +32,13 @@ use crate::diag::Files;
 /// must drop it once its compilation returns, or the next edit waits for
 /// ever.
 ///
-/// File ids are assigned when a path is first set and never reused, so
-/// diagnostics stay valid for the life of the world; [`World::MANIFEST`] and
-/// [`World::LOCKFILE`] are reserved.
+/// A source's file id is assigned when its path is first set, and freed
+/// when the source is removed, for a later source to take, so a world that
+/// sees any number of paths over its life never runs out of ids. The
+/// diagnostics of a compilation therefore stay valid until a source is
+/// removed: resolve them first, or against a [`Snapshot`], which keeps the
+/// files as they were and holds no handle on the database.
+/// [`World::MANIFEST`] and [`World::LOCKFILE`] are reserved.
 ///
 /// The world also gives every node of its sources a [`NodeId`] that lasts
 /// across edits ([`World::node_id`], SPEC §12.4). Node ids are kept beside
@@ -297,6 +301,12 @@ impl World {
         }
     }
 
+    /// The font files besides the bundled ones, as [`Self::set_fonts`] set
+    /// them.
+    pub fn font_files(&self) -> &EcoVec<FontFile> {
+        self.project.fonts(&self.db)
+    }
+
     /// Reads the fonts of the project's font directory (`fonts/` next to
     /// `folio.toml`, which is in `root`) and takes the fonts that
     /// `folio.lock` locks from the font cache, if one is given, and sets
@@ -321,7 +331,8 @@ impl World {
 
     /// Replaces the faces installed on the machine, as
     /// [`folio_fonts::system_fonts`] finds them. Their files are read only
-    /// when a document uses them.
+    /// when a document uses them, and each at most once until the system
+    /// fonts change, so a file that changes on disk meanwhile is not seen.
     pub fn set_system_fonts(&mut self, fonts: impl IntoIterator<Item = SystemFont>) {
         let fonts: EcoVec<SystemFont> = fonts.into_iter().collect();
         if &fonts != self.project.system_fonts(&self.db) {
@@ -329,6 +340,9 @@ impl World {
                 .set_system_fonts(&mut self.db)
                 .with_durability(Durability::MEDIUM)
                 .to(fonts);
+            // No other handle is left, and every query that read a face
+            // re-runs.
+            self.db.system_faces = Arc::default();
         }
     }
 
@@ -415,8 +429,8 @@ impl World {
         Ok(reparsed)
     }
 
-    /// Removes a source. Its file id stays reserved for its path. Returns
-    /// whether there was one.
+    /// Removes a source and frees its file id, which a source added later
+    /// may take. Returns whether there was one.
     pub fn remove_source(&mut self, path: &str) -> bool {
         let Some(path) = ProjectPath::new(path) else {
             return false;
@@ -427,11 +441,53 @@ impl World {
         };
         let id = file.source(&self.db).id();
         Arc::make_mut(&mut self.nodes).remove(id);
+        Arc::make_mut(&mut self.ids).release(&path);
         self.project
             .set_sources(&mut self.db)
             .with_durability(Durability::LOW)
             .to(sources);
         true
+    }
+
+    /// The paths of the world's sources, in path order.
+    pub fn source_paths(&self) -> impl Iterator<Item = &ProjectPath> {
+        self.project.sources(&self.db).keys()
+    }
+
+    /// The paths of the world's image and data files, in path order.
+    pub fn file_paths(&self) -> impl Iterator<Item = &ProjectPath> {
+        self.project.files(&self.db).keys()
+    }
+
+    /// The contents of an image or data file, if the world has one at the
+    /// path.
+    pub fn file(&self, path: &str) -> Option<Bytes> {
+        let path = ProjectPath::new(path)?;
+        let file = self.project.files(&self.db).get(&path)?;
+        Some(file.bytes(&self.db).clone())
+    }
+
+    /// The files that diagnostics point into as they are now: the sources,
+    /// `folio.toml` and `folio.lock`. A snapshot is cheap to make, holds no
+    /// handle on the database, so it does not hold up edits, and stays valid
+    /// after them: a language server resolves a compilation's diagnostics
+    /// against the snapshot taken with it while the next edit goes ahead.
+    pub fn snapshot(&self) -> Snapshot {
+        let sources = self
+            .project
+            .sources(&self.db)
+            .values()
+            .map(|file| {
+                let source = file.source(&self.db);
+                (source.id(), source.clone())
+            })
+            .collect();
+        Snapshot {
+            ids: self.ids.clone(),
+            sources: Arc::new(sources),
+            manifest_text: self.manifest_text.clone(),
+            lockfile_text: self.lockfile_text.clone(),
+        }
     }
 
     /// A source, if the world has one at the path.
@@ -490,14 +546,11 @@ impl World {
         match id {
             Self::MANIFEST => Some("folio.toml"),
             Self::LOCKFILE => Some("folio.lock"),
-            _ => {
-                let index = usize::from(id.into_raw().get()).checked_sub(FIRST_SOURCE_ID)?;
-                self.ids.paths.get(index).map(ProjectPath::as_str)
-            }
+            _ => self.ids.path(id).map(ProjectPath::as_str),
         }
     }
 
-    /// The file id of a source path, if one was ever set.
+    /// The file id of a source path, if the world has a source there.
     pub fn id(&self, path: &str) -> Option<FileId> {
         self.ids.by_path.get(&ProjectPath::new(path)?).copied()
     }
@@ -545,16 +598,7 @@ impl World {
         if let Some(&id) = self.ids.by_path.get(path) {
             return Ok(id);
         }
-        let raw = u16::try_from(FIRST_SOURCE_ID + self.ids.paths.len())
-            .ok()
-            .and_then(NonZeroU16::new)
-            .filter(|&raw| FileId::from_raw(raw) != FileId::DETACHED)
-            .ok_or(WorldError::TooManyFiles)?;
-        let id = FileId::from_raw(raw);
-        let ids = Arc::make_mut(&mut self.ids);
-        ids.by_path.insert(path.clone(), id);
-        ids.paths.push(path.clone());
-        Ok(id)
+        Arc::make_mut(&mut self.ids).assign(path)
     }
 }
 
@@ -583,7 +627,7 @@ impl Debug for World {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("World")
             .field("manifest", self.manifest())
-            .field("sources", &self.ids.paths)
+            .field("sources", &self.ids.by_path)
             .finish_non_exhaustive()
     }
 }
@@ -591,12 +635,109 @@ impl Debug for World {
 /// The raw id of the first source; 1 and 2 are the manifest and lockfile.
 const FIRST_SOURCE_ID: usize = 3;
 
-/// The file ids given out so far.
+/// The file ids of the world's sources.
 #[derive(Debug, Clone, Default)]
 struct FileIds {
     by_path: BTreeMap<ProjectPath, FileId>,
-    /// The path of each id, from [`FIRST_SOURCE_ID`] on.
-    paths: Vec<ProjectPath>,
+    /// The path of each id, from [`FIRST_SOURCE_ID`] on; `None` for an id
+    /// that was freed.
+    paths: Vec<Option<ProjectPath>>,
+    /// The freed ids, by index into `paths`, which are given out again
+    /// lowest first.
+    free: BTreeSet<usize>,
+}
+
+impl FileIds {
+    /// The path of an id.
+    fn path(&self, id: FileId) -> Option<&ProjectPath> {
+        let index = usize::from(id.into_raw().get()).checked_sub(FIRST_SOURCE_ID)?;
+        self.paths.get(index)?.as_ref()
+    }
+
+    /// Gives a path an id: the lowest freed one, or a new one.
+    fn assign(&mut self, path: &ProjectPath) -> Result<FileId, WorldError> {
+        let index = match self.free.first() {
+            Some(&index) => index,
+            None => self.paths.len(),
+        };
+        let raw = u16::try_from(FIRST_SOURCE_ID + index)
+            .ok()
+            .and_then(NonZeroU16::new)
+            .filter(|&raw| FileId::from_raw(raw) != FileId::DETACHED)
+            .ok_or(WorldError::TooManyFiles)?;
+        let id = FileId::from_raw(raw);
+        if index == self.paths.len() {
+            self.paths.push(Some(path.clone()));
+        } else {
+            self.free.remove(&index);
+            self.paths[index] = Some(path.clone());
+        }
+        self.by_path.insert(path.clone(), id);
+        Ok(id)
+    }
+
+    /// Frees the id of a path.
+    fn release(&mut self, path: &ProjectPath) {
+        if let Some(id) = self.by_path.remove(path) {
+            let index = usize::from(id.into_raw().get()) - FIRST_SOURCE_ID;
+            self.paths[index] = None;
+            self.free.insert(index);
+        }
+    }
+}
+
+/// The files that diagnostics point into, as they were when
+/// [`World::snapshot`] took them: the sources, `folio.toml` and
+/// `folio.lock`. It holds no handle on the database, so a host can keep it
+/// while the world is edited.
+#[derive(Clone)]
+pub struct Snapshot {
+    ids: Arc<FileIds>,
+    sources: Arc<BTreeMap<FileId, Source>>,
+    manifest_text: Lines<String>,
+    lockfile_text: Option<Lines<String>>,
+}
+
+impl Snapshot {
+    /// The path of a file id: a source, `folio.toml` or `folio.lock`.
+    pub fn path(&self, id: FileId) -> Option<&str> {
+        match id {
+            World::MANIFEST => Some("folio.toml"),
+            World::LOCKFILE => Some("folio.lock"),
+            _ => self.ids.path(id).map(ProjectPath::as_str),
+        }
+    }
+
+    /// The source with a file id.
+    pub fn source(&self, id: FileId) -> Option<&Source> {
+        self.sources.get(&id)
+    }
+}
+
+impl Files for Snapshot {
+    fn path(&self, id: FileId) -> Option<EcoString> {
+        Snapshot::path(self, id).map(EcoString::from)
+    }
+
+    fn source(&self, id: FileId) -> Option<Source> {
+        Snapshot::source(self, id).cloned()
+    }
+
+    fn lines(&self, id: FileId) -> Option<Lines<String>> {
+        match id {
+            World::MANIFEST => Some(self.manifest_text.clone()),
+            World::LOCKFILE => self.lockfile_text.clone(),
+            _ => Files::source(self, id).map(|source| source.lines().clone()),
+        }
+    }
+}
+
+impl Debug for Snapshot {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Snapshot")
+            .field("sources", &self.ids.by_path)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a world could not take a file or an edit.
@@ -672,6 +813,9 @@ pub(crate) struct Database {
     layout: Arc<folio_core::layout::Cache>,
     /// Shared by every handle of the world.
     pages: Arc<folio_core::layout::PageCache>,
+    /// Shared by every handle of the world, and replaced when the system
+    /// fonts are.
+    system_faces: Arc<folio_core::fonts::SystemFaces>,
 }
 
 impl Database {
@@ -699,6 +843,7 @@ impl Database {
             text: Arc::default(),
             layout: Arc::default(),
             pages: Arc::default(),
+            system_faces: Arc::default(),
         }
     }
 }
@@ -718,5 +863,9 @@ impl folio_core::db::Db for Database {
 
     fn page_cache(&self) -> &folio_core::layout::PageCache {
         &self.pages
+    }
+
+    fn system_faces(&self) -> &folio_core::fonts::SystemFaces {
+        &self.system_faces
     }
 }

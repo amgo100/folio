@@ -73,20 +73,8 @@ fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
     };
     diagnostics.extend(toolchain::check(world.manifest(), current));
 
-    // The outputs of every build, which are not inputs of the next.
-    let outputs: Vec<_> = world
-        .builds()
-        .iter()
-        .filter_map(|(variant, target)| world.manifest().output_path(variant.as_ref(), *target))
-        .filter_map(|path| ProjectPath::new(&path))
-        .collect();
-    let outputs: Vec<&str> = outputs.iter().map(ProjectPath::as_str).collect();
-    let loaded = project::read_files(&root, &outputs, &mut diagnostics)
-        .map_err(|e| format!("cannot read the project directory: {e}"))
-        .and_then(|files| {
-            project::load(&mut world, files, &mut diagnostics).map_err(|e| e.to_string())
-        });
-    if let Err(message) = loaded {
+    // The outputs of every build are not inputs of the next.
+    if let Err(message) = project::load(&root, &mut world, &mut diagnostics) {
         return fail(message);
     }
     let cache = FontCache::default_dir().map(FontCache::new);

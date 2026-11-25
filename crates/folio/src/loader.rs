@@ -1,0 +1,1014 @@
+//! Loading a project from disk into a [`World`], and keeping the world in
+//! step with the disk (SPEC §12.1, §12.2).
+//!
+//! A [`Loader`] reads a project directory: `folio.toml` and `folio.lock`
+//! into a world ([`Loader::world`]), and every other file of the project as
+//! a source or a data file ([`Loader::load`]). A host that watches the
+//! project, such as `folio watch` or the language server, hands the paths
+//! that file-system events name to [`Loader::update`], which reads them
+//! again and changes the world to match; it does not watch itself.
+//!
+//! The files of a project are every file under its directory except
+//! `folio.toml` and `folio.lock`, hidden files and directories (whose names
+//! start with `.`), the font directory (read by [`World::load_fonts`]) and
+//! the files its builds write. A symbolic link is followed only to a file or
+//! directory inside the project, and not to a directory it is in; an output
+//! is left out by the path it is written to, so a link that leads to it
+//! does not make it an input.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Display, Formatter};
+use std::fs;
+use std::io;
+use std::path::{Component, Path, PathBuf};
+
+use folio_fonts::{FontCache, PROJECT_FONT_DIR};
+use folio_syntax::DiagSpan;
+
+use crate::diag::TextFiles;
+use crate::{Diagnostic, ProjectError, ProjectPath, World, WorldBuilder, WorldError};
+
+/// The manifest's file name.
+pub const MANIFEST: &str = "folio.toml";
+/// The lockfile's file name.
+pub const LOCKFILE: &str = "folio.lock";
+
+/// The project directory: `root` if given, which must hold `folio.toml`,
+/// or else the current directory or the nearest directory above it that
+/// holds one.
+pub fn find_root(root: Option<&Path>) -> Result<PathBuf, LoadError> {
+    if let Some(root) = root {
+        return if root.join(MANIFEST).is_file() {
+            Ok(root.to_path_buf())
+        } else {
+            Err(LoadError::NoManifest {
+                dir: root.to_path_buf(),
+                above: false,
+            })
+        };
+    }
+    let cwd = std::env::current_dir().map_err(|error| LoadError::Io {
+        what: "the current directory".into(),
+        error,
+    })?;
+    cwd.ancestors()
+        .find(|dir| dir.join(MANIFEST).is_file())
+        .map(Path::to_path_buf)
+        .ok_or(LoadError::NoManifest {
+            dir: cwd,
+            above: true,
+        })
+}
+
+/// Why a project could not be loaded.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum LoadError {
+    /// The directory, or with `above` any directory above it, holds no
+    /// `folio.toml`.
+    NoManifest {
+        /// The directory.
+        dir: PathBuf,
+        /// Whether the directories above it were searched too.
+        above: bool,
+    },
+    /// A file or directory could not be read.
+    Io {
+        /// What could not be read, as a message names it.
+        what: String,
+        /// Why.
+        error: io::Error,
+    },
+    /// `folio.toml` or `folio.lock` has errors.
+    Project(ProjectErrors),
+    /// The world could not take a file.
+    World(WorldError),
+}
+
+impl Display for LoadError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoManifest { dir, above: false } => {
+                write!(f, "`{}` holds no {MANIFEST}", dir.display())
+            }
+            Self::NoManifest { dir, above: true } => write!(
+                f,
+                "no {MANIFEST} in `{}` or any directory above it",
+                dir.display()
+            ),
+            Self::Io { what, error } => write!(f, "cannot read {what}: {error}"),
+            Self::Project(errors) => {
+                let n = errors.diagnostics.len();
+                write!(
+                    f,
+                    "{n} error{} in the project files",
+                    if n == 1 { "" } else { "s" }
+                )
+            }
+            Self::World(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+impl From<WorldError> for LoadError {
+    fn from(error: WorldError) -> Self {
+        Self::World(error)
+    }
+}
+
+/// The errors of `folio.toml` or `folio.lock`, with the texts they point
+/// into: the world keeps the last valid manifest and lockfile, not the
+/// texts that failed, so resolve them against `files`.
+#[derive(Debug, Clone)]
+pub struct ProjectErrors {
+    /// The texts of `folio.toml` and `folio.lock`, under [`World::MANIFEST`]
+    /// and [`World::LOCKFILE`].
+    pub files: TextFiles,
+    /// The errors.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl ProjectErrors {
+    fn new(manifest: Option<&str>, lockfile: Option<&str>, errors: Vec<ProjectError>) -> Self {
+        let mut files = TextFiles::new();
+        if let Some(text) = manifest {
+            files.insert(World::MANIFEST, MANIFEST, text);
+        }
+        if let Some(text) = lockfile {
+            files.insert(World::LOCKFILE, LOCKFILE, text);
+        }
+        Self {
+            files,
+            diagnostics: errors.into_iter().map(Diagnostic::from).collect(),
+        }
+    }
+}
+
+/// A file of the project, by its path relative to the project directory.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ProjectFile {
+    /// The path, with `/` as separator.
+    pub path: String,
+    /// The file's contents.
+    pub bytes: Vec<u8>,
+}
+
+/// What [`Loader::update`] changed.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct Update {
+    /// The paths whose contents the world now has differently: sources and
+    /// data files set or removed, `folio.toml`, `folio.lock`, and files of
+    /// the font directory. Empty when nothing changed, so there is nothing
+    /// to rebuild.
+    pub changed: BTreeSet<String>,
+    /// The errors of a new `folio.toml` or `folio.lock`, which the world did
+    /// not take.
+    pub errors: Option<ProjectErrors>,
+}
+
+/// Reads a project directory into a [`World`] and keeps it in step with the
+/// disk. See the [module documentation](self) for which files are read.
+#[derive(Debug, Clone)]
+pub struct Loader {
+    root: PathBuf,
+    canonical: PathBuf,
+    /// The project paths of the files the builds write.
+    outputs: BTreeSet<String>,
+    /// The links found by the last reads, by project path, with the
+    /// canonical paths they lead to.
+    links: BTreeMap<String, PathBuf>,
+    font_cache: Option<FontCache>,
+}
+
+impl Loader {
+    /// A loader for the project in `root`, the directory that holds
+    /// `folio.toml`. Fails when the directory cannot be read.
+    pub fn new(root: &Path) -> Result<Self, LoadError> {
+        let canonical = root.canonicalize().map_err(|error| LoadError::Io {
+            what: "the project directory".into(),
+            error,
+        })?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            canonical,
+            outputs: BTreeSet::new(),
+            links: BTreeMap::new(),
+            font_cache: None,
+        })
+    }
+
+    /// Takes the fonts that `folio.lock` locks from a font cache when it
+    /// reads the project's fonts again.
+    pub fn with_font_cache(mut self, cache: Option<FontCache>) -> Self {
+        self.font_cache = cache;
+        self
+    }
+
+    /// The project directory, as given.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Reads `folio.toml`.
+    pub fn read_manifest(&self) -> Result<String, LoadError> {
+        fs::read_to_string(self.root.join(MANIFEST)).map_err(|error| LoadError::Io {
+            what: MANIFEST.into(),
+            error,
+        })
+    }
+
+    /// Reads `folio.lock`, if the project has one.
+    pub fn read_lockfile(&self) -> Result<Option<String>, LoadError> {
+        match fs::read_to_string(self.root.join(LOCKFILE)) {
+            Ok(text) => Ok(Some(text)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(LoadError::Io {
+                what: LOCKFILE.into(),
+                error,
+            }),
+        }
+    }
+
+    /// Builds a world from the project's `folio.toml` and `folio.lock`, and
+    /// leaves out the files its builds write from what it reads from then
+    /// on.
+    pub fn world(&mut self, builder: WorldBuilder) -> Result<World, LoadError> {
+        let manifest = self.read_manifest()?;
+        let lockfile = self.read_lockfile()?;
+        let world = builder
+            .build(&manifest, lockfile.as_deref())
+            .map_err(|errors| {
+                LoadError::Project(ProjectErrors::new(
+                    Some(&manifest),
+                    lockfile.as_deref(),
+                    errors,
+                ))
+            })?;
+        self.set_outputs(&world);
+        Ok(world)
+    }
+
+    /// Leaves out the files that the builds of the world's manifest write
+    /// ([`World::builds`]). [`Self::world`] and [`Self::update`] do this
+    /// for their worlds' manifests.
+    pub fn set_outputs(&mut self, world: &World) {
+        self.outputs = world
+            .builds()
+            .iter()
+            .filter_map(|(variant, target)| world.manifest().output_path(variant.as_ref(), *target))
+            .filter_map(|path| ProjectPath::new(&path))
+            .map(|path| path.as_str().to_owned())
+            .collect();
+    }
+
+    /// Reads the files of the project, in path order. Warns of files and
+    /// directories that cannot be read; fails only when the project
+    /// directory cannot.
+    pub fn read_files(
+        &mut self,
+        warnings: &mut Vec<Diagnostic>,
+    ) -> Result<Vec<ProjectFile>, LoadError> {
+        let mut files = Vec::new();
+        let mut links = BTreeMap::new();
+        self.scan(
+            "",
+            vec![self.canonical.clone()],
+            &mut files,
+            &mut links,
+            warnings,
+        )
+        .map_err(|error| LoadError::Io {
+            what: "the project directory".into(),
+            error,
+        })?;
+        self.links = links;
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+
+    /// Reads the files of the project into a world: `.fol` and `.fsty` files
+    /// as sources, the others as data files, and removes the sources and
+    /// data files the project no longer has. Warns of files that cannot be
+    /// read and of sources that are not UTF-8; leaves out files whose paths
+    /// a document cannot name. Returns the paths it changed.
+    pub fn load(
+        &mut self,
+        world: &mut World,
+        warnings: &mut Vec<Diagnostic>,
+    ) -> Result<BTreeSet<String>, LoadError> {
+        let files = self.read_files(warnings)?;
+        let mut changed = BTreeSet::new();
+        let found: BTreeSet<String> = files.iter().map(|f| f.path.clone()).collect();
+        for path in world_paths(world, "") {
+            if !found.contains(&path) && remove(world, &path) {
+                changed.insert(path);
+            }
+        }
+        for file in files {
+            set(world, file, &mut changed, warnings)?;
+        }
+        Ok(changed)
+    }
+
+    /// Brings the world in step with the disk at the given paths: those
+    /// that file-system events name, whether a file or directory was
+    /// created, changed, removed or renamed. A path that no longer exists
+    /// is removed from the world with everything under it; a directory is
+    /// read again with everything under it; `folio.toml` and `folio.lock`
+    /// are parsed again, and a valid one replaces the world's; a change in
+    /// the font directory, or of the lockfile, reads the project's fonts
+    /// again. Paths outside the project, hidden ones and outputs are
+    /// ignored. A path that a link inside the project leads to is updated
+    /// under the link's path too.
+    pub fn update<P: AsRef<Path>>(
+        &mut self,
+        world: &mut World,
+        paths: impl IntoIterator<Item = P>,
+        warnings: &mut Vec<Diagnostic>,
+    ) -> Result<Update, LoadError> {
+        let mut update = Update::default();
+        let mut relative = BTreeSet::new();
+        for path in paths {
+            relative.extend(self.project_paths(path.as_ref()));
+        }
+        // A directory read again covers the paths under it.
+        let mut done: Vec<String> = Vec::new();
+        for rel in relative {
+            if done.iter().any(|d| d.is_empty() || is_under(&rel, d)) {
+                continue;
+            }
+            self.refresh(world, &rel, &mut update, warnings)?;
+            done.push(rel);
+        }
+        Ok(update)
+    }
+
+    /// The project paths that an event's path stands for: its own, and
+    /// those of the links that lead to it.
+    fn project_paths(&self, path: &Path) -> Vec<String> {
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        let mut out = Vec::new();
+        for base in [&self.root, &self.canonical] {
+            if let Some(rel) = path.strip_prefix(base).ok().and_then(relative) {
+                out.push(rel);
+            }
+        }
+        // The path the event names may be gone: resolve its directory.
+        let resolved = path.canonicalize().ok().or_else(|| {
+            let dir = path.parent()?.canonicalize().ok()?;
+            Some(dir.join(path.file_name()?))
+        });
+        if let Some(resolved) = resolved {
+            if let Some(rel) = resolved
+                .strip_prefix(&self.canonical)
+                .ok()
+                .and_then(relative)
+            {
+                out.push(rel);
+            }
+            for (link, target) in &self.links {
+                if let Ok(rest) = resolved.strip_prefix(target)
+                    && let Some(rest) = relative(rest)
+                {
+                    out.push(join(link, &rest));
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Brings the world in step with the disk at one project path.
+    fn refresh(
+        &mut self,
+        world: &mut World,
+        rel: &str,
+        update: &mut Update,
+        warnings: &mut Vec<Diagnostic>,
+    ) -> Result<(), LoadError> {
+        if rel.split('/').any(|name| name.starts_with('.')) {
+            return Ok(());
+        }
+        if rel.is_empty() {
+            update.changed.extend(self.load(world, warnings)?);
+            return Ok(());
+        }
+        if rel == MANIFEST {
+            return self.refresh_manifest(world, update, warnings);
+        }
+        if rel == LOCKFILE {
+            return self.refresh_lockfile(world, update, warnings);
+        }
+        if is_under(rel, PROJECT_FONT_DIR) {
+            let before = world.font_files().clone();
+            self.load_fonts(world, warnings);
+            if *world.font_files() != before {
+                update.changed.insert(rel.to_owned());
+            }
+            return Ok(());
+        }
+        let full = self.root.join(rel);
+        // Reads are limited to the project, and leave out outputs.
+        let canonical = full
+            .canonicalize()
+            .ok()
+            .filter(|c| c.starts_with(&self.canonical) && !self.canonical_outputs().contains(c));
+        self.links.retain(|link, _| !is_under(link, rel));
+        let metadata = canonical
+            .as_ref()
+            .filter(|_| !self.outputs.contains(rel))
+            .and_then(|c| fs::metadata(c).ok());
+        // Gone, or an output: the world no longer has it.
+        let Some(metadata) = metadata else {
+            for path in world_paths(world, rel) {
+                if remove(world, &path) {
+                    update.changed.insert(path);
+                }
+            }
+            return Ok(());
+        };
+        let canonical = canonical.expect("there is metadata");
+        // The directories it is in must be ones a read of the project
+        // follows, and so must it if it is a directory.
+        let dir = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let chain = if metadata.is_dir() {
+            self.chain(rel)
+        } else {
+            self.chain(dir)
+        };
+        let Some(chain) = chain else {
+            return Ok(());
+        };
+        if self.is_link(&full) {
+            self.links.insert(rel.to_owned(), canonical.clone());
+        }
+
+        if metadata.is_dir() {
+            let mut files = Vec::new();
+            let mut links = BTreeMap::new();
+            if let Err(e) = self.scan(rel, chain, &mut files, &mut links, warnings) {
+                warnings.push(unreadable(rel, &e.to_string()));
+                return Ok(());
+            }
+            self.links.extend(links);
+            let found: BTreeSet<&str> = files.iter().map(|f| f.path.as_str()).collect();
+            for path in world_paths(world, rel) {
+                if !found.contains(path.as_str()) && remove(world, &path) {
+                    update.changed.insert(path);
+                }
+            }
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            for file in files {
+                set(world, file, &mut update.changed, warnings)?;
+            }
+        } else if metadata.is_file() {
+            // A directory that is now a file.
+            for path in world_paths(world, rel) {
+                if path != rel && remove(world, &path) {
+                    update.changed.insert(path);
+                }
+            }
+            match fs::read(&canonical) {
+                Ok(bytes) => {
+                    let file = ProjectFile {
+                        path: rel.to_owned(),
+                        bytes,
+                    };
+                    set(world, file, &mut update.changed, warnings)?;
+                }
+                Err(e) => {
+                    warnings.push(unreadable(rel, &e.to_string()));
+                    if remove(world, rel) {
+                        update.changed.insert(rel.to_owned());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh_manifest(
+        &mut self,
+        world: &mut World,
+        update: &mut Update,
+        warnings: &mut Vec<Diagnostic>,
+    ) -> Result<(), LoadError> {
+        let text = match self.read_manifest() {
+            Ok(text) => text,
+            Err(e) => {
+                // The world keeps the manifest it has.
+                warnings.push(warning(e.to_string()));
+                return Ok(());
+            }
+        };
+        let before = world.manifest().clone();
+        match world.set_manifest(&text) {
+            Ok(()) => {
+                if *world.manifest() != before {
+                    update.changed.insert(MANIFEST.into());
+                    let outputs = self.outputs.clone();
+                    self.set_outputs(world);
+                    // A file that was an output may be an input now, and
+                    // the other way round.
+                    for path in outputs.symmetric_difference(&self.outputs.clone()) {
+                        self.refresh(world, path, update, warnings)?;
+                    }
+                }
+            }
+            Err(errors) => {
+                let errors = ProjectErrors::new(Some(&text), None, errors);
+                merge(&mut update.errors, errors);
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh_lockfile(
+        &mut self,
+        world: &mut World,
+        update: &mut Update,
+        warnings: &mut Vec<Diagnostic>,
+    ) -> Result<(), LoadError> {
+        let text = match self.read_lockfile() {
+            Ok(text) => text,
+            Err(e) => {
+                warnings.push(warning(e.to_string()));
+                return Ok(());
+            }
+        };
+        let before = world.lockfile().clone();
+        match world.set_lockfile(text.as_deref()) {
+            Ok(()) => {
+                if *world.lockfile() != before {
+                    update.changed.insert(LOCKFILE.into());
+                    // The locked fonts come from the font cache.
+                    self.load_fonts(world, warnings);
+                }
+            }
+            Err(errors) => {
+                let errors = ProjectErrors::new(None, text.as_deref(), errors);
+                merge(&mut update.errors, errors);
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the project's fonts again, warning when they cannot be read.
+    fn load_fonts(&self, world: &mut World, warnings: &mut Vec<Diagnostic>) {
+        if let Err(e) = world.load_fonts(&self.root, self.font_cache.as_ref()) {
+            warnings.push(warning(format!("cannot read the project's fonts: {e}")));
+        }
+    }
+
+    /// Whether a path is a symbolic link.
+    fn is_link(&self, path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+    }
+
+    /// The canonical paths of the directories a project directory is in,
+    /// itself included, which a link under it must not lead back to; `None`
+    /// when a read of the project would not reach it: one of them is the
+    /// font directory, leaves the project, is a link to a directory it is
+    /// in, or cannot be resolved.
+    fn chain(&self, rel: &str) -> Option<Vec<PathBuf>> {
+        let mut chain = vec![self.canonical.clone()];
+        let mut prefix = String::new();
+        for name in rel.split('/').filter(|name| !name.is_empty()) {
+            prefix = join(&prefix, name);
+            if prefix == PROJECT_FONT_DIR {
+                return None;
+            }
+            let canonical = self.root.join(&prefix).canonicalize().ok()?;
+            if !canonical.starts_with(&self.canonical) || chain.contains(&canonical) {
+                return None;
+            }
+            chain.push(canonical);
+        }
+        Some(chain)
+    }
+
+    /// The canonical paths the builds write to, where their directories
+    /// exist.
+    fn canonical_outputs(&self) -> BTreeSet<PathBuf> {
+        self.outputs
+            .iter()
+            .filter_map(|output| {
+                let path = self.root.join(output);
+                let dir = path.parent()?.canonicalize().ok()?;
+                Some(dir.join(path.file_name()?))
+            })
+            .collect()
+    }
+
+    /// Reads the files under the project directory `start`, whose own
+    /// directories, from the project's on, have the canonical paths in
+    /// `chain`. Fails only when `start` cannot be read.
+    fn scan(
+        &self,
+        start: &str,
+        chain: Vec<PathBuf>,
+        files: &mut Vec<ProjectFile>,
+        links: &mut BTreeMap<String, PathBuf>,
+        warnings: &mut Vec<Diagnostic>,
+    ) -> io::Result<()> {
+        let outputs = self.canonical_outputs();
+        let mut dirs = vec![(start.to_owned(), chain)];
+        while let Some((dir, chain)) = dirs.pop() {
+            let entries = fs::read_dir(self.root.join(&dir)).and_then(|entries| {
+                entries
+                    .map(|entry| entry.and_then(|e| Ok((e.file_type()?, e))))
+                    .collect::<io::Result<Vec<_>>>()
+            });
+            let mut entries = match entries {
+                Ok(entries) => entries,
+                Err(e) if dir == start => return Err(e),
+                Err(e) => {
+                    warnings.push(unreadable(&dir, &e.to_string()));
+                    continue;
+                }
+            };
+            entries.sort_by_key(|(_, entry)| entry.file_name());
+            let here = chain.last().expect("a chain holds the project").clone();
+            for (file_type, entry) in entries {
+                // A name that is not Unicode cannot be named in a document.
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if name.starts_with('.') {
+                    continue;
+                }
+                let path = join(&dir, &name);
+                let target = if file_type.is_symlink() {
+                    // Reads are limited to the project.
+                    match entry.path().canonicalize() {
+                        Ok(target) if target.starts_with(&self.canonical) => Some(target),
+                        _ => continue,
+                    }
+                } else {
+                    None
+                };
+                let is_dir = match &target {
+                    Some(target) => target.is_dir(),
+                    None => file_type.is_dir(),
+                };
+                if is_dir {
+                    if path == PROJECT_FONT_DIR {
+                        continue;
+                    }
+                    let link = target.is_some();
+                    let target = match target {
+                        Some(target) => target,
+                        None => here.join(&name),
+                    };
+                    // A link to a directory it is in would never end.
+                    if chain.contains(&target) {
+                        continue;
+                    }
+                    if link {
+                        links.insert(path.clone(), target.clone());
+                    }
+                    let mut chain = chain.clone();
+                    chain.push(target);
+                    dirs.push((path, chain));
+                    continue;
+                }
+                let is_file = match &target {
+                    Some(target) => target.is_file(),
+                    None => file_type.is_file(),
+                };
+                if !is_file || path == MANIFEST || path == LOCKFILE || self.outputs.contains(&path)
+                {
+                    continue;
+                }
+                // An output written through a link is still an output.
+                let canonical = target.clone().unwrap_or_else(|| here.join(&name));
+                if outputs.contains(&canonical) {
+                    continue;
+                }
+                if let Some(target) = target {
+                    links.insert(path.clone(), target);
+                }
+                match fs::read(entry.path()) {
+                    Ok(bytes) => files.push(ProjectFile { path, bytes }),
+                    Err(e) => warnings.push(unreadable(&path, &e.to_string())),
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Sets a file in a world: a `.fol` or `.fsty` file as a source, another as
+/// a data file. Records its path in `changed` if the world had it
+/// differently. Warns of sources that are not UTF-8, and leaves out files
+/// whose paths a document cannot name.
+fn set(
+    world: &mut World,
+    file: ProjectFile,
+    changed: &mut BTreeSet<String>,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<(), WorldError> {
+    let source = matches!(
+        Path::new(&file.path).extension().and_then(|e| e.to_str()),
+        Some("fol" | "fsty")
+    );
+    let result = if source {
+        match String::from_utf8(file.bytes) {
+            // Some editors start UTF-8 files with a byte-order mark,
+            // which is not part of the text.
+            Ok(text) => {
+                let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
+                if world.source(&file.path).is_some_and(|s| s.text() == text) {
+                    return Ok(());
+                }
+                world.set_source(&file.path, text).map(drop)
+            }
+            Err(_) => {
+                warnings.push(unreadable(&file.path, "it is not UTF-8 text"));
+                if world.remove_source(&file.path) {
+                    changed.insert(file.path);
+                }
+                return Ok(());
+            }
+        }
+    } else {
+        if world.file(&file.path).is_some_and(|b| *b == *file.bytes) {
+            return Ok(());
+        }
+        world.set_file(&file.path, file.bytes)
+    };
+    match result {
+        Ok(()) => {
+            changed.insert(file.path);
+            Ok(())
+        }
+        Err(WorldError::InvalidPath(_)) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Removes a source or data file from a world. Returns whether there was
+/// one.
+fn remove(world: &mut World, path: &str) -> bool {
+    world.remove_source(path) || world.remove_file(path)
+}
+
+/// The paths of a world's sources and data files at or under `rel`, every
+/// one when it is empty.
+fn world_paths(world: &World, rel: &str) -> Vec<String> {
+    world
+        .source_paths()
+        .chain(world.file_paths())
+        .map(ProjectPath::as_str)
+        .filter(|path| rel.is_empty() || is_under(path, rel))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether a project path is `dir` or under it.
+fn is_under(path: &str, dir: &str) -> bool {
+    path.strip_prefix(dir)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Joins two project paths, either of which may be empty.
+fn join(dir: &str, name: &str) -> String {
+    match (dir.is_empty(), name.is_empty()) {
+        (true, _) => name.to_owned(),
+        (_, true) => dir.to_owned(),
+        _ => format!("{dir}/{name}"),
+    }
+}
+
+/// A path relative to the project as a project path, with `/` as
+/// separator; `None` if it leaves the project or a name is not Unicode.
+fn relative(path: &Path) -> Option<String> {
+    let mut out = String::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => out = join(&out, name.to_str()?),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Adds the errors of one project file to those of the other.
+fn merge(errors: &mut Option<ProjectErrors>, new: ProjectErrors) {
+    match errors {
+        None => *errors = Some(new),
+        Some(errors) => {
+            for id in [World::MANIFEST, World::LOCKFILE] {
+                use crate::diag::Files;
+                if let (Some(path), Some(lines)) = (new.files.path(id), new.files.lines(id)) {
+                    errors.files.insert(id, path, lines.text());
+                }
+            }
+            errors.diagnostics.extend(new.diagnostics);
+        }
+    }
+}
+
+/// A warning about the project without a place in a file.
+fn warning(message: String) -> Diagnostic {
+    Diagnostic::warning(DiagSpan::detached(), message)
+}
+
+/// The warning that a file cannot be read.
+fn unreadable(path: &str, why: &str) -> Diagnostic {
+    warning(format!("cannot read `{path}`: {why}"))
+        .with_hint("a document that uses it reports it as not found")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(root: &Path, outputs: &[&str]) -> (Vec<String>, Vec<Diagnostic>) {
+        let mut loader = Loader::new(root).unwrap();
+        loader.outputs = outputs.iter().map(|&o| o.to_owned()).collect();
+        let mut warnings = Vec::new();
+        let files = loader.read_files(&mut warnings).unwrap();
+        (files.into_iter().map(|f| f.path).collect(), warnings)
+    }
+
+    #[test]
+    fn reads_the_project_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let write = |path: &str, bytes: &[u8]| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        };
+        write(MANIFEST, b"");
+        write(LOCKFILE, b"");
+        write("main.fol", b"= Forces");
+        write("styles/exam.fsty", b"");
+        write("data/points.csv", b"x,y\n");
+        write(".git/config", b"");
+        write("styles/.hidden.fsty", b"");
+        write("fonts/serif.ttf", b"");
+        write("out/main-exam.pdf", b"");
+        write("out/figure.png", b"");
+        write("outline/notes.fol", b"");
+
+        let (paths, warnings) = read(root, &["out/main-exam.pdf"]);
+        assert_eq!(
+            paths,
+            [
+                "data/points.csv",
+                "main.fol",
+                "out/figure.png",
+                "outline/notes.fol",
+                "styles/exam.fsty"
+            ]
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_links_only_inside_the_project() {
+        use std::os::unix::fs::symlink;
+
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.csv"), b"x").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("main.fol"), b"").unwrap();
+        fs::create_dir_all(root.join("shared/questions")).unwrap();
+        fs::write(root.join("shared/questions/q1.fol"), b"").unwrap();
+        symlink(root.join("main.fol"), root.join("alias.fol")).unwrap();
+        symlink(outside.path().join("secret.csv"), root.join("secret.csv")).unwrap();
+        symlink(outside.path(), root.join("elsewhere")).unwrap();
+        symlink(root.join("shared/questions"), root.join("questions")).unwrap();
+        symlink(root, root.join("loop")).unwrap();
+        symlink(root.join("shared"), root.join("shared/questions/up")).unwrap();
+
+        let (paths, _) = read(root, &[]);
+        assert_eq!(
+            paths,
+            [
+                "alias.fol",
+                "main.fol",
+                "questions/q1.fol",
+                "shared/questions/q1.fol",
+            ]
+        );
+    }
+
+    /// An output written through a link to a directory inside the project
+    /// is not read as an input (#230).
+    #[cfg(unix)]
+    #[test]
+    fn leaves_out_outputs_written_through_links() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("main.fol"), b"").unwrap();
+        fs::create_dir(root.join("build")).unwrap();
+        symlink(root.join("build"), root.join("pdfs")).unwrap();
+        // What a build with the output `pdfs/main.pdf` wrote.
+        fs::write(root.join("build/main.pdf"), b"%PDF-").unwrap();
+        fs::write(root.join("build/notes.csv"), b"").unwrap();
+
+        let (paths, _) = read(root, &["pdfs/main.pdf"]);
+        assert_eq!(paths, ["build/notes.csv", "main.fol", "pdfs/notes.csv"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn warns_of_unreadable_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("main.fol"), b"").unwrap();
+        fs::create_dir(root.join("locked")).unwrap();
+        fs::write(root.join("locked/x.csv"), b"").unwrap();
+        fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+        // Permissions do not stop a privileged user.
+        let readable = fs::read_dir(root.join("locked")).is_ok();
+
+        let mut loader = Loader::new(root).unwrap();
+        let mut warnings = Vec::new();
+        let files = loader.read_files(&mut warnings);
+        fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+        let files = files.unwrap();
+        if !readable {
+            assert_eq!(files.len(), 1);
+            assert!(warnings[0].message.contains("`locked`"));
+        }
+    }
+
+    #[test]
+    fn sets_sources_and_data() {
+        let mut world = World::new(
+            "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n",
+        )
+        .unwrap();
+        let file = |path: &str, bytes: &[u8]| ProjectFile {
+            path: path.into(),
+            bytes: bytes.to_vec(),
+        };
+        let mut warnings = Vec::new();
+        let mut changed = BTreeSet::new();
+        for f in [
+            file("bad.fol", &[0xff, 0xfe]),
+            file("data/points.csv", b"x,y\n"),
+            file("main.fol", b"= Forces\n"),
+            file("bom.fol", "\u{FEFF}= Forces\n".as_bytes()),
+            file("weird\\name.csv", b""),
+        ] {
+            set(&mut world, f, &mut changed, &mut warnings).unwrap();
+        }
+        assert_eq!(world.source("main.fol").unwrap().text(), "= Forces\n");
+        assert_eq!(world.source("bom.fol").unwrap().text(), "= Forces\n");
+        assert!(world.source("bad.fol").is_none());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("`bad.fol`"));
+        assert_eq!(
+            changed.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["bom.fol", "data/points.csv", "main.fol"]
+        );
+
+        // Setting what the world has changes nothing.
+        let mut again = BTreeSet::new();
+        set(
+            &mut world,
+            file("main.fol", b"= Forces\n"),
+            &mut again,
+            &mut warnings,
+        )
+        .unwrap();
+        set(
+            &mut world,
+            file("data/points.csv", b"x,y\n"),
+            &mut again,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn relative_paths() {
+        assert_eq!(relative(Path::new("a/./b")).as_deref(), Some("a/b"));
+        assert_eq!(relative(Path::new("../a")), None);
+        assert_eq!(relative(Path::new("")).as_deref(), Some(""));
+        assert!(is_under("a/b", "a"));
+        assert!(is_under("a", "a"));
+        assert!(!is_under("ab", "a"));
+    }
+}
