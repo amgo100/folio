@@ -1147,7 +1147,7 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 | `folio build [--variant v] [--target t] [--today date] [--strict] [--diagnostics human\|json]` | Build outputs; all declared variants by default |
 | `folio watch` | Rebuild incrementally and serve the live preview |
 | `folio present` | Run the live presentation with presenter view |
-| `folio check [--layout] [--leaks] [--report overrides]` | Diagnostics without output |
+| `folio check [--layout] [--leaks] [--report overrides] [--diagnostics human\|json]` | Diagnostics without output |
 | `folio fmt` | Canonical formatting of `.fol` and `.fsty` files |
 | `folio promote <file:line>` | Move a local override into a stylesheet |
 | `folio query <selector>` | Print elements as JSON, such as all questions with their marks |

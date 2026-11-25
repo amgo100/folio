@@ -1,8 +1,12 @@
 # Diagnostics as JSON
 
-`folio build --diagnostics json` writes one JSON document to standard error when the command ends, in place of the source excerpts and the `wrote …` lines it writes by default (SPEC §12, §12.1). Standard error then holds that document and nothing else, so a program can parse all of it. The exit status is the same as without the flag.
+`folio build --diagnostics json` writes one JSON document to standard error when the command ends, in place of the source excerpts and the `wrote …` lines it writes by default (SPEC §12, §12.1). Apart from the cases below, standard error then holds that document and nothing else, so a program can parse all of it. The exit status is the same as without the flag.
 
-Arguments that do not parse, and commands or flags that are not supported yet, still end with a plain message and exit status 2, without a document. So does a failure to hand the build to the compiler version that `folio.toml` pins (SPEC §2.4).
+Some messages are still plain text, with no document or before it:
+
+- Arguments that do not parse, and commands or flags that are not supported yet, end with a plain message and exit status 2.
+- Handing the build to the compiler version that `folio.toml` pins (SPEC §2.4) happens before the arguments are read. A failure to run that version ends with a plain message and exit status 1. A warning that the pinned version has an unfixed security problem is plain text before the pinned version's own output.
+- A crash of the compiler (exit status 101) writes no document.
 
 ## Version 1
 

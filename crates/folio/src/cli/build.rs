@@ -106,23 +106,19 @@ fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
 
     // A diagnostic of a file that several builds read is shown once.
     let mut seen: HashSet<Diagnostic> = diagnostics.iter().cloned().collect();
+    // Each build, in the manifest's order, with what it compiled to, or
+    // `None` when it failed.
     let mut written = Vec::new();
-    let mut failures = Vec::new();
     for output in outputs {
         let name = build_name(output.variant.as_ref(), output.target);
+        let path = world
+            .manifest()
+            .output_path(output.variant.as_ref(), output.target);
         let compiled = match output.result {
             Ok(compiled) => compiled,
             Err(cancelled) => {
                 diagnostics.push(error(format!("the build of {name} failed: {cancelled}")));
-                let path = world
-                    .manifest()
-                    .output_path(output.variant.as_ref(), output.target);
-                failures.push(Build::new(
-                    &output.variant,
-                    output.target,
-                    path.as_deref(),
-                    Status::Failed,
-                ));
+                written.push((output.variant, output.target, path, None));
                 continue;
             }
         };
@@ -131,16 +127,17 @@ fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
                 diagnostics.push(diagnostic.clone());
             }
         }
-        let path = world
-            .manifest()
-            .output_path(output.variant.as_ref(), output.target);
-        written.push((output.variant, output.target, path, compiled));
+        written.push((output.variant, output.target, path, Some(compiled)));
     }
     report.diagnostics(&world, &diagnostics);
 
     let mut failed = diagnostics.iter().any(Diagnostic::is_error);
     for (variant, target, path, compiled) in written {
         let build = |path: Option<&str>, status| Build::new(&variant, target, path, status);
+        let Some(compiled) = compiled else {
+            report.build(build(path.as_deref(), Status::Failed));
+            continue;
+        };
         match write(&root, path.as_deref(), &compiled) {
             Ok(Written::File(path)) => report.build(build(Some(&path), Status::Written)),
             Ok(Written::Nothing) => report.build(build(path.as_deref(), Status::None)),
@@ -151,9 +148,6 @@ fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
                 failed = true;
             }
         }
-    }
-    for build in failures {
-        report.build(build);
     }
     if failed {
         ExitCode::from(FAILURE)
