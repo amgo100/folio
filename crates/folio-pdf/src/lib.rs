@@ -534,6 +534,11 @@ impl Dry {
                     self.notdef.push(error);
                 }
             }
+            // The ToUnicode map has no entry for the `.notdef` glyph,
+            // which is reported above.
+            if g.id == 0 {
+                continue;
+            }
             let bits = &mut self.mapped[index].1;
             let (word, bit) = (usize::from(g.id) / 64, 1u64 << (g.id % 64));
             if bits[word] & bit != 0 {
@@ -993,10 +998,11 @@ mod preflight_tests {
         page
     }
 
-    /// A document, a section with heading `heading` (node 2, without text
-    /// when `None`) and a paragraph (node 3) holding `body`.
-    /// Checks that the check foresees whether it claims PDF/UA-1 (`ua`)
-    /// and the warnings, and that the document is then written once.
+    /// Checks a document, a section with heading `heading` (node 2,
+    /// without text when `None`) and a paragraph (node 3) holding `body`:
+    /// that the check foresees whether it claims PDF/UA-1 (`ua`) and the
+    /// warnings, in the validator's order, and that the document is then
+    /// written once.
     fn check(ua: bool, heading: Option<&str>, body: FragmentItem) {
         let mut head = Tag::new(Role::Heading, SourceRef(2));
         head.text = heading.map(Into::into);
@@ -1062,6 +1068,23 @@ mod preflight_tests {
             Some("Forces"),
             run("ab", 3, &[(0, 0..1), (98, 1..2)]),
         );
+    }
+
+    /// The `.notdef` glyph is reported once, not again for its text,
+    /// which the ToUnicode map does not hold.
+    #[test]
+    fn foresees_a_notdef_glyph_without_text() {
+        let text = "a\u{feff}b";
+        let glyphs = [(97, 0..1), (0, 1..4), (0, 4..4), (98, 4..5)];
+        check(false, Some("Forces"), run(text, 3, &glyphs));
+    }
+
+    /// Reasons of every kind together, in the validator's order.
+    #[test]
+    fn foresees_several_reasons_in_order() {
+        let text = "ab\u{feff}";
+        let glyphs = [(0, 0..1), (120, 1..1), (98, 1..2), (300, 2..5)];
+        check(false, None, run(text, 3, &glyphs));
     }
 
     #[test]
