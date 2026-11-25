@@ -32,9 +32,10 @@ use crate::diag::Files;
 /// must drop it once its compilation returns, or the next edit waits for
 /// ever.
 ///
-/// A source's file id is assigned when its path is first set, and freed
-/// when the source is removed, for a later source to take, so a world that
-/// sees any number of paths over its life never runs out of ids. The
+/// A source's file id is assigned when its path is set, and freed when the
+/// source is removed. Ids are new until about 65,000 have been given out,
+/// and then freed ones are given out again, so a world that sees any number
+/// of paths over its life never runs out of them. The
 /// diagnostics of a compilation therefore stay valid until a source is
 /// removed: resolve them first, or against a [`Snapshot`], which keeps the
 /// files as they were and holds no handle on the database.
@@ -429,8 +430,8 @@ impl World {
         Ok(reparsed)
     }
 
-    /// Removes a source and frees its file id, which a source added later
-    /// may take. Returns whether there was one.
+    /// Removes a source and frees its file id, which a source added much
+    /// later may take. Returns whether there was one.
     pub fn remove_source(&mut self, path: &str) -> bool {
         let Some(path) = ProjectPath::new(path) else {
             return false;
@@ -642,8 +643,8 @@ struct FileIds {
     /// The path of each id, from [`FIRST_SOURCE_ID`] on; `None` for an id
     /// that was freed.
     paths: Vec<Option<ProjectPath>>,
-    /// The freed ids, by index into `paths`, which are given out again
-    /// lowest first.
+    /// The freed ids, by index into `paths`, which are given out again,
+    /// lowest first, once every id has been given out once.
     free: BTreeSet<usize>,
 }
 
@@ -654,17 +655,23 @@ impl FileIds {
         self.paths.get(index)?.as_ref()
     }
 
-    /// Gives a path an id: the lowest freed one, or a new one.
+    /// Gives a path an id: a new one while there are any, so that an id
+    /// is not soon given to another path, and after that the lowest freed
+    /// one.
     fn assign(&mut self, path: &ProjectPath) -> Result<FileId, WorldError> {
-        let index = match self.free.first() {
-            Some(&index) => index,
-            None => self.paths.len(),
+        let raw = |index: usize| {
+            u16::try_from(FIRST_SOURCE_ID + index)
+                .ok()
+                .and_then(NonZeroU16::new)
+                .filter(|&raw| FileId::from_raw(raw) != FileId::DETACHED)
         };
-        let raw = u16::try_from(FIRST_SOURCE_ID + index)
-            .ok()
-            .and_then(NonZeroU16::new)
-            .filter(|&raw| FileId::from_raw(raw) != FileId::DETACHED)
-            .ok_or(WorldError::TooManyFiles)?;
+        let (index, raw) = match raw(self.paths.len()) {
+            Some(raw) => (self.paths.len(), raw),
+            None => {
+                let index = *self.free.first().ok_or(WorldError::TooManyFiles)?;
+                (index, raw(index).expect("a freed id was given out"))
+            }
+        };
         let id = FileId::from_raw(raw);
         if index == self.paths.len() {
             self.paths.push(Some(path.clone()));

@@ -160,8 +160,9 @@ pub struct ProjectFile {
 #[non_exhaustive]
 pub struct Update {
     /// The paths whose contents the world now has differently: sources and
-    /// data files set or removed, `folio.toml`, `folio.lock`, and files of
-    /// the font directory. Empty when nothing changed, so there is nothing
+    /// data files set or removed, `folio.toml`, `folio.lock`, and the font
+    /// directory, or the path in it that an event named, when the fonts
+    /// changed. Empty when nothing changed, so there is nothing
     /// to rebuild.
     pub changed: BTreeSet<String>,
     /// The errors of a new `folio.toml` or `folio.lock`, which the world did
@@ -341,11 +342,23 @@ impl Loader {
                 .into();
         }
         // The manifest first, which decides the outputs and which the
-        // lockfile is checked against; then the lockfile.
+        // lockfile is checked against; then the lockfile; then the fonts,
+        // which the lockfile locks and a read of the files leaves out.
         for special in [MANIFEST, LOCKFILE] {
             if relative.remove(special) {
                 self.refresh(world, special, &mut update, warnings)?;
             }
+        }
+        let fonts: Vec<String> = relative
+            .iter()
+            .filter(|rel| is_under(rel, PROJECT_FONT_DIR))
+            .cloned()
+            .collect();
+        for rel in fonts.iter().take(1) {
+            self.refresh(world, rel, &mut update, warnings)?;
+        }
+        for rel in &fonts {
+            relative.remove(rel);
         }
         // A directory read again covers the paths under it.
         let mut done: Vec<String> = Vec::new();

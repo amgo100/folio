@@ -250,6 +250,21 @@ fn updates_the_manifest() {
     assert_eq!(changed(&update), ["folio.toml", "out/main-exam.pdf"]);
     assert!(world.file("out/main-exam.pdf").is_none());
 
+    // An event for the project directory reads the fonts again too.
+    let font = folio::bundled_fonts()[0].clone();
+    fs::create_dir(root.join("fonts")).unwrap();
+    fs::write(root.join("fonts/serif.ttf"), font.data().as_ref()).unwrap();
+    let update = loader
+        .update(
+            &mut world,
+            [root.to_path_buf(), root.join("fonts/serif.ttf")],
+            &mut Vec::new(),
+        )
+        .unwrap();
+    // The root stands for the font directory.
+    assert_eq!(changed(&update), ["fonts"]);
+    assert_eq!(world.font_files().len(), 1);
+
     // An event for the project directory reads the manifest again too.
     write(root, "folio.toml", MANIFEST);
     let update = loader.update(&mut world, [root], &mut Vec::new()).unwrap();

@@ -469,12 +469,14 @@ fn files_and_ids() {
     assert_eq!(world.set_source("main.fol", "Hello, world").unwrap(), main);
     assert_eq!(world.source("main.fol").unwrap().text(), "Hello, world");
 
-    // A removed source's id is freed, and the next source takes it.
+    // A removed source's id is freed; a source added soon after gets a new
+    // one.
     world.remove_source("main.fol");
     assert!(world.source("main.fol").is_none());
     assert_eq!(world.path(main), None);
     assert_eq!(world.id("main.fol"), None);
-    assert_eq!(world.set_source("main.fol", "Again").unwrap(), main);
+    let main = world.set_source("main.fol", "Again").unwrap();
+    assert_ne!(Some(main), world.id("exam.fsty"));
 
     // Edits reparse in place.
     let reparsed = world.edit_source("main.fol", 0..5, "Once more").unwrap();
@@ -536,8 +538,9 @@ fn adds_and_removes_many_paths() {
         seen.insert(id);
         assert!(world.remove_source(&path));
     }
-    // One id served every draft.
-    assert_eq!(seen.len(), 1);
+    // Ids were new until every one had been given out, and freed ones were
+    // given out again after that.
+    assert!((60_000..100_000).contains(&seen.len()), "{}", seen.len());
     assert_eq!(world.path(kept), Some("main.fol"));
 
     // Freed ids are given out lowest first.

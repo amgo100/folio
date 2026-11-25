@@ -100,11 +100,12 @@ struct SystemFace {
     read: Arc<OnceLock<Option<Font>>>,
 }
 
-/// Equal when the faces are: what reading them gave is the same for both,
-/// since they share it through [`SystemFaces`].
+/// Equal when the faces are and they share what reading them gave, as the
+/// faces of one [`SystemFaces`] do; a face of the store that replaced it is
+/// not equal, so the queries that hold it are not kept.
 impl PartialEq for SystemFace {
     fn eq(&self, other: &Self) -> bool {
-        self.font == other.font
+        self.font == other.font && Arc::ptr_eq(&self.read, &other.read)
     }
 }
 
