@@ -170,6 +170,25 @@ fn a_change_that_is_too_deep_changes_nothing() {
 }
 
 #[test]
+fn a_compound_assignment_that_is_too_deep_changes_nothing() {
+    // `a.x += (deep,)` would nest `a` one more than the limit. The place
+    // keeps its value rather than losing it to `none`.
+    let main = format!(
+        "#let deep = ()\n#for i in range({}) {{ deep = (deep,) }}\n\
+         #let a = (x: (1,))\n#{{ a.x += (deep,) }}\n#a.x.len()\n",
+        MAX_NESTING - 2
+    );
+    let (errors, text) = compile(&main);
+    assert_eq!(
+        errors,
+        [format!(
+            "this would make a value that is nested more than {MAX_NESTING} deep"
+        )]
+    );
+    assert_eq!(text.as_deref(), Some("[error] 1"));
+}
+
+#[test]
 fn content_at_the_limit_goes_through_every_stage() {
     // The deepest content allowed, as inline elements, as blocks, and as
     // elements with labels and references, compiles to a PDF on a small

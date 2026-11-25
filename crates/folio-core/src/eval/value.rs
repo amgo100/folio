@@ -210,8 +210,8 @@ impl Value {
     }
 }
 
-/// A cached depth, which equality, hashing and debug output ignore: it
-/// follows from the value that holds it.
+/// A cached depth, which equality and hashing ignore: it follows from the
+/// value that holds it.
 #[derive(Copy, Clone)]
 struct Depth(u32);
 
@@ -248,7 +248,7 @@ pub(crate) fn repr_float(v: f64) -> String {
 #[derive(Clone)]
 pub struct Array {
     items: EcoVec<Value>,
-    depth: u32,
+    nesting: Nesting,
 }
 
 impl Array {
@@ -256,7 +256,7 @@ impl Array {
     pub fn new() -> Self {
         Self {
             items: EcoVec::new(),
-            depth: 1,
+            nesting: Nesting::EMPTY,
         }
     }
 
@@ -264,13 +264,13 @@ impl Array {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             items: EcoVec::with_capacity(capacity),
-            depth: 1,
+            nesting: Nesting::EMPTY,
         }
     }
 
     /// How deeply the array nests: one more than its deepest item.
     pub fn depth(&self) -> u32 {
-        self.depth
+        self.nesting.depth
     }
 
     /// The items.
@@ -280,13 +280,13 @@ impl Array {
 
     /// Appends an item.
     pub fn push(&mut self, value: Value) {
-        self.depth = self.depth.max(value.depth().saturating_add(1));
+        self.nesting.added(value.depth());
         self.items.push(value);
     }
 
     /// Inserts an item at an index, shifting the ones after it.
     pub fn insert(&mut self, index: usize, value: Value) {
-        self.depth = self.depth.max(value.depth().saturating_add(1));
+        self.nesting.added(value.depth());
         self.items.insert(index, value);
     }
 
@@ -311,30 +311,72 @@ impl Array {
         let before = item.depth();
         let result = f(item);
         let after = item.depth();
-        self.depth = self.depth.max(after.saturating_add(1));
-        if after < before {
-            self.removed(before);
-        }
+        // The changed item counts as removed and added again.
+        self.nesting.added(after);
+        self.removed(before);
         result
     }
 
-    /// Restores the depth after an item of depth `depth` was removed or
-    /// made shallower: only an item at the greatest depth can lower it.
+    /// Uncounts an item of depth `depth` that was removed or replaced.
     fn removed(&mut self, depth: u32) {
-        if depth.saturating_add(1) == self.depth {
-            self.depth = depth_of(self.items.iter());
-        }
+        let items = &self.items;
+        self.nesting
+            .removed(depth, || Nesting::measure(items.iter()));
     }
 }
 
 /// One more than the deepest of some values.
 pub(crate) fn depth_of<'a>(values: impl IntoIterator<Item = &'a Value>) -> u32 {
-    values
-        .into_iter()
-        .map(Value::depth)
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1)
+    Nesting::measure(values).depth
+}
+
+/// The depth of an array or a dictionary, kept exact as values come and go:
+/// one more than its deepest value, and how many values are that deep. Only
+/// removing the last of those lowers the depth, so only that rescans the
+/// values, and taking items one by one from an array whose items are all
+/// equally deep takes constant time each.
+#[derive(Copy, Clone)]
+struct Nesting {
+    depth: u32,
+    deepest: usize,
+}
+
+impl Nesting {
+    /// No values.
+    const EMPTY: Self = Self {
+        depth: 1,
+        deepest: 0,
+    };
+
+    /// The nesting of some values.
+    fn measure<'a>(values: impl IntoIterator<Item = &'a Value>) -> Self {
+        let mut nesting = Self::EMPTY;
+        for value in values {
+            nesting.added(value.depth());
+        }
+        nesting
+    }
+
+    /// Counts a value of depth `depth` that was added.
+    fn added(&mut self, depth: u32) {
+        let depth = depth.saturating_add(1);
+        if depth > self.depth {
+            *self = Self { depth, deepest: 1 };
+        } else if depth == self.depth {
+            self.deepest += 1;
+        }
+    }
+
+    /// Uncounts a value of depth `depth` that was removed, rescanning the
+    /// values that are left when it was the last of the deepest.
+    fn removed(&mut self, depth: u32, values: impl FnOnce() -> Self) {
+        if depth.saturating_add(1) == self.depth {
+            self.deepest -= 1;
+            if self.deepest == 0 && self.depth > 1 {
+                *self = values();
+            }
+        }
+    }
 }
 
 impl Default for Array {
@@ -373,8 +415,8 @@ impl Debug for Array {
 
 impl From<EcoVec<Value>> for Array {
     fn from(items: EcoVec<Value>) -> Self {
-        let depth = depth_of(items.iter());
-        Self { items, depth }
+        let nesting = Nesting::measure(items.iter());
+        Self { items, nesting }
     }
 }
 
@@ -497,7 +539,7 @@ impl Duration {
 pub struct Dict {
     map: Arc<IndexMap<EcoString, Value>>,
     /// One more than the deepest value, kept exact by the methods.
-    depth: u32,
+    nesting: Nesting,
 }
 
 impl Dict {
@@ -508,7 +550,7 @@ impl Dict {
 
     /// How deeply the dictionary nests: one more than its deepest value.
     pub fn depth(&self) -> u32 {
-        self.depth
+        self.nesting.depth
     }
 
     /// The number of pairs.
@@ -533,7 +575,7 @@ impl Dict {
 
     /// Inserts a pair, replacing the value of an existing key in place.
     pub fn insert(&mut self, key: EcoString, value: Value) {
-        self.depth = self.depth.max(value.depth().saturating_add(1));
+        self.nesting.added(value.depth());
         if let Some(old) = Arc::make_mut(&mut self.map).insert(key, value) {
             self.removed(old.depth());
         }
@@ -556,7 +598,8 @@ impl Dict {
         f: impl FnOnce(&mut Value) -> R,
     ) -> Option<R> {
         let map = Arc::make_mut(&mut self.map);
-        if !map.contains_key(key) {
+        let existed = map.contains_key(key);
+        if !existed {
             if !insert {
                 return None;
             }
@@ -566,19 +609,20 @@ impl Dict {
         let before = value.depth();
         let result = f(value);
         let after = value.depth();
-        self.depth = self.depth.max(after.saturating_add(1));
-        if after < before {
+        // The changed value counts as removed and added again. A key that
+        // was inserted held `none`, which counts as added.
+        self.nesting.added(after);
+        if existed {
             self.removed(before);
         }
         Some(result)
     }
 
-    /// Restores the depth after a value of depth `depth` was removed or
-    /// made shallower: only a value at the greatest depth can lower it.
+    /// Uncounts a value of depth `depth` that was removed or replaced.
     fn removed(&mut self, depth: u32) {
-        if depth.saturating_add(1) == self.depth {
-            self.depth = depth_of(self.map.values());
-        }
+        let map = &self.map;
+        self.nesting
+            .removed(depth, || Nesting::measure(map.values()));
     }
 }
 
@@ -586,7 +630,7 @@ impl Default for Dict {
     fn default() -> Self {
         Self {
             map: Arc::default(),
-            depth: 1,
+            nesting: Nesting::EMPTY,
         }
     }
 }
@@ -617,10 +661,10 @@ impl Debug for Dict {
 impl FromIterator<(EcoString, Value)> for Dict {
     fn from_iter<T: IntoIterator<Item = (EcoString, Value)>>(iter: T) -> Self {
         let map: IndexMap<EcoString, Value> = iter.into_iter().collect();
-        let depth = depth_of(map.values());
+        let nesting = Nesting::measure(map.values());
         Self {
             map: Arc::new(map),
-            depth,
+            nesting,
         }
     }
 }
@@ -1038,6 +1082,37 @@ mod tests {
         assert_eq!(array.depth(), 9);
         let collected: Array = array.iter().cloned().collect();
         assert_eq!(collected.depth(), 9);
+    }
+
+    #[test]
+    fn only_the_last_of_the_deepest_items_lowers_the_depth() {
+        let mut array: Array = (0..1000).map(|_| nested(3)).collect();
+        array.push(Value::Int(0));
+        array.insert(0, nested(1));
+        assert_eq!(array.depth(), 4);
+        // Every deep item but the last leaves the depth as it is.
+        for _ in 0..999 {
+            array.remove(1);
+            assert_eq!(array.depth(), 4);
+        }
+        array.remove(1);
+        assert_eq!(array.depth(), 2);
+        // An item made deeper and then as deep as before is counted once.
+        array.update(0, |item| *item = nested(5));
+        array.update(0, |item| *item = nested(5));
+        assert_eq!(array.depth(), 6);
+        array.update(0, |item| *item = Value::None);
+        assert_eq!(array.depth(), 1);
+
+        let mut dict = Dict::new();
+        dict.insert("a".into(), nested(2));
+        dict.insert("b".into(), nested(2));
+        dict.insert("a".into(), nested(2));
+        assert_eq!(dict.depth(), 3);
+        dict.remove("a");
+        assert_eq!(dict.depth(), 3);
+        dict.update("b", false, |v| *v = Value::None);
+        assert_eq!(dict.depth(), 1);
     }
 
     #[test]

@@ -553,7 +553,6 @@ impl<'a> Vm<'a> {
 
     // ---- Code ----
 
-    /// Evaluates an expression.
     /// Evaluates an expression. A value that nests more than
     /// [`MAX_NESTING`] deep is an error at the expression that made it.
     pub(crate) fn expr(&mut self, expr: ast::Expr<'_>) -> EvalResult<Value> {
@@ -885,7 +884,12 @@ impl<'a> Vm<'a> {
             }
             AddAssign | SubAssign | MulAssign | DivAssign => {
                 let rhs = self.expr(binary.rhs())?;
-                let lhs = self.mutate(binary.lhs(), false, 0, span, |place| {
+                // The result is at most as deep as the deeper operand, and
+                // the place already holds the left one, so checking the
+                // right one here means that putting the result back cannot
+                // fail and leave the place empty.
+                let incoming = rhs.depth();
+                let lhs = self.mutate(binary.lhs(), false, incoming, span, |place| {
                     Ok(std::mem::take(place))
                 })?;
                 let op = match op {
@@ -1621,7 +1625,6 @@ impl<'a> Vm<'a> {
     }
 }
 
-/// The element a function makes, directly or with arguments applied.
 /// A step from a variable to the place an assignment changes.
 enum Step {
     /// A dictionary field, added if it is missing and the flag is set.
@@ -1680,6 +1683,7 @@ fn descend<R>(
     }
 }
 
+/// The element a function makes, directly or with arguments applied.
 fn element_of(value: &Value) -> Option<&QualifiedName> {
     fn func(f: &Func) -> Option<&QualifiedName> {
         match f {
