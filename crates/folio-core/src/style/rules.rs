@@ -809,13 +809,28 @@ impl<'a> Compiler<'a> {
                         )
                     {
                         // A malformed position is still an error.
-                        if name.get().as_str() == "nth" {
-                            position("nth")?;
-                        }
+                        let written = if name.get().as_str() == "nth" {
+                            eco_format!("nth({})", position("nth")?)
+                        } else {
+                            name.get().clone()
+                        };
                         self.warn(
                             span,
                             eco_format!(
-                                "`page:{}` cannot match yet: pages are not told apart by position, \
+                                "`page:{written}` cannot match yet: pages are not told apart by \
+                                 position, so the rule is ignored"
+                            ),
+                        );
+                        return None;
+                    }
+                    // A page has no children, and steps belong to slides.
+                    if out.name == Some(NodeName::Page)
+                        && matches!(name.get().as_str(), "has" | "step")
+                    {
+                        self.warn(
+                            span,
+                            eco_format!(
+                                "`page:{}(..)` cannot match yet: a page has no children or steps, \
                                  so the rule is ignored",
                                 name.get()
                             ),

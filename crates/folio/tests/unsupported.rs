@@ -72,6 +72,7 @@ fn lists_the_warnings_for_what_is_not_supported() {
     let style = "page:first { margin-top: 1cm; header: \"Ignored\"; }\n\
                  page:nth(2) { margin-top: 1cm; }\n\
                  page[size] { margin-top: 1cm; }\n\
+                 page:has(heading) { margin-top: 1cm; }\n\
                  figure { side: outer; }\n\
                  heading { counter-reset: q; marker: none; }\n\
                  page:left { margin-top: 1cm; }\n\
@@ -106,12 +107,16 @@ fn lists_the_warnings_for_what_is_not_supported() {
             "page.landscape",
         ),
         warning(
-            "`page:nth` cannot match yet: pages are not told apart by position, so the rule is ignored",
+            "`page:nth(2)` cannot match yet: pages are not told apart by position, so the rule is ignored",
             ":nth(2)",
         ),
         warning(
             "this page selector cannot match yet: a page has no label or fields, so the rule is ignored",
             "page[size]",
+        ),
+        warning(
+            "`page:has(..)` cannot match yet: a page has no children or steps, so the rule is ignored",
+            ":has(heading)",
         ),
         warning(&not_implemented("side"), "side: outer;"),
         warning(&not_implemented("counter-reset"), "counter-reset: q;"),

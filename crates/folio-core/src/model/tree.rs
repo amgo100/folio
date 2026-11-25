@@ -475,11 +475,11 @@ fn check_labels(db: &dyn Db, root: &Element) {
         refs: Vec::new(),
     };
     walk.element(root);
+    let labels: Vec<&str> = walk.seen.keys().map(EcoString::as_str).collect();
     for (target, span) in walk.refs {
         if walk.seen.contains_key(target) {
             continue;
         }
-        let labels: Vec<&str> = walk.seen.keys().map(EcoString::as_str).collect();
         let diagnostic = Diagnostic::warning(
             span,
             eco_format!(
