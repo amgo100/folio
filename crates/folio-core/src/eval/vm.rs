@@ -200,9 +200,9 @@ impl<'a> Vm<'a> {
     /// Evaluates a file's markup into a module.
     pub(crate) fn module(&mut self, markup: ast::Markup<'_>, name: &str) -> EvalResult<Module> {
         let content = self.markup(markup)?;
-        // Without recovery, a stray `break`, `continue` or `return` stops
-        // the file's markup and fails it here; with it, the markup reported
-        // it and went on.
+        // A file's markup recovers, so it reported a stray `break`,
+        // `continue` or `return` and went on, leaving none here. Should one
+        // reach this point anyway, it fails the file rather than vanishing.
         if let Some(flow) = self.flow.take() {
             return Err(flow.stray().into());
         }
@@ -923,7 +923,9 @@ impl<'a> Vm<'a> {
                 let value = match self.apply_keeping(op, lhs, rhs, span) {
                     Ok(value) => value,
                     Err((stop, lhs)) => {
-                        self.assign(binary.lhs(), false, lhs, span)?;
+                        // The operation's error is the one to report, even
+                        // if finding the place again fails.
+                        let _ = self.assign(binary.lhs(), false, lhs, span);
                         return Err(stop);
                     }
                 };
@@ -985,7 +987,9 @@ impl<'a> Vm<'a> {
                     | (Value::Dict(_), Value::Dict(_))
             );
         if in_place {
-            return Self::operate(op, lhs, rhs, span).map_err(|stop| (stop, Value::None));
+            let result = Self::operate(op, lhs, rhs, span);
+            debug_assert!(result.is_ok(), "a sum in place cannot fail");
+            return result.map_err(|stop| (stop, Value::None));
         }
         Self::operate(op, lhs.clone(), rhs, span).map_err(|stop| (stop, lhs))
     }

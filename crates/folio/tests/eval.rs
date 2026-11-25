@@ -484,7 +484,8 @@ fn a_failed_compound_assignment_keeps_the_variable() {
 fn a_stray_break_or_return_in_a_file_fails_only_itself() {
     // Each is an error at its own span, the construct it came from becomes
     // a marker, and the rest of the file evaluates (SPEC §12.2).
-    let main = "A #break B\n\n#if true { return } C\n\n#continue\n\nD\n";
+    let main = "A #break B\n\n#if true { return } C\n\n#continue\n\n\
+                #{ (return) + 1 } D\n";
     let (repr, messages) = partial(&[("main.fol", main)]);
     assert_eq!(
         messages,
@@ -492,9 +493,10 @@ fn a_stray_break_or_return_in_a_file_fails_only_itself() {
             "error: cannot break outside of a loop",
             "error: cannot return outside of a function",
             "error: cannot continue outside of a loop",
+            "error: cannot add a none and an int",
         ]
     );
-    assert_eq!(repr.matches("error(").count(), 3, "{repr}");
+    assert_eq!(repr.matches("error(").count(), 4, "{repr}");
     for text in ["\"A\"", "\"B\"", "\"C\"", "\"D\""] {
         assert!(repr.contains(text), "{text} in {repr}");
     }
