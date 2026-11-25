@@ -201,7 +201,7 @@ fn the_spec_example_evaluates_to_its_tree() {
   section(level: 1)
     heading(level: 1, body: ["Kinematics"]) <sec:kin>
     paragraph(body: ["A ball is thrown vertically upwards with speed", space, math(text: "u = qty(12, \"m s^-1\")", block: false), ".", space, "Air resistance is negligible.", sidenote(body: [paragraph(body: ["Take", space, math(text: "g = qty(9.81, \"m s^-2\")", block: false), "."])])])
-    figure(placement: "wrap", side: "outer", width: 0.3333333333333333, caption: ["Path of the ball."]) <fig:ball>
+    figure(caption: ["Path of the ball."], placement: "wrap", side: "outer", width: 0.3333333333333333) <fig:ball>
       paragraph(body: [image(path: "assets/ball.svg")])
     exam.question(marks: 3)
       paragraph(body: ["Calculate the maximum height reached. See", space, ref(target: <fig:ball>), "."])
@@ -342,7 +342,7 @@ doc
         tree("#example(title: [A *b*], difficulty: \"extension\")[#statement[S]] <ex>\n"),
         "\
 doc
-  exam.example(title: [\"A\", space, strong(body: [\"b\"])], difficulty: \"extension\", label-text: [\"Example\"], numbered: true) <ex>
+  exam.example(title: [\"A\", space, strong(body: [\"b\"])], label-text: [\"Example\"], numbered: true, difficulty: \"extension\") <ex>
     statement:
       paragraph(body: [\"S\"])
 "
@@ -361,12 +361,14 @@ fn universal_fields() {
         .repr(),
         "\
 doc
-  figure(class: (\"wide\", \"hard\"), steps: \"2-\", handout: \"keep\", override@markscheme: (space-before: 24.0pt), override@pptx: (:), break-before: \"page\", keep-with-next: true, body: []) <fig:a>
+  figure(body: [], class: (\"wide\", \"hard\"), steps: \"2-\", handout: \"keep\", override@markscheme: (space-before: 24.0pt), override@pptx: (:), break-before: \"page\", keep-with-next: true) <fig:a>
   paragraph(body: [image(path: \"b.svg\", class: (\"icon\",), steps: \"3\")])
 "
     );
 }
 
+/// Slots are stored in their declared order, whatever order they are
+/// filled in (SPEC §4.3).
 #[test]
 fn slots_are_filled_by_sub_blocks() {
     assert_eq!(
@@ -375,12 +377,12 @@ fn slots_are_filled_by_sub_blocks() {
         ),
         "\
 doc
-  exam.example(hint: [\"Use\", space, strong(body: [\"axes\"])], label-text: [\"Example\"], numbered: true, difficulty: \"core\") <ex:slope>
+  exam.example(label-text: [\"Example\"], numbered: true, difficulty: \"core\", hint: [\"Use\", space, strong(body: [\"axes\"])]) <ex:slope>
+    statement:
+      paragraph(body: [\"A particle.\"])
     solution:
       paragraph(body: [\"Resolve.\"])
       paragraph(body: [\"Then solve.\"])
-    statement:
-      paragraph(body: [\"A particle.\"])
 "
     );
     // Slot names are defined only in the element's arguments.
@@ -401,16 +403,16 @@ fn elements_with_arguments_applied_keep_slots_and_keywords() {
         ),
         "\
 doc
-  exam.example(difficulty: \"extension\", label-text: [\"Example\"], numbered: true)
+  exam.example(label-text: [\"Example\"], numbered: true, difficulty: \"extension\")
     statement:
       paragraph(body: [\"S\"])
-  figure(placement: \"top\", body: [])
+  figure(body: [], placement: \"top\")
 "
     );
     // A variable is its value, not a keyword.
     assert_eq!(
         tree("#let p = \"bottom\"\n#figure(placement: p)[]\n"),
-        "doc\n  figure(placement: \"bottom\", body: [])\n"
+        "doc\n  figure(body: [], placement: \"bottom\")\n"
     );
 }
 
@@ -420,7 +422,7 @@ fn floats_in_running_text_stay_as_anchors() {
         tree("Text #figure(placement: wrap)[] more.\n\n#figure[]\nAfter\n"),
         "\
 doc
-  paragraph(body: [\"Text\", space, figure(placement: \"wrap\", body: []), space, \"more.\"])
+  paragraph(body: [\"Text\", space, figure(body: [], placement: \"wrap\"), space, \"more.\"])
   figure(body: [])
   paragraph(body: [\"After\"])
 "
@@ -435,7 +437,7 @@ fn built_in_elements_can_be_called() {
 doc
   section(level: 2)
     heading(level: 2, body: [\"A\"])
-    paragraph(body: [strong(body: [\"b\"]), space, emph(body: [\"c\"]), space, raw(text: \"x\", lang: \"rs\", block: false)])
+    paragraph(body: [strong(body: [\"b\"]), space, emph(body: [\"c\"]), space, raw(text: \"x\", block: false, lang: \"rs\")])
 "
     );
     // Structural elements are made by markup and the model, not by calls.

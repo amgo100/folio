@@ -289,3 +289,81 @@ fn failing_constructs_become_error_markers_and_the_rest_compiles() {
     }
     assert!(found);
 }
+
+/// The order of a call's arguments changes neither the document tree, nor
+/// the styled tree, nor the PDF: an instance stores its fields in its
+/// schema's order (SPEC §4.3), so the caption follows the figure's body
+/// however the call is written.
+#[test]
+fn argument_order_changes_nothing() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    styles = [\"styles/main.fsty\"]\n";
+    let style = "figure.wide { space-before: 6pt; }\nfigure > caption { font-style: italic; }\n";
+    let calls = [
+        "#figure(caption: [The path.], override: (space-after: 4pt), class: \"wide\")[A ball falls.]",
+        "#figure([A ball falls.], class: \"wide\", caption: [The path.], override: (space-after: 4pt))",
+        "#figure(class: \"wide\", override: (space-after: 4pt))[A ball falls.][The path.]",
+        "#figure(override: (space-after: 4pt), body: [A ball falls.], class: \"wide\", caption: [The path.])",
+    ];
+    let builds: Vec<_> = calls
+        .iter()
+        .map(|call| {
+            let mut world = World::new(manifest).unwrap();
+            let main = format!("#doc(title: [Motion])\n\n= Falling\n\n{call}\n\nIt lands.\n");
+            world.set_source("main.fol", &main).unwrap();
+            world.set_source("styles/main.fsty", style).unwrap();
+            let document = folio::document(&world, None).unwrap().unwrap();
+            let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
+            let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+            assert!(
+                compiled.diagnostics.is_empty(),
+                "{call}: {:?}",
+                compiled.diagnostics
+            );
+            (document, styled, compiled.output.expect("a PDF"))
+        })
+        .collect();
+
+    /// The styled tree without spans, which differ with the spelling.
+    fn same_shape(a: &folio::style::StyledNode, b: &folio::style::StyledNode) -> bool {
+        a.name == b.name
+            && a.style == b.style
+            && a.children.len() == b.children.len()
+            && a.children
+                .iter()
+                .zip(&b.children)
+                .all(|(a, b)| same_shape(a, b))
+    }
+
+    /// The keys of the first figure's fields, in order.
+    fn figure_keys(element: &folio::eval::Element) -> Option<Vec<String>> {
+        if element.name.to_string() == "figure" {
+            return Some(element.fields.iter().map(|(k, _)| k.to_string()).collect());
+        }
+        element.fields.iter().find_map(|(_, value)| match value {
+            folio::eval::Value::Content(content) => {
+                content.nodes().iter().find_map(|node| match node {
+                    folio::eval::Node::Element(element) => figure_keys(element),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+    }
+
+    let (document, styled, pdf) = &builds[0];
+    assert_eq!(
+        figure_keys(&document.root).unwrap(),
+        ["body", "caption", "class", "override"]
+    );
+    for ((other_document, other_styled, other_pdf), call) in builds.iter().zip(calls).skip(1) {
+        assert_eq!(document.repr(), other_document.repr(), "{call}");
+        assert_eq!(
+            figure_keys(&document.root),
+            figure_keys(&other_document.root),
+            "{call}"
+        );
+        assert!(same_shape(&styled.root, &other_styled.root), "{call}");
+        assert!(pdf == other_pdf, "{call}: the PDF differs");
+    }
+}

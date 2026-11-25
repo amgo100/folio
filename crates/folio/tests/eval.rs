@@ -931,8 +931,9 @@ fn component_elements_make_instances() {
     let content = logged.content(None);
     assert_eq!(
         content.repr(),
-        "[exam.question(marks: 3, override@pptx: (space-before: 24.0pt), \
-         body: [\"Find\", space, math(text: \"v\", block: false), \".\"]) <q:1>, space, \
+        "[exam.question(marks: 3, \
+         body: [\"Find\", space, math(text: \"v\", block: false), \".\"], \
+         override@pptx: (space-before: 24.0pt)) <q:1>, space, \
          exam.question(marks: 1, body: [\"Why?\"]), space]"
     );
     let element = content.nodes()[0].clone();

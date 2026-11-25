@@ -86,6 +86,7 @@ use folio_component::Name;
 use folio_syntax::ast;
 
 pub use self::content::{Content, Element, Node, Slot};
+pub(crate) use self::element::canonical_fields;
 pub use self::error::{EvalError, Tracepoint};
 pub use self::value::{
     Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module, NativeFunc,

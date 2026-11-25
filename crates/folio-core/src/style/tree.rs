@@ -48,7 +48,8 @@ pub struct Styled {
 ///
 /// The tree has the shape of the document tree: an element's children are
 /// the elements of its body and a part for each slot and content field
-/// other than the body, in the order of its fields. A part holds the
+/// other than the body, in the canonical order of its fields (SPEC §4.3),
+/// which does not depend on how a call was written. A part holds the
 /// elements of its content.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StyledNode {
@@ -266,7 +267,7 @@ pub(crate) fn styled_children<'a>(
 }
 
 /// The children of an element: the elements of its body, and a part for
-/// each other content field, in field order.
+/// each other content field, in the canonical order of its fields.
 fn element_children(element: &Element) -> Vec<Child<'_>> {
     let mut out = Vec::new();
     for (key, value) in element.fields.iter() {
