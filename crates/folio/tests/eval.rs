@@ -842,6 +842,43 @@ fn calls_near_the_depth_limit_are_exact_at_any_depth() {
 }
 
 #[test]
+fn an_error_brought_by_many_imports_is_kept_once() {
+    // Each file imports the next one twice, so the last one's error is
+    // reached along 2^18 paths. It is kept once at each file, not once per
+    // path.
+    let mut files: Vec<(String, String)> = (0..18)
+        .map(|i| {
+            let path = if i == 0 {
+                "main.fol".to_owned()
+            } else {
+                format!("f{i}.fol")
+            };
+            let next = format!("f{}.fol", i + 1);
+            (
+                path,
+                format!("#import \"{next}\": x\n#import \"{next}\": y\n"),
+            )
+        })
+        .collect();
+    files.push((
+        "f18.fol".into(),
+        "#let x = 1\n#let y = 2\n#(1 + \"a\")\n".into(),
+    ));
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        send.send(partial(&files).1)
+    });
+    let messages = receive
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("evaluation finishes in time");
+    assert_eq!(messages, ["error: cannot add an int and a str"]);
+}
+
+#[test]
 fn only_code_that_reads_the_variant_is_evaluated_per_variant() {
     let logged = Logged::new(
         VARIANTS,

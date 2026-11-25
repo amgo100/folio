@@ -7,6 +7,7 @@ use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Abs, BODY, Body, Em, Name, QualifiedName, Ratio, Scalar, UNIVERSAL_FIELDS};
 use folio_syntax::Span;
 use folio_syntax::ast::{self, AstNode, Unit};
+use indexmap::IndexSet;
 
 use super::captures::{captures, free_variables};
 use super::content::{Content, Node};
@@ -84,7 +85,8 @@ pub(crate) struct Vm<'a> {
     /// The errors that markup turned into markers, here and in the
     /// evaluations of the files and calls this one used, for whoever uses
     /// this evaluation to report ([`Memo::recovered`]).
-    pub(crate) recovered: Vec<EvalError>,
+    /// Each error is kept once, however many imports and calls bring it.
+    pub(crate) recovered: IndexSet<EvalError>,
     /// The variables that a `let` or an import that failed would have
     /// bound. Reading one fails without another error, since the failure
     /// was reported where it happened.
@@ -161,7 +163,7 @@ impl<'a> Vm<'a> {
             cost: Cost::default(),
             flow: None,
             recover: false,
-            recovered: Vec::new(),
+            recovered: IndexSet::new(),
             poisoned: BTreeSet::new(),
         }
     }
@@ -358,7 +360,7 @@ impl<'a> Vm<'a> {
         if !self.recover {
             return Err(error.into());
         }
-        self.recovered.push(error);
+        self.recovered.insert(error);
         Ok(())
     }
 
@@ -380,7 +382,7 @@ impl<'a> Vm<'a> {
             Stop::NeedsVariant => return Err(stop),
             Stop::Error(error) => {
                 let message = error.message.clone();
-                self.recovered.push(*error);
+                self.recovered.insert(*error);
                 message
             }
             Stop::Reported if expr.to_untyped().diagnosis().errors => "this does not parse".into(),
@@ -613,6 +615,15 @@ impl<'a> Vm<'a> {
             return Err(depth_exceeded(span, self.limits).into());
         }
         Ok(depth)
+    }
+
+    /// Takes on the recovered errors of an evaluation this one uses.
+    fn take_on(&mut self, errors: &[EvalError]) {
+        for error in errors {
+            if !self.recovered.contains(error) {
+                self.recovered.insert(error.clone());
+            }
+        }
     }
 
     /// The depth key of a call or import made here at depth `depth`. Depth
@@ -1381,7 +1392,7 @@ impl<'a> Vm<'a> {
                 memo
             }
         };
-        self.recovered.extend(memo.recovered.iter().cloned());
+        self.take_on(&memo.recovered);
         self.charge(memo.cost, span)?;
         match &memo.outcome {
             Ok(value) => Ok(value.clone()),
@@ -1763,7 +1774,7 @@ impl<'a> Vm<'a> {
         let memo = self.exact(key, depth, |depth| {
             eval_file_for(db, project, file, &mode, depth)
         });
-        self.recovered.extend(memo.recovered.iter().cloned());
+        self.take_on(&memo.recovered);
         self.charge(memo.cost, span)?;
         match &memo.outcome {
             Ok(module) => Ok(module.clone()),
