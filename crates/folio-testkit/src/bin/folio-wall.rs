@@ -99,9 +99,10 @@ enum Prepared {
 /// the pages after it may reflow.
 fn word_edit(project: &Project) -> Edit {
     let text = &project.sources["main.fol"];
-    let start = text[text.len() / 2..]
+    let middle = text.ceil_char_boundary(text.len() / 2);
+    let start = text[middle..]
         .find("\n\nThe ")
-        .map(|i| text.len() / 2 + i + 2)
+        .map(|i| middle + i + 2)
         .expect("a paragraph after the middle");
     Edit {
         path: "main.fol".into(),
@@ -137,12 +138,16 @@ fn compiled(project: Project, edit: fn(&Project) -> Edit) -> Prepared {
 }
 
 /// The preview path: the pages, without emit, which is what a preview
-/// repaints from; returns the number of pages. Point it at a query that
-/// stops at the pages and runs the build's checks once there is one.
+/// repaints from; returns the number of pages, and panics when the build
+/// cannot be laid out, so that a broken edit is not timed as a fast one.
+/// Point it at a query that stops at the pages and runs the build's checks
+/// once there is one.
 fn preview(world: &World) -> usize {
     folio::pages(world, Target::Pdf, None)
         .expect("not cancelled")
-        .map_or(0, |pages| pages.pages.len())
+        .expect("the build is laid out")
+        .pages
+        .len()
 }
 
 /// Compiles a project in a fresh world, from its sources to the PDF's
@@ -175,13 +180,17 @@ fn preview_after_edit(prepared: Prepared) -> usize {
     preview(&world)
 }
 
-/// Compiles the first variant of a project with variants in a fresh world.
+/// The variant that [`compile_one_variant`] compiles: the teacher's, which
+/// shows everything and shares its styles with the exam.
+const ONE_VARIANT: &str = refdoc::VARIANTS[2];
+
+/// Compiles [`ONE_VARIANT`] of a project with variants in a fresh world.
 fn compile_one_variant(prepared: Prepared) -> usize {
     let Prepared::Project(project) = prepared else {
         unreachable!("set up as a project")
     };
     let world = project.world(BuildMode::Build);
-    let variant = Name::new(refdoc::VARIANTS[0]).expect("a name");
+    let variant = Name::new(ONE_VARIANT).expect("a name");
     let compiled = folio::compile(&world, Target::Pdf, Some(&variant)).expect("not cancelled");
     compiled.output.map_or(0, |bytes| bytes.len())
 }
@@ -218,6 +227,15 @@ fn reference_word_edit() -> Prepared {
 fn reference_style_edit() -> Prepared {
     compiled(refdoc::generate(&Spec::REFERENCE), style_edit)
 }
+
+/// The bounds of the preview after an edit (SPEC §14.1, the M1 exit check
+/// of §15).
+const PREVIEW: Bounds = Bounds {
+    source: "preview after an edit: M1 exit (§15), §14.1",
+    target: Some(Duration::from_millis(30)),
+    limit: Duration::from_millis(80),
+    gated: false,
+};
 
 /// The bounds of a warm full compile (SPEC §14.1).
 const WARM_FULL: Bounds = Bounds {
@@ -263,12 +281,7 @@ fn scenarios() -> Vec<Scenario> {
         Scenario {
             name: "preview-edit",
             what: "100 pages, a one-word edit in the middle, to the pages",
-            bounds: Some(Bounds {
-                source: "preview after an edit: M1 exit (§15), §14.1",
-                target: Some(Duration::from_millis(30)),
-                limit: Duration::from_millis(80),
-                gated: false,
-            }),
+            bounds: Some(PREVIEW),
             setup: reference_word_edit,
             run: preview_after_edit,
         },
@@ -286,7 +299,7 @@ fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             name: "variants-one",
-            what: "100 pages, one variant of three, in a fresh world",
+            what: "100 pages, the teacher variant of three, in a fresh world",
             bounds: Some(WARM_FULL),
             setup: || Prepared::Project(refdoc::generate_variants(&Spec::REFERENCE)),
             run: compile_one_variant,
@@ -491,7 +504,7 @@ fn main() -> ExitCode {
         "ok"
     };
     println!(
-        "three variants against one (p95): {ratio:.2}×, target {VARIANTS_TARGET}×, \
+        "three variants against the teacher's (p95): {ratio:.2}×, target {VARIANTS_TARGET}×, \
          limit {VARIANTS_LIMIT}×: {ratio_status}, three variants in parallel (§14.1)"
     );
 
@@ -541,12 +554,7 @@ fn main() -> ExitCode {
 
     let mut times = typing(keystrokes);
     times.sort();
-    let bounds = Bounds {
-        source: "preview after an edit: M1 exit (§15), §14.1",
-        target: Some(Duration::from_millis(30)),
-        limit: Duration::from_millis(80),
-        gated: false,
-    };
+    let bounds = PREVIEW;
     let p95 = percentile(&times, 95);
     println!(
         "\ntyping: {keystrokes} characters, one every {} ms, edit to pages: median {}, p95 {}, \

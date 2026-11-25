@@ -69,6 +69,14 @@ fn variants() {
     let spec = Spec::pages(2);
     let project = refdoc::generate_variants(&spec);
     assert_eq!(project.name, "refdoc-2-variants");
+    // Without the answers, the document is `generate`'s.
+    let plain = refdoc::generate(&spec);
+    let main = &project.sources["main.fol"];
+    let without: String = main
+        .split_inclusive("\n\n")
+        .filter(|chunk| !chunk.starts_with("#if variant"))
+        .collect();
+    assert_eq!(without, plain.sources["main.fol"]);
     assert_eq!(
         project.sources["main.fol"]
             .matches("#if variant != \"exam\"")

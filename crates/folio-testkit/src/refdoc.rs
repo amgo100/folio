@@ -110,8 +110,8 @@ styles = [\"styles/markscheme.fsty\"]
 targets = [\"pdf\"]
 ";
 
-/// The mark scheme's overlay: answers set smaller, so that it paginates
-/// differently from the exam.
+/// The mark scheme's overlay: the whole mark scheme set smaller, so that
+/// it is shaped and paginates apart from the other two variants.
 const MARKSCHEME_STYLESHEET: &str = "doc { font-size: 10pt; }\n";
 
 /// Generates a document: its project, named `reference` for
@@ -133,8 +133,9 @@ pub fn generate(spec: &Spec) -> Project {
 }
 
 /// Generates a document with the three [`VARIANTS`] (SPEC §6): the
-/// document of [`generate`] with an answer after the running text of every
-/// page that only the mark scheme and teacher variants show. Its project
+/// document of [`generate`], which the exam variant shows unchanged, with
+/// an answer after the running text of every page that only the mark
+/// scheme and teacher variants show. Its project
 /// is named as [`generate`]'s with `-variants` appended.
 pub fn generate_variants(spec: &Spec) -> Project {
     let mut project = generate(spec);
@@ -270,6 +271,9 @@ const CLAUSES: &[&str] = &[
 #[derive(Debug)]
 struct Generator {
     rng: Rng,
+    /// The answers' own generator, so that they leave the rest of the
+    /// document as [`generate`] writes it.
+    answer_rng: Rng,
     out: String,
     figure: usize,
     equation: usize,
@@ -282,6 +286,7 @@ impl Generator {
     fn new(answers: bool) -> Self {
         Self {
             rng: Rng(0x5eed_f011_0b00_00c5),
+            answer_rng: Rng(0xa115_3e45_0b00_00c5),
             out: String::new(),
             figure: 0,
             equation: 0,
@@ -345,7 +350,9 @@ impl Generator {
     /// An answer to the page's questions, shown by every variant but the
     /// exam.
     fn answer(&mut self, page: usize) {
+        std::mem::swap(&mut self.rng, &mut self.answer_rng);
         let sentences = [self.sentence(), self.sentence()];
+        std::mem::swap(&mut self.rng, &mut self.answer_rng);
         let _ = writeln!(
             self.out,
             "#if variant != \"exam\" [\n  Answer {}: {}\n]\n",

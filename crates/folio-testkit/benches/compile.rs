@@ -20,7 +20,8 @@
 //! an edit, up to its pages and without emit. Both go through [`preview`],
 //! the one place to point at a query that stops at the pages and runs the
 //! build's checks once there is one. `compile_variants` counts the ten-page
-//! document with three variants, one variant against all three.
+//! document with three variants: the teacher's variant alone, and all
+//! three.
 //!
 //! Callgrind counts only the benchmark function's thread. Paragraphs that
 //! `folio-text` shapes several at a time run on its shaping thread, so
@@ -30,7 +31,7 @@
 //! counting on and off on entering and leaving any function of a
 //! benchmark's wrapper module, a closure that the body defines and does
 //! not inline included, so the bodies here use loops rather than closures
-//! for their work.
+//! for their work. Issue #234 tracks counting the shaping thread.
 
 // Gungraun's macros expand to paths the first lint calls redundant, and to
 // public items without documentation.
@@ -86,13 +87,19 @@ fn compiled(project: Project) -> (World, String, Range<usize>) {
     let (variant, target) = first_build(&world);
     folio::compile(&world, target, variant.as_ref()).expect("not cancelled");
     let entry = world.manifest().project.entry.v.to_string();
-    let text = &project.sources[&entry];
-    // The first word of the paragraph that starts after the middle.
-    let start = text[text.len() / 2..]
+    let range = middle_word(&project.sources[&entry]);
+    (world, entry, range)
+}
+
+/// The range of "The", the first word of the first paragraph that starts
+/// after the middle of a text.
+fn middle_word(text: &str) -> Range<usize> {
+    let middle = text.ceil_char_boundary(text.len() / 2);
+    let start = text[middle..]
         .find("\n\nThe ")
-        .map(|i| text.len() / 2 + i + 2)
+        .map(|i| middle + i + 2)
         .expect("a paragraph after the middle");
-    (world, entry, start..start + 3)
+    start..start + 3
 }
 
 /// The M0 exit document, compiled, with a word to edit.
@@ -115,11 +122,15 @@ fn recompile_after_edit((mut world, entry, range): (World, String, Range<usize>)
 }
 
 /// The preview path: the pages of a project without variants, which is
-/// what a preview repaints from; returns their number.
+/// what a preview repaints from; returns their number, and panics when the
+/// build cannot be laid out, so that a broken edit is not counted as a
+/// cheap one.
 fn preview(world: &World) -> usize {
     folio::pages(world, Target::Pdf, None)
         .expect("not cancelled")
-        .map_or(0, |pages| pages.pages.len())
+        .expect("the build is laid out")
+        .pages
+        .len()
 }
 
 /// A world of the reference document laid out to its pages, and an edit:
@@ -132,12 +143,8 @@ fn previewed_word_edit() -> Previewed {
     let project = refdoc::generate(&Spec::REFERENCE);
     let world = project.world(BuildMode::Build);
     preview(&world);
-    let text = &project.sources["main.fol"];
-    let start = text[text.len() / 2..]
-        .find("\n\nThe ")
-        .map(|i| text.len() / 2 + i + 2)
-        .expect("a paragraph after the middle");
-    (world, "main.fol".into(), start..start + 3, "This")
+    let range = middle_word(&project.sources["main.fol"]);
+    (world, "main.fol".into(), range, "This")
 }
 
 /// The reference document laid out, with a stylesheet edit (SPEC §14.1):
@@ -175,30 +182,36 @@ fn restyle((mut world, path, range, with): Previewed) -> usize {
     black_box(preview(&world))
 }
 
-/// The ten-page document with three variants, and how many of them to
-/// compile.
-fn m0_exit_variants(variants: usize) -> (Project, usize) {
+/// The variant that `compile_variants::one` compiles: the teacher's, which
+/// shows everything and shares its styles with the exam.
+const ONE_VARIANT: &[&str] = &["teacher"];
+
+/// The ten-page document with three variants, and the variants to compile.
+fn m0_exit_variants(variants: &'static [&'static str]) -> (Project, &'static [&'static str]) {
     (refdoc::generate_variants(&Spec::M0_EXIT), variants)
 }
 
 // Compiles variants of the ten-page document with three variants in a
-// fresh world, to PDF: the first alone, and all three, which share what
-// does not read the variant (SPEC §6). The builds run one after another on
-// the benchmark's thread rather than through `folio::compile_builds`, whose
-// worker threads Callgrind would not count: the counts compare the work,
-// not how it is shared out.
+// fresh world, to PDF: the teacher's alone, and all three, which share
+// what does not read the variant (SPEC §6). The builds run one after
+// another on the benchmark's thread rather than through
+// `folio::compile_builds`, whose worker threads Callgrind would not count:
+// the counts compare the work, not how it is shared out.
 #[library_benchmark]
-#[bench::one(args = (1), setup = m0_exit_variants)]
-#[bench::three(args = (3), setup = m0_exit_variants)]
-fn compile_variants((project, variants): (Project, usize)) -> usize {
-    // A loop rather than a closure: Gungraun toggles counting on entering
-    // and leaving any function of the benchmark's wrapper module, a
-    // closure in its body included, which would stop counting inside it.
+#[bench::one(args = (ONE_VARIANT), setup = m0_exit_variants)]
+#[bench::three(args = (&refdoc::VARIANTS), setup = m0_exit_variants)]
+fn compile_variants((project, variants): (Project, &[&str])) -> usize {
+    // Loops and matches rather than closures: Gungraun toggles counting on
+    // entering and leaving any function of the benchmark's wrapper module,
+    // a closure in its body included, which would stop counting inside it.
     let world = project.world(BuildMode::Build);
     let mut size = 0;
-    for (variant, target) in world.builds().into_iter().take(variants) {
-        let compiled = folio::compile(&world, target, variant.as_ref()).expect("not cancelled");
-        size += compiled.output.map_or(0, |bytes| bytes.len());
+    for &variant in variants {
+        let variant = Name::new(variant).expect("a name");
+        let compiled = folio::compile(&world, Target::Pdf, Some(&variant)).expect("not cancelled");
+        if let Some(bytes) = compiled.output {
+            size += bytes.len();
+        }
     }
     black_box(size)
 }

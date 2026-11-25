@@ -92,8 +92,9 @@ and tables are stand-ins of about their size until math (M1) and tables
 says the page count is off.
 
 `refdoc::generate_variants` generates the same document with three
-variants (`exam`, `markscheme` with a stylesheet overlay, `teacher`) and an
-answer at the end of every page that only the last two show.
+variants (`exam`, `markscheme` with a stylesheet overlay that sets it at
+10pt, `teacher`) and an answer at the end of every page that only the last
+two show; the exam is `refdoc::generate`'s document unchanged.
 
 The instruction-count benchmarks (`cargo bench -p folio-testkit --bench compile`):
 
@@ -101,10 +102,10 @@ The instruction-count benchmarks (`cargo bench -p folio-testkit --bench compile`
 | --- | --- |
 | `compile_cold m0_exit` | The M0 exit check: the ten-page document from source to PDF in a fresh world. |
 | `compile_cold exam`, `notes` | Corpus documents from source to PDF in a fresh world. |
-| `recompile_after_edit m0_exit` | The ten-page document recompiled to PDF after a word is added in its middle. |
-| `preview_after_edit reference` | The preview path: the reference document laid out again to its pages, without emit, after a word is added in its middle. |
+| `recompile_after_edit m0_exit` | The ten-page document recompiled to PDF after a word in its middle is replaced by a longer one. |
+| `preview_after_edit reference` | The preview path: the reference document laid out again to its pages, without emit, after a word in its middle is replaced by a longer one. |
 | `restyle reference` | The preview path after a stylesheet edit: the reference document's body font size changes from 11pt to 12pt. |
-| `compile_variants one`, `three` | The ten-page document with three variants from source to PDF in a fresh world: the first variant alone, and all three one after another. |
+| `compile_variants one`, `three` | The ten-page document with three variants from source to PDF in a fresh world: the teacher's variant alone, and all three one after another. |
 | `parse reference` | Parsing the reference document's markup. |
 
 Callgrind counts only the benchmark's own thread. Paragraphs that
@@ -120,9 +121,10 @@ the limits of SPEC §14.1 and §15:
 - scenarios, each run 20 times after a warm-up and judged by its 95th
   percentile: the M0 exit check (gated: 200 ms); the reference document's
   full compile, one-word edit to PDF, one-word edit to the pages (the
-  preview of the M1 exit check: 80 ms), stylesheet edit, one variant of
-  three and all three in parallel, with the ratio of three variants to
-  one (the others are release criteria and only reported);
+  preview of the M1 exit check: 80 ms), stylesheet edit, the teacher's
+  variant of three and all three in parallel, with the ratio of three
+  variants to the teacher's (the others are release criteria and only
+  reported);
 - stages of the reference document's PDF build: the median and 95th
   percentile of applying the edit, `evaluate`, `document`, `style`,
   `text`, `lines`, `pages` and emit (with the build's checks), for a full
