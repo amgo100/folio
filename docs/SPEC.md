@@ -73,7 +73,7 @@ Folio is for documents whose structure matters and whose outputs must stay consi
 | Fragment | A positioned box produced by layout; pages and slides are fragments |
 | Flow state | Everything the page builder carries from one page to the next (§2.3) |
 | Display list | The drawing commands for one fragment, used by the preview, the editor and the live renderer |
-| Span map | The mapping from glyphs in a fragment back to source positions |
+| Span map | The mapping from glyphs and boxes in a fragment back to source positions |
 | Part | The content of an element's slot, or of a content field other than its body, as a node that selectors name like an element (`example > solution`) |
 
 ## 2. Architecture
@@ -1179,7 +1179,7 @@ Folio Studio is a desktop editor, built with Electron, in which users edit direc
 - **Editability classes.** Every rendered node is *literal* (written directly in a source file; fully editable in place), an *instance* (produced by a call to a function or element; its fields are editable on the page and its definition opens in the source pane), or *generated* (from loops, imports or data files; read-only on the page, with *Edit source* jumping to the loop or the data row).
 - **Transactions** are typed operations (`insert_text`, `split_block`, `wrap_in`, `move_node`, `set_field`, `set_class`, `set_hint`, and others), checked against element schemas and turned into text patches on the buffer.
 - **Undo** stores inverse text patches, so it is exact; one stack serves both views.
-- **Node identity** at runtime carries over reparses through a tree diff; it is used for selections and the inspector only, never for undo or saved data.
+- **Node identity** at runtime carries over reparses through a tree diff; it is used for selections, the inspector and runtime state only, never for undo or saved data. The world keeps it beside the query database, so no compilation reads it and output does not depend on the order of edits (§2.4).
 - **Saving**: edits change the buffer; files are written on save and by autosave after one second idle. The file watcher ignores Folio's own writes; an external change reloads an unmodified buffer and asks before touching a modified one.
 
 **Page view**

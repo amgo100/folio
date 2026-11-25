@@ -106,11 +106,12 @@ fn document(sections: usize) -> String {
     out
 }
 
-/// Pages without the references of their glyphs and shapes to source
-/// nodes.
+/// Pages without the references of their glyphs, shapes and boxes to
+/// source nodes.
 fn strip(pages: &Pages) -> Pages {
     fn fragment(f: &Fragment) -> Fragment {
         let mut out = f.clone();
+        out.source = SourceRef::DETACHED;
         out.items = f
             .items
             .iter()
@@ -124,7 +125,7 @@ fn strip(pages: &Pages) -> Pages {
                             .iter()
                             .map(|g| {
                                 let mut g = g.clone();
-                                g.source = (SourceRef::DETACHED, 0);
+                                g.source = (SourceRef::DETACHED, 0..0);
                                 g
                             })
                             .collect();
@@ -577,7 +578,13 @@ fn unchanged_pages_come_from_the_cache() {
     let edited = source.replace("Heading 13", "Heading thirteen");
     world.set_source("main.fol", &edited).unwrap();
     let after = pages(&world);
-    let shared = |a: &Page, b: &Page| a.fragment.items.as_ptr() == b.fragment.items.as_ptr();
+    // The page itself is dressed as a box of the document; its body's
+    // content is what the cache shares.
+    let body = |p: &Page| match &p.fragment.items[0].1 {
+        FragmentItem::Group(body) => body.items.as_ptr(),
+        _ => panic!("a page holds its body"),
+    };
+    let shared = |a: &Page, b: &Page| body(a) == body(b);
     let unchanged = before
         .pages
         .iter()

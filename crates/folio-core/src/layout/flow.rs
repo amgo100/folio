@@ -37,6 +37,8 @@ use std::sync::Arc;
 
 use ecow::EcoVec;
 use folio_component::{Abs, Color, Em, Paint, SourceRef, Value};
+
+use crate::span_map::source_ref;
 use folio_syntax::Span;
 use folio_text::{Glyph, ItemKind, Shaped};
 
@@ -46,7 +48,7 @@ use super::paragraph::{LineSlot, ParagraphLayout};
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{Text, TextBlock, TextFlow};
+use crate::text::{Text, TextBlock, TextFlow, TextSource};
 
 /// The cost of a break that leaves a widow or an orphan (TeX's
 /// `\widowpenalty` and `\clubpenalty`).
@@ -110,9 +112,8 @@ pub(super) struct ParagraphInfo {
     pub orphans: usize,
     /// How each segment of the paragraph is painted.
     pub segments: EcoVec<SegmentPaint>,
-    /// Ranges of the text that are the text of a source node, with the
-    /// node, in order.
-    pub sources: EcoVec<(Range<usize>, SourceRef)>,
+    /// Ranges of the text that are the text of a source node, in order.
+    pub sources: EcoVec<TextSource>,
     /// The element whose content the paragraph is.
     pub span: Span,
 }
@@ -135,27 +136,30 @@ pub(super) struct SegmentPaint {
 }
 
 impl ParagraphInfo {
-    /// The source reference and the offset within its node of the text at
-    /// a byte of the paragraph: the node the byte comes from, or the
-    /// paragraph's element.
-    pub(super) fn source(&self, at: usize) -> (SourceRef, u32) {
-        let i = self.sources.partition_point(|(r, _)| r.end <= at);
+    /// The source of the bytes `range` of the paragraph's text, as a glyph
+    /// that shows them names it ([`folio_component::Glyph::source`]): the
+    /// node the first byte comes from, with the bytes of its text that the
+    /// range shows up to the node's end; or the paragraph's element, with
+    /// no bytes, where no node gave the text. An empty range is a position
+    /// in the node whose text it starts.
+    pub(super) fn source(&self, range: Range<usize>) -> (SourceRef, Range<u32>) {
+        let at = range.start;
+        let i = self.sources.partition_point(|s| s.range.end <= at);
         match self.sources.get(i) {
-            Some((range, source)) if range.start <= at => {
-                (*source, u32::try_from(at - range.start).unwrap_or(u32::MAX))
+            Some(source) if source.range.start <= at => {
+                let within = source.within(range);
+                (
+                    source_ref(source.span),
+                    offset(within.start)..offset(within.end),
+                )
             }
-            _ => (source_ref(self.span), 0),
+            _ => (source_ref(self.span), 0..0),
         }
     }
 }
 
-/// The reference of a source node in fragments.
-pub(super) fn source_ref(span: Span) -> SourceRef {
-    if span.is_detached() {
-        SourceRef::DETACHED
-    } else {
-        SourceRef(span.into_raw().get())
-    }
+fn offset(at: usize) -> u32 {
+    u32::try_from(at).unwrap_or(u32::MAX)
 }
 
 /// What a page holds whole.
@@ -546,11 +550,7 @@ impl Builder<'_> {
             widows: count("widows"),
             orphans: count("orphans"),
             segments: paints,
-            sources: paragraph
-                .sources
-                .iter()
-                .map(|s| (s.range.clone(), source_ref(s.span)))
-                .collect(),
+            sources: paragraph.sources.clone(),
             span: paragraph.span,
         });
         for line in 0..layout.lines.len() {

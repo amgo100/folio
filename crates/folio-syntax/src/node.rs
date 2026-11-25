@@ -409,6 +409,21 @@ impl SyntaxNode {
         }
     }
 
+    /// Whether two nodes are one node of one tree, or of two revisions of a
+    /// tree that an edit left alone: they have the same span and share
+    /// their children, or are equal leaves. Cheap: it never descends, since
+    /// a reparse that changes or renumbers anything below a node copies it.
+    pub fn is_same(&self, other: &Self) -> bool {
+        self.span == other.span
+            && match (&self.data, &other.data) {
+                (Node::Leaf(a, ka), Node::Leaf(b, kb)) => ka == kb && a == b,
+                (Node::Inner(a, _), Node::Inner(b, _)) => Arc::ptr_eq(a, b),
+                (Node::Error(a, _), Node::Error(b, _)) => Arc::ptr_eq(a, b),
+                (Node::Warning(a, _), Node::Warning(b, _)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+
     /// Whether the two syntax nodes are the same apart from spans.
     pub fn spanless_eq(&self, other: &Self) -> bool {
         self.kind() == other.kind() && {

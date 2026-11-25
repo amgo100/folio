@@ -187,7 +187,7 @@ impl Model<'_> {
         let mut out: Vec<Node> = Vec::new();
         for node in content.nodes() {
             match node {
-                Node::Space if matches!(out.last(), None | Some(Node::Space)) => {}
+                Node::Space(_) if matches!(out.last(), None | Some(Node::Space(_))) => {}
                 Node::Element(element) => out.push(Node::Element(self.element(element))),
                 // Checked when the element was made; reached only by
                 // content that no element holds.
@@ -195,7 +195,7 @@ impl Model<'_> {
                 other => out.push(other.clone()),
             }
         }
-        while matches!(out.last(), Some(Node::Space)) {
+        while matches!(out.last(), Some(Node::Space(_))) {
             out.pop();
         }
         out.into_iter().collect()
@@ -207,8 +207,8 @@ impl Model<'_> {
         let mut blocks = Blocks::default();
         for node in content.nodes() {
             match node {
-                Node::Parbreak => blocks.end_paragraph(),
-                Node::Space if blocks.run.is_empty() => {}
+                Node::Parbreak(_) => blocks.end_paragraph(),
+                Node::Space(_) if blocks.run.is_empty() => {}
                 Node::Rule(_) => blocks.rules.push(node.clone()),
                 Node::Slot(slot) => self.misplaced(slot),
                 Node::Element(element) => {
@@ -262,7 +262,7 @@ struct Blocks {
 impl Blocks {
     fn inline(&mut self, node: Node) {
         self.end_list();
-        if matches!(node, Node::Space) && matches!(self.run.last(), Some(Node::Space)) {
+        if matches!(node, Node::Space(_)) && matches!(self.run.last(), Some(Node::Space(_))) {
             return;
         }
         self.run.push(node);
@@ -289,7 +289,7 @@ impl Blocks {
     }
 
     fn end_paragraph(&mut self) {
-        while matches!(self.run.last(), Some(Node::Space)) {
+        while matches!(self.run.last(), Some(Node::Space(_))) {
             self.run.pop();
         }
         if self.run.is_empty() {
@@ -410,7 +410,7 @@ fn node_span(node: &Node) -> Option<Span> {
         Node::Element(element) => Some(element.span),
         Node::Slot(slot) => Some(slot.span),
         Node::Rule(rule) => Some(rule.span()),
-        Node::Space | Node::Linebreak | Node::Parbreak | Node::Quote { .. } => None,
+        Node::Space(_) | Node::Linebreak(_) | Node::Parbreak(_) | Node::Quote { .. } => None,
     }
 }
 

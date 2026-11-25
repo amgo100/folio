@@ -54,6 +54,8 @@ pub struct Styled {
 pub struct StyledNode {
     /// The element's name, or the part's.
     pub name: NodeName,
+    /// The element, or the element whose part it is.
+    pub span: Span,
     /// Its style.
     pub style: ComputedStyle,
     /// Its children.
@@ -355,19 +357,25 @@ struct Walker<'a> {
 impl<'a> Walker<'a> {
     fn root(&mut self, root: &Element) -> StyledNode {
         let siblings = [Child::Element(root)];
-        self.node(&siblings, 0, None, None)
+        self.node(&siblings, 0, None, None, root.span)
     }
 
-    /// Styles the child `i` of `siblings`, with the context of its parent.
+    /// Styles the child `i` of `siblings`, with the context of its parent;
+    /// `owner` is the element whose children they are.
     fn node(
         &mut self,
         siblings: &[Child<'_>],
         i: usize,
         context: Option<ContextKey<'a>>,
         parent: Option<&ComputedStyle>,
+        owner: Span,
     ) -> StyledNode {
         let needs = &self.cascade.needs;
         let child = siblings[i];
+        let span = match child {
+            Child::Element(element) => element.span,
+            Child::Part(..) => owner,
+        };
         let view = self.view(siblings, i, &needs.subject, needs);
         let key = MatchKey::new(self.db, self.build, view, context);
         let matched = match_node(self.db, key).clone();
@@ -414,7 +422,7 @@ impl<'a> Walker<'a> {
         }
         let grandchildren = child.children();
         let children = (0..grandchildren.len())
-            .map(|j| self.node(&grandchildren, j, child_context, Some(&style)))
+            .map(|j| self.node(&grandchildren, j, child_context, Some(&style), span))
             .collect();
         if scoped_view.is_some() {
             self.scoped_chain.pop();
@@ -423,6 +431,7 @@ impl<'a> Walker<'a> {
 
         StyledNode {
             name: name_of(child),
+            span,
             style,
             children,
         }

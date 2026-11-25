@@ -1,5 +1,10 @@
 //! Shaped text as it appears in fragments: [`GlyphRun`]s of positioned
 //! glyphs, each traced back to its source (SPEC §1.5 span map, §6.4).
+//!
+//! A glyph's [`Glyph::source`] names the source node its text came from and
+//! the bytes of the node's text that it shows. The core resolves that pair
+//! to a file and a byte range of the file; components copy what they are
+//! given.
 
 use std::ops::Range;
 
@@ -73,9 +78,13 @@ pub struct Glyph {
     pub x_offset: Em,
     /// The vertical offset from the baseline, upwards.
     pub y_offset: Em,
-    /// The bytes of the run's text that this glyph shows.
+    /// The bytes of the run's text that this glyph shows: more than one
+    /// character for a ligature.
     pub range: Range<u32>,
-    /// The source node the glyph came from, and the byte offset of its text
-    /// within that node.
-    pub source: (SourceRef, u32),
+    /// The source node the glyph came from, and the bytes of the node's
+    /// text that it shows. A glyph whose text runs across two nodes names
+    /// the first, with the part of its text that the first gives; a hyphen
+    /// that a line break inserts shows no text of its node, and names the
+    /// empty range where the break is.
+    pub source: (SourceRef, Range<u32>),
 }

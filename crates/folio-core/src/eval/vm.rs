@@ -293,12 +293,15 @@ impl<'a> Vm<'a> {
                 self.step(span)?;
                 text(t.get().clone())
             }
-            ast::Expr::Space(_) => Content::node(Node::Space),
-            ast::Expr::Linebreak(_) => Content::node(Node::Linebreak),
-            ast::Expr::Parbreak(_) => Content::node(Node::Parbreak),
+            ast::Expr::Space(_) => Content::node(Node::Space(span)),
+            ast::Expr::Linebreak(_) => Content::node(Node::Linebreak(span)),
+            ast::Expr::Parbreak(_) => Content::node(Node::Parbreak(span)),
             ast::Expr::Escape(e) => text(e.get().into()),
             ast::Expr::Shorthand(s) => text(s.get().into()),
-            ast::Expr::SmartQuote(q) => Content::node(Node::Quote { double: q.double() }),
+            ast::Expr::SmartQuote(q) => Content::node(Node::Quote {
+                double: q.double(),
+                span,
+            }),
             ast::Expr::Strong(s) => {
                 self.step(span)?;
                 let body = self.markup(s.body())?;

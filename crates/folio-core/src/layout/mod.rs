@@ -287,9 +287,9 @@ fn report_lines(
 }
 
 /// The source of the text a line ends with: the part of the source node
-/// that is on the line where the node's source is the paragraph's text,
-/// else the whole node; or the paragraph's element when the line's text
-/// comes from no node.
+/// that is on the line where the span map can tell it
+/// ([`crate::span_map::text_range`]), else the whole node; or the
+/// paragraph's element when the line's text comes from no node.
 fn line_span(db: &dyn Db, project: Project, paragraph: &TextParagraph, line: &Line) -> DiagSpan {
     let end = line.content_end.max(line.range.start + 1);
     let Some(source) = paragraph
@@ -301,16 +301,14 @@ fn line_span(db: &dyn Db, project: Project, paragraph: &TextParagraph, line: &Li
         return paragraph.span.into();
     };
     let part = line.range.start.max(source.range.start)..end.min(source.range.end);
-    narrow(db, project, paragraph.shaped.text(), source, part).unwrap_or_else(|| source.span.into())
+    narrow(db, project, source, part).unwrap_or_else(|| source.span.into())
 }
 
-/// The part `part` of a paragraph's text as a sub-range of the source node
-/// it comes from, if the node's source starts with the text it gave: a
-/// text node of markup does, while a string from a script does not.
+/// The part `part` of a paragraph's text, which starts in `source`, as a
+/// sub-range of the source node it comes from.
 fn narrow(
     db: &dyn Db,
     project: Project,
-    text: &str,
     source: &TextSource,
     part: Range<usize>,
 ) -> Option<DiagSpan> {
@@ -320,14 +318,8 @@ fn narrow(
         .values()
         .find(|f| f.source(db).id() == id)?;
     let file = file.source(db);
-    let node = file.find(source.span)?;
-    let written = file.text().get(node.range())?;
-    if !written.starts_with(text.get(source.range.clone())?) {
-        return None;
-    }
-    let sub = SubRange::new(
-        part.start - source.range.start,
-        part.end - source.range.start,
-    )?;
+    let node = file.find(source.span)?.range();
+    let bytes = crate::span_map::text_range(file, source.span, source.within(part))?;
+    let sub = SubRange::new(bytes.start - node.start, bytes.end - node.start)?;
     Some(DiagSpan::from_span(source.span, Some(sub)))
 }

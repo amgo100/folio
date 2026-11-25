@@ -13,10 +13,17 @@ use crate::text::{GlyphRun, SourceRef};
 /// place it in a flow: its baselines, so that surrounding text can snap to
 /// the baseline grid, and its keep and break constraints across its lower
 /// boundary (SPEC §3.3).
+///
+/// Like its glyphs and shapes, a fragment names the source node it is the
+/// box of, so the span map leads from any box on a page back to source
+/// (SPEC §1.5, §12.2).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Fragment {
     /// The size of the box.
     pub size: Size,
+    /// The source node whose box this is: the element of a block, or
+    /// [`SourceRef::DETACHED`] for a box that no node makes.
+    pub source: SourceRef,
     /// The content, positioned relative to the top-left corner, in painting
     /// order.
     pub items: EcoVec<(Point, FragmentItem)>,
@@ -36,17 +43,24 @@ pub struct Fragment {
 }
 
 impl Fragment {
-    /// An empty fragment of a size, with its baselines at the bottom edge
-    /// and no keep or break constraints.
+    /// An empty fragment of a size, with its baselines at the bottom edge,
+    /// no keep or break constraints, and no source node.
     pub fn new(size: Size) -> Self {
         Self {
             size,
+            source: SourceRef::DETACHED,
             items: EcoVec::new(),
             first_baseline: size.height,
             last_baseline: size.height,
             keep_with_next: false,
             break_penalty_after: 0,
         }
+    }
+
+    /// The same fragment as the box of a source node.
+    pub fn with_source(mut self, source: SourceRef) -> Self {
+        self.source = source;
+        self
     }
 
     /// Adds an item on top of the existing ones.
