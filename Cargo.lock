@@ -310,6 +310,7 @@ name = "folio-pdf"
 version = "0.0.0"
 dependencies = [
  "folio-component",
+ "folio-fonts",
 ]
 
 [[package]]

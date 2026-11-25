@@ -41,8 +41,8 @@ use super::set::set_line;
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::fonts;
+use crate::pipeline::step_styled;
 use crate::span_map::source_ref;
-use crate::style::styles;
 use crate::text::text;
 
 /// How much a page's emptiness costs: an empty page would cost this much.
@@ -102,7 +102,7 @@ struct PageOut {
 pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let lines = lines(db, build).as_ref()?;
     let text = text(db, build).as_ref()?;
-    let styled = styles(db, build).as_ref()?;
+    let styled = step_styled(db, build)?;
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
     let master = PageMaster::of(&styled.page, props);

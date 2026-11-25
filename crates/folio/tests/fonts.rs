@@ -387,8 +387,18 @@ fn a_font_that_forbids_embedding_is_an_error_in_a_pdf() {
                 .into()
         )]
     );
+    // DOCX embeds no fonts by default; its build only says that it has no
+    // writer yet.
     let docx = folio::compile(&world, Target::Docx, Some(&exam)).unwrap();
-    assert!(docx.diagnostics.is_empty(), "{:?}", docx.diagnostics);
+    assert_eq!(
+        messages(&docx),
+        [(
+            Severity::Warning,
+            "DOCX output is not implemented yet: this build checks the document but writes \
+             no file"
+                .into()
+        )]
+    );
 }
 
 #[test]

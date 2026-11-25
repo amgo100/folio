@@ -136,6 +136,14 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
         element("link", ElementKind::Inline, false)
             .fields([FieldDecl::required(name("dest"), FieldType::Str)])
             .build(),
+        // An error marker (SPEC §12.2): it stands where a construct failed
+        // to parse or evaluate, so the rest of the document still compiles.
+        // Its body is what it shows, and stylesheets style it as
+        // `error { .. }`.
+        element("error", ElementKind::Inline, false)
+            .fields([FieldDecl::required(name("message"), FieldType::Str)])
+            .body(content(Inline))
+            .build(),
     ]
 });
 

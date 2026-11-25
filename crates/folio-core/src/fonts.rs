@@ -39,8 +39,9 @@ use folio_syntax::{DiagSpan, Span};
 use crate::db::{Build, BuildMode, Db, Project};
 use crate::diag::{self, Diagnostic};
 use crate::model::document;
+use crate::pipeline::step_styled;
 use crate::project::{FormattingMode, LockedFont};
-use crate::style::{ComputedStyle, Properties, styles};
+use crate::style::{ComputedStyle, Properties};
 
 /// What pins a face, so that a build with it gives the same output on
 /// another machine (SPEC §2.4).
@@ -426,7 +427,7 @@ impl Request {
 #[salsa::tracked]
 pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
     let project = build.project(db);
-    let Some(styled) = styles(db, build) else {
+    let Some(styled) = step_styled(db, build) else {
         return;
     };
     let Some(doc) = document(db, project, build.variant(db).clone()) else {
