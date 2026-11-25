@@ -55,3 +55,10 @@ path = "fuzz_targets/nesting.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "differential"
+path = "fuzz_targets/differential.rs"
+test = false
+doc = false
+bench = false

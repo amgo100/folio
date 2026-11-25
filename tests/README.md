@@ -75,6 +75,16 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | `reparse` | An incremental reparse after an edit equals a full parse, and node identities follow the edit. |
 | `style` | Evaluating content and matching a stylesheet's selectors against it finishes without a panic, within small evaluation limits. |
 | `nesting` | A script that nests content, arrays, dictionaries, closures and arguments by applying wrappers in loops compiles to PDF on a 2 MiB stack, or stops at the nesting limit, without a panic or a stack overflow. |
+| `differential` | After each edit of a random sequence to a corpus project's content and stylesheets, applied in place through `World::edit_source`, every build has the outputs, the diagnostics and the span maps of its pages (spans resolved to byte ranges) of a world built afresh from the same texts. It catches stale results in the memoised queries and in the shaping, line-break and page caches, which live outside salsa. |
+
+The `differential` harness also runs as a property test on stable:
+`cargo test -p folio-testkit --test differential` checks 12 random
+sequences of 6 edits beyond the seed corpus. `FOLIO_DIFFERENTIAL_CASES=<n>`
+runs more, and a failure names its seed, which
+`FOLIO_DIFFERENTIAL_SEED=<seed> FOLIO_DIFFERENTIAL_CASES=1` reruns alone.
+`crates/folio/tests/incremental.rs` checks that results are reused: a
+one-character edit in a paragraph does not re-run the cascade, and a
+reflow confined to one page takes the other pages from the page cache.
 
 When a target fails, libFuzzer writes the input to `fuzz/artifacts/<target>/`.
 Reproduce it with `cargo +nightly fuzz run <target> <file>`, fix the bug,
