@@ -1,0 +1,17 @@
+[package]
+name = "folio-pdf-prototype"
+description = "Prototype for the PDF assumptions of SPEC §16.2 (issue #38); not part of the workspace"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# A workspace of its own, so that krilla does not enter the main workspace's
+# lockfile before `folio-pdf` chooses its version.
+[workspace]
+
+[dependencies]
+hayro-svg = "0.9"
+krilla = { version = "=0.8.2", features = ["pdf"] }
+krilla-svg = "=0.8.1"
+lopdf = "0.47"
+usvg = "0.47"

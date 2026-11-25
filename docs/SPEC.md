@@ -130,7 +130,7 @@ Components take part in every stage through the extension points of §3.
 | `folio-runtime` | Live renderer: clock, events, dynamic elements, triggers. No tokio or threads, so it also compiles to WebAssembly (§16.1) | folio-component, folio-anim, folio-render; the live-region sub-pipeline is injected by the folio library as a callback |
 | `folio-edit` | Editable model: buffers, transactions, undo, hit-testing, caret geometry, spell checking | `folio-syntax`, `folio-layout`, `spellbook` |
 | `folio-render` | Display lists and their binary wire format (§12.2), glyph rasterisation, SVG and raster output. No tokio or threads, so it also compiles to WebAssembly (§16.1) | `tiny-skia`, usvg, image |
-| `folio-pdf` | PDF output through krilla: tagging, PDF/UA, PDF/A, font subsetting, colour management, import of PDF figures | `krilla` |
+| `folio-pdf` | PDF output through krilla: tagging, PDF/UA, PDF/A, font subsetting, colour management, import of PDF figures | `krilla`, `hayro-svg` (PDF figures under PDF/A and PDF/UA, §11.1) |
 | `folio-ooxml` | OOXML package writer; DOCX and PPTX backends; OMML; animation timing | `zip`, `quick-xml` |
 | `folio-preview` | Watch server, live presentation server, websocket protocol | `notify`, `tokio` |
 | `folio-lsp` | Language server, synchronous, with cancellation through the query database (§2.3) | `lsp-server` |
@@ -798,7 +798,7 @@ Math is parsed into a semantic math tree and laid out with the font's OpenType M
 
 | Target | Representation |
 | --- | --- |
-| PDF | Glyphs positioned by Folio, tagged as `Formula` with alt text (PDF/UA-1). Under PDF 2.0 with PDF/UA-2 (from M10, §11.1) a MathML associated file is attached; not under base PDF/A-4, which does not allow it (PDF/A-4f does). Where PDF 2.0 MathML structure elements are supported, they are preferred, because they need no embedded file (§16.2) |
+| PDF | Glyphs positioned by Folio, in a `Formula` structure element with alt text; under PDF/UA-1 (PDF 1.7) that is all. PDF/UA-2 (PDF 2.0, from M10, §11.1) requires MathML for mathematics, so `Formula` also holds the formula as MathML structure elements, which every PDF/A-4 level allows and which NVDA reads in Acrobat, Foxit and Firefox. Where embedded files are allowed (PDF/A-4f, or no PDF/A level), a MathML associated file (`AFRelationship` `Supplement`, type `application/mathml+xml`) is attached to `Formula` as well, as the PDF Association's best-practice guide for math recommends; base PDF/A-4 does not allow it (§11.1, §16.2) |
 | DOCX | Native OMML (`m:oMath`), editable in Word's equation editor |
 | PPTX | OMML inside `a14:m` (PowerPoint 2010 and later) with an image fallback |
 | Live | Rendered glyphs |
@@ -938,7 +938,7 @@ A drawing can depend on a time parameter, passed as a function argument in code 
 | Discrete steps | One page per step (labels in §10.1). `slide { animation: flatten; }` in a variant's stylesheet gives one page per slide in its final state, for handouts; `#only` content absent from the final step is then dropped with a lint unless it has `handout: keep` | Click-triggered build sequence | Steps on click, key or clicker |
 | Layout | Each distinct layout once | One slide per distinct layout | All step layouts of the current and next slide precomputed |
 | Effects | Not shown | Nearest native preset, with durations | As specified |
-| Slide transitions | A PDF page transition on the first page of each slide only, where viewers support it | Native transitions | As specified |
+| Slide transitions | A PDF page transition on the first page of each slide only. Most classroom viewers ignore it, and the rest play it only in full-screen or presentation mode (§16.2), so step pages must read correctly without it | Native transitions | As specified |
 | Continuous animation | Final state | Motion path or final state | Real time |
 | Dynamic elements and inputs | Static fallback and sample pages (§10.5, §10.6) | Static fallback and sample slides | Live |
 
@@ -1050,10 +1050,12 @@ PDF and live are fixed-layout targets rendered from Folio's fragments. DOCX and 
 
 - Written with `krilla`, which provides tagging, PDF/UA-1, PDF/A, font subsetting and ICC colour handling, and which Typst's PDF export also uses; PDF 1.7 by default, PDF 2.0 optional.
 - Font subsets with ToUnicode maps, so text is searchable and copyable (§2.5).
-- Images: JPEG passed through; PNG and WebP decoded and Flate-compressed; SVG converted to native vector paths (via `usvg`); PDF figures imported as form XObjects through krilla's PDF embedding (§16.2).
+- Images: JPEG passed through; PNG and WebP decoded and Flate-compressed; SVG converted to native vector paths (via `usvg`).
+- **PDF figures** are placed as form XObjects through krilla's PDF embedding, which keeps their vectors, fonts and text but drops their annotations and tags. When a PDF/A or PDF/UA level is requested, krilla refuses embedded pages, because it cannot check them: the page's own marked content nests inside Folio's tags, which PDF/UA forbids, and its fonts and colours need not meet PDF/A. Under those levels Folio converts the figure to vector paths (through `hayro-svg` and the SVG path above), so its text becomes outlines and its alt text carries its content. A figure whose PDF version is newer than the output's is converted the same way, with a warning (§16.2).
 - Navigation: bookmarks from headings, links for references, named destinations for labels, page labels (i, ii, 1, 2, and 3a, 3b for animation steps and 3-s1 for sample pages).
-- **Tagging from the first version**: the structure tree is built from the semantic tree. Targets: PDF/UA-1 on PDF 1.7 from M0, and PDF/UA-2 on PDF 2.0 from M10 (§16.2); alt text is required under `--strict-a11y`.
-- **PDF/A**: PDF/A-2u (or PDF/A-2a together with PDF/UA-1) on PDF 1.7, and PDF/A-4 with PDF/UA-2 (from M10), each with the required OutputIntent and ICC profile. MathML associated files are not allowed under PDF/A-2; under PDF/A-4 they need the PDF/A-4f profile, which Folio offers as a separate conformance level; under base PDF/A-4 they are omitted (§16.2).
+- **Slides**: step pages and page transitions as §10.4. krilla 0.8 cannot write page transitions (§16.2).
+- **Tagging from the first version**: the structure tree is built from the semantic tree. Targets: PDF/UA-1 on PDF 1.7 from M0, and PDF/UA-2 on PDF 2.0 from M10, which needs krilla features that version 0.8 lacks (§16.2); alt text is required under `--strict-a11y`.
+- **PDF/A**: PDF/A-2u (or PDF/A-2a together with PDF/UA-1) on PDF 1.7, and PDF/A-4 or PDF/A-4f with PDF/UA-2 (from M10), each with the required OutputIntent and ICC profile. PDF/A-2 and base PDF/A-4 (ISO 19005-4:2020) accept only PDF/A files as embedded files, so the MathML associated files of §8.3 need PDF/A-4f, which Folio offers as a separate conformance level. Under base PDF/A-4 they are omitted and the MathML structure elements remain (§16.2).
 - **Colour**: stylesheet colours are sRGB; `color-space: cmyk` with an ICC profile (such as FOGRA39) prepares files for commercial print.
 
 ### 11.2 DOCX
@@ -1395,6 +1397,8 @@ A first usable release (exam and mark scheme to PDF, with math, variants and liv
 10. **M9 — Folio Studio beta.** Page editing, inspector, style panel, variant switcher, step strip, structural math, source pane. *Exit:* the acceptance documents can be written in the app without opening source.
 11. **M10 — 1.0.** PDF/UA and PDF/A, accessibility review of the app, all performance targets met.
 
+**Every milestone's exit** also includes a dependency review: for `harfrust`, `icu_segmenter`, `salsa`, `lsp-server` and `krilla` (§2.2), the latest release, recent activity, and any notice of deprecation or a successor (§16.2). At the close of M3 and M9 the review also checks krilla's releases for the features that M4 and M10 need (§16.2), so that a missing one is known a milestone ahead.
+
 **After 1.0**, in no fixed order: the WebAssembly component tier and the planned components of §13.6; native Office charts and shapes; contour wrap and unequal columns; comments and tracked changes in Folio Studio, exported as Word comments and revisions; HTML and EPUB output, including standalone live presentations; Word citation fields; a LaTeX import tool; a package registry.
 
 ## 16. Open questions and assumptions
@@ -1417,11 +1421,9 @@ A first usable release (exam and mark scheme to PDF, with math, variants and liv
 | Assumption | Section | Verification |
 | --- | --- | --- |
 | LibreOffice and Keynote show the image fallback of OMML inside `a14:m` (or render the OMML) | §8.3 | Open `tests/office/pptx/math-a14.pptx` in each |
-| PDF viewers used in classrooms honour page transitions | §10.4 | Test common viewers |
-| PDF 2.0 MathML structure elements are usable; MathML attachments need PDF/A-4f | §8.3, §11.1 | Check ISO 19005-4; validate with veraPDF |
-| `harfrust`, `icu_segmenter`, `salsa`, `lsp-server` and `krilla` stay maintained | §2.2 | Review at each milestone |
-| `krilla` embeds PDF figures as form XObjects | §11.1 | Prototype in M0 |
-| `krilla` supports PDF/UA-2 by M10 | §11.1 | Check krilla's releases before M10 |
+| `harfrust`, `icu_segmenter`, `salsa`, `lsp-server` and `krilla` stay maintained | §2.2 | Review at the close of each milestone (§15). All five were maintained at the M0 review (`tests/pdf/README.md`); krilla had not released for six months, though its `main` branch was active |
+| `krilla` gains what Folio needs beyond 0.8.2: page transitions by M4; MathML structure elements, associated files on structure elements, PDF/UA-2 and the corrected PDF 2.0 namespace (fixed on `main`) by M10 | §8.3, §10.4, §11.1 | Contribute upstream; `pdf-writer`, which krilla writes with, has the primitives. Check krilla's releases at the close of M3 and M9 (§15). If a feature is not released in time, `folio-pdf` uses a patched krilla vendored in the repository until a release has it |
+| A dated revision of ISO 19005-4 lets base PDF/A-4 embed MathML files added for accessibility | §11.1 | Check when ISO/DIS 19005-4.2 is published (at the close of voting in late 2026); then attach the MathML file under base PDF/A-4 too |
 | Typst's math layout can be adapted to Folio's math tree without Typst's content model | §8.2 | Prototype in M1 |
 
 The Office assumptions below were verified in M0 with hand-written files opened in Word and PowerPoint 16.0 (Microsoft 365, build 20527). The files, the scripts that measure them and the measurements are in `tests/office`.
@@ -1434,6 +1436,14 @@ The Office assumptions below were verified in M0 with hand-written files opened 
 | OMML inside `a14:m` renders in PowerPoint | §8.3 | Confirmed for display and inline equations, and kept on save; versions before Microsoft 365 were not available to test |
 | PowerPoint covers the effect vocabulary of §10.2 | §10.4 | Confirmed: every entrance, exit and emphasis effect, paragraph-level effects, a motion path, and simultaneous swaps of shapes and of pictures read back as native effects and survive a save |
 | Chained motion paths approximate physical timing | §10.3 | Confirmed: PowerPoint moves at a uniform speed in fractions of the slide's width and height, so the writer can predict the deviation; it falls with the square of the number of segments |
+
+The PDF assumptions below were verified in M0 with files written by a krilla 0.8.2 prototype and validated with veraPDF 1.30.4, and for viewers from their source code and documentation, with Acrobat on Windows also driven on screen. The files, the prototype and the results are in `tests/pdf`.
+
+| Verified assumption | Section | Result |
+| --- | --- | --- |
+| krilla embeds PDF figures as form XObjects | §11.1 | Confirmed: one form XObject that keeps the page's content, fonts and text. krilla refuses it under every PDF/A and PDF/UA level, and veraPDF confirms that the embedded page's marked content breaks PDF/UA-1, so §11.1 converts figures to vector paths under those levels |
+| PDF 2.0 MathML structure elements are usable; MathML associated files need PDF/A-4f | §8.3, §11.1 | Confirmed: structure elements pass PDF/A-4, PDF/UA-2 and WTPDF 1.0; an associated file fails base PDF/A-4 (rule 6.9-3) and passes PDF/A-4f. NVDA reads structure elements in Acrobat, Foxit and Firefox, and associated files in Foxit and Firefox only; JAWS reads neither yet. PDF/UA-2 requires MathML for mathematics, so §8.3 writes structure elements at every PDF/A-4 level |
+| PDF viewers used in classrooms honour page transitions | §10.4 | Does not hold: browser viewers, Apple devices and whiteboard software ignore them; Acrobat on Windows, Foxit, Okular, Evince and pdfpc play them only in full-screen or presentation mode. On screen, Acrobat on Windows played all eleven styles in full screen and none in normal view. §10.4 keeps the transition as an enhancement that nothing depends on |
 
 ## Appendix A. Why the stylesheet language is a CSS-like hybrid
 
