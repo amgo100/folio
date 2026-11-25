@@ -135,16 +135,29 @@ fn world(files: &[(&str, &str)]) -> World {
     world
 }
 
+/// Whether a diagnostic says only that a feature is not laid out or
+/// implemented yet, which the document model does not depend on.
+fn not_yet(diagnostic: &folio::Diagnostic) -> bool {
+    diagnostic.message.contains("not laid out yet")
+        || diagnostic.message.contains("is not implemented yet")
+}
+
 /// The document tree of the exam variant; panics with the diagnostics if
-/// there are any.
+/// there are any other than [`not_yet`] warnings.
 fn document(files: &[(&str, &str)]) -> Document {
     let world = world(files);
     let exam = name("exam");
     let compiled = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    let diagnostics: Vec<_> = compiled
+        .diagnostics
+        .iter()
+        .filter(|d| !not_yet(d))
+        .cloned()
+        .collect();
     assert!(
-        compiled.diagnostics.is_empty(),
+        diagnostics.is_empty(),
         "{}",
-        diag::render(&world, &compiled.diagnostics, false)
+        diag::render(&world, &diagnostics, false)
     );
     folio::document(&world, Some(&exam))
         .unwrap()

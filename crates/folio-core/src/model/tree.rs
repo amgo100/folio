@@ -45,7 +45,8 @@ impl Document {
 
 /// The document tree of a variant (`None` for a project without variants),
 /// or `None` when the document could not be evaluated. Reports misplaced
-/// `#doc` calls and labels used twice.
+/// `#doc` calls, labels used twice and references to labels that no
+/// element has.
 #[salsa::tracked(returns(ref))]
 pub fn document(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<Document> {
     let content = evaluate(db, project, variant).as_ref()?;
@@ -418,40 +419,80 @@ fn node_span(node: &Node) -> Option<Span> {
 }
 
 /// Reports labels that more than one element has: a reference to one could
-/// not say which it means.
+/// not say which it means; and references to a label that no element has.
 fn check_labels(db: &dyn Db, root: &Element) {
-    fn walk(db: &dyn Db, element: &Element, seen: &mut BTreeMap<EcoString, Span>) {
-        if let Some(label) = &element.label {
-            if let Some(first) = seen.get(label) {
-                diag::report(
-                    db,
-                    Diagnostic::error(element.span, eco_format!("label `<{label}>` is used twice"))
+    struct Walk<'a> {
+        db: &'a dyn Db,
+        seen: BTreeMap<EcoString, Span>,
+        /// The references, with the label each names, in document order.
+        refs: Vec<(&'a EcoString, Span)>,
+    }
+    impl<'a> Walk<'a> {
+        fn element(&mut self, element: &'a Element) {
+            if let Some(label) = &element.label {
+                if let Some(first) = self.seen.get(label) {
+                    diag::report(
+                        self.db,
+                        Diagnostic::error(
+                            element.span,
+                            eco_format!("label `<{label}>` is used twice"),
+                        )
                         .with_related(*first, "it is first used here")
                         .with_hint("a label names one element, so references can find it"),
-                );
-            } else {
-                seen.insert(label.clone(), element.span);
-            }
-        }
-        for (_, value) in element.fields.iter() {
-            walk_value(db, value, seen);
-        }
-    }
-    fn walk_value(db: &dyn Db, value: &Value, seen: &mut BTreeMap<EcoString, Span>) {
-        match value {
-            Value::Content(content) => {
-                for node in content.nodes() {
-                    if let Node::Element(element) = node {
-                        walk(db, element, seen);
-                    }
+                    );
+                } else {
+                    self.seen.insert(label.clone(), element.span);
                 }
             }
-            Value::Array(items) => items.iter().for_each(|v| walk_value(db, v, seen)),
-            Value::Dict(dict) => dict.iter().for_each(|(_, v)| walk_value(db, v, seen)),
-            _ => {}
+            if element.name.namespace.is_none()
+                && element.name.name.as_str() == "ref"
+                && let Some(Value::Label(target)) = element.field("target")
+            {
+                self.refs.push((target, element.span));
+            }
+            for (_, value) in element.fields.iter() {
+                self.value(value);
+            }
+        }
+        fn value(&mut self, value: &'a Value) {
+            match value {
+                Value::Content(content) => {
+                    for node in content.nodes() {
+                        if let Node::Element(element) = node {
+                            self.element(element);
+                        }
+                    }
+                }
+                Value::Array(items) => items.iter().for_each(|v| self.value(v)),
+                Value::Dict(dict) => dict.iter().for_each(|(_, v)| self.value(v)),
+                _ => {}
+            }
         }
     }
-    walk(db, root, &mut BTreeMap::new());
+    let mut walk = Walk {
+        db,
+        seen: BTreeMap::new(),
+        refs: Vec::new(),
+    };
+    walk.element(root);
+    for (target, span) in walk.refs {
+        if walk.seen.contains_key(target) {
+            continue;
+        }
+        let labels: Vec<&str> = walk.seen.keys().map(EcoString::as_str).collect();
+        let diagnostic = Diagnostic::warning(
+            span,
+            eco_format!(
+                "no element has the label `<{target}>`, so the reference has nothing to refer to"
+            ),
+        );
+        let diagnostic = match crate::project::suggest(target, &labels) {
+            Some(close) => diagnostic.with_hint(eco_format!("did you mean `<{close}>`?")),
+            None => diagnostic
+                .with_hint("label the element the reference means, such as `= Forces <forces>`"),
+        };
+        diag::report(db, diagnostic);
+    }
 }
 
 /// Writes an element and the blocks it holds, indented by `depth`.

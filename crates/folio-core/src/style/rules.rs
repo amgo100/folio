@@ -10,9 +10,9 @@ use folio_component::{Body, FieldType, Name, PropertyType, QualifiedName, Target
 use folio_syntax::ast::{self, AstNode, SimpleSelector, StyleItem};
 use folio_syntax::{Span, SyntaxNode};
 
-use super::props::{PropId, Properties, confusable};
+use super::props::{PropId, Properties, Property, confusable, not_implemented};
 use super::selector::{AttrTest, Compound, Needs, NodeName, Pseudo, Selector, Specificity};
-use super::value::{Declared, TokenDef, Tokens, Values, ValuesCx, check};
+use super::value::{Declared, TokenDef, Tokens, Values, ValuesCx, check, compute};
 use crate::component::{ComponentHost, Reason};
 use crate::db::{Build, Db, Project, component_host, source_file};
 use crate::diag::{self, Diagnostic};
@@ -570,6 +570,7 @@ impl<'a> Compiler<'a> {
             };
             let property = self.properties.get(prop);
             let value = if property.ty == PropertyType::Template && !is_keyword_value(decl) {
+                self.lint_not_implemented(property, None, span);
                 DeclValue::Template(decl.to_untyped().clone())
             } else {
                 let Some(value) = values.declaration(decl) else {
@@ -588,11 +589,38 @@ impl<'a> Compiler<'a> {
                     diag::report(self.db, diagnostic);
                     continue;
                 }
+                self.lint_not_implemented(property, Some(&value), span);
                 DeclValue::Value(value)
             };
             out.push(Decl { prop, value, span });
         }
         out
+    }
+
+    /// Warns that a declaration sets a property no stage reads yet, so it
+    /// has no effect.
+    fn lint_not_implemented(&self, property: &Property, value: Option<&Declared>, span: Span) {
+        // The value as plain data, compared with the initial one; the font
+        // size does not matter for the properties checked.
+        let computed = value.map(|v| compute(v, folio_component::Abs::pt(10.0)).ok());
+        let value = match &computed {
+            Some(Some(value)) => Some(value),
+            // A value that cannot be computed yet is not the initial one.
+            Some(None) | None => None,
+        };
+        if let Some(feature) = not_implemented(property, value) {
+            diag::report(
+                self.db,
+                Diagnostic::warning(
+                    span,
+                    eco_format!(
+                        "`{}` is not implemented yet, so this declaration has no effect",
+                        property.name
+                    ),
+                )
+                .with_hint(eco_format!("Folio does not do {feature} yet")),
+            );
+        }
     }
 
     /// Resolves the property of a declaration, reporting an unknown one.
@@ -728,6 +756,21 @@ impl<'a> Compiler<'a> {
                             }
                         }
                     };
+                    // Masters by position come with page masters (SPEC
+                    // §7.1); until then the page's view has no position.
+                    if out.name == Some(NodeName::Page)
+                        && matches!(name.get().as_str(), "first" | "left" | "right")
+                    {
+                        self.warn(
+                            span,
+                            eco_format!(
+                                "`page:{}` cannot match yet: pages are not told apart by position, \
+                                 so the rule is ignored",
+                                name.get()
+                            ),
+                        );
+                        return None;
+                    }
                     match name.get().as_str() {
                         "first" => out.pseudos.push(Pseudo::First),
                         "last" => out.pseudos.push(Pseudo::Last),
@@ -783,6 +826,20 @@ impl<'a> Compiler<'a> {
                     }
                 }
             }
+        }
+        // Named masters (`page.landscape`, chosen by `break-before:
+        // page(landscape)`) come with page masters (SPEC §7.1).
+        if out.name == Some(NodeName::Page)
+            && let Some(class) = out.classes.first()
+        {
+            self.warn(
+                compound.span(),
+                eco_format!(
+                    "`page.{class}` cannot match yet: there are no named page masters, \
+                     so the rule is ignored"
+                ),
+            );
+            return None;
         }
         Some((out, steps))
     }
