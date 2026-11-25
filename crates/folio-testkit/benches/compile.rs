@@ -17,9 +17,10 @@
 //!
 //! `preview_after_edit` and `restyle` count the preview path (SPEC §14.1,
 //! the M1 exit check of §15): the reference document laid out again after
-//! an edit, up to its pages and without emit. Both go through [`preview`],
-//! the one place to point at a query that stops at the pages and runs the
-//! build's checks once there is one. `compile_variants` counts the ten-page
+//! an edit, up to its pages and without emit. Both go through [`preview`].
+//! `check_after_edit` counts the check path of the same one-word edit
+//! (SPEC §12.1, `folio check`): every stage before Emit and the PDF
+//! writer's check, which give a build's diagnostics without its file. `compile_variants` counts the ten-page
 //! document with three variants: the teacher's variant alone, and all
 //! three.
 //!
@@ -153,6 +154,30 @@ fn preview_after_edit((mut world, edit): (World, Edit)) -> usize {
     black_box(preview(&world))
 }
 
+/// The reference document checked ([`folio::check`]), with a one-word
+/// edit in its middle.
+fn checked_word_edit() -> (World, Edit) {
+    let project = refdoc::generate(&Spec::REFERENCE);
+    let world = project.world(BuildMode::Build);
+    folio::check(&world, Target::Pdf, None).expect("not cancelled");
+    let edit = Edit::word(&project);
+    (world, edit)
+}
+
+// Checks the reference document again after a one-word edit, as `folio
+// check`, the language server and the preview do: every stage before
+// Emit and the PDF writer's check, with the memoised queries and the
+// shaping, line and page caches warm; returns the number of diagnostics.
+#[library_benchmark]
+#[bench::reference(setup = checked_word_edit)]
+fn check_after_edit((mut world, edit): (World, Edit)) -> usize {
+    world
+        .edit_source(&edit.path, edit.range, edit.with)
+        .expect("a valid edit");
+    let checked = folio::check(&world, Target::Pdf, None).expect("not cancelled");
+    black_box(checked.diagnostics.len())
+}
+
 // Lays the reference document out again after its body's font size
 // changes in the stylesheet: every paragraph is set at the new size and
 // broken again, and every page reflows.
@@ -218,6 +243,7 @@ library_benchmark_group!(
         compile_cold,
         recompile_after_edit,
         preview_after_edit,
+        check_after_edit,
         restyle,
         compile_variants,
         parse
