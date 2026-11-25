@@ -2,6 +2,7 @@
 //! origins, tokens, compiled selectors and evaluated declarations, in
 //! cascade order.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use folio_syntax::{Span, SyntaxNode};
 
 use super::props::{PropId, Properties, Property, confusable, not_implemented};
 use super::selector::{AttrTest, Compound, Needs, NodeName, Pseudo, Selector, Specificity};
-use super::value::{Declared, TokenDef, Tokens, Values, ValuesCx, check, compute};
+use super::value::{Declared, TokenDef, Tokens, Values, ValuesCx, check, coerce, compute};
 use crate::component::{ComponentHost, Reason};
 use crate::db::{Build, Db, Project, component_host, source_file};
 use crate::diag::{self, Diagnostic};
@@ -232,6 +233,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             project,
             tokens: &tokens,
         },
+        applies: Cell::new(true),
     };
 
     let mut rules = Vec::new();
@@ -242,6 +244,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             .cast::<ast::StyleRule<'_>>()
             .expect("a style rule");
         let values = Values::new(cx.values, pending.file.clone());
+        cx.applies.set(pending.applies);
         let compiled = cx.compile_rule(
             &values,
             rule.selectors(),
@@ -500,6 +503,9 @@ pub(super) struct Compiler<'a> {
     pub(super) properties: &'a Properties,
     pub(super) parts: &'a BTreeSet<Name>,
     pub(super) values: ValuesCx<'a>,
+    /// Whether the rule being compiled applies to the build: the warnings
+    /// that a feature is not implemented yet are given only then.
+    pub(super) applies: Cell<bool>,
 }
 
 impl<'a> Compiler<'a> {
@@ -521,6 +527,7 @@ impl<'a> Compiler<'a> {
                 project,
                 tokens,
             },
+            applies: Cell::new(true),
         }
     }
 
@@ -649,7 +656,13 @@ impl<'a> Compiler<'a> {
         // The value as plain data, compared with the initial one. It is
         // computed at two font sizes: a value in ems that equals the
         // initial value at one size is not initial at the other.
-        let at = |size: f64| value.map(|v| compute(v, folio_component::Abs::pt(size)).ok());
+        let at = |size: f64| {
+            value.map(|v| {
+                compute(v, folio_component::Abs::pt(size))
+                    .ok()
+                    .map(|v| coerce(v, &property.ty, false))
+            })
+        };
         let (computed, other) = (at(10.0), at(13.0));
         let value = match (&computed, &other) {
             (Some(Some(a)), Some(Some(b))) if a == b => Some(a),
@@ -820,7 +833,7 @@ impl<'a> Compiler<'a> {
                         } else {
                             name.get().clone()
                         };
-                        self.warn(
+                        self.warn_not_yet(
                             span,
                             eco_format!(
                                 "`page:{written}` cannot match yet: pages are not told apart by \
@@ -833,7 +846,7 @@ impl<'a> Compiler<'a> {
                     if out.name == Some(NodeName::Page)
                         && matches!(name.get().as_str(), "has" | "step")
                     {
-                        self.warn(
+                        self.warn_not_yet(
                             span,
                             eco_format!(
                                 "`page:{}(..)` cannot match yet: a page has no children or steps, \
@@ -904,7 +917,7 @@ impl<'a> Compiler<'a> {
         if out.name == Some(NodeName::Page)
             && let Some(class) = out.classes.first()
         {
-            self.warn(
+            self.warn_not_yet(
                 compound.span(),
                 eco_format!(
                     "`page.{class}` cannot match yet: there are no named page masters, \
@@ -915,7 +928,7 @@ impl<'a> Compiler<'a> {
         }
         // The page's view has no label or fields either.
         if out.name == Some(NodeName::Page) && (out.label.is_some() || !out.attrs.is_empty()) {
-            self.warn(
+            self.warn_not_yet(
                 compound.span(),
                 "this page selector cannot match yet: a page has no label or fields, \
                  so the rule is ignored",
@@ -1022,6 +1035,13 @@ impl<'a> Compiler<'a> {
 
     fn error(&self, span: Span, message: impl Into<EcoString>) {
         diag::report(self.db, Diagnostic::error(span, message));
+    }
+
+    /// Warns that something cannot work yet, when the rule applies.
+    fn warn_not_yet(&self, span: Span, message: impl Into<EcoString>) {
+        if self.applies.get() {
+            self.warn(span, message);
+        }
     }
 
     fn warn(&self, span: Span, message: impl Into<EcoString>) {

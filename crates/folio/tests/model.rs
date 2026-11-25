@@ -142,6 +142,7 @@ fn not_yet(diagnostic: &folio::Diagnostic) -> bool {
     diagnostic.severity == folio::Severity::Warning
         && (message.ends_with("is not laid out yet, so the output leaves it out")
             || message.ends_with("are not laid out yet, so the output leaves them out")
+            || message.ends_with("is not laid out yet, so the output shows at most its box")
             || message.ends_with("is not implemented yet, so this declaration has no effect"))
 }
 

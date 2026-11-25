@@ -380,6 +380,14 @@ impl Collector<'_> {
                 .iter()
                 .any(|(_, value)| matches!(value, eval::Value::Content(_)))
         {
+            // Display maths and images are reported as such.
+            if ["math", "image", "ref"]
+                .iter()
+                .any(|name| is_builtin(&element.name, name))
+            {
+                self.not_laid_out(element);
+                return;
+            }
             self.report_once(
                 eco_format!("not-laid-out:{}", element.name),
                 Diagnostic::warning(

@@ -217,3 +217,21 @@ fn a_render_block_is_reported_in_a_laid_out_build() {
     let docx = compile(&world, Target::Docx);
     assert!(docx.diagnostics.iter().all(|d| d.message != message));
 }
+
+#[test]
+fn display_maths_and_page_rules_of_other_targets() {
+    // Display maths is maths, and a rule for another target does not warn.
+    let world = world(
+        "@target docx { page:first { margin-top: 1cm; } }\n",
+        "Text.\n\n$ x^2 $\n\nMore $y$.\n",
+    );
+    let messages: Vec<String> = compile(&world, Target::Pdf)
+        .diagnostics
+        .iter()
+        .map(|d| d.message.to_string())
+        .collect();
+    assert_eq!(
+        messages,
+        ["maths is not laid out yet, so the output leaves it out"]
+    );
+}

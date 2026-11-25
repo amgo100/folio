@@ -100,6 +100,8 @@ impl Logged {
                         || d.message
                             .ends_with("are not laid out yet, so the output leaves them out")
                         || d.message
+                            .ends_with("is not laid out yet, so the output shows at most its box")
+                        || d.message
                             .ends_with("is not implemented yet, so this declaration has no effect"))
             })
             .cloned()
