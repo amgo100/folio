@@ -577,22 +577,32 @@ impl<'a> Walker<'a> {
     /// The view of child `i` of `siblings` with a need of a set of rules:
     /// its previous siblings are seen as the rules' context, and its fields
     /// as their attribute tests name them.
+    ///
+    /// Positions and previous siblings count the elements of the body
+    /// only (SPEC §5.1): a part has no position and no previous siblings,
+    /// and the elements around it skip it.
     fn view(&self, siblings: &[Child<'_>], i: usize, need: &Need, needs: &Needs) -> NodeView {
         let fields = &needs.fields;
-        let full = Position {
-            first: i == 0,
-            last: i + 1 == siblings.len(),
-            index: u32::try_from(i + 1).unwrap_or(u32::MAX),
-            column: 0,
+        let body = body_range(siblings);
+        let (full, prev) = if body.contains(&i) {
+            let full = Position {
+                first: i == body.start,
+                last: i + 1 == body.end,
+                index: u32::try_from(i - body.start + 1).unwrap_or(u32::MAX),
+                column: 0,
+            };
+            let context = Need {
+                prev: 0,
+                ..needs.context
+            };
+            let prev = (1..=need.prev)
+                .filter_map(|k| i.checked_sub(k).filter(|&j| j >= body.start))
+                .map(|j| self.view(siblings, j, &context, needs))
+                .collect();
+            (full, prev)
+        } else {
+            (Position::default(), EcoVec::new())
         };
-        let context = Need {
-            prev: 0,
-            ..needs.context
-        };
-        let prev = (1..=need.prev)
-            .filter_map(|k| i.checked_sub(k))
-            .map(|j| self.view(siblings, j, &context, needs))
-            .collect();
         let children = if need.children {
             siblings[i]
                 .children()
@@ -608,6 +618,23 @@ impl<'a> Walker<'a> {
             prev,
             children,
         }
+    }
+}
+
+/// The range of `siblings` that the body's elements take. They are
+/// contiguous, since the body is one field; the parts before and after
+/// them are few, so this costs as many steps as there are parts.
+fn body_range(siblings: &[Child<'_>]) -> std::ops::Range<usize> {
+    let is_element = |c: &Child<'_>| matches!(c, Child::Element(_));
+    match siblings.iter().position(is_element) {
+        Some(start) => {
+            start
+                ..siblings
+                    .iter()
+                    .rposition(is_element)
+                    .map_or(start, |e| e + 1)
+        }
+        None => 0..0,
     }
 }
 
