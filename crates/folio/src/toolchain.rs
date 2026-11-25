@@ -115,13 +115,14 @@ impl Toolchains {
     }
 
     /// The serial and bytes of the last `channel.toml` that [`install`]
-    /// stored. Its signature is not checked: the cache is the user's own,
-    /// and the serial serves only to refuse older copies, so a copy signed
-    /// with a key that this compiler no longer trusts still counts.
-    fn stored_serial(&self) -> Option<(u64, Vec<u8>)> {
-        let (_, bytes) = self.stored_channel()?;
-        let info = ChannelInfo::parse(std::str::from_utf8(&bytes).ok()?).ok()?;
-        Some((info.serial, bytes))
+    /// stored, if its signature verifies with one of `keys`. Only the
+    /// serial is read, which every format of the file keeps, so that a copy
+    /// in a later format, stored by a newer compiler, still counts.
+    fn stored_serial(&self, keys: &[VerifyingKey]) -> Option<(u64, Vec<u8>)> {
+        let (signature, bytes) = self.stored_channel()?;
+        verify(keys, CHANNEL_FILE, &bytes, &signature).ok()?;
+        let serial = ChannelInfo::parse_serial(std::str::from_utf8(&bytes).ok()?).ok()?;
+        Some((serial, bytes))
     }
 }
 
@@ -180,13 +181,7 @@ impl ChannelInfo {
         if format != Some(Self::FORMAT) {
             return Err(format!("expected `version = {}`", Self::FORMAT));
         }
-        let serial = match get("serial") {
-            Some(DeValue::Integer(i)) => {
-                u64::from_str_radix(&i.as_str().replace('_', ""), i.radix()).ok()
-            }
-            _ => None,
-        };
-        let serial = serial.ok_or("expected `serial`, a whole number that is not negative")?;
+        let serial = Self::serial(get("serial"))?;
         let floor = match get("security-fixes-from") {
             Some(DeValue::String(text)) => Version::parse(text).ok(),
             _ => None,
@@ -196,6 +191,26 @@ impl ChannelInfo {
             serial,
             security_fixes_from: floor,
         })
+    }
+
+    /// The serial of a `channel.toml` in any format: every format keeps
+    /// `serial` with this meaning.
+    fn parse_serial(text: &str) -> Result<u64, String> {
+        use toml::de::DeTable;
+
+        let root = DeTable::parse(text).map_err(|e| e.message().trim_end().to_owned())?;
+        Self::serial(root.get_ref().get("serial").map(|v| v.get_ref()))
+    }
+
+    /// The value of `serial`, a whole number that is not negative.
+    fn serial(value: Option<&toml::de::DeValue<'_>>) -> Result<u64, String> {
+        match value {
+            Some(toml::de::DeValue::Integer(i)) => {
+                u64::from_str_radix(&i.as_str().replace('_', ""), i.radix()).ok()
+            }
+            _ => None,
+        }
+        .ok_or_else(|| "expected `serial`, a whole number that is not negative".into())
     }
 }
 
@@ -412,7 +427,7 @@ pub fn install(
         .map_err(|e| e.to_string())
         .and_then(ChannelInfo::parse)
         .map_err(InstallError::ChannelInfo)?;
-    if let Some((stored, stored_bytes)) = toolchains.stored_serial()
+    if let Some((stored, stored_bytes)) = toolchains.stored_serial(&channel.keys)
         && (info.serial < stored || (info.serial == stored && info_bytes != stored_bytes))
     {
         return Err(InstallError::ChannelReplayed {
@@ -453,6 +468,7 @@ pub fn install(
         let _ = fs::remove_dir_all(&staging);
         // Another install of the same version finished first.
         if let Some(path) = toolchains.get(version) {
+            store_channel(toolchains, channel, &info, &info_bytes, &info_signature);
             return Ok(Installed {
                 path,
                 already: true,
@@ -466,7 +482,7 @@ pub fn install(
     // it again when they read it. The version is installed whether or not
     // this is stored: without it, builds know only what they were released
     // with.
-    store_channel(dir, &info, &info_bytes, &info_signature);
+    store_channel(toolchains, channel, &info, &info_bytes, &info_signature);
     Ok(Installed {
         path,
         already: false,
@@ -474,21 +490,25 @@ pub fn install(
     })
 }
 
-/// Stores a verified `channel.toml` and its signature in the toolchain
-/// cache in `dir`, unless the copy stored there already is as new. A lock
+/// Stores a `channel.toml` of `channel`, verified, and its signature in the
+/// toolchain cache, unless the copy stored there already is as new. A lock
 /// file keeps concurrent installs from storing an older copy over a newer
-/// one between the check and the write; one file holds both, so the copy
-/// and its signature are replaced together. Fails silently.
-fn store_channel(dir: &Path, info: &ChannelInfo, bytes: &[u8], signature: &[u8]) {
-    let Ok(lock) = fs::File::create(dir.join(".channel.lock")) else {
-        return;
-    };
-    if lock.lock().is_err() {
-        return;
-    }
-    let toolchains = Toolchains::new(dir);
+/// one between the check and the write, where the file system can lock;
+/// one file holds both, so the copy and its signature are replaced
+/// together. Fails silently.
+fn store_channel(
+    toolchains: &Toolchains,
+    channel: &Channel,
+    info: &ChannelInfo,
+    bytes: &[u8],
+    signature: &[u8],
+) {
+    let dir = toolchains.dir();
+    let lock = fs::File::create(dir.join(".channel.lock"));
+    // Held until the function returns.
+    let _locked = lock.as_ref().map(fs::File::lock);
     if toolchains
-        .stored_serial()
+        .stored_serial(&channel.keys)
         .is_some_and(|(stored, _)| stored >= info.serial)
     {
         return;

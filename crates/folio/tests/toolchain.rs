@@ -438,13 +438,13 @@ fn refuses_an_older_channel_file() {
     assert!(!toolchains.dir().join("channel.toml").exists());
     assert!(!toolchains.dir().join("channel.toml.sig").exists());
 
-    // A stored copy whose signature this compiler cannot check, signed with
-    // a retired key, say, still refuses older copies, but gives no floor.
-    fs::write(
-        &stored,
-        "0123\nversion = 1\nserial = 9\nsecurity-fixes-from = \"79.0.0\"\n",
-    )
-    .unwrap();
+    // A copy stored in a later format, by a newer compiler, gives no floor,
+    // but still refuses older copies.
+    let later = "version = 2\nserial = 9\nfloor = \"79.0.0\"\n";
+    let signature = sign(&key(), "channel.toml", later.as_bytes());
+    let mut contents = signature.clone();
+    contents.extend_from_slice(later.as_bytes());
+    fs::write(&stored, &contents).unwrap();
     assert_eq!(toolchains.channel_info(&keys), None);
     channel.release("80.0.0", FAKE_COMPILER);
     assert!(matches!(
@@ -454,8 +454,20 @@ fn refuses_an_older_channel_file() {
             stored: 9
         })
     ));
-    channel.publish(1_000, "79.0.0");
+
+    // A stored copy that no key of the channel signed counts for nothing:
+    // another channel's, say.
+    let other = SigningKey::from_bytes(&[8; 32]);
+    let mut contents = sign(&other, "channel.toml", later.as_bytes());
+    contents.extend_from_slice(later.as_bytes());
+    fs::write(&stored, &contents).unwrap();
     install(&channel, "80.0.0", &toolchains).unwrap();
+    assert_eq!(toolchains.channel_info(&keys).unwrap().serial, 5);
+
+    // Serials may use digit separators.
+    channel.publish(1_000, "79.0.0");
+    channel.release("81.0.0", FAKE_COMPILER);
+    install(&channel, "81.0.0", &toolchains).unwrap();
     assert_eq!(toolchains.channel_info(&keys).unwrap().serial, 1_000);
 }
 
