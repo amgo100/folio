@@ -334,6 +334,19 @@ impl Loader {
         for path in paths {
             relative.extend(self.project_paths(path.as_ref()));
         }
+        // The project directory stands for every path in it.
+        if relative.contains("") {
+            relative = [MANIFEST, LOCKFILE, PROJECT_FONT_DIR, ""]
+                .map(String::from)
+                .into();
+        }
+        // The manifest first, which decides the outputs and which the
+        // lockfile is checked against; then the lockfile.
+        for special in [MANIFEST, LOCKFILE] {
+            if relative.remove(special) {
+                self.refresh(world, special, &mut update, warnings)?;
+            }
+        }
         // A directory read again covers the paths under it.
         let mut done: Vec<String> = Vec::new();
         for rel in relative {
@@ -360,12 +373,15 @@ impl Loader {
                 out.push(rel);
             }
         }
-        // The path the event names may be gone: resolve its directory.
-        let resolved = path.canonicalize().ok().or_else(|| {
-            let dir = path.parent()?.canonicalize().ok()?;
-            Some(dir.join(path.file_name()?))
-        });
-        if let Some(resolved) = resolved {
+        // The path resolved, and, since it may be gone or now be a link to
+        // somewhere else, the path in its resolved directory.
+        let in_dir = path
+            .parent()
+            .and_then(|dir| dir.canonicalize().ok())
+            .zip(path.file_name())
+            .map(|(dir, name)| dir.join(name));
+        let resolved = path.canonicalize().ok();
+        for resolved in resolved.iter().chain(&in_dir) {
             if let Some(rel) = resolved
                 .strip_prefix(&self.canonical)
                 .ok()
@@ -444,7 +460,14 @@ impl Loader {
         } else {
             self.chain(dir)
         };
+        // A read of the project would not reach it: the world no longer
+        // has what is under it.
         let Some(chain) = chain else {
+            for path in world_paths(world, rel) {
+                if remove(world, &path) {
+                    update.changed.insert(path);
+                }
+            }
             return Ok(());
         };
         if self.is_link(&full) {

@@ -250,6 +250,13 @@ fn updates_the_manifest() {
     assert_eq!(changed(&update), ["folio.toml", "out/main-exam.pdf"]);
     assert!(world.file("out/main-exam.pdf").is_none());
 
+    // An event for the project directory reads the manifest again too.
+    write(root, "folio.toml", MANIFEST);
+    let update = loader.update(&mut world, [root], &mut Vec::new()).unwrap();
+    assert_eq!(changed(&update), ["folio.toml", "out/main-exam.pdf"]);
+    assert!(world.manifest().variants.is_empty());
+    assert!(world.file("out/main-exam.pdf").is_some());
+
     write(root, "folio.toml", "[project]\n");
     let update = loader
         .update(&mut world, [root.join("folio.toml")], &mut Vec::new())
@@ -259,7 +266,7 @@ fn updates_the_manifest() {
     assert!(!errors.diagnostics.is_empty());
     let shown = folio::diag::render(&errors.files, &errors.diagnostics, false);
     assert!(shown.contains("folio.toml"), "{shown}");
-    assert_eq!(world.manifest().variants.len(), 1);
+    assert!(world.manifest().variants.is_empty());
 }
 
 /// A change to a file that a link inside the project leads to updates the
@@ -296,6 +303,19 @@ fn updates_paths_through_links() {
         world.source("questions/q1.fol").unwrap().text(),
         "Changed.\n"
     );
+
+    // A directory replaced by a link to a directory it is in is no longer
+    // read, and its files leave the world.
+    fs::remove_dir_all(root.join("shared/questions")).unwrap();
+    symlink(root.join("shared"), root.join("shared/questions")).unwrap();
+    let update = loader
+        .update(&mut world, [root.join("shared/questions")], &mut Vec::new())
+        .unwrap();
+    assert_eq!(
+        changed(&update),
+        ["questions/q1.fol", "shared/questions/q1.fol"]
+    );
+    assert!(world.source("shared/questions/q1.fol").is_none());
 
     // A link to a directory the link is in is not followed.
     symlink(root, root.join("shared/up")).unwrap();
