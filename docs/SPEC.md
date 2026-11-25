@@ -680,6 +680,8 @@ Layout turns the resolved tree into pages of positioned fragments in two levels:
 - Masters are chosen by rules (`page:first`, `page:left`, `page:right`) or by name: `page.landscape { ... }` defines a master and `break-before: page(landscape)` starts one.
 - Two-sided documents mirror inner and outer regions on left-hand pages; a note with `side: outer` always lands in the outer margin.
 - `page-count-multiple: 2` (or 4 for booklets) pads the document with pages from a `blank` master, which can print *This page is intentionally left blank*.
+- **Blocks**: `space-before` and `space-after` collapse to the largest of the spaces that meet, unless padding or a border separates them, and a block's space lies outside its box. Half a paragraph's leading lies above its first line and below its last, so paragraphs without space between them are one leading apart. At a page break the spaces and leading there are dropped. A block broken across pages is sliced: its top border is drawn where it starts and its bottom border where it ends.
+- **Page breaking** is strictly forward (§2.3). Each page ends at its cheapest break: a break costs how empty it leaves the page plus the penalties of the constraints it goes against (§7.2), and ties go to the later break. `break-before` forces a break. A block that does not fit on an empty page is placed anyway, overflowing it, with a warning.
 
 ### 7.2 Paragraphs and lines
 

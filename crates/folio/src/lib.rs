@@ -34,18 +34,20 @@ use std::panic::AssertUnwindSafe;
 
 use rayon::prelude::*;
 
-pub use folio_component::{Abs, Name, Ratio, Registry, Target};
+pub use folio_component::{
+    Abs, Fragment, FragmentItem, GlyphRun, Name, Point, Ratio, Registry, Size, SourceRef, Target,
+};
 pub use folio_core::db::{BuildMode, Bytes, Compiled};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::eval;
 pub use folio_core::eval::Limits;
 pub use folio_core::fonts::{Face, FontRun, Fonts, Pin};
 pub use folio_core::layout;
-pub use folio_core::layout::{Line, Lines, ParagraphLayout};
+pub use folio_core::layout::{Line, LineRef, Lines, Page, PageMaster, Pages, ParagraphLayout};
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 pub use folio_core::style;
-pub use folio_core::text::{SegmentStyle, Text, TextParagraph, TextSource};
+pub use folio_core::text::{SegmentStyle, Text, TextBlock, TextFlow, TextParagraph, TextSource};
 pub use folio_fonts::{
     BUNDLED_FAMILIES, FaceKey, FontCache, FontFile, FontHash, FontOrigin, FontStyle, FontVariant,
     SystemFont, bundled as bundled_fonts, project_fonts, system_fonts,
@@ -176,6 +178,31 @@ pub fn lines(
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         layout::lines(db, build).clone()
+    })
+}
+
+/// Lays out a variant of the world's document for a target into pages
+/// (SPEC §7.1): its blocks and lines broken into pages of the default page
+/// master, strictly forward, each page a fragment holding nested
+/// fragments for its blocks, with their glyph runs, backgrounds, borders,
+/// baselines and keep data; or `None` when the document could not be
+/// styled. The variant is `None` only for a project that declares no
+/// variants.
+///
+/// Pages whose content is equal to pages laid out before in this world are
+/// taken from the page cache. Constraints that a page break had to relax
+/// (widows, orphans, keeps) and content that does not fit on a page are
+/// diagnostics that [`compile`] reports. Fails only when an edit to the
+/// world cancels it.
+pub fn pages(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+) -> Result<Option<Pages>, Cancelled> {
+    catch(|| {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        layout::pages(db, build).clone()
     })
 }
 

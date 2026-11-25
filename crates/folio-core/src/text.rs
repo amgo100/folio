@@ -46,10 +46,39 @@ pub use folio_text::Cache;
 /// The shaped paragraphs of a build, in document order: an element's body
 /// and content fields in the order they were given, and the blocks of a
 /// note or float after the paragraph it is anchored in.
-#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Text {
     /// The paragraphs.
     pub paragraphs: EcoVec<TextParagraph>,
+    /// The blocks that hold them: the `doc` element, with a block for
+    /// every element whose content the paragraphs are or are in, and for
+    /// every part of one (a content field other than the body). Layout
+    /// draws their boxes and keeps their constraints (SPEC §7.1).
+    pub root: TextBlock,
+}
+
+/// A block of the document and what it holds, in document order: the
+/// paragraphs of its content, and its child blocks. The blocks of a note
+/// or float anchored in a paragraph follow that paragraph.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TextBlock {
+    /// The computed style of the element or part: its block properties
+    /// (`space-before`, `padding`, `border`, `keep-with-next`, ...) are
+    /// the block's.
+    pub style: ComputedStyle,
+    /// The element, or the element whose part the block is.
+    pub span: Span,
+    /// What it holds, in order.
+    pub children: EcoVec<TextFlow>,
+}
+
+/// What a block holds.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum TextFlow {
+    /// A paragraph, as an index into [`Text::paragraphs`].
+    Paragraph(usize),
+    /// A child block.
+    Block(TextBlock),
 }
 
 /// One paragraph of a build, shaped.
@@ -115,9 +144,12 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
         settings: HashMap::new(),
         reported: HashSet::new(),
         pending: Vec::new(),
+        blocks: Vec::new(),
+        root: None,
     };
     collector.element(&doc.root, &styled.root);
 
+    let root = collector.root.take().expect("the root is a block");
     let pending = collector.pending;
     let inputs: Vec<Paragraph> = pending.iter().map(|p| p.paragraph.clone()).collect();
     let shaped = db.text_cache().shape_all(&inputs);
@@ -132,7 +164,7 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
             sources: p.sources,
         })
         .collect();
-    Some(Text { paragraphs })
+    Some(Text { paragraphs, root })
 }
 
 /// A paragraph made, before shaping.
@@ -165,6 +197,10 @@ struct Collector<'a> {
     /// Values already reported, so each is reported once per build.
     reported: HashSet<EcoString>,
     pending: Vec<Pending>,
+    /// The blocks being collected, innermost last.
+    blocks: Vec<TextBlock>,
+    /// The root block, once it is done.
+    root: Option<TextBlock>,
 }
 
 /// A paragraph's text as it is collected.
@@ -195,8 +231,33 @@ struct Piece {
 }
 
 impl Collector<'_> {
-    /// Collects the paragraphs of an element and its descendants.
+    /// Opens a block of a style.
+    fn open(&mut self, style: &ComputedStyle, span: Span) {
+        self.blocks.push(TextBlock {
+            style: style.clone(),
+            span,
+            children: EcoVec::new(),
+        });
+    }
+
+    /// Closes the innermost block and adds it to its parent.
+    fn close(&mut self) {
+        let block = self.blocks.pop().expect("a block is open");
+        match self.blocks.last_mut() {
+            Some(parent) => parent.children.push(TextFlow::Block(block)),
+            None => self.root = Some(block),
+        }
+    }
+
+    /// Collects the paragraphs of an element and its descendants, in a
+    /// block of the element's.
     fn element(&mut self, element: &Element, node: &StyledNode) {
+        self.open(&node.style, element.span);
+        self.element_content(element, node);
+        self.close();
+    }
+
+    fn element_content(&mut self, element: &Element, node: &StyledNode) {
         // A code block is a paragraph whose lines end in forced breaks.
         if let Some(text) = raw_text(element) {
             let mut builder = Builder::default();
@@ -225,7 +286,9 @@ impl Collector<'_> {
                 && let Some((part, part_node)) = parts.next()
             {
                 let mut part_kids = content_elements(part).zip(part_node.children.iter());
+                self.open(&part_node.style, element.span);
                 self.content(part, &part_node.style, element.span, &mut part_kids);
+                self.close();
             }
         }
     }
@@ -388,6 +451,10 @@ impl Collector<'_> {
                     face: run.face,
                 });
             }
+        }
+        let index = self.pending.len();
+        if let Some(block) = self.blocks.last_mut() {
+            block.children.push(TextFlow::Paragraph(index));
         }
         self.pending.push(Pending {
             paragraph: Paragraph {

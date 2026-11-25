@@ -8,7 +8,7 @@
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
 /// A finite 64-bit float with total equality, ordering and a stable hash.
 ///
@@ -119,6 +119,18 @@ macro_rules! unit {
             type Output = Self;
             fn sub(self, rhs: Self) -> Self {
                 Self(Scalar::new(self.get() - rhs.get()))
+            }
+        }
+
+        impl AddAssign for $name {
+            fn add_assign(&mut self, rhs: Self) {
+                *self = *self + rhs;
+            }
+        }
+
+        impl SubAssign for $name {
+            fn sub_assign(&mut self, rhs: Self) {
+                *self = *self - rhs;
             }
         }
 

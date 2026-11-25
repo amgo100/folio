@@ -73,6 +73,10 @@ pub trait Db: salsa::Database {
     /// database shares (SPEC §2.3). Like shaping, breaking is a pure
     /// function of its key.
     fn layout_cache(&self) -> &crate::layout::Cache;
+
+    /// The page cache (SPEC §2.3), shared by every handle of the database
+    /// like the line-break cache.
+    fn page_cache(&self) -> &crate::layout::PageCache;
 }
 
 /// What a build reads besides source text, one field per kind of input.
@@ -400,7 +404,7 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     check_document(db, project, build.variant(db).clone());
     check_styles(db, build);
     crate::fonts::check_fonts(db, build);
-    check_lines(db, build);
+    check_pages(db, build);
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),
@@ -428,8 +432,8 @@ fn check_styles(db: &dyn Db, build: Build<'_>) {
 /// diagnostics. Like [`check_document`], it stands in for the page
 /// builder, which will read the lines.
 #[salsa::tracked]
-fn check_lines(db: &dyn Db, build: Build<'_>) {
-    crate::layout::lines(db, build);
+fn check_pages(db: &dyn Db, build: Build<'_>) {
+    crate::layout::pages(db, build);
 }
 
 /// Compiles one build: runs [`build_output`] and collects the diagnostics
