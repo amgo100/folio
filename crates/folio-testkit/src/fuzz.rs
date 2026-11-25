@@ -532,16 +532,16 @@ impl Edits {
     }
 }
 
+/// Where a box or a glyph comes from: a file and a byte range, or `None`
+/// for one that names no source.
+type Origin = Option<(String, Range<usize>)>;
+
 /// Where each box and glyph of a build's pages comes from, by page, in
 /// painting order: a file and a byte range, or `None` for one that names
 /// no source. Pages and glyph runs reused from a cache must point at the
 /// nodes of the current revision, which the output bytes do not show.
-fn span_map(
-    world: &World,
-    variant: Option<&Name>,
-    target: Target,
-) -> Vec<Vec<Option<(String, Range<usize>)>>> {
-    fn walk(world: &World, fragment: &Fragment, out: &mut Vec<Option<(String, Range<usize>)>>) {
+fn span_map(world: &World, variant: Option<&Name>, target: Target) -> Vec<Vec<Origin>> {
+    fn walk(world: &World, fragment: &Fragment, out: &mut Vec<Origin>) {
         let located = |l: Option<folio::diag::Location>| l.map(|l| (l.path.to_string(), l.bytes));
         out.push(located(span_map::locate_fragment(world, fragment)));
         for (_, item) in &fragment.items {
