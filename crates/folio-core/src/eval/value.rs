@@ -1705,6 +1705,9 @@ mod tests {
             assert_eq!(dict, left);
             assert_eq!(hash_of(&dict), hash_of(&left));
             assert_eq!(dict.depth(), left.depth());
+            // Fewer than half of the slots are ever empty, so removal stays
+            // amortised constant time rather than shifting later pairs.
+            assert!(dict.map.slots.len() < 2 * dict.len());
         }
         // A removed key inserted again goes to the end; an existing one is
         // replaced in place.
