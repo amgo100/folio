@@ -189,8 +189,7 @@ fn report_page_size(
         .rules
         .iter()
         .flat_map(|rule| &rule.declarations)
-        .filter(|decl| decl.prop == page_size)
-        .last()
+        .rfind(|decl| decl.prop == page_size)
         .map_or(root, |decl| decl.span);
     let side = |a: Abs| {
         if a.to_pt().abs() < 1e6 {
