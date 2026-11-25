@@ -1,5 +1,6 @@
 //! Fonts (SPEC §2.4, §2.5): the bundled families, project fonts, locking by
-//! hash, fallback, system fonts by build mode, and embedding permissions.
+//! hash, fallback, system fonts by build mode, and embedding permissions,
+//! checked for every character a build sets.
 
 use std::fs;
 use std::path::Path;
@@ -453,4 +454,91 @@ fn leading_spaces_join_the_first_run() {
         .map(|r| (&text[r.range], r.face))
         .collect();
     assert_eq!(runs, [(" \u{5e9} ", Some(modern)), ("x", Some(serif))]);
+}
+
+/// A system font of a family no bundled font has, so that text asks for it
+/// by name and is set in it.
+fn local_serif(dir: &Path) -> SystemFont {
+    let mut font = system_font(dir, SERIF, "SourceSerif4-Regular");
+    font.key.families = EcoVec::from(["Local Serif".into()]);
+    font
+}
+
+/// Text that no walk of the document's text nodes sees: the text of `raw`,
+/// a link's destination shown as text, and the quotation marks the text
+/// stage writes. Each is set in a font of its own style.
+const UNSEEN: [(&str, &str, &str); 3] = [
+    (
+        "raw",
+        "raw { font: \"{font}\"; }\n",
+        "Code `{text}` here.\n",
+    ),
+    (
+        "link",
+        "link { font: \"{font}\"; }\n",
+        "See https://example.com/{text} now.\n",
+    ),
+    (
+        "quotation marks",
+        "doc { font: \"{font}\"; }\nstrong { font: \"Source Serif 4\"; }\n",
+        "\"*Hi*\"\n",
+    ),
+];
+
+#[test]
+fn checks_the_fonts_of_raw_text_links_and_quotation_marks() {
+    let dir = tempfile::tempdir().unwrap();
+    let system = local_serif(dir.path());
+    let message = "`SourceSerif4-Regular` is a system font, so the output depends on this machine";
+    for (what, style, text) in UNSEEN {
+        let style = style.replace("{font}", "Local Serif");
+        let text = text.replace("{text}", "x");
+        for (mode, severity) in [
+            (BuildMode::Watch, None),
+            (BuildMode::Build, Some(Severity::Warning)),
+            (BuildMode::Ci, Some(Severity::Error)),
+        ] {
+            let mut world = World::builder().mode(mode).build(MANIFEST, None).unwrap();
+            world.set_source("styles/main.fsty", &style).unwrap();
+            world.set_source("main.fol", &text).unwrap();
+            world.set_system_fonts([system.clone()]);
+            let expected: Vec<_> = severity
+                .map(|s| (s, message.to_string()))
+                .into_iter()
+                .collect();
+            assert_eq!(messages(&compile(&world)), expected, "{what}, {mode:?}");
+        }
+    }
+
+    // A glyph that no font of the chain has.
+    for (what, style, text) in &UNSEEN[..2] {
+        let style = style.replace("{font}", "Source Serif 4");
+        let text = text.replace("{text}", "漢");
+        let compiled = compile(&world(&style, &text));
+        assert_eq!(
+            messages(&compiled),
+            [(
+                Severity::Error,
+                "no font of the `font` chain has a glyph for `漢` (U+6F22)".into()
+            )],
+            "{what}"
+        );
+    }
+    // Every bundled font has the quotation marks, so the marks are set in
+    // a chain that has no font at all, while the words they quote have one.
+    let (_, style, text) = UNSEEN[2];
+    let compiled = compile(&world(&style.replace("{font}", "Nonexistent"), text));
+    assert_eq!(
+        messages(&compiled),
+        [
+            (
+                Severity::Warning,
+                "the font family `Nonexistent` is not available".into()
+            ),
+            (
+                Severity::Error,
+                "no font of the `font` chain is available: `Nonexistent`".into()
+            ),
+        ]
+    );
 }

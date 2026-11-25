@@ -13,15 +13,19 @@
 //! - **Quotation marks**: a quote in markup becomes its language's mark,
 //!   opening or closing by the characters around it ([`Lang::quotes`]).
 //! - **Fonts**: each run of one style is set in its `font` chain, split by
-//!   fallback ([`Fonts::resolve`]); the font stage reports what is missing.
+//!   fallback ([`Fonts::resolve`]); the font stage checks the segments this
+//!   gives ([`crate::fonts::check_fonts`]), so every character set.
 //! - **Language and hyphenation**: `lang` (or the manifest's language when
 //!   it is `auto`) chooses glyph forms, hyphenation patterns and line-end
 //!   rules; `hyphenate: auto` hyphenates justified paragraphs.
 //!
-//! Shaping is memoised per paragraph in the database's [`Cache`]: the query
-//! hands every paragraph of the build to it, the new ones are shaped in
-//! parallel with `rayon`, and an edit re-shapes only the paragraphs it
-//! changed. The query itself is memoised like any other.
+//! The stage is two queries: [`collect_text`] collects the paragraphs and
+//! sets them in fonts, for every target, and [`text()`] shapes them, for
+//! the targets that are laid out. Shaping is memoised per paragraph in the
+//! database's [`Cache`]: the query hands every paragraph of the build to
+//! it, the new ones are shaped in parallel with `rayon`, and an edit
+//! re-shapes only the paragraphs it changed. The queries themselves are
+//! memoised like any other.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -157,11 +161,68 @@ impl TextSource {
 }
 
 /// The paragraphs of a build, shaped, or `None` when the document could not
-/// be styled. Reports `features` that are not OpenType feature settings,
-/// `lang` values that are not language tags, and `hyphenate: true` for a
-/// language without hyphenation patterns.
+/// be styled: those of [`collect_text`], each shaped.
 #[salsa::tracked(returns(ref))]
 pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
+    let collected = collect_text(db, build).as_ref()?;
+    let inputs: Vec<Paragraph> = collected
+        .paragraphs
+        .iter()
+        .map(|p| p.paragraph.clone())
+        .collect();
+    let shaped = db.text_cache().shape_all(&inputs);
+    let paragraphs = collected
+        .paragraphs
+        .iter()
+        .zip(shaped)
+        .map(|(p, shaped)| TextParagraph {
+            shaped,
+            style: p.style.clone(),
+            span: p.span,
+            segments: p.segments.clone(),
+            sources: p.sources.clone(),
+        })
+        .collect();
+    Some(Text {
+        paragraphs,
+        root: collected.root.clone(),
+    })
+}
+
+/// The paragraphs of a build before shaping, with the blocks that hold them.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Collected {
+    /// The paragraphs, in the order of [`Text::paragraphs`].
+    pub paragraphs: EcoVec<CollectedParagraph>,
+    /// The blocks that hold them, as [`Text::root`].
+    pub root: TextBlock,
+}
+
+/// A paragraph of a build, split into segments set in their fonts, before
+/// shaping. Its fields are those of [`TextParagraph`].
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct CollectedParagraph {
+    /// Its text and segments, as shaping takes them.
+    pub paragraph: Paragraph,
+    /// As [`TextParagraph::style`].
+    pub style: ComputedStyle,
+    /// As [`TextParagraph::span`].
+    pub span: Span,
+    /// As [`TextParagraph::segments`].
+    pub segments: EcoVec<SegmentStyle>,
+    /// As [`TextParagraph::sources`].
+    pub sources: EcoVec<TextSource>,
+}
+
+/// The paragraphs of a build, collected from the styled tree and set in
+/// fonts by fallback but not shaped, or `None` when the document could not
+/// be styled. Every build checks the fonts of their segments
+/// ([`crate::fonts::check_fonts`]); the targets that are laid out shape
+/// them ([`text()`]). Reports `features` that are not OpenType feature
+/// settings, `lang` values that are not language tags, and
+/// `hyphenate: true` for a language without hyphenation patterns.
+#[salsa::tracked(returns(ref))]
+pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
     let project = build.project(db);
     let styled = step_styled(db, build)?;
     let doc = document(db, project, build.variant(db).clone()).as_ref()?;
@@ -186,30 +247,10 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
     collector.element(&doc.root, &styled.root);
 
     let root = collector.root.take().expect("the root is a block");
-    let pending = collector.pending;
-    let inputs: Vec<Paragraph> = pending.iter().map(|p| p.paragraph.clone()).collect();
-    let shaped = db.text_cache().shape_all(&inputs);
-    let paragraphs = pending
-        .into_iter()
-        .zip(shaped)
-        .map(|(p, shaped)| TextParagraph {
-            shaped,
-            style: p.style,
-            span: p.span,
-            segments: p.segments,
-            sources: p.sources,
-        })
-        .collect();
-    Some(Text { paragraphs, root })
-}
-
-/// A paragraph made, before shaping.
-struct Pending {
-    paragraph: Paragraph,
-    style: ComputedStyle,
-    span: Span,
-    segments: EcoVec<SegmentStyle>,
-    sources: EcoVec<TextSource>,
+    Some(Collected {
+        paragraphs: collector.pending.into_iter().collect(),
+        root,
+    })
 }
 
 /// What shaping and breaking read of a style.
@@ -232,7 +273,7 @@ struct Collector<'a> {
     settings: HashMap<ComputedStyle, Settings>,
     /// Values already reported, so each is reported once per build.
     reported: HashSet<EcoString>,
-    pending: Vec<Pending>,
+    pending: Vec<CollectedParagraph>,
     /// The blocks being collected, innermost last.
     blocks: Vec<TextBlock>,
     /// The root block, once it is done.
@@ -522,7 +563,7 @@ impl Collector<'_> {
         if let Some(block) = self.blocks.last_mut() {
             block.children.push(TextFlow::Paragraph(index));
         }
-        self.pending.push(Pending {
+        self.pending.push(CollectedParagraph {
             paragraph: Paragraph {
                 text: builder.text.as_str().into(),
                 segments,
