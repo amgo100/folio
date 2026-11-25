@@ -37,6 +37,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use semver::Version;
@@ -360,32 +361,58 @@ impl Fetch for Curl {
             Some(("file", _)) => "=file",
             _ => return Err("Folio downloads only over HTTPS".into()),
         };
-        let output = Command::new("curl")
-            .args(["--fail", "--silent", "--show-error", "--location"])
-            .args(["--proto", scheme, "--proto-redir", scheme])
-            .args(["--retry", "3", "--retry-max-time", "3600"])
-            .args(["--connect-timeout", "30", "--max-time", "3600"])
-            .args(["--speed-limit", "1000", "--speed-time", "60"])
-            .args(["--max-filesize", "1073741824"])
-            .arg(url)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| match e.kind() {
-                io::ErrorKind::NotFound => {
-                    "Folio downloads with `curl`, which is not installed".into()
-                }
-                _ => format!("cannot run `curl`: {e}"),
-            })?;
-        if output.status.success() {
-            Ok(output.stdout)
-        } else {
-            let message = String::from_utf8_lossy(&output.stderr);
-            let message = message.trim().trim_start_matches("curl: ");
-            Err(match message {
-                "" => format!("`curl` failed ({})", output.status),
-                message => message.to_owned(),
-            })
-        }
+        // Into a file, not to standard output: curl truncates a file before
+        // it tries a transfer again, but would append a second copy to a
+        // stream. The file is created new, so curl writes to nothing else; a
+        // name left by a process that had the same id is skipped.
+        static DOWNLOADS: AtomicU64 = AtomicU64::new(0);
+        let file = loop {
+            let n = DOWNLOADS.fetch_add(1, Ordering::Relaxed);
+            let file = std::env::temp_dir()
+                .join(format!("folio-download-{}-{n}.part", std::process::id()));
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file)
+            {
+                Ok(_) => break file,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 1000 => {}
+                Err(e) => return Err(format!("cannot create `{}`: {e}", file.display())),
+            }
+        };
+        let result = curl(url, scheme, &file);
+        let _ = fs::remove_file(&file);
+        result
+    }
+}
+
+/// Downloads a URL with `curl` into a file, and returns its bytes.
+fn curl(url: &str, scheme: &str, file: &Path) -> Result<Vec<u8>, String> {
+    let output = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--location"])
+        .args(["--proto", scheme, "--proto-redir", scheme])
+        .args(["--retry", "3", "--retry-max-time", "3600"])
+        .args(["--connect-timeout", "30", "--max-time", "3600"])
+        .args(["--speed-limit", "1000", "--speed-time", "60"])
+        .args(["--max-filesize", "1073741824"])
+        .arg("--output")
+        .arg(file)
+        .arg(url)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => "Folio downloads with `curl`, which is not installed".into(),
+            _ => format!("cannot run `curl`: {e}"),
+        })?;
+    if output.status.success() {
+        fs::read(file).map_err(|e| format!("cannot read `{}`: {e}", file.display()))
+    } else {
+        let message = String::from_utf8_lossy(&output.stderr);
+        let message = message.trim().trim_start_matches("curl: ");
+        Err(match message {
+            "" => format!("`curl` failed ({})", output.status),
+            message => message.to_owned(),
+        })
     }
 }
 
@@ -511,19 +538,17 @@ fn store_channel(
     signature: &[u8],
 ) {
     let dir = toolchains.dir();
-    let Ok(lock) = fs::OpenOptions::new()
+    let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(dir.join(".channel.lock"))
-    else {
-        return;
-    };
-    // Held until `lock` is dropped, when the function returns.
-    match lock.lock() {
-        Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
-        Err(_) => return,
+        .open(dir.join(".channel.lock"));
+    // Held until `lock` is dropped, when the function returns. Where the
+    // file system cannot lock (some network file systems), the copy is
+    // stored without the lock: an unlikely race is better than storing
+    // nothing.
+    if let Ok(lock) = &lock {
+        let _ = lock.lock();
     }
     if toolchains
         .stored_serial(&channel.keys)

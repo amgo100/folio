@@ -465,7 +465,7 @@ fn refuses_an_older_channel_file() {
     assert_eq!(toolchains.channel_info(&keys).unwrap().serial, 5);
 
     // Serials may use digit separators.
-    channel.publish(1_000, "79.0.0");
+    channel.publish_text("version = 1\nserial = 1_000\nsecurity-fixes-from = \"79.0.0\"\n");
     channel.release("81.0.0", FAKE_COMPILER);
     install(&channel, "81.0.0", &toolchains).unwrap();
     assert_eq!(toolchains.channel_info(&keys).unwrap().serial, 1_000);
