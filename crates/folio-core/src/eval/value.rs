@@ -1262,6 +1262,18 @@ impl Closure {
         &self.0.1.defaults
     }
 
+    /// Whether it has an argument sink (`..rest`), which holds the
+    /// arguments it takes, spans and all.
+    pub(crate) fn has_sink(&self) -> bool {
+        self.node()
+            .cast::<folio_syntax::ast::Closure<'_>>()
+            .is_some_and(|c| {
+                c.params()
+                    .children()
+                    .any(|p| matches!(p, folio_syntax::ast::Param::Spread(_)))
+            })
+    }
+
     /// How deeply the closure nests: one more than the deepest value it
     /// captured or holds as a default.
     pub fn depth(&self) -> u32 {
@@ -1395,6 +1407,26 @@ impl Args {
     /// How deeply the arguments nest: one more than the deepest value.
     pub fn depth(&self) -> u32 {
         self.depth.0
+    }
+
+    /// The arguments with the spans of the call and of each argument
+    /// detached, which makes the same call at two sites equal. The values
+    /// keep their own spans.
+    pub(crate) fn without_spans(&self) -> Self {
+        let items = self
+            .items
+            .iter()
+            .map(|arg| Arg {
+                span: Span::detached(),
+                ..arg.clone()
+            })
+            .collect();
+        Self {
+            span: Span::detached(),
+            items,
+            depth: self.depth,
+            hash: LazyHash::new(true),
+        }
     }
 }
 

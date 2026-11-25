@@ -7,6 +7,7 @@ use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Abs, BODY, Body, Em, Name, QualifiedName, Ratio, Scalar, UNIVERSAL_FIELDS};
 use folio_syntax::Span;
 use folio_syntax::ast::{self, AstNode, Unit};
+use indexmap::IndexSet;
 
 use super::captures::{captures, free_variables};
 use super::content::{Content, Node};
@@ -17,7 +18,7 @@ use super::ops::{self, a_type};
 use super::value::{
     Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module, Scope, Value,
 };
-use super::{Cost, Limits, MAX_NESTING, Mode, eval_file_for, globals, reachable, today};
+use super::{Cost, Limits, MAX_NESTING, Memo, Mode, eval_file_for, globals, reachable, today};
 use crate::component::Reason;
 use crate::db::{Db, Project, component_host, source_file};
 use crate::project::ProjectPath;
@@ -62,8 +63,13 @@ pub(crate) struct Vm<'a> {
     /// The file the code being evaluated is in, which paths are relative to.
     pub(crate) file: ProjectPath,
     mode: Mode,
-    /// The depth of the call or import being evaluated.
+    /// The depth of the call or import being evaluated, as its query is
+    /// keyed: see [`Vm::exact`].
     depth: u32,
+    /// The deepest call or import made so far, at least `depth`.
+    pub(crate) reached: u32,
+    /// Whether this evaluates a file's own code rather than a call.
+    pub(crate) file_level: bool,
     globals: &'a Scope,
     scopes: Scopes,
     limits: Limits,
@@ -76,9 +82,11 @@ pub(crate) struct Vm<'a> {
     /// and cleared inside code, so that an error in a function reaches the
     /// markup that called it, with its trace.
     pub(crate) recover: bool,
-    /// The errors that markup turned into markers, which the file's query
-    /// reports.
-    pub(crate) recovered: Vec<EvalError>,
+    /// The errors that markup turned into markers, here and in the
+    /// evaluations of the files and calls this one used, for whoever uses
+    /// this evaluation to report ([`Memo::recovered`]).
+    /// Each error is kept once, however many imports and calls bring it.
+    pub(crate) recovered: IndexSet<EvalError>,
     /// The variables that a `let` or an import that failed would have
     /// bound. Reading one fails without another error, since the failure
     /// was reported where it happened.
@@ -144,6 +152,8 @@ impl<'a> Vm<'a> {
             file,
             mode,
             depth,
+            reached: depth,
+            file_level: false,
             globals: globals(db, project),
             scopes: Scopes {
                 captured,
@@ -153,7 +163,7 @@ impl<'a> Vm<'a> {
             cost: Cost::default(),
             flow: None,
             recover: false,
-            recovered: Vec::new(),
+            recovered: IndexSet::new(),
             poisoned: BTreeSet::new(),
         }
     }
@@ -350,7 +360,7 @@ impl<'a> Vm<'a> {
         if !self.recover {
             return Err(error.into());
         }
-        self.recovered.push(error);
+        self.recovered.insert(error);
         Ok(())
     }
 
@@ -372,7 +382,7 @@ impl<'a> Vm<'a> {
             Stop::NeedsVariant => return Err(stop),
             Stop::Error(error) => {
                 let message = error.message.clone();
-                self.recovered.push(*error);
+                self.recovered.insert(*error);
                 message
             }
             Stop::Reported if expr.to_untyped().diagnosis().errors => "this does not parse".into(),
@@ -605,6 +615,49 @@ impl<'a> Vm<'a> {
             return Err(depth_exceeded(span, self.limits).into());
         }
         Ok(depth)
+    }
+
+    /// Takes on the recovered errors of an evaluation this one uses.
+    fn take_on(&mut self, errors: &[EvalError]) {
+        for error in errors {
+            if !self.recovered.contains(error) {
+                self.recovered.insert(error.clone());
+            }
+        }
+    }
+
+    /// The depth key of a call or import made here at depth `depth`. Depth
+    /// matters to an evaluation only through the limit, so the evaluation
+    /// of a file, and of a call made from a file's own code, is keyed at
+    /// depth 1 wherever it happens, and is shared by imports and calls at
+    /// every depth (SPEC §2.3). A call made inside a call is keyed at its
+    /// depth, which grows along every chain of calls, so that recursion
+    /// ends at the limit; imports cannot recurse, since they form no
+    /// cycle.
+    fn depth_key(&self, depth: u32, import: bool) -> u32 {
+        if import || self.file_level { 1 } else { depth }
+    }
+
+    /// The evaluation of a call or import made at depth `depth`: the one
+    /// `run` gives at depth key `key` if it stays within the depth limit
+    /// when moved to `depth`, where it is the same, or else the one at
+    /// `depth` itself, which fails where the limit is reached. Counts how
+    /// deep it went.
+    fn exact<'m, T>(
+        &mut self,
+        key: u32,
+        depth: u32,
+        run: impl Fn(u32) -> &'m Memo<T>,
+    ) -> &'m Memo<T> {
+        let moved = |memo: &Memo<T>| memo.reached - key + depth;
+        let mut memo = run(key);
+        if key != depth && moved(memo) > self.limits.depth {
+            memo = run(depth);
+            self.reached = self.reached.max(memo.reached);
+        } else {
+            self.reached = self.reached.max(moved(memo));
+        }
+        memo
     }
 
     fn expr_inner(&mut self, expr: ast::Expr<'_>) -> EvalResult<Value> {
@@ -1295,28 +1348,55 @@ impl<'a> Vm<'a> {
 
     /// Calls a closure through its memoised query: for all variants first,
     /// and for this evaluation's variant if the call reads `variant`.
+    ///
+    /// The call's key leaves out where it was made, so that the same call
+    /// at two sites is evaluated once (SPEC §2.3): the depth (see
+    /// [`Vm::depth_key`]) and the spans of the arguments, which only errors
+    /// and argument sinks can show. A closure with a sink is called with
+    /// its arguments' spans; a call without them that fails is evaluated
+    /// again with them, so that its errors point at the arguments.
     fn call_closure(&mut self, closure: Closure, args: Args, span: Span) -> EvalResult<Value> {
         let depth = self.deeper(span)?;
+        let key = self.depth_key(depth, false);
         let name = closure.name().cloned();
-        let shared = super::call_closure(
-            self.db,
-            self.project,
-            closure.clone(),
-            args.clone(),
-            depth,
-            Mode::Shared,
-        );
-        let memo = match (&shared.outcome, &self.mode) {
-            (Err(Stop::NeedsVariant), Mode::Variant(_)) => super::call_closure(
-                self.db,
-                self.project,
-                closure,
-                args,
+        let (db, project, mode) = (self.db, self.project, self.mode.clone());
+        let lookup = |args: &Args, depth: u32| {
+            let shared = super::call_closure(
+                db,
+                project,
+                closure.clone(),
+                args.clone(),
                 depth,
-                self.mode.clone(),
-            ),
-            _ => shared,
+                Mode::Shared,
+            );
+            match (&shared.outcome, &mode) {
+                (Err(Stop::NeedsVariant), Mode::Variant(_)) => super::call_closure(
+                    db,
+                    project,
+                    closure.clone(),
+                    args.clone(),
+                    depth,
+                    mode.clone(),
+                ),
+                _ => shared,
+            }
         };
+        let memo = if closure.has_sink() {
+            self.exact(key, depth, |depth| lookup(&args, depth))
+        } else {
+            let anywhere = args.without_spans();
+            let memo = self.exact(key, depth, |depth| lookup(&anywhere, depth));
+            // Only errors can show the spans the key left out: those of the
+            // call, and those that files it imported recovered from.
+            let detached = matches!(&memo.outcome, Err(Stop::Error(error)) if error.has_detached_span())
+                || memo.recovered.iter().any(EvalError::has_detached_span);
+            if detached {
+                self.exact(key, depth, |depth| lookup(&args, depth))
+            } else {
+                memo
+            }
+        };
+        self.take_on(&memo.recovered);
         self.charge(memo.cost, span)?;
         match &memo.outcome {
             Ok(value) => Ok(value.clone()),
@@ -1693,7 +1773,12 @@ impl<'a> Vm<'a> {
                 .into());
         }
         let depth = self.deeper(span)?;
-        let memo = eval_file_for(self.db, self.project, file, &self.mode, depth);
+        let key = self.depth_key(depth, true);
+        let (db, project, mode) = (self.db, self.project, self.mode.clone());
+        let memo = self.exact(key, depth, |depth| {
+            eval_file_for(db, project, file, &mode, depth)
+        });
+        self.take_on(&memo.recovered);
         self.charge(memo.cost, span)?;
         match &memo.outcome {
             Ok(module) => Ok(module.clone()),
