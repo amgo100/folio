@@ -55,5 +55,5 @@ A uniform ladder of length 5.0 m and weight 280 N rests against a smooth vertica
   + Award one mark for the statement and one for noting that the forces act on different bodies.
   + Resultant force: 5400 N, towards the centre of the bend.
 
-  Section B, first projectile: range #calc.round(10 * 10 * calc.sin(40deg) / g, digits: 2) m, maximum height #calc.round(calc.pow(10 * calc.sin(20deg), 2) / (2 * g), digits: 2) m, time of flight #calc.round(2 * 10 * calc.sin(20deg) / g, digits: 2) s.
+  Section B, first projectile: range #calc.round(10 * 10 * calc.sin(40deg) / g, digits: 2) m, maximum height #calc.round(calc.pow(10 * calc.sin(20deg), 2) / (2 * g), digits: 3) m, time of flight #calc.round(2 * 10 * calc.sin(20deg) / g, digits: 3) s.
 ]

@@ -213,7 +213,7 @@ fn badness(ratio: f64) -> f64 {
         // Multiplied out rather than `powi`, whose rounding varies by
         // platform (SPEC §2.4).
         let r = ratio.abs();
-        (100.0 * r * r * r).min(INF_BAD)
+        (100.0 * (r * (r * r))).min(INF_BAD)
     }
 }
 

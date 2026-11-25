@@ -18,9 +18,9 @@
 //!
 //! It compares every output file and the diagnostics of every build byte
 //! for byte. Then it compares the SHA-256 digests of the outputs with the
-//! ones recorded in `tests/determinism/digests.txt`, which were made on
-//! another machine, so that running the test on a second machine or
-//! operating system compares the two. After a change meant to alter the
+//! ones recorded in `tests/determinism/digests.txt` by the last bless, so
+//! that running the test on another machine or operating system compares
+//! it with the one that recorded them. After a change meant to alter the
 //! output, run `FOLIO_BLESS=1 cargo test -p folio --test determinism` and
 //! commit the new digests. The file has the format of `sha256sum`, so
 //! outputs written with `FOLIO_DETERMINISM_KEEP=<dir>` can be checked with

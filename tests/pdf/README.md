@@ -113,7 +113,7 @@ python tests/pdf/corpus.py [--verapdf <command>] [--pdftotext <command>] [--out 
 
 runs that test and checks every PDF with veraPDF's PDF/UA-1 profile and with Poppler's `pdftotext -raw`, whose output must be the expected text: a soft hyphen at a line break joins the lines around it, a line that ends in a hyphen after a letter joins the next without a space, and other white space is one space. It needs Java and Poppler; it is not part of `scripts/check.sh`.
 
-Results (veraPDF 1.28.2, Poppler 24, Linux, November 2026): all three documents pass PDF/UA-1 (106 rules) and their text round-trips.
+Results (veraPDF 1.28.2, Poppler 24, Linux, November 2026): all three documents pass PDF/UA-1 (106 rules) and their text round-trips. These predate the exam's mark scheme variant, whose PDF has so far passed krilla's validator and the `pdftotext` round-trip only.
 
 Two behaviours of readers shaped the writer:
 
