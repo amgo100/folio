@@ -1,5 +1,7 @@
 //! `folio build` (SPEC §12.1): builds the variants and targets of a project
-//! and writes their outputs where `[output] path` says (SPEC §6.4).
+//! and writes their outputs where `[output] path` says (SPEC §6.4). `folio
+//! check` runs the same command without emitting or writing anything
+//! ([`Mode::Check`]).
 
 use std::collections::HashSet;
 use std::fs;
@@ -8,26 +10,46 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use ecow::EcoVec;
 use folio::diag::{self, Files, Resolved, TextFiles};
 use folio::{
-    Compiled, Diagnostic, FontCache, Manifest, Name, ProjectPath, Target, World, compile_builds,
+    Cancelled, Compiled, Diagnostic, FontCache, Manifest, Name, ProjectPath, Target, World,
+    check_builds, compile_builds,
 };
 use folio_syntax::DiagSpan;
 use serde::Serialize;
 
 use super::project::{self, LOCKFILE, MANIFEST};
-use super::{BuildArgs, DiagnosticsFormat, FAILURE, toolchain};
+use super::{DiagnosticsFormat, FAILURE, ProjectArgs, toolchain};
+
+/// What a command does with the builds it chooses.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub(super) enum Mode {
+    /// `folio build`: compile them and write their outputs.
+    Build,
+    /// `folio check`: check them ([`folio::check`]) and write nothing.
+    Check,
+}
 
 /// Runs `folio build`.
-pub(crate) fn build(args: &BuildArgs) -> ExitCode {
+pub(crate) fn build(args: &ProjectArgs) -> ExitCode {
+    run_command(args, Mode::Build)
+}
+
+/// Runs `folio build` or `folio check`.
+pub(super) fn run_command(args: &ProjectArgs, mode: Mode) -> ExitCode {
     let mut report = Report::new(args);
-    let status = run(args, &mut report);
+    let status = run(args, mode, &mut report);
     report.finish();
     status
 }
 
-/// Builds, reporting what it finds to `report`.
-fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
+/// A build's diagnostics, and its output when it was compiled; or how it
+/// failed.
+type Outcome = Result<(EcoVec<Diagnostic>, Option<Compiled>), Cancelled>;
+
+/// Builds or checks, reporting what it finds to `report`.
+fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
     let mut fail = |message: String| {
         report.diagnostics(&TextFiles::new(), &[error(message)]);
         ExitCode::from(FAILURE)
@@ -98,45 +120,68 @@ fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
         world.set_today(Some(today));
     }
 
-    let outputs = if diagnostics.iter().any(Diagnostic::is_error) {
-        Vec::new()
-    } else {
-        compile_builds(&world, builds)
-    };
+    let outputs: Vec<(Option<Name>, Target, Outcome)> =
+        if diagnostics.iter().any(Diagnostic::is_error) {
+            Vec::new()
+        } else {
+            match mode {
+                Mode::Build => compile_builds(&world, builds)
+                    .into_iter()
+                    .map(|o| {
+                        let result = o.result.map(|c| (c.diagnostics.clone(), Some(c)));
+                        (o.variant, o.target, result)
+                    })
+                    .collect(),
+                Mode::Check => check_builds(&world, builds)
+                    .into_iter()
+                    .map(|o| (o.variant, o.target, o.result.map(|c| (c.diagnostics, None))))
+                    .collect(),
+            }
+        };
 
     // A diagnostic of a file that several builds read is shown once.
     let mut seen: HashSet<Diagnostic> = diagnostics.iter().cloned().collect();
     // Each build, in the manifest's order, with what it compiled to, or
     // `None` when it failed.
     let mut written = Vec::new();
-    for output in outputs {
-        let name = build_name(output.variant.as_ref(), output.target);
-        let path = world
-            .manifest()
-            .output_path(output.variant.as_ref(), output.target);
-        let compiled = match output.result {
-            Ok(compiled) => compiled,
+    for (variant, target, result) in outputs {
+        let name = build_name(variant.as_ref(), target);
+        let path = world.manifest().output_path(variant.as_ref(), target);
+        let (found, compiled) = match result {
+            Ok(outcome) => outcome,
             Err(cancelled) => {
-                diagnostics.push(error(format!("the build of {name} failed: {cancelled}")));
-                written.push((output.variant, output.target, path, None));
+                let what = match mode {
+                    Mode::Build => "build",
+                    Mode::Check => "check",
+                };
+                diagnostics.push(error(format!("the {what} of {name} failed: {cancelled}")));
+                written.push((variant, target, path, None));
                 continue;
             }
         };
-        for diagnostic in &compiled.diagnostics {
+        for diagnostic in &found {
             if seen.insert(diagnostic.clone()) {
                 diagnostics.push(diagnostic.clone());
             }
         }
-        written.push((output.variant, output.target, path, Some(compiled)));
+        written.push((variant, target, path, Some(compiled)));
     }
     report.diagnostics(&world, &diagnostics);
 
     let mut failed = diagnostics.iter().any(Diagnostic::is_error);
     for (variant, target, path, compiled) in written {
         let build = |path: Option<&str>, status| Build::new(&variant, target, path, status);
-        let Some(compiled) = compiled else {
-            report.build(build(path.as_deref(), Status::Failed));
-            continue;
+        let compiled = match compiled {
+            None => {
+                report.build(build(path.as_deref(), Status::Failed));
+                continue;
+            }
+            // A check writes nothing.
+            Some(None) => {
+                report.build(build(None, Status::Checked));
+                continue;
+            }
+            Some(Some(compiled)) => compiled,
         };
         match write(&root, path.as_deref(), &compiled) {
             Ok(Written::File(path)) => report.build(build(Some(&path), Status::Written)),
@@ -162,7 +207,7 @@ fn run(args: &BuildArgs, report: &mut Report) -> ExitCode {
 fn select(
     manifest: &Manifest,
     declared: &[(Option<Name>, Target)],
-    args: &BuildArgs,
+    args: &ProjectArgs,
 ) -> Result<Vec<(Option<Name>, Target)>, Diagnostic> {
     let names = || -> String {
         let names: Vec<_> = manifest
@@ -375,7 +420,7 @@ fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
-/// Where `folio build` reports what it found and did: to standard error,
+/// Where `folio build` and `folio check` report what they found and did: to standard error,
 /// as it goes, with source excerpts; or, with `--diagnostics json`, as one
 /// JSON document written when the command ends (`docs/diagnostics-json.md`).
 struct Report {
@@ -384,7 +429,7 @@ struct Report {
     json: Option<Document>,
 }
 
-/// The JSON document of `folio build --diagnostics json`, which
+/// The JSON document of `--diagnostics json`, which
 /// `docs/diagnostics-json.md` describes.
 #[derive(Debug, Default, Serialize)]
 struct Document {
@@ -432,13 +477,15 @@ enum Status {
     None,
     /// The build or the write failed; a diagnostic says why.
     Failed,
+    /// The build was checked (`folio check`), which writes no output.
+    Checked,
 }
 
 impl Report {
     /// The version of [`Document`]'s shape.
     const VERSION: u32 = 1;
 
-    fn new(args: &BuildArgs) -> Self {
+    fn new(args: &ProjectArgs) -> Self {
         Self {
             color: args.color.enabled(),
             json: (args.diagnostics == DiagnosticsFormat::Json).then(|| Document {
@@ -504,11 +551,11 @@ mod tests {
         compiler = \"0.0.0\"\n\n[variants.exam]\ntargets = [\"pdf\", \"docx\"]\n\n\
         [variants.markscheme]\ntargets = [\"pdf\"]\n";
 
-    fn args(flags: &[&str]) -> BuildArgs {
+    fn args(flags: &[&str]) -> ProjectArgs {
         let mut all = vec!["folio", "build"];
         all.extend(flags);
         match Cli::parse_from(all).command {
-            Command::Build(args) => args,
+            Command::Build(args) => args.project,
             other => panic!("{other:?}"),
         }
     }

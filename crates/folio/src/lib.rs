@@ -90,21 +90,72 @@ pub fn compile(
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         let built = pipeline::compile_build(db, build);
-        // A diagnostic that two queries report alike, such as a missing
-        // imported file that both the file search and evaluation find, is
-        // kept once.
-        let mut seen = HashSet::new();
-        let diagnostics = pipeline::compile_build::accumulated::<Reported>(db, build)
-            .into_iter()
-            .filter(|reported| seen.insert(&reported.0))
-            .map(|reported| reported.0.clone())
-            .collect();
+        let diagnostics = collect(pipeline::compile_build::accumulated::<Reported>(db, build));
         Compiled {
             sources: built.sources.clone(),
             output: built.output.clone(),
             diagnostics,
         }
     })
+}
+
+/// Checks a variant of the world's document for a target without
+/// emitting it: runs every stage of SPEC §2.1 up to Emit, lays out the
+/// pages of a fixed-layout target, and for PDF runs the writer's check of
+/// the pages, but writes nothing. The variant is `None` only for a
+/// project that declares no variants.
+///
+/// The diagnostics are those that [`compile`] reports for the build, but
+/// for the few that only writing the file finds: an error of the writer
+/// itself, such as a font it cannot subset, and a reason for a PDF not to
+/// claim PDF/UA-1 that the writer's check does not foresee. After an edit,
+/// checking again re-runs only what the edit affects; compiling the same
+/// build afterwards reuses the check and only emits. Fails only when an
+/// edit to the world cancels the check.
+pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Checked, Cancelled> {
+    catch(|| {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        let sources = pipeline::check_build(db, build).clone();
+        let diagnostics = collect(pipeline::check_build::accumulated::<Reported>(db, build));
+        Checked {
+            sources,
+            diagnostics,
+        }
+    })
+}
+
+/// The diagnostics a query and the queries it depends on reported, each
+/// once.
+fn collect(reported: Vec<&Reported>) -> EcoVec<Diagnostic> {
+    // A diagnostic that two queries report alike, such as a missing
+    // imported file that both the file search and evaluation find, is kept
+    // once.
+    let mut seen = HashSet::new();
+    reported
+        .into_iter()
+        .filter(|reported| seen.insert(&reported.0))
+        .map(|reported| reported.0.clone())
+        .collect()
+}
+
+/// What checking a build finds ([`check`]): its diagnostics, without
+/// output.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+pub struct Checked {
+    /// The source files the build read, in the order they were found. A
+    /// watcher checks again when one of them changes.
+    pub sources: EcoVec<ProjectPath>,
+    /// Every problem found, errors and warnings, in the order the queries
+    /// that reported them first ran.
+    pub diagnostics: EcoVec<Diagnostic>,
+}
+
+impl Checked {
+    /// Whether any diagnostic is an error.
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics.iter().any(Diagnostic::is_error)
+    }
 }
 
 /// What compiling a build produces: its output and its diagnostics.
@@ -269,6 +320,25 @@ pub fn compile_builds(
     world: &World,
     builds: impl IntoIterator<Item = (Option<Name>, Target)>,
 ) -> Vec<Output> {
+    run_builds(world, builds, compile)
+}
+
+/// Checks builds of the world's document without emitting them
+/// ([`check`]), as [`compile_builds`] compiles them: in parallel, each on
+/// its own handle of the world, the results in the order of the builds.
+pub fn check_builds(
+    world: &World,
+    builds: impl IntoIterator<Item = (Option<Name>, Target)>,
+) -> Vec<Output<Checked>> {
+    run_builds(world, builds, check)
+}
+
+/// Runs `run` on builds in parallel, each on its own handle of the world.
+fn run_builds<T: Send>(
+    world: &World,
+    builds: impl IntoIterator<Item = (Option<Name>, Target)>,
+    run: fn(&World, Target, Option<&Name>) -> Result<T, Cancelled>,
+) -> Vec<Output<T>> {
     // A handle is not `Sync`, so each build takes its own.
     let builds: Vec<_> = builds
         .into_iter()
@@ -277,7 +347,7 @@ pub fn compile_builds(
     builds
         .into_par_iter()
         .map(|(world, (variant, target))| {
-            let result = compile(&world, target, variant.as_ref());
+            let result = run(&world, target, variant.as_ref());
             Output {
                 variant,
                 target,
@@ -287,15 +357,16 @@ pub fn compile_builds(
         .collect()
 }
 
-/// The result of one build of [`compile_all`] or [`compile_builds`].
+/// The result of one build of [`compile_all`] or [`compile_builds`]
+/// (what it compiled to), or of [`check_builds`] (what checking it found).
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Output {
+pub struct Output<T = Compiled> {
     /// The variant, or `None` for a project without variants.
     pub variant: Option<Name>,
     /// The target.
     pub target: Target,
-    /// What compiling it produced.
-    pub result: Result<Compiled, Cancelled>,
+    /// What compiling or checking it produced.
+    pub result: Result<T, Cancelled>,
 }
 
 /// A compilation was stopped by an edit to the world, so its result would

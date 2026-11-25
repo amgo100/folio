@@ -22,11 +22,21 @@
 //! is the first, and the leaves and boundaries its builder read, from its
 //! first leaf to the boundary after the last it considered. A page whose
 //! content is unchanged, wherever an edit has moved it, is found there and
-//! not broken or assembled again. The full two-part flow state (§2.3) comes
-//! with page furniture and floats.
+//! not broken or assembled again, and keeps its fragment: the page as
+//! dressed for the document is kept with it, so an unchanged page shares
+//! its fragment's content with the page it was before. The full two-part
+//! flow state (§2.3) comes with page furniture and floats.
+//!
+//! **Changed pages** ([`Pages::hashes`]): each page has a hash of what it
+//! shows, computed once when it is assembled. It leaves out the sources
+//! that fragments and glyphs name, whose span numbers a reparse may
+//! renumber, so a page that looks the same after an edit has the same hash
+//! wherever its source moved, and a watcher sends only the pages whose
+//! hash changed (§2.3).
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -34,7 +44,7 @@ use ecow::{EcoVec, eco_format};
 use folio_component::{Abs, Fragment, FragmentItem, Path, Point, Shape, Size, SourceRef, Stroke};
 use folio_syntax::Span;
 
-use super::flow::{Boundary, Constraint, Flow, Item, KEEP, Leaf, Origin, Part, Walk};
+use super::flow::{Boundary, Constraint, Flow, Item, KEEP, Leaf, Origin, Part, Shared, Walk};
 use super::lines;
 use super::master::{BlockBox, PageMaster};
 use super::set::set_line;
@@ -61,6 +71,26 @@ pub struct Pages {
     pub master: PageMaster,
     /// The pages, at least one.
     pub pages: EcoVec<Page>,
+    /// The content hash of each page, in the order of [`Pages::pages`]:
+    /// a hash of what the page shows, its geometry, glyphs and paint,
+    /// that leaves out the sources its fragments and glyphs name. Two pages
+    /// that look the same have the same hash, whatever their sources'
+    /// span numbers.
+    pub hashes: EcoVec<u64>,
+}
+
+impl Pages {
+    /// The indices of the pages that differ from those of `before` by
+    /// their content hash: pages whose hash changed, and pages that
+    /// `before` did not have.
+    pub fn changed(&self, before: &Pages) -> Vec<usize> {
+        self.hashes
+            .iter()
+            .enumerate()
+            .filter(|&(i, hash)| before.hashes.get(i) != Some(hash))
+            .map(|(i, _)| i)
+            .collect()
+    }
 }
 
 /// One page.
@@ -87,6 +117,8 @@ pub struct LineRef {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 struct PageOut {
     fragment: Fragment,
+    /// The content hash of the fragment ([`content_hash`]).
+    hash: u64,
     /// How many leaves the page holds.
     leaves: usize,
     /// The constraints the break after the page goes against.
@@ -106,9 +138,13 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
     let master = PageMaster::of(&styled.page, props);
+    let cache = db.page_cache();
+    let now = cache.tick();
     let flow = Flow::new(
         text,
         db.layout_cache(),
+        &cache.shared,
+        now,
         &lines.paragraphs,
         &lines.slots,
         props,
@@ -118,9 +154,8 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
 
     // The page and its body are boxes of the document.
     let root = source_ref(text.root.span);
-    let cache = db.page_cache();
-    let now = cache.tick();
     let mut pages = EcoVec::new();
+    let mut hashes = EcoVec::new();
     let mut start = 0;
     while start < flow.items.len() {
         // `break-before: odd-page` and `even-page` pad with a blank page.
@@ -128,14 +163,16 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
             && let Some(odd) = flow.boundary(start).parity
             && (pages.len() % 2 == 0) != odd
         {
+            let fragment = blank(&master);
+            hashes.push(content_hash(&fragment));
             pages.push(Page {
-                fragment: dress(&blank(&master), root),
+                fragment: dress(&fragment, root),
                 lines: EcoVec::new(),
             });
         }
-        let out = cache.page(&flow, master, start, start == 0, now);
+        let (out, fragment) = cache.page(&flow, master, start, start == 0, now, root);
         report(db, &out);
-        let fragment = dress(&out.fragment, root);
+        hashes.push(out.hash);
         let lines = flow.origins[start..start + out.leaves]
             .iter()
             .filter_map(|origin| match *origin {
@@ -147,12 +184,61 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         start += out.leaves;
     }
     cache.sweep(now);
-    Some(Pages { master, pages })
+    Some(Pages {
+        master,
+        pages,
+        hashes,
+    })
+}
+
+/// A hash of what a page shows: its fragments' sizes, positions,
+/// baselines and break data, its glyph runs and its shapes, without the
+/// sources that fragments, glyphs and shapes name.
+fn content_hash(fragment: &Fragment) -> u64 {
+    fn walk(fragment: &Fragment, h: &mut DefaultHasher) {
+        fragment.size.hash(h);
+        fragment.first_baseline.hash(h);
+        fragment.last_baseline.hash(h);
+        fragment.keep_with_next.hash(h);
+        fragment.break_penalty_after.hash(h);
+        fragment.items.len().hash(h);
+        for (pos, item) in &fragment.items {
+            pos.hash(h);
+            match item {
+                FragmentItem::Group(group) => {
+                    0u8.hash(h);
+                    walk(group, h);
+                }
+                FragmentItem::Text(run) => {
+                    1u8.hash(h);
+                    run.font.hash(h);
+                    run.size.hash(h);
+                    run.fill.hash(h);
+                    run.text.hash(h);
+                    run.glyphs.len().hash(h);
+                    for glyph in &run.glyphs {
+                        glyph.id.hash(h);
+                        glyph.x_advance.hash(h);
+                        glyph.x_offset.hash(h);
+                        glyph.y_offset.hash(h);
+                        glyph.range.hash(h);
+                    }
+                }
+                FragmentItem::Shape { shape, source: _ } => {
+                    2u8.hash(h);
+                    shape.hash(h);
+                }
+            }
+        }
+    }
+    let mut hasher = DefaultHasher::new();
+    walk(fragment, &mut hasher);
+    hasher.finish()
 }
 
 /// A page and its body as boxes of the document's root, `root`. Pages come
 /// from the cache whatever document they were made for, so they are
-/// dressed afterwards.
+/// dressed afterwards; the cache keeps a page as it was last dressed.
 fn dress(page: &Fragment, root: SourceRef) -> Fragment {
     let mut page = page.clone().with_source(root);
     for (_, item) in page.items.make_mut() {
@@ -304,6 +390,7 @@ fn layout_page(flow: &Flow, master: &PageMaster, start: usize, first: bool) -> (
         (span, found.overflow)
     });
     let out = PageOut {
+        hash: content_hash(&fragment),
         fragment,
         leaves: found.end - start,
         relaxed,
@@ -522,6 +609,9 @@ fn decorate(fragment: &mut Fragment, block: &BlockBox, starts: bool, ends: bool)
 #[derive(Default)]
 pub struct PageCache {
     entries: Mutex<HashMap<(PageMaster, bool, u64), Vec<Entry>>>,
+    /// The paragraphs and blocks of recent flows, shared so that the same
+    /// one in the next flow is the same `Arc`.
+    shared: Shared,
     /// Counts the calls of `pages`.
     clock: AtomicU64,
     hits: AtomicU64,
@@ -534,6 +624,8 @@ struct Entry {
     /// The boundary after the last leaf, when the builder read it.
     end: Option<Boundary>,
     out: Arc<PageOut>,
+    /// The page as last dressed, and the root it was dressed for.
+    dressed: (SourceRef, Fragment),
     /// The clock when it was last asked for.
     used: u64,
 }
@@ -566,11 +658,13 @@ impl PageCache {
                 bucket.retain(|e| e.used + MAX_AGE >= now);
             }
             entries.retain(|_, bucket| !bucket.is_empty());
+            drop(entries);
+            self.shared.sweep(now, MAX_AGE);
         }
     }
 
     /// The page that starts at leaf `start` of a flow: memoised, or made
-    /// now.
+    /// now; with its fragment dressed as a box of `root`.
     fn page(
         &self,
         flow: &Flow,
@@ -578,28 +672,34 @@ impl PageCache {
         start: usize,
         first: bool,
         now: u64,
-    ) -> Arc<PageOut> {
+        root: SourceRef,
+    ) -> (Arc<PageOut>, Fragment) {
         let key = (master, first, flow.items[start].leaf.fingerprint());
         if let Some(bucket) = lock(&self.entries).get_mut(&key)
             && let Some(entry) = bucket.iter_mut().find(|e| e.matches(flow, start))
         {
             entry.used = now;
+            if entry.dressed.0 != root {
+                entry.dressed = (root, dress(&entry.out.fragment, root));
+            }
             self.hits.fetch_add(1, Ordering::Relaxed);
-            return entry.out.clone();
+            return (entry.out.clone(), entry.dressed.1.clone());
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
         let (out, read) = layout_page(flow, &master, start, first);
         let out = Arc::new(out);
+        let dressed = dress(&out.fragment, root);
         let n = flow.items.len();
         let stop = (read + 1).min(n);
         let entry = Entry {
             items: flow.items[start..stop].to_vec(),
             end: (read == n).then(|| flow.end.clone()),
             out: out.clone(),
+            dressed: (root, dressed.clone()),
             used: now,
         };
         lock(&self.entries).entry(key).or_default().push(entry);
-        out
+        (out, dressed)
     }
 
     /// How often the cache had a page since it was made.

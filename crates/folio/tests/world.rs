@@ -88,7 +88,7 @@ impl Logged {
 /// memoised apart); line and page breaking, which read the text; and Emit,
 /// which reads the pages.
 const EVAL: &str = "eval_file evaluate document styles select sequence resolve step_style \
-                    check_fonts text lines pages emit";
+                    check_fonts text lines pages pdf_input pdf_check emit";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {

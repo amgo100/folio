@@ -31,9 +31,10 @@
 //! builder takes the cheapest break and reports the constraints it had to
 //! relax (SPEC §7.2).
 
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::EcoVec;
 use folio_component::{Abs, Color, Em, Paint, SourceRef, Value};
@@ -405,6 +406,8 @@ impl Flow {
     pub(super) fn new(
         text: &Text,
         cache: &Cache,
+        shared: &Shared,
+        now: u64,
         layouts: &[Arc<ParagraphLayout>],
         slots: &[LineSlot],
         props: &Properties,
@@ -414,6 +417,8 @@ impl Flow {
         let mut builder = Builder {
             text,
             cache,
+            shared,
+            now,
             layouts,
             slots,
             props,
@@ -425,13 +430,16 @@ impl Flow {
             origins: Vec::new(),
         };
         let root = &text.root;
-        let root_box = Arc::new(BlockBox::of(
-            &root.style,
-            props,
-            root.span,
-            Abs::zero(),
-            width,
-        ));
+        let root_box = shared.block(
+            Arc::new(BlockBox::of(
+                &root.style,
+                props,
+                root.span,
+                Abs::zero(),
+                width,
+            )),
+            now,
+        );
         builder.block(root, root_box);
         let end = builder.boundary(None);
         Flow {
@@ -447,6 +455,93 @@ impl Flow {
     }
 }
 
+/// The paragraphs and blocks of recent flows, so that one equal to a
+/// paragraph or block of an earlier flow is the same `Arc`. A flow is built
+/// anew after every edit; with its unchanged parts shared, the page cache
+/// compares the leaves and boundaries a page read by pointer rather than
+/// by content. Kept with the page cache, by its clock.
+#[derive(Default)]
+pub(super) struct Shared {
+    paragraphs: Mutex<HashMap<u64, Vec<(Arc<ParagraphInfo>, u64)>>>,
+    blocks: Mutex<HashMap<u64, Vec<(Arc<BlockBox>, u64)>>>,
+}
+
+impl Shared {
+    /// A paragraph, as the `Arc` of an equal one from a recent flow if
+    /// there is one. `now` is the page cache's clock.
+    pub(super) fn paragraph(&self, info: ParagraphInfo, now: u64) -> Arc<ParagraphInfo> {
+        // The shaped paragraph and its lines are shared by their caches,
+        // so they are keyed by pointer; equality still compares them by
+        // content where the pointers differ.
+        let mut hasher = DefaultHasher::new();
+        (Arc::as_ptr(&info.shaped) as usize).hash(&mut hasher);
+        (Arc::as_ptr(&info.layout) as usize).hash(&mut hasher);
+        info.slot.hash(&mut hasher);
+        info.leading.hash(&mut hasher);
+        info.indent.hash(&mut hasher);
+        info.widows.hash(&mut hasher);
+        info.orphans.hash(&mut hasher);
+        info.segments.hash(&mut hasher);
+        info.sources.hash(&mut hasher);
+        info.span.hash(&mut hasher);
+        intern(&self.paragraphs, hasher.finish(), info, now)
+    }
+
+    /// A block's box, as the `Arc` of an equal one from a recent flow if
+    /// there is one.
+    pub(super) fn block(&self, block: Arc<BlockBox>, now: u64) -> Arc<BlockBox> {
+        let mut hasher = DefaultHasher::new();
+        block.hash(&mut hasher);
+        let key = hasher.finish();
+        let mut map = lock(&self.blocks);
+        let bucket = map.entry(key).or_default();
+        if let Some((shared, used)) = bucket.iter_mut().find(|(b, _)| *b == block) {
+            *used = now;
+            return shared.clone();
+        }
+        bucket.push((block.clone(), now));
+        block
+    }
+
+    /// Forgets what no flow has used in the last `age` ticks of the clock.
+    pub(super) fn sweep(&self, now: u64, age: u64) {
+        fn sweep<T>(map: &Mutex<HashMap<u64, Vec<(Arc<T>, u64)>>>, now: u64, age: u64) {
+            let mut map = lock(map);
+            for bucket in map.values_mut() {
+                bucket.retain(|(_, used)| used + age >= now);
+            }
+            map.retain(|_, bucket| !bucket.is_empty());
+        }
+        sweep(&self.paragraphs, now, age);
+        sweep(&self.blocks, now, age);
+    }
+}
+
+/// The `Arc` of a value equal to `value` in `map` under `key`, or of
+/// `value`, now kept there.
+fn intern<T: Eq>(
+    map: &Mutex<HashMap<u64, Vec<(Arc<T>, u64)>>>,
+    key: u64,
+    value: T,
+    now: u64,
+) -> Arc<T> {
+    let mut map = lock(map);
+    let bucket = map.entry(key).or_default();
+    if let Some((shared, used)) = bucket.iter_mut().find(|(v, _)| **v == value) {
+        *used = now;
+        return shared.clone();
+    }
+    let value = Arc::new(value);
+    bucket.push((value.clone(), now));
+    value
+}
+
+/// Locks a mutex. A thread that panicked while holding it left its map
+/// whole: each insertion or removal is one call.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// What the boundary being built has seen since the last leaf.
 enum Event {
     Close(Arc<BlockBox>),
@@ -456,6 +551,9 @@ enum Event {
 struct Builder<'a> {
     text: &'a Text,
     cache: &'a Cache,
+    shared: &'a Shared,
+    /// The page cache's clock, for [`Shared`].
+    now: u64,
     layouts: &'a [Arc<ParagraphLayout>],
     slots: &'a [LineSlot],
     props: &'a Properties,
@@ -480,6 +578,7 @@ impl Builder<'_> {
                 TextFlow::Paragraph(i) => self.paragraph(*i),
                 TextFlow::Block(b) => {
                     let child = boxed.child(&b.style, self.props, b.span);
+                    let child = self.shared.block(child, self.now);
                     self.block(b, child);
                 }
             }
@@ -552,18 +651,21 @@ impl Builder<'_> {
                     .collect(),
             })
             .collect();
-        let info = Arc::new(ParagraphInfo {
-            shaped: paragraph.shaped.clone(),
-            layout: layout.clone(),
-            slot: self.slots[index],
-            leading: style.leading,
-            indent: style.indent,
-            widows: count("widows"),
-            orphans: count("orphans"),
-            segments: paints,
-            sources: paragraph.sources.clone(),
-            span: paragraph.span,
-        });
+        let info = self.shared.paragraph(
+            ParagraphInfo {
+                shaped: paragraph.shaped.clone(),
+                layout: layout.clone(),
+                slot: self.slots[index],
+                leading: style.leading,
+                indent: style.indent,
+                widows: count("widows"),
+                orphans: count("orphans"),
+                segments: paints,
+                sources: paragraph.sources.clone(),
+                span: paragraph.span,
+            },
+            self.now,
+        );
         for line in 0..layout.lines.len() {
             self.leaf(
                 Leaf::Line {
