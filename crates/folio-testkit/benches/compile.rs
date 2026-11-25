@@ -14,6 +14,24 @@
 //! `compile_cold::m0_exit` is the M0 exit check (SPEC §15) counted in
 //! instructions: the ten-page document compiled from source in a fresh
 //! world. `folio-wall` times it against its 200 ms limit.
+//!
+//! `preview_after_edit` and `restyle` count the preview path (SPEC §14.1,
+//! the M1 exit check of §15): the reference document laid out again after
+//! an edit, up to its pages and without emit. Both go through [`preview`],
+//! the one place to point at a query that stops at the pages and runs the
+//! build's checks once there is one. `compile_variants` counts the ten-page
+//! document with three variants: the teacher's variant alone, and all
+//! three.
+//!
+//! Callgrind counts only the benchmark function's thread. Paragraphs that
+//! `folio-text` shapes several at a time run on its shaping thread, so
+//! their shaping is not counted: a full compile's or a stylesheet edit's
+//! counts leave most of the shaping out, and a one-word edit's, which
+//! shapes one paragraph on the calling thread, keep it. Gungraun also turns
+//! counting on and off on entering and leaving any function of a
+//! benchmark's wrapper module, a closure that the body defines and does
+//! not inline included, so the bodies here do their work in loops rather
+//! than closures (the small closures that only read a length are inlined). Issue #234 tracks counting the shaping thread.
 
 // Gungraun's macros expand to paths the first lint calls redundant, and to
 // public items without documentation.
@@ -24,7 +42,7 @@ use std::ops::Range;
 
 use folio::{BuildMode, Name, Target, World};
 use folio_testkit::corpus::{self, Project};
-use folio_testkit::refdoc::{self, Spec};
+use folio_testkit::refdoc::{self, Edit, Spec};
 use gungraun::prelude::*;
 use gungraun::{Callgrind, EventKind};
 
@@ -69,13 +87,9 @@ fn compiled(project: Project) -> (World, String, Range<usize>) {
     let (variant, target) = first_build(&world);
     folio::compile(&world, target, variant.as_ref()).expect("not cancelled");
     let entry = world.manifest().project.entry.v.to_string();
-    let text = &project.sources[&entry];
-    // The first word of the paragraph that starts after the middle.
-    let start = text[text.len() / 2..]
-        .find("\n\nThe ")
-        .map(|i| text.len() / 2 + i + 2)
-        .expect("a paragraph after the middle");
-    (world, entry, start..start + 3)
+    let edit = Edit::word(&project);
+    assert_eq!(edit.path, entry);
+    (world, entry, edit.range)
 }
 
 /// The M0 exit document, compiled, with a word to edit.
@@ -97,6 +111,95 @@ fn recompile_after_edit((mut world, entry, range): (World, String, Range<usize>)
     black_box(compiled.output.map_or(0, |bytes| bytes.len()))
 }
 
+/// The preview path: the pages of a project without variants, which is
+/// what a preview repaints from; returns their number, and panics when the
+/// build cannot be laid out, so that a broken edit is not counted as a
+/// cheap one.
+fn preview(world: &World) -> usize {
+    folio::pages(world, Target::Pdf, None)
+        .expect("not cancelled")
+        .expect("the build is laid out")
+        .pages
+        .len()
+}
+
+/// The reference document laid out to its pages, and an edit to make.
+fn previewed(edit: fn(&Project) -> Edit) -> (World, Edit) {
+    let project = refdoc::generate(&Spec::REFERENCE);
+    let world = project.world(BuildMode::Build);
+    preview(&world);
+    let edit = edit(&project);
+    (world, edit)
+}
+
+/// The reference document laid out, with a one-word edit in its middle.
+fn previewed_word_edit() -> (World, Edit) {
+    previewed(Edit::word)
+}
+
+/// The reference document laid out, with the body's font size changed.
+fn previewed_style_edit() -> (World, Edit) {
+    previewed(Edit::style)
+}
+
+// Lays the reference document out again after an edit: the preview path,
+// with the memoised queries and the shaping, line and page caches warm.
+#[library_benchmark]
+#[bench::reference(setup = previewed_word_edit)]
+fn preview_after_edit((mut world, edit): (World, Edit)) -> usize {
+    world
+        .edit_source(&edit.path, edit.range, edit.with)
+        .expect("a valid edit");
+    black_box(preview(&world))
+}
+
+// Lays the reference document out again after its body's font size
+// changes in the stylesheet: every paragraph is set at the new size and
+// broken again, and every page reflows.
+#[library_benchmark]
+#[bench::reference(setup = previewed_style_edit)]
+fn restyle((mut world, edit): (World, Edit)) -> usize {
+    world
+        .edit_source(&edit.path, edit.range, edit.with)
+        .expect("a valid edit");
+    black_box(preview(&world))
+}
+
+/// The variant that `compile_variants::one` compiles: the teacher's, which
+/// shows everything and shares its styles with the exam.
+const ONE_VARIANT: &[&str] = &["teacher"];
+
+/// The ten-page document with three variants (and answers, which make two
+/// of them a little longer), and the variants to compile.
+fn m0_exit_variants(variants: &'static [&'static str]) -> (Project, &'static [&'static str]) {
+    (refdoc::generate_variants(&Spec::M0_EXIT), variants)
+}
+
+// Compiles variants of the ten-page document with three variants in a
+// fresh world, to PDF: the teacher's alone, and all three, which share
+// what does not read the variant (SPEC §6). The builds run one after
+// another on the benchmark's thread rather than through
+// `folio::compile_builds`, whose worker threads Callgrind would not count:
+// the counts compare the work, not how it is shared out.
+#[library_benchmark]
+#[bench::one(args = (ONE_VARIANT), setup = m0_exit_variants)]
+#[bench::three(args = (&refdoc::VARIANTS), setup = m0_exit_variants)]
+fn compile_variants((project, variants): (Project, &[&str])) -> usize {
+    // Loops and matches rather than closures: Gungraun toggles counting on
+    // entering and leaving any function of the benchmark's wrapper module,
+    // a closure in its body included, which would stop counting inside it.
+    let world = project.world(BuildMode::Build);
+    let mut size = 0;
+    for &variant in variants {
+        let variant = Name::new(variant).expect("a name");
+        let compiled = folio::compile(&world, Target::Pdf, Some(&variant)).expect("not cancelled");
+        if let Some(bytes) = compiled.output {
+            size += bytes.len();
+        }
+    }
+    black_box(size)
+}
+
 /// The reference document's markup.
 fn reference_markup() -> String {
     refdoc::generate(&Spec::REFERENCE).sources["main.fol"].clone()
@@ -111,7 +214,14 @@ fn parse(text: String) -> usize {
 
 library_benchmark_group!(
     name = compile,
-    benchmarks = [compile_cold, recompile_after_edit, parse]
+    benchmarks = [
+        compile_cold,
+        recompile_after_edit,
+        preview_after_edit,
+        restyle,
+        compile_variants,
+        parse
+    ]
 );
 
 main!(

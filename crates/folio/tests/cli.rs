@@ -192,3 +192,95 @@ fn rejects_what_is_not_supported_yet() {
         format!("folio {}", folio::VERSION)
     );
 }
+
+/// The JSON document that `folio build --diagnostics json` writes to
+/// standard error, which must be all that it writes there.
+fn json(output: &Output) -> serde_json::Value {
+    serde_json::from_slice(&output.stderr).unwrap_or_else(|e| panic!("{e}: {}", stderr(output)))
+}
+
+#[test]
+fn writes_diagnostics_as_json() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir(&corpus().join("notes"), dir.path());
+    let append = |path: &str, text: &str| {
+        let path = dir.path().join(path);
+        let mut source = fs::read_to_string(&path).unwrap();
+        source.push_str(text);
+        fs::write(path, source).unwrap();
+    };
+    append("main.fol", "\n#box(\n");
+    append("styles/notes.fsty", "\nparagraph:bogus { indent: 0pt; }\n");
+    let main = fs::read_to_string(dir.path().join("main.fol")).unwrap();
+    let lines = main.lines().count();
+
+    let output = folio(dir.path(), &["build", "--diagnostics", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let document = json(&output);
+    assert_eq!(document["version"], 1);
+
+    let diagnostics = document["diagnostics"].as_array().unwrap();
+    let error = diagnostics
+        .iter()
+        .find(|d| d["severity"] == "error")
+        .unwrap_or_else(|| panic!("{document:#}"));
+    assert_eq!(error["message"], "unclosed delimiter");
+    assert_eq!(error["code"], serde_json::Value::Null);
+    let location = &error["location"];
+    assert_eq!(location["path"], "main.fol");
+    assert_eq!(location["start"]["line"], lines);
+    assert_eq!(location["start"]["column"], 5);
+    let start = location["bytes"]["start"].as_u64().unwrap() as usize;
+    assert_eq!(&main[start..start + 1], "(");
+
+    let warning = diagnostics
+        .iter()
+        .find(|d| d["severity"] == "warning")
+        .unwrap_or_else(|| panic!("{document:#}"));
+    assert_eq!(
+        warning["message"],
+        "unknown pseudo-class `:bogus`; the rule is ignored"
+    );
+    assert_eq!(warning["location"]["path"], "styles/notes.fsty");
+    assert!(warning["hints"][0].as_str().unwrap().contains(":first"));
+
+    assert_eq!(
+        document["builds"],
+        serde_json::json!([
+            {"variant": null, "target": "pdf", "path": "out/main.pdf", "status": "skipped"}
+        ])
+    );
+    assert!(!dir.path().join("out").exists());
+}
+
+#[test]
+fn writes_json_for_builds_without_errors_and_without_a_project() {
+    let dir = project(&[("folio.toml", MANIFEST), ("main.fol", "Text.\n")]);
+    let output = folio(dir.path(), &["build", "--diagnostics", "json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        json(&output),
+        serde_json::json!({
+            "version": 1,
+            "diagnostics": [],
+            "builds": [
+                {"variant": null, "target": "pdf", "path": "out/main.pdf", "status": "written"}
+            ]
+        })
+    );
+
+    // An error before there is a project points at no file.
+    let empty = tempfile::tempdir().unwrap();
+    let output = folio(empty.path(), &["build", "--diagnostics", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let document = json(&output);
+    assert_eq!(document["diagnostics"][0]["severity"], "error");
+    assert_eq!(
+        document["diagnostics"][0]["location"],
+        serde_json::Value::Null
+    );
+    assert_eq!(document["builds"], serde_json::json!([]));
+
+    let output = folio(dir.path(), &["build", "--diagnostics", "xml"]);
+    assert_eq!(output.status.code(), Some(2));
+}

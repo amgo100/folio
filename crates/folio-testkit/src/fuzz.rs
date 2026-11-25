@@ -13,14 +13,17 @@
 //! | `reparse` | an edit to markup or a stylesheet | incremental reparsing equals a full parse; node identities follow the edit |
 //! | `style` | content and a stylesheet | evaluation, the cascade and selector matching finish without a panic |
 //! | `nesting` | wrappers and how often to apply each | a script that nests values that deeply compiles to PDF on a small stack, or reports the nesting limit, without a panic or an overflow |
+//! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs, diagnostics and span maps of a world built afresh from the same texts |
 //!
 //! A target panics when a check fails; libFuzzer records the input.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
-use folio::{Limits, Name, Target, World};
+use folio::{BuildMode, Fragment, FragmentItem, Limits, Name, Target, World, span_map};
 use folio_syntax::{NodeIds, Source, SyntaxNode, parse, parse_stylesheet};
 
 use crate::corpus;
@@ -35,6 +38,7 @@ pub const TARGETS: &[(&str, Body)] = &[
     ("reparse", reparse),
     ("style", style),
     ("nesting", nesting),
+    ("differential", differential),
 ];
 
 /// The regression inputs of a target: `fuzz/regressions/<target>/`.
@@ -305,6 +309,315 @@ edition = \"2027\"
 compiler = \"0.0.0\"
 ";
 
+/// What [`differential`] inserts into content: markup that opens and closes
+/// blocks, scripts, references and labels, words, and breaks, so that
+/// random edits restructure the document as well as reflow it.
+pub const CONTENT_SNIPPETS: &[&str] = &[
+    "x",
+    "word ",
+    " ",
+    "\n",
+    "\n\n",
+    "*",
+    "_",
+    "= ",
+    "== ",
+    "- ",
+    "+ ",
+    "/ term: ",
+    "#",
+    "#[",
+    "[",
+    "]",
+    "{",
+    "}",
+    "(",
+    ")",
+    "\"",
+    "`",
+    "\\",
+    "<l>",
+    "@l",
+    "#strong[bold]",
+    "#figure[A figure.]",
+    "#let v = 1\n",
+    "#v",
+    "#if true [yes] else [no]",
+    "żółć ",
+    "biało-czerwony ",
+    "A sentence long enough to move a line break or two further down the page. ",
+];
+
+/// What [`differential`] inserts into stylesheets: rules, declarations of
+/// properties that layout reads, and the punctuation that opens and
+/// closes them.
+pub const SHEET_SNIPPETS: &[&str] = &[
+    "{",
+    "}",
+    ";",
+    ":",
+    " ",
+    "\n",
+    "1",
+    "pt",
+    "heading",
+    "paragraph",
+    "strong",
+    "figure { space-before: 20pt; }\n",
+    "doc { font-size: 14pt; }\n",
+    "doc { justify: false; }\n",
+    "doc { leading: 1.5em; }\n",
+    "paragraph { indent: 2em; }\n",
+    "heading { keep-with-next: false; }\n",
+    "heading[level=1] { font-size: 20pt; }\n",
+    "heading + paragraph { indent: 0pt; }\n",
+    "emph { color: #f00; }\n",
+    "page { margin-top: 60mm; }\n",
+    "font-size: 9pt;",
+    "space-after: 30pt;",
+];
+
+/// How many edits [`differential`] applies at most, so that one input stays
+/// within a few seconds.
+pub const MAX_EDITS: usize = 6;
+
+/// An edit of [`differential`], as [`Edits::decode`] reads it.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SourceEdit {
+    /// The source edited, by path in the project.
+    pub path: String,
+    /// The bytes replaced, on character boundaries.
+    pub range: Range<usize>,
+    /// What replaces them.
+    pub with: String,
+}
+
+/// A corpus project and a sequence of edits to its sources, which
+/// [`differential`] applies one at a time.
+#[derive(Debug, Clone)]
+pub struct Edits {
+    /// The project.
+    pub project: corpus::Project,
+    /// The bytes each edit is decoded from, five per edit.
+    pub ops: Vec<[u8; 5]>,
+}
+
+impl Edits {
+    /// Reads a project (the first byte picks one of [`corpus::projects`])
+    /// and then up to [`MAX_EDITS`] edits of five bytes each: the source
+    /// (an index into the project's sources in order of path), where the
+    /// edit starts (two bytes, little-endian, wrapped to the text's
+    /// length in characters), how many characters it removes (up to 15),
+    /// and what it inserts (an index into [`CONTENT_SNIPPETS`] or
+    /// [`SHEET_SNIPPETS`], wrapped to one more than its length, which
+    /// inserts nothing). Bytes left over are ignored. `None` without a
+    /// project byte and at least one edit.
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let (&first, rest) = data.split_first()?;
+        // Read once: the fuzzer runs the target many times a second.
+        static PROJECTS: OnceLock<Vec<corpus::Project>> = OnceLock::new();
+        let projects = PROJECTS.get_or_init(corpus::projects);
+        let project = projects[usize::from(first) % projects.len()].clone();
+        let ops = rest
+            .chunks_exact(5)
+            .take(MAX_EDITS)
+            .map(|op| op.try_into().expect("chunks of five"))
+            .collect::<Vec<_>>();
+        // Without an edit, there is nothing to compare.
+        if ops.is_empty() {
+            return None;
+        }
+        Some(Self { project, ops })
+    }
+
+    /// The edit an op makes to the current texts of the project's sources.
+    pub fn edit(sources: &BTreeMap<String, String>, op: [u8; 5]) -> SourceEdit {
+        let [file, lo, hi, len, snippet] = op;
+        let (path, text) = sources
+            .iter()
+            .nth(usize::from(file) % sources.len())
+            .expect("a corpus project has sources");
+        let boundaries: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain([text.len()])
+            .collect();
+        let start = usize::from(u16::from_le_bytes([lo, hi])) % boundaries.len();
+        let end = (start + usize::from(len % 16)).min(boundaries.len() - 1);
+        let snippets = if path.ends_with(".fsty") {
+            SHEET_SNIPPETS
+        } else {
+            CONTENT_SNIPPETS
+        };
+        SourceEdit {
+            path: path.clone(),
+            range: boundaries[start]..boundaries[end],
+            with: snippets
+                .get(usize::from(snippet) % (snippets.len() + 1))
+                .copied()
+                .unwrap_or("")
+                .to_string(),
+        }
+    }
+
+    /// Applies the edits one at a time to a world through
+    /// [`World::edit_source`], compiling every build of the project after
+    /// each, and checks each time that the outputs, the diagnostics and the
+    /// span maps of laid-out pages equal those of a world built afresh
+    /// from the same texts.
+    ///
+    /// The incremental world is compiled before the first edit too, so
+    /// that its queries and its shaping, line-break and page caches hold
+    /// results from before the edit. Diagnostics are compared with their
+    /// spans resolved to file byte ranges, as the command line reports
+    /// them: span numbers differ between an incremental reparse and a
+    /// fresh parse.
+    ///
+    /// # Panics
+    ///
+    /// When a build differs, naming the project, the build and the edits
+    /// applied so far.
+    pub fn check(&self) {
+        let mut sources = self.project.sources.clone();
+        let mut world = self.project.world(BuildMode::Ci);
+        let builds = world.builds();
+        compile_builds(&world, &builds);
+        let mut applied = Vec::new();
+        for &op in &self.ops {
+            let edit = Self::edit(&sources, op);
+            world
+                .edit_source(&edit.path, edit.range.clone(), &edit.with)
+                .expect("the edit's range is on character boundaries");
+            sources
+                .get_mut(&edit.path)
+                .expect("the edit's source")
+                .replace_range(edit.range.clone(), &edit.with);
+            applied.push(edit);
+            let incremental = compile_builds(&world, &builds);
+            let fresh_project = corpus::Project {
+                name: self.project.name.clone(),
+                manifest: self.project.manifest.clone(),
+                sources: sources.clone(),
+            };
+            let fresh_world = fresh_project.world(BuildMode::Ci);
+            let fresh = compile_builds(&fresh_world, &builds);
+            for (((variant, target), a), b) in builds.iter().zip(&incremental).zip(&fresh) {
+                let build = format!(
+                    "{} {} {}",
+                    self.project.name,
+                    variant.as_ref().map_or("-", |v| v.as_str()),
+                    target.as_str()
+                );
+                let diags = |world: &World, (_, diagnostics): &Built| {
+                    folio::diag::to_json(world, diagnostics)
+                };
+                assert_eq!(
+                    diags(&world, a),
+                    diags(&fresh_world, b),
+                    "{build}: the diagnostics of an incremental compile differ from a fresh one after the edits {applied:#?}"
+                );
+                assert!(
+                    a.0 == b.0,
+                    "{build}: the output of an incremental compile differs from a fresh one after the edits {applied:#?}"
+                );
+                if corpus::laid_out(*target) {
+                    assert_eq!(
+                        span_map(&world, variant.as_ref(), *target),
+                        span_map(&fresh_world, variant.as_ref(), *target),
+                        "{build}: the span map of an incremental compile differs from a fresh one after the edits {applied:#?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Where a box or a glyph comes from: a file and a byte range, or `None`
+/// for one that names no source.
+type Origin = Option<(String, Range<usize>)>;
+
+/// Where each box and glyph of a build's pages comes from, by page, in
+/// painting order: a file and a byte range, or `None` for one that names
+/// no source. Pages and glyph runs reused from a cache must point at the
+/// nodes of the current revision, which the output bytes do not show.
+fn span_map(world: &World, variant: Option<&Name>, target: Target) -> Vec<Vec<Origin>> {
+    fn walk(world: &World, fragment: &Fragment, out: &mut Vec<Origin>) {
+        let located = |l: Option<folio::diag::Location>| l.map(|l| (l.path.to_string(), l.bytes));
+        out.push(located(span_map::locate_fragment(world, fragment)));
+        for (_, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(group) => walk(world, group, out),
+                FragmentItem::Text(run) => out.extend(
+                    run.glyphs
+                        .iter()
+                        .map(|glyph| located(span_map::locate_glyph(world, glyph))),
+                ),
+                _ => {}
+            }
+        }
+    }
+    let Some(pages) = folio::pages(world, target, variant).expect("nothing cancels the compile")
+    else {
+        return Vec::new();
+    };
+    pages
+        .pages
+        .iter()
+        .map(|page| {
+            let mut out = Vec::new();
+            walk(world, &page.fragment, &mut out);
+            out
+        })
+        .collect()
+}
+
+/// A build's output and diagnostics.
+type Built = (Option<folio::Bytes>, Vec<folio::Diagnostic>);
+
+/// Compiles builds of a world in parallel, as `folio build` does.
+fn compile_builds(world: &World, builds: &[(Option<Name>, Target)]) -> Vec<Built> {
+    folio::compile_builds(world, builds.iter().cloned())
+        .into_iter()
+        .map(|output| {
+            let compiled = output.result.expect("nothing cancels the compile");
+            (compiled.output, compiled.diagnostics.to_vec())
+        })
+        .collect()
+}
+
+/// Edits a corpus project in place ([`Edits::decode`] reads the bytes) and
+/// checks every build after each edit against a fresh compile
+/// ([`Edits::check`]).
+pub fn differential(data: &[u8]) {
+    if let Some(edits) = Edits::decode(data) {
+        edits.check();
+    }
+}
+
+/// Random inputs of [`differential`], from a seed: a project and
+/// [`MAX_EDITS`] edits, for the property test and the seed corpus. The
+/// same seed gives the same bytes on every platform.
+pub fn differential_input(seed: u64) -> Vec<u8> {
+    // SplitMix64: small, and its output depends on nothing but the seed.
+    let mut state = seed;
+    let mut next = move || {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let mut out = Vec::with_capacity(1 + 5 * MAX_EDITS);
+    out.extend(next().to_le_bytes().into_iter().take(1));
+    for _ in 0..MAX_EDITS {
+        out.extend(next().to_le_bytes().into_iter().take(5));
+    }
+    out
+}
+
+/// How many random inputs of [`differential`] the seed corpus holds.
+pub const DIFFERENTIAL_SEEDS: u64 = 4;
+
 /// The seed corpus of every target, as (target, file name, bytes): the
 /// documents and stylesheets of `tests/corpus` and of the parser's corpus
 /// in `crates/folio-syntax/tests/corpus`, encoded for each target.
@@ -357,6 +670,13 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
         .flat_map(|i| [u8::try_from(i).expect("few wrappers"), 7])
         .collect();
     out.push(("nesting", "mixed.bin".into(), mixed));
+    for seed in 0..DIFFERENTIAL_SEEDS {
+        out.push((
+            "differential",
+            format!("random-{seed}.bin"),
+            differential_input(seed),
+        ));
+    }
     for (name, text) in &contents {
         out.push(("markup", name.clone(), text.as_bytes().to_vec()));
     }

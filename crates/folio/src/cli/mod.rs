@@ -111,6 +111,16 @@ pub(crate) struct BuildArgs {
     #[arg(long, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
     pub(crate) color: Color,
 
+    /// How to write diagnostics to standard error: `human` with source
+    /// excerpts, or `json` as one document when the command ends
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        default_value_t = DiagnosticsFormat::Human
+    )]
+    pub(crate) diagnostics: DiagnosticsFormat,
+
     /// Force strict mode for this build, or with `report` list violations
     /// (not yet supported)
     #[arg(
@@ -163,6 +173,16 @@ impl Color {
             }
         }
     }
+}
+
+/// How diagnostics are written.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
+pub(crate) enum DiagnosticsFormat {
+    /// For people: source excerpts, as they are found
+    Human,
+    /// For programs: one JSON document, described in
+    /// docs/diagnostics-json.md, when the command ends
+    Json,
 }
 
 /// A target as the manifest writes it.
