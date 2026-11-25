@@ -30,7 +30,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Target, Value};
@@ -88,15 +88,9 @@ impl Face {
     pub fn font(&self) -> Option<Font> {
         match &self.source {
             Source::Loaded(font) => Some(font.clone()),
-            Source::System(system) => {
-                // A failed read is tried again: the file may be complete
-                // next time. A read that succeeded is kept.
-                let mut read = system.read.lock().unwrap_or_else(PoisonError::into_inner);
-                if read.is_none() {
-                    *read = system.font.load().ok();
-                }
-                read.clone()
-            }
+            // A failed read is kept too, so that every query of a build
+            // agrees on the face.
+            Source::System(system) => system.read.get_or_init(|| system.font.load().ok()).clone(),
         }
     }
 }
@@ -105,7 +99,7 @@ impl Face {
 #[derive(Debug, Clone)]
 struct SystemFace {
     font: SystemFont,
-    read: Arc<Mutex<Option<Font>>>,
+    read: Arc<OnceLock<Option<Font>>>,
 }
 
 /// Equal when the faces are and they share what reading them gave, as the
@@ -126,18 +120,18 @@ impl Hash for SystemFace {
 }
 
 /// What a world has read of the system faces its documents use: each face's
-/// file is read at most once successfully, on first use, and every query and every
+/// file is read at most once, on first use, and a failed read is kept too, and every query and every
 /// revision sees what that read gave, until the host sets the system fonts
 /// again. A file that changes on disk meanwhile therefore cannot make two
 /// queries of one build disagree; reading it is not a tracked input.
 #[derive(Default)]
 pub struct SystemFaces {
-    read: Mutex<HashMap<SystemFont, Arc<Mutex<Option<Font>>>>>,
+    read: Mutex<HashMap<SystemFont, Arc<OnceLock<Option<Font>>>>>,
 }
 
 impl SystemFaces {
     /// The cell that holds what reading a face gave.
-    fn cell(&self, font: &SystemFont) -> Arc<Mutex<Option<Font>>> {
+    fn cell(&self, font: &SystemFont) -> Arc<OnceLock<Option<Font>>> {
         let mut read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
         read.entry(font.clone()).or_default().clone()
     }

@@ -293,9 +293,10 @@ impl Loader {
     /// Reads the files of the project into a world: `.fol` and `.fsty` files
     /// as sources, the others as data files, and removes the sources and
     /// data files the project no longer has, including those a host set
-    /// itself, such as unsaved editor buffers, which it sets again after. Warns of files that cannot be
-    /// read and of sources that are not UTF-8; leaves out files whose paths
-    /// a document cannot name. Returns the paths it changed.
+    /// itself, such as unsaved editor buffers, which it sets again after.
+    /// Warns of files that cannot be read and of sources that are not
+    /// UTF-8; leaves out files whose paths a document cannot name. Returns
+    /// the paths it changed.
     pub fn load(
         &mut self,
         world: &mut World,
@@ -494,6 +495,7 @@ impl Loader {
             if let Err(e) = self.scan(rel, chain, &mut files, &mut links, warnings) {
                 // As a read of the project leaves it out.
                 warnings.push(unreadable(rel, &e.to_string()));
+                self.links.remove(rel);
                 for path in world_paths(world, rel) {
                     if remove(world, &path) {
                         update.changed.insert(path);
