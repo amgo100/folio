@@ -41,23 +41,26 @@ pub(super) fn set_line(
             .partition_point(|s| s.range.end < offset)
             .min(segments.len().saturating_sub(1))
     };
-    // The explicit hyphen a line repeats, and the one a break inserts.
+    // The explicit hyphen a line repeats, which shows the hyphen that ends
+    // the line before, and the one a break inserts, which shows no text.
     let start_hyphen = if line.repeated_hyphen {
         text[..line.range.start]
             .chars()
             .next_back()
-            .map(|c| (line.range.start, c))
+            .map(|c| (line.range.start - c.len_utf8()..line.range.start, c))
     } else {
         None
     };
-    let end_hyphen = line.hyphen.then_some((line.content_end, '-'));
+    let end_hyphen = line
+        .hyphen
+        .then_some((line.content_end..line.content_end, '-'));
     let (left, right) = if rtl {
         (end_hyphen, start_hyphen)
     } else {
         (start_hyphen, end_hyphen)
     };
-    if let Some((at, c)) = left {
-        pen = runs.hyphen(info, segment_at(at), at, c, pen);
+    if let Some((shows, c)) = left {
+        pen = runs.hyphen(info, segment_at(shows.end), shows, c, pen);
     }
 
     for (piece, _) in shaped.visual_runs(line.range.clone()) {
@@ -109,7 +112,7 @@ pub(super) fn set_line(
                 x_offset: em(g.x_offset, units_per_em),
                 y_offset: em(g.y_offset, units_per_em),
                 range: 0..0,
-                source: info.source(cluster),
+                source: info.source(cluster..end.min(text.len())),
             };
             pen = runs.push(
                 Key {
@@ -125,8 +128,8 @@ pub(super) fn set_line(
         }
     }
 
-    if let Some((at, c)) = right {
-        runs.hyphen(info, segment_at(at), at, c, pen);
+    if let Some((shows, c)) = right {
+        runs.hyphen(info, segment_at(shows.end), shows, c, pen);
     }
     runs.flush();
 }
@@ -312,13 +315,14 @@ impl Runs<'_> {
         ));
     }
 
-    /// Sets a hyphen `c` of segment `segment` at `pen`, for the text at
-    /// byte `at`, as a run of its own, and returns the pen after it.
+    /// Sets a hyphen `c` of segment `segment` at `pen`, showing the bytes
+    /// `shows` of the paragraph's text, as a run of its own, and returns
+    /// the pen after it.
     fn hyphen(
         &mut self,
         info: &ParagraphInfo,
         segment: usize,
-        at: usize,
+        shows: Range<usize>,
         c: char,
         pen: Abs,
     ) -> Abs {
@@ -333,6 +337,7 @@ impl Runs<'_> {
             return pen;
         };
         let len = u32::try_from(c.len_utf8()).unwrap_or(1);
+        let source = info.source(shows);
         let size = paint.size;
         let count = hyphen.len();
         let glyphs: EcoVec<Glyph> = hyphen
@@ -349,7 +354,7 @@ impl Runs<'_> {
                     x_offset: em(g.x_offset, *units_per_em),
                     y_offset: em(g.y_offset, *units_per_em),
                     range: 0..len,
-                    source: info.source(at.saturating_sub(1)),
+                    source: source.clone(),
                 }
             })
             .collect();

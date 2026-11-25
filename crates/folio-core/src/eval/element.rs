@@ -303,7 +303,7 @@ impl Vm<'_> {
                 let mut filled: Vec<(EcoString, Content)> = Vec::new();
                 for node in content.nodes() {
                     match node {
-                        Node::Space | Node::Parbreak => {}
+                        Node::Space(_) | Node::Parbreak(_) => {}
                         Node::Slot(slot) if &slot.parent == name => {
                             let decl = slots
                                 .iter()
@@ -569,7 +569,7 @@ fn is_builtin(name: &QualifiedName, builtin: &str) -> bool {
 fn check_inline(content: &Content, what: impl Fn() -> EcoString, span: Span) -> EvalResult<()> {
     for node in content.nodes() {
         match node {
-            Node::Parbreak => bail!(
+            Node::Parbreak(_) => bail!(
                 span,
                 "{} takes inline content, but has a paragraph break",
                 what()
@@ -595,7 +595,9 @@ fn check_inline(content: &Content, what: impl Fn() -> EcoString, span: Span) -> 
 fn check_inline_str(content: &Content) -> StrResult<()> {
     for node in content.nodes() {
         match node {
-            Node::Parbreak => return Err("expected inline content, found a paragraph break".into()),
+            Node::Parbreak(_) => {
+                return Err("expected inline content, found a paragraph break".into());
+            }
             Node::Element(element) if model::is_block(element.kind) => {
                 return Err(eco_format!(
                     "expected inline content, found `{}`, which is a block",
@@ -650,7 +652,7 @@ fn node_span(node: &Node) -> Option<Span> {
         Node::Element(element) => Some(element.span),
         Node::Slot(slot) => Some(slot.span),
         Node::Rule(rule) => Some(rule.span()),
-        Node::Space | Node::Linebreak | Node::Parbreak | Node::Quote { .. } => None,
+        Node::Space(_) | Node::Linebreak(_) | Node::Parbreak(_) | Node::Quote { .. } => None,
     }
 }
 

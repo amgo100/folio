@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod diag;
+pub mod span_map;
 mod world;
 
 use std::fmt::{self, Display, Formatter};
@@ -52,7 +53,7 @@ pub use folio_fonts::{
     BUNDLED_FAMILIES, FaceKey, FontCache, FontFile, FontHash, FontOrigin, FontStyle, FontVariant,
     SystemFont, bundled as bundled_fonts, project_fonts, system_fonts,
 };
-pub use folio_syntax::{FileId, Source};
+pub use folio_syntax::{FileId, NodeId, Source, Span};
 pub use folio_text::{
     Break, BreakKind, Feature, Glyph, Item, ItemKind, Lang, Paragraph, Segment, SegmentKind,
     Shaped, mark_breaks,

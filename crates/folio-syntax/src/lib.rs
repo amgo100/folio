@@ -20,6 +20,8 @@
 //! - [`Source`] holds one file's text and tree and reparses only the smallest
 //!   enclosing block after an edit, reusing untouched nodes (SPEC §2.3).
 //!   [`Source::stylesheet`] makes a source that is reparsed as a stylesheet.
+//! - [`NodeIds`] gives nodes an identity that lasts across edits, through a
+//!   diff of the trees before and after (SPEC §12.4).
 //!
 //! Stylesheets follow design C of SPEC Appendix A: rule structure (selectors,
 //! at-rules, blocks, property names) is fixed syntax, and expressions appear
@@ -73,6 +75,7 @@ pub mod ast;
 
 mod file;
 mod highlight;
+mod identity;
 mod kind;
 mod lexer;
 mod lines;
@@ -86,6 +89,7 @@ mod utils;
 
 pub use self::file::FileId;
 pub use self::highlight::{Tag, highlight, highlight_html};
+pub use self::identity::{NodeId, NodeIds};
 pub use self::kind::SyntaxKind;
 pub use self::lexer::{
     is_id_continue, is_id_start, is_ident, is_newline, is_valid_label_literal_id, link_prefix,

@@ -14,7 +14,7 @@ use folio_core::db::{BuildMode, Bytes, DataFile, Durability, Project, SourceFile
 use folio_core::eval::Limits;
 use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 use folio_fonts::{FontCache, FontFile, FontHash, SystemFont};
-use folio_syntax::{FileId, Lines, Source};
+use folio_syntax::{FileId, Lines, NodeId, NodeIds, Source, Span};
 use salsa::Setter;
 
 use crate::diag::Files;
@@ -35,11 +35,16 @@ use crate::diag::Files;
 /// File ids are assigned when a path is first set and never reused, so
 /// diagnostics stay valid for the life of the world; [`World::MANIFEST`] and
 /// [`World::LOCKFILE`] are reserved.
+///
+/// The world also gives every node of its sources a [`NodeId`] that lasts
+/// across edits ([`World::node_id`], SPEC §12.4). Node ids are kept beside
+/// the query database, not in it, so no compilation reads them.
 #[derive(Clone)]
 pub struct World {
     db: Database,
     project: Project,
     ids: Arc<FileIds>,
+    nodes: Arc<NodeIds>,
     /// The text of `folio.toml` and of `folio.lock`, which diagnostics
     /// point into.
     manifest_text: Lines<String>,
@@ -179,6 +184,7 @@ impl WorldBuilder {
             db,
             project,
             ids: Arc::default(),
+            nodes: Arc::default(),
             manifest_text: Lines::new(manifest_text.to_owned()),
             lockfile_text: lockfile_text.map(|text| Lines::new(text.to_owned())),
         })
@@ -346,12 +352,14 @@ impl World {
             _ => return Err(WorldError::NotSource(path)),
         };
         if let Some(file) = self.project.sources(&self.db).get(&path).copied() {
-            let mut source = file.source(&self.db).clone();
-            if source.text() != text {
+            let old = file.source(&self.db).clone();
+            if old.text() != text {
+                let mut source = old.clone();
                 source.replace(text);
-                set_source(&mut self.db, file, source);
+                set_source(&mut self.db, file, source.clone());
+                Arc::make_mut(&mut self.nodes).update(old.root(), source.root());
             }
-            return Ok(file.source(&self.db).id());
+            return Ok(old.id());
         }
 
         let id = self.assign_id(&path)?;
@@ -361,6 +369,7 @@ impl World {
         } else {
             Source::new(id, text)
         };
+        Arc::make_mut(&mut self.nodes).insert(source.root());
         let file = SourceFile::builder(path.clone(), source)
             .durability(Durability::LOW)
             .new(&self.db);
@@ -399,8 +408,10 @@ impl World {
         if &text[range.clone()] == with {
             return Ok(range);
         }
+        let old = source.clone();
         let reparsed = source.edit(range, with);
-        set_source(&mut self.db, file, source);
+        set_source(&mut self.db, file, source.clone());
+        Arc::make_mut(&mut self.nodes).update(old.root(), source.root());
         Ok(reparsed)
     }
 
@@ -411,9 +422,11 @@ impl World {
             return false;
         };
         let mut sources = self.project.sources(&self.db).clone();
-        if sources.remove(&path).is_none() {
+        let Some(file) = sources.remove(&path) else {
             return false;
-        }
+        };
+        let id = file.source(&self.db).id();
+        Arc::make_mut(&mut self.nodes).remove(id);
         self.project
             .set_sources(&mut self.db)
             .with_durability(Durability::LOW)
@@ -487,6 +500,23 @@ impl World {
     /// The file id of a source path, if one was ever set.
     pub fn id(&self, path: &str) -> Option<FileId> {
         self.ids.by_path.get(&ProjectPath::new(path)?).copied()
+    }
+
+    /// The identity of the node of a source that has a span in the current
+    /// revision: an id that the node keeps across edits and reparses for
+    /// as long as it lives (SPEC §12.4). A span from a fragment is
+    /// [`span_map::span`](crate::span_map::span) of its reference.
+    ///
+    /// Node ids depend on the order of edits. They serve selections, the
+    /// inspector and runtime state, never undo or anything saved.
+    pub fn node_id(&self, span: Span) -> Option<NodeId> {
+        self.nodes.id(span)
+    }
+
+    /// The span of a node in the current revision of its source, if it
+    /// still lives.
+    pub fn node_span(&self, id: NodeId) -> Option<Span> {
+        self.nodes.span(id)
     }
 
     /// The variants and targets the manifest declares, in declaration order:

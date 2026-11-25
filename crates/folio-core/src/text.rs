@@ -97,8 +97,7 @@ pub struct TextParagraph {
     /// style its text is set in and its face.
     pub segments: EcoVec<SegmentStyle>,
     /// Where the paragraph's text came from: ranges of it that are the text
-    /// of a source node, in order. Spaces, quotation marks and objects that
-    /// markup implies are in no range.
+    /// of a source node, in order. Objects are in no range.
     pub sources: EcoVec<TextSource>,
 }
 
@@ -117,8 +116,37 @@ pub struct SegmentStyle {
 pub struct TextSource {
     /// The byte range in the paragraph's text.
     pub range: Range<usize>,
-    /// The node: a text node of markup, or a `raw` element.
+    /// The node: a text node of markup, a space, a quotation mark, a
+    /// `raw` element, or the expression a string came from.
     pub span: Span,
+    /// The bytes of the node's text that the range is. As long as `range`
+    /// where the paragraph has the node's text as it is; else, as for the
+    /// line breaks of `raw`, the bytes the range stands for as a whole, or
+    /// [`TextSource::WHOLE`] for text that the node gave in no way the span
+    /// map can follow.
+    pub within: Range<usize>,
+}
+
+impl TextSource {
+    /// The bytes of a node's text that stand for the whole node: they run
+    /// past the end of any text, so the span map resolves them to all of
+    /// it ([`crate::span_map::text_range`]).
+    pub const WHOLE: Range<usize> = 0..usize::MAX;
+
+    /// The bytes of the node's text that the part `part` of the
+    /// paragraph's text shows, where `part` starts in this range: the same
+    /// part of the node's text, cut at the end of the range, or all of
+    /// [`Self::within`] where the paragraph does not have the node's text
+    /// as it is.
+    pub fn within(&self, part: Range<usize>) -> Range<usize> {
+        if self.range.len() != self.within.len() {
+            return self.within.clone();
+        }
+        let start = part.start.clamp(self.range.start, self.range.end);
+        let end = part.end.clamp(start, self.range.end);
+        let base = self.within.start;
+        base + (start - self.range.start)..base + (end - self.range.start)
+    }
 }
 
 /// The paragraphs of a build, shaped, or `None` when the document could not
@@ -146,6 +174,7 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
         pending: Vec::new(),
         blocks: Vec::new(),
         root: None,
+        owner: Span::detached(),
     };
     collector.element(&doc.root, &styled.root);
 
@@ -201,6 +230,9 @@ struct Collector<'a> {
     blocks: Vec<TextBlock>,
     /// The root block, once it is done.
     root: Option<TextBlock>,
+    /// The innermost element being collected that the document model did
+    /// not make: the source of text that records no node of its own.
+    owner: Span,
 }
 
 /// A paragraph's text as it is collected.
@@ -253,15 +285,32 @@ impl Collector<'_> {
     /// block of the element's.
     fn element(&mut self, element: &Element, node: &StyledNode) {
         self.open(&node.style, element.span);
+        let owner = self.own(element);
         self.element_content(element, node);
+        self.owner = owner;
         self.close();
+    }
+
+    /// Makes an element the owner of text without a node of its own,
+    /// unless the document model made it (a paragraph, list or section,
+    /// whose span is that of its first node or heading), and returns the
+    /// previous owner.
+    fn own(&mut self, element: &Element) -> Span {
+        let previous = self.owner;
+        let made = ["paragraph", "list", "enum", "terms", "section"]
+            .iter()
+            .any(|name| is_builtin(&element.name, name));
+        if !made && !element.span.is_detached() {
+            self.owner = element.span;
+        }
+        previous
     }
 
     fn element_content(&mut self, element: &Element, node: &StyledNode) {
         // A code block is a paragraph whose lines end in forced breaks.
         if let Some(text) = raw_text(element) {
             let mut builder = Builder::default();
-            builder.push(&text, &node.style, Some(element.span));
+            builder.raw(text, &node.style, element.span);
             self.finish(builder, &node.style, element.span);
             return;
         }
@@ -335,25 +384,30 @@ impl Collector<'_> {
     ) {
         for node in content.nodes() {
             match node {
-                Node::Text { text, span } => out.push(text, style, Some(*span)),
+                // Text that records no node, such as a string joined to
+                // content, stands for the whole element that holds it.
+                Node::Text { text, span: own } if own.is_detached() => {
+                    out.push_part(text, style, self.owner, TextSource::WHOLE, false);
+                }
+                Node::Text { text, span: own } => out.push(text, style, *own),
                 // A space next to a forced line break would start or end a
                 // line, so it is dropped.
-                Node::Space | Node::Parbreak => {
+                Node::Space(own) | Node::Parbreak(own) => {
                     if !out.text.ends_with('\u{2028}') {
-                        out.push(" ", style, None);
+                        out.push_implied(" ", style, own.or(span));
                     }
                 }
-                Node::Linebreak => {
+                Node::Linebreak(own) => {
                     out.trim_space();
-                    out.push("\u{2028}", style, None);
+                    out.push_implied("\u{2028}", style, own.or(span));
                 }
-                Node::Quote { double } => {
+                Node::Quote { double, span: own } => {
                     let lang = self.settings(style, span).lang;
                     out.quote(Quote {
                         double: *double,
                         style: style.clone(),
                         lang,
-                        span,
+                        span: own.or(span),
                     });
                 }
                 Node::Element(element) => {
@@ -385,13 +439,13 @@ impl Collector<'_> {
             }
         }
         if let Some(text) = raw_text(element) {
-            out.push(&text, style, Some(element.span));
+            out.raw(text, style, element.span);
             return;
         }
         if is_builtin(&element.name, "link")
             && let Some(eval::Value::Str(dest)) = element.field("dest")
         {
-            out.push(dest, style, Some(element.span));
+            out.push(dest, style, element.span);
             return;
         }
         if let Some(eval::Value::Content(body)) = element.field(BODY) {
@@ -400,7 +454,9 @@ impl Collector<'_> {
                 Child::Element(e) => Some((*e, *node)),
                 Child::Part(..) => None,
             });
+            let owner = self.own(element);
             self.inline(body, style, element.span, &mut body_kids, out, anchored);
+            self.owner = owner;
             return;
         }
         // Inline math, an image, a reference: an object layout sizes.
@@ -567,7 +623,28 @@ impl Collector<'_> {
 
 impl Builder {
     /// Appends text in a style; `span` is the node it is the text of.
-    fn push(&mut self, text: &str, style: &ComputedStyle, span: Option<Span>) {
+    fn push(&mut self, text: &str, style: &ComputedStyle, span: Span) {
+        self.push_part(text, style, span, 0..text.len(), false);
+    }
+
+    /// Appends a space or line break that markup implies, the text of node
+    /// `span`. Problems with its style are reported at the text around it,
+    /// not at the whitespace.
+    fn push_implied(&mut self, text: &str, style: &ComputedStyle, span: Span) {
+        self.push_part(text, style, span, 0..text.len(), true);
+    }
+
+    /// Appends text in a style that is the bytes `within` of the text of
+    /// node `span` (see [`TextSource::within`]); `implied` as for
+    /// [`Self::push_implied`].
+    fn push_part(
+        &mut self,
+        text: &str,
+        style: &ComputedStyle,
+        span: Span,
+        within: Range<usize>,
+        implied: bool,
+    ) {
         if text.is_empty() {
             return;
         }
@@ -575,18 +652,29 @@ impl Builder {
         let start = self.text.len();
         self.text.push_str(text);
         let end = self.text.len();
-        if let Some(span) = span {
+        if !span.is_detached() {
             self.sources.push(TextSource {
                 range: start..end,
                 span,
+                within,
             });
         }
-        self.extend(
-            start..end,
-            style,
-            false,
-            span.unwrap_or_else(Span::detached),
-        );
+        let report = if implied { Span::detached() } else { span };
+        self.extend(start..end, style, false, report);
+    }
+
+    /// Appends the text of a `raw` element, `text`, with its line breaks as
+    /// forced ones. Each line is the same part of the element's text, and
+    /// each break stands for the newline it replaces.
+    fn raw(&mut self, text: &str, style: &ComputedStyle, span: Span) {
+        let mut at = 0;
+        for (i, line) in text.split('\n').enumerate() {
+            if i > 0 {
+                self.push_part("\u{2028}", style, span, at - 1..at, false);
+            }
+            self.push_part(line, style, span, at..at + line.len(), false);
+            at += line.len() + 1;
+        }
     }
 
     /// Removes a space that ends the text, which markup's spaces give.
@@ -605,6 +693,9 @@ impl Builder {
         if let Some(last) = self.sources.last_mut()
             && last.range.end > end
         {
+            if last.range.len() == last.within.len() {
+                last.within.end -= last.range.end - end;
+            }
             last.range.end = end;
             if last.range.is_empty() {
                 self.sources.pop();
@@ -657,24 +748,19 @@ impl Builder {
         let before = self.text.chars().next_back();
         let mark = quote.lang.quotes().mark(quote.double, before, after);
         let mut buf = [0; 4];
-        self.push(mark.encode_utf8(&mut buf), &quote.style, None);
-        if let Some(last) = self.pieces.last_mut()
-            && last.span.is_detached()
-        {
-            last.span = quote.span;
-        }
+        self.push(mark.encode_utf8(&mut buf), &quote.style, quote.span);
     }
 }
 
-/// The text of a `raw` element, with its line breaks as forced ones.
-fn raw_text(element: &Element) -> Option<EcoString> {
+/// The text of a `raw` element without the line breaks it ends with.
+fn raw_text(element: &Element) -> Option<&str> {
     if !is_builtin(&element.name, "raw") {
         return None;
     }
     let Some(eval::Value::Str(text)) = element.field("text") else {
         return None;
     };
-    Some(text.trim_end_matches('\n').replace('\n', "\u{2028}").into())
+    Some(text.trim_end_matches('\n'))
 }
 
 /// Whether an element is the built-in element of a name.
@@ -687,7 +773,7 @@ fn is_builtin(name: &QualifiedName, builtin: &str) -> bool {
 /// between blocks into paragraphs.
 fn is_inline(content: &Content) -> bool {
     content.nodes().iter().any(|node| match node {
-        Node::Text { .. } | Node::Space | Node::Linebreak | Node::Quote { .. } => true,
+        Node::Text { .. } | Node::Space(_) | Node::Linebreak(_) | Node::Quote { .. } => true,
         Node::Element(element) => matches!(element.kind, ElementKind::Inline | ElementKind::Note),
         _ => false,
     })

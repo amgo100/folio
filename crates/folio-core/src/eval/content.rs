@@ -67,7 +67,7 @@ impl Content {
 
     /// Removes spaces at the end.
     pub(crate) fn trim_end_spaces(&mut self) {
-        while matches!(self.0.last(), Some(Node::Space)) {
+        while matches!(self.0.last(), Some(Node::Space(_))) {
             self.0.pop();
         }
     }
@@ -77,7 +77,7 @@ impl Content {
         let index = self
             .0
             .iter()
-            .rposition(|node| !matches!(node, Node::Space))?;
+            .rposition(|node| !matches!(node, Node::Space(_)))?;
         match &mut self.0.make_mut()[index] {
             Node::Element(element) => Some(element),
             _ => None,
@@ -97,8 +97,8 @@ impl Content {
         for node in &self.0 {
             match node {
                 Node::Text { text, .. } => out.push_str(text),
-                Node::Space | Node::Linebreak | Node::Parbreak => out.push(' '),
-                Node::Quote { double } => out.push(if *double { '"' } else { '\'' }),
+                Node::Space(_) | Node::Linebreak(_) | Node::Parbreak(_) => out.push(' '),
+                Node::Quote { double, .. } => out.push(if *double { '"' } else { '\'' }),
                 Node::Element(element) => {
                     for (_, value) in element.fields.iter() {
                         if let Value::Content(body) = value {
@@ -122,11 +122,11 @@ impl Content {
             }
             match node {
                 Node::Text { text, .. } => write!(out, "{text:?}").unwrap(),
-                Node::Space => out.push_str("space"),
-                Node::Linebreak => out.push_str("linebreak"),
-                Node::Parbreak => out.push_str("parbreak"),
-                Node::Quote { double: true } => out.push_str("quote(double)"),
-                Node::Quote { double: false } => out.push_str("quote(single)"),
+                Node::Space(_) => out.push_str("space"),
+                Node::Linebreak(_) => out.push_str("linebreak"),
+                Node::Parbreak(_) => out.push_str("parbreak"),
+                Node::Quote { double: true, .. } => out.push_str("quote(double)"),
+                Node::Quote { double: false, .. } => out.push_str("quote(single)"),
                 Node::Element(element) => {
                     write!(out, "{}(", element.name).unwrap();
                     for (j, (key, value)) in element.fields.iter().enumerate() {
@@ -167,16 +167,18 @@ pub enum Node {
         /// Where it came from.
         span: Span,
     },
-    /// A space between words.
-    Space,
+    /// A space between words, with the whitespace it was written as.
+    Space(Span),
     /// A forced line break: `\`.
-    Linebreak,
+    Linebreak(Span),
     /// A paragraph break: a blank line.
-    Parbreak,
+    Parbreak(Span),
     /// A quotation mark that the target language's quotes replace.
     Quote {
         /// Whether it is a double quotation mark.
         double: bool,
+        /// The mark as written.
+        span: Span,
     },
     /// An element instance.
     Element(Element),

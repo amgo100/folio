@@ -31,16 +31,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::{EcoVec, eco_format};
-use folio_component::{Abs, Fragment, FragmentItem, Path, Point, Shape, Size, Stroke};
+use folio_component::{Abs, Fragment, FragmentItem, Path, Point, Shape, Size, SourceRef, Stroke};
 use folio_syntax::Span;
 
-use super::flow::{Boundary, Constraint, Flow, Item, KEEP, Leaf, Origin, Part, Walk, source_ref};
+use super::flow::{Boundary, Constraint, Flow, Item, KEEP, Leaf, Origin, Part, Walk};
 use super::lines;
 use super::master::{BlockBox, PageMaster};
 use super::set::set_line;
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::fonts;
+use crate::span_map::source_ref;
 use crate::style::styles;
 use crate::text::text;
 
@@ -115,6 +116,8 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         master.body.size.width,
     );
 
+    // The page and its body are boxes of the document.
+    let root = source_ref(text.root.span);
     let cache = db.page_cache();
     let now = cache.tick();
     let mut pages = EcoVec::new();
@@ -126,12 +129,13 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
             && (pages.len() % 2 == 0) != odd
         {
             pages.push(Page {
-                fragment: blank(&master),
+                fragment: dress(&blank(&master), root),
                 lines: EcoVec::new(),
             });
         }
         let out = cache.page(&flow, master, start, start == 0, now);
         report(db, &out);
+        let fragment = dress(&out.fragment, root);
         let lines = flow.origins[start..start + out.leaves]
             .iter()
             .filter_map(|origin| match *origin {
@@ -139,14 +143,24 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
                 Origin::Empty => None,
             })
             .collect();
-        pages.push(Page {
-            fragment: out.fragment.clone(),
-            lines,
-        });
+        pages.push(Page { fragment, lines });
         start += out.leaves;
     }
     cache.sweep(now);
     Some(Pages { master, pages })
+}
+
+/// A page and its body as boxes of the document's root, `root`. Pages come
+/// from the cache whatever document they were made for, so they are
+/// dressed afterwards.
+fn dress(page: &Fragment, root: SourceRef) -> Fragment {
+    let mut page = page.clone().with_source(root);
+    for (_, item) in page.items.make_mut() {
+        if let FragmentItem::Group(body) = item {
+            body.source = root;
+        }
+    }
+    page
 }
 
 /// A page without content.
@@ -345,7 +359,7 @@ impl Assembler {
         let top = open.top;
         let height = (y - top).max(Abs::zero());
         let size = Size::new(block.width, height);
-        let mut fragment = Fragment::new(size);
+        let mut fragment = Fragment::new(size).with_source(source_ref(block.span));
         decorate(&mut fragment, block, !open.continued, !continues);
         let origin = Point::new(block.x, top);
         for (pos, item) in open.items {

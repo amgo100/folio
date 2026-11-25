@@ -130,14 +130,20 @@ fn early_cutoff_on_a_whitespace_edit() {
     // per-file queries re-run, but return what they returned before, so the
     // file set of the build and the build itself are not re-run. The file is
     // evaluated again, because its text spans changed, and so are the
-    // pages, whose glyphs point at those spans.
+    // stages that carry those spans to the pages' glyphs (SPEC §12.2).
     let edited = MAIN.replace("ball is", "ball   is");
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(after, before);
     assert_eq!(
         logged.take(),
-        set(&["dependencies", "check_source", "check_pages", EVAL])
+        set(&[
+            "dependencies",
+            "check_source",
+            "check_styles",
+            "check_pages",
+            EVAL
+        ])
     );
 
     // An edit that changes the imports re-runs the file set. The file it

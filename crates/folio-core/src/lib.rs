@@ -18,5 +18,6 @@ pub mod fonts;
 pub mod layout;
 pub mod model;
 pub mod project;
+pub mod span_map;
 pub mod style;
 pub mod text;
