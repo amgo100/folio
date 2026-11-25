@@ -17,16 +17,18 @@ use ecow::{EcoString, EcoVec};
 use folio_component::{ElementKind, Name, QualifiedName};
 use folio_syntax::{Span, SyntaxNode};
 
-use super::value::{Dict, Value};
+use super::value::{Dict, Equality, LazyHash, Value, compare_once};
 
 /// A sequence of content nodes.
 ///
-/// It caches its depth ([`Content::depth`]). Equality, hashing and debug
-/// output are those of its nodes.
+/// It caches its depth ([`Content::depth`]), and its hash when it holds
+/// content that holds other content. Equality, hashing and debug output are
+/// those of its nodes.
 #[derive(Clone, Default)]
 pub struct Content {
     nodes: EcoVec<Node>,
     depth: u32,
+    hash: LazyHash,
 }
 
 impl Content {
@@ -37,9 +39,11 @@ impl Content {
 
     /// Content of one node.
     pub fn node(node: Node) -> Self {
+        let depth = node.depth();
         Self {
-            depth: node.depth(),
+            depth,
             nodes: EcoVec::from([node]),
+            hash: LazyHash::for_depth(depth),
         }
     }
 
@@ -74,7 +78,13 @@ impl Content {
         } else {
             self.depth = self.depth.max(other.depth);
             self.nodes.extend(other.nodes);
+            self.changed();
         }
+    }
+
+    /// Forgets the hash after a change.
+    fn changed(&mut self) {
+        self.hash.reset(self.depth >= 2);
     }
 
     /// The element this content is, if it is one element.
@@ -89,6 +99,7 @@ impl Content {
     pub(crate) fn trim_end_spaces(&mut self) {
         while matches!(self.nodes.last(), Some(Node::Space(_))) {
             self.nodes.pop();
+            self.changed();
         }
     }
 
@@ -99,6 +110,10 @@ impl Content {
             .nodes
             .iter()
             .rposition(|node| !matches!(node, Node::Space(_)))?;
+        if !matches!(self.nodes[index], Node::Element(_)) {
+            return None;
+        }
+        self.changed();
         match &mut self.nodes.make_mut()[index] {
             Node::Element(element) => Some(element),
             _ => None,
@@ -176,13 +191,29 @@ impl FromIterator<Node> for Content {
     fn from_iter<T: IntoIterator<Item = Node>>(iter: T) -> Self {
         let nodes: EcoVec<Node> = iter.into_iter().collect();
         let depth = nodes.iter().map(Node::depth).max().unwrap_or(0);
-        Self { nodes, depth }
+        Self {
+            nodes,
+            depth,
+            hash: LazyHash::for_depth(depth),
+        }
     }
 }
 
 impl PartialEq for Content {
     fn eq(&self, other: &Self) -> bool {
-        self.nodes == other.nodes
+        let same = self.nodes.as_ptr() == other.nodes.as_ptr() && self.len() == other.len();
+        if same || self.len() != other.len() || self.hash.differ(&other.hash) {
+            return same;
+        }
+        if self.depth < 2 {
+            return self.nodes == other.nodes;
+        }
+        compare_once(
+            self.nodes.as_ptr() as usize,
+            other.nodes.as_ptr() as usize,
+            Equality::Strict,
+            || self.nodes == other.nodes,
+        )
     }
 }
 
@@ -190,7 +221,8 @@ impl Eq for Content {}
 
 impl Hash for Content {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.nodes.hash(state);
+        self.hash
+            .write(state, |mut state| self.nodes.hash(&mut state));
     }
 }
 
@@ -287,5 +319,55 @@ impl Element {
     /// The value of a field.
     pub fn field(&self, name: &str) -> Option<&Value> {
         self.fields.get(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Content holding `inner` twice, each time in a `strong` element.
+    fn doubled(inner: &Content) -> Content {
+        let strong = |body: &Content| {
+            let mut fields = Dict::new();
+            fields.insert("body".into(), Value::Content(body.clone()));
+            Node::Element(Element {
+                name: QualifiedName::unqualified(Name::new("strong").unwrap()),
+                kind: ElementKind::Inline,
+                fields,
+                label: None,
+                span: Span::detached(),
+            })
+        };
+        [strong(inner), strong(inner)].into_iter().collect()
+    }
+
+    #[test]
+    fn content_built_alike_compares_once_per_part() {
+        // Two contents built apart, each a tree of 2^60 elements.
+        let text = |t: &str| {
+            Content::node(Node::Text {
+                text: t.into(),
+                span: Span::detached(),
+            })
+        };
+        let (mut a, mut b, mut c) = (text("x"), text("x"), text("y"));
+        for _ in 0..60 {
+            a = doubled(&a);
+            b = doubled(&b);
+            c = doubled(&c);
+        }
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        // A label changes the content, and its hash with it.
+        let hash = |content: &Content| {
+            let mut state = std::hash::DefaultHasher::new();
+            content.hash(&mut state);
+            state.finish()
+        };
+        let before = hash(&b);
+        b.last_element_mut().unwrap().label = Some("l".into());
+        assert_ne!(hash(&b), before);
+        assert_ne!(a, b);
     }
 }

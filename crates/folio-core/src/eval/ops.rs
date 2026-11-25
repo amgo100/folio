@@ -7,7 +7,7 @@ use folio_component::Scalar;
 
 use super::content::{Content, Node};
 use super::error::StrResult;
-use super::value::{Angle, Duration, Fraction, Length, Value as V};
+use super::value::{Angle, Duration, Equality, Fraction, Length, Value as V, compare_once};
 
 fn mismatch(op: &str, lhs: &V, rhs: &V) -> ecow::EcoString {
     eco_format!(
@@ -296,12 +296,22 @@ pub(crate) fn equal(lhs: &V, rhs: &V) -> bool {
     match (lhs, rhs) {
         (V::Int(a), V::Float(b)) | (V::Float(b), V::Int(a)) => *a as f64 == b.get(),
         (V::Array(a), V::Array(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| equal(a, b))
+            let compare = || a.len() == b.len() && a.iter().zip(b).all(|(a, b)| equal(a, b));
+            if a.depth() < 2 {
+                return compare();
+            }
+            compare_once(a.storage(), b.storage(), Equality::Loose, compare)
         }
         (V::Dict(a), V::Dict(b)) => {
-            a.len() == b.len()
-                && a.iter()
-                    .all(|(key, value)| b.get(key).is_some_and(|other| equal(value, other)))
+            let compare = || {
+                a.len() == b.len()
+                    && a.iter()
+                        .all(|(key, value)| b.get(key).is_some_and(|other| equal(value, other)))
+            };
+            if a.depth() < 2 {
+                return compare();
+            }
+            compare_once(a.storage(), b.storage(), Equality::Loose, compare)
         }
         (a, b) => a == b,
     }

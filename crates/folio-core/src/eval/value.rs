@@ -1,9 +1,10 @@
 //! The values scripts compute with (SPEC §4.4).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{self, Debug, Formatter, Write};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Abs, Color, Em, Name, QualifiedName, Ratio, Scalar};
@@ -233,6 +234,146 @@ impl Debug for Depth {
     }
 }
 
+/// The hash of a value that holds other values, computed when it is first
+/// needed and shared by the value's clones.
+///
+/// Hashing walks a value as a tree. A value can hold one part many times,
+/// as `(a, a)` does, and a loop that doubles an array this way makes one
+/// whose tree is exponentially large. With the hash of each part cached
+/// where its clones share it, hashing such a value hashes each part once.
+/// A value whose hash is cached writes that hash where it would write its
+/// parts, so values that are equal must agree on whether they cache: the
+/// containers decide by their exact depth, and arguments and functions with
+/// arguments applied always cache.
+#[derive(Clone, Default)]
+pub(crate) struct LazyHash(Option<Arc<OnceLock<u64>>>);
+
+impl LazyHash {
+    /// A hash that is cached, or written as the parts are.
+    pub(crate) fn new(cached: bool) -> Self {
+        Self(cached.then(Arc::default))
+    }
+
+    /// Whether containers of depth `depth` cache their hash: those that hold
+    /// containers, whose parts can be shared.
+    pub(crate) fn for_depth(depth: u32) -> Self {
+        Self::new(depth >= 2)
+    }
+
+    /// Writes the hash of a value whose parts `parts` writes: the cached
+    /// hash, computed first if needed, or else the parts.
+    pub(crate) fn write<H: Hasher>(&self, state: &mut H, parts: impl FnOnce(&mut dyn Hasher)) {
+        match &self.0 {
+            Some(cell) => state.write_u64(*cell.get_or_init(|| {
+                let mut hasher = DefaultHasher::new();
+                parts(&mut hasher);
+                hasher.finish()
+            })),
+            None => parts(state),
+        }
+    }
+
+    /// The cached hash, if it was computed.
+    pub(crate) fn get(&self) -> Option<u64> {
+        self.0.as_ref()?.get().copied()
+    }
+
+    /// Whether two values certainly differ, because their cached hashes do.
+    pub(crate) fn differ(&self, other: &Self) -> bool {
+        matches!((self.get(), other.get()), (Some(a), Some(b)) if a != b)
+    }
+
+    /// Forgets the hash after the value changed. Its clones, which did not
+    /// change, keep theirs.
+    pub(crate) fn reset(&mut self, cached: bool) {
+        match &mut self.0 {
+            Some(cell) if cached => match Arc::get_mut(cell) {
+                Some(cell) => {
+                    cell.take();
+                }
+                None => *self = Self::new(true),
+            },
+            _ => *self = Self::new(cached),
+        }
+    }
+}
+
+/// Which equality a comparison of two values asks for.
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub(crate) enum Equality {
+    /// Structural equality: `Eq`.
+    Strict,
+    /// The language's `==`, which compares `1` and `1.0` as equal.
+    Loose,
+}
+
+/// The comparisons running on a thread, and the pairs of containers they
+/// found equal, by the address of their storage and the equality.
+type Comparisons = (u32, HashSet<(usize, usize, Equality)>);
+
+thread_local! {
+    static EQUAL: RefCell<Comparisons> = RefCell::new((0, HashSet::new()));
+}
+
+/// Compares two containers that hold containers, whose storage is at `a`
+/// and `b`, with `compare`, remembering the pairs found equal until the
+/// outermost comparison ends.
+///
+/// Like hashing, comparing walks values as trees, and two values built
+/// alike, each holding its parts many times, are exponentially large trees.
+/// Comparing each pair of parts once makes it linear. While a comparison
+/// runs, both values are borrowed, so their storage cannot move or change.
+pub(crate) fn compare_once(
+    a: usize,
+    b: usize,
+    equality: Equality,
+    compare: impl FnOnce() -> bool,
+) -> bool {
+    /// Leaves a comparison, forgetting the pairs when it was the outermost,
+    /// also when a comparison unwinds.
+    struct Leave;
+
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            EQUAL.with_borrow_mut(|(running, equal)| {
+                *running -= 1;
+                if *running == 0 {
+                    equal.clear();
+                }
+            });
+        }
+    }
+
+    let key = (a, b, equality);
+    let known = EQUAL.with_borrow_mut(|(running, equal)| {
+        *running += 1;
+        equal.contains(&key)
+    });
+    let _leave = Leave;
+    if known {
+        return true;
+    }
+    let result = compare();
+    if result {
+        EQUAL.with_borrow_mut(|(_, equal)| equal.insert(key));
+    }
+    result
+}
+
+impl PartialEq for LazyHash {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LazyHash {}
+
+impl Debug for LazyHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("..")
+    }
+}
+
 /// Writes a float as code would: `1.0`, `0.25`, `1e30`.
 pub(crate) fn repr_float(v: f64) -> String {
     if v.is_infinite() {
@@ -249,6 +390,7 @@ pub(crate) fn repr_float(v: f64) -> String {
 pub struct Array {
     items: EcoVec<Value>,
     nesting: Nesting,
+    hash: LazyHash,
 }
 
 impl Array {
@@ -257,6 +399,7 @@ impl Array {
         Self {
             items: EcoVec::new(),
             nesting: Nesting::EMPTY,
+            hash: LazyHash::default(),
         }
     }
 
@@ -265,6 +408,7 @@ impl Array {
         Self {
             items: EcoVec::with_capacity(capacity),
             nesting: Nesting::EMPTY,
+            hash: LazyHash::default(),
         }
     }
 
@@ -278,22 +422,30 @@ impl Array {
         &self.items
     }
 
+    /// The address of the array's storage, for [`compare_once`].
+    pub(crate) fn storage(&self) -> usize {
+        self.items.as_ptr() as usize
+    }
+
     /// Appends an item.
     pub fn push(&mut self, value: Value) {
         self.nesting.added(value.depth());
         self.items.push(value);
+        self.changed();
     }
 
     /// Inserts an item at an index, shifting the ones after it.
     pub fn insert(&mut self, index: usize, value: Value) {
         self.nesting.added(value.depth());
         self.items.insert(index, value);
+        self.changed();
     }
 
     /// Removes and returns the last item.
     pub fn pop(&mut self) -> Option<Value> {
         let value = self.items.pop()?;
         self.removed(value.depth());
+        self.changed();
         Some(value)
     }
 
@@ -301,6 +453,7 @@ impl Array {
     pub fn remove(&mut self, index: usize) -> Value {
         let value = self.items.remove(index);
         self.removed(value.depth());
+        self.changed();
         value
     }
 
@@ -314,7 +467,13 @@ impl Array {
         // The changed item counts as removed and added again.
         self.nesting.added(after);
         self.removed(before);
+        self.changed();
         result
+    }
+
+    /// Forgets the hash after a change.
+    fn changed(&mut self) {
+        self.hash.reset(self.nesting.depth >= 2);
     }
 
     /// Uncounts an item of depth `depth` that was removed or replaced.
@@ -395,7 +554,19 @@ impl std::ops::Deref for Array {
 
 impl PartialEq for Array {
     fn eq(&self, other: &Self) -> bool {
-        self.items == other.items
+        let same = self.items.as_ptr() == other.items.as_ptr() && self.len() == other.len();
+        if same || self.len() != other.len() || self.hash.differ(&other.hash) {
+            return same;
+        }
+        if self.nesting.depth < 2 {
+            return self.items == other.items;
+        }
+        compare_once(
+            self.items.as_ptr() as usize,
+            other.items.as_ptr() as usize,
+            Equality::Strict,
+            || self.items == other.items,
+        )
     }
 }
 
@@ -403,7 +574,8 @@ impl Eq for Array {}
 
 impl Hash for Array {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.items.hash(state);
+        self.hash
+            .write(state, |mut state| self.items.hash(&mut state));
     }
 }
 
@@ -416,7 +588,11 @@ impl Debug for Array {
 impl From<EcoVec<Value>> for Array {
     fn from(items: EcoVec<Value>) -> Self {
         let nesting = Nesting::measure(items.iter());
-        Self { items, nesting }
+        Self {
+            items,
+            nesting,
+            hash: LazyHash::for_depth(nesting.depth),
+        }
     }
 }
 
@@ -540,6 +716,7 @@ pub struct Dict {
     map: Arc<IndexMap<EcoString, Value>>,
     /// One more than the deepest value, kept exact by the methods.
     nesting: Nesting,
+    hash: LazyHash,
 }
 
 impl Dict {
@@ -579,12 +756,14 @@ impl Dict {
         if let Some(old) = Arc::make_mut(&mut self.map).insert(key, value) {
             self.removed(old.depth());
         }
+        self.changed();
     }
 
     /// Removes a key, keeping the order of the others.
     pub fn remove(&mut self, key: &str) -> Option<Value> {
         let value = Arc::make_mut(&mut self.map).shift_remove(key)?;
         self.removed(value.depth());
+        self.changed();
         Some(value)
     }
 
@@ -615,7 +794,13 @@ impl Dict {
         if existed {
             self.removed(before);
         }
+        self.changed();
         Some(result)
+    }
+
+    /// Forgets the hash after a change.
+    fn changed(&mut self) {
+        self.hash.reset(self.nesting.depth >= 2);
     }
 
     /// Uncounts a value of depth `depth` that was removed or replaced.
@@ -631,13 +816,36 @@ impl Default for Dict {
         Self {
             map: Arc::default(),
             nesting: Nesting::EMPTY,
+            hash: LazyHash::default(),
         }
     }
 }
 
 impl PartialEq for Dict {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.map, &other.map) || self.map.iter().eq(other.map.iter())
+        if Arc::ptr_eq(&self.map, &other.map) {
+            return true;
+        }
+        if self.len() != other.len() || self.hash.differ(&other.hash) {
+            return false;
+        }
+        let compare = || self.map.iter().eq(other.map.iter());
+        if self.nesting.depth < 2 {
+            return compare();
+        }
+        compare_once(
+            Arc::as_ptr(&self.map) as usize,
+            Arc::as_ptr(&other.map) as usize,
+            Equality::Strict,
+            compare,
+        )
+    }
+}
+
+impl Dict {
+    /// The address of the dictionary's storage, for [`compare_once`].
+    pub(crate) fn storage(&self) -> usize {
+        Arc::as_ptr(&self.map) as usize
     }
 }
 
@@ -645,10 +853,12 @@ impl Eq for Dict {}
 
 impl Hash for Dict {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_usize(self.map.len());
-        for pair in self.map.iter() {
-            pair.hash(state);
-        }
+        self.hash.write(state, |mut state| {
+            state.write_usize(self.map.len());
+            for pair in self.map.iter() {
+                pair.hash(&mut state);
+            }
+        });
     }
 }
 
@@ -665,6 +875,7 @@ impl FromIterator<(EcoString, Value)> for Dict {
         Self {
             map: Arc::new(map),
             nesting,
+            hash: LazyHash::for_depth(nesting.depth),
         }
     }
 }
@@ -795,7 +1006,7 @@ pub enum Func {
     /// arguments of a call of the element are evaluated.
     Slot(Arc<(QualifiedName, Name)>),
     /// A function with some arguments already applied: `f.with(x)`.
-    With(Arc<(Func, Args)>),
+    With(Arc<Applied>),
 }
 
 impl Func {
@@ -806,7 +1017,7 @@ impl Func {
             Self::Closure(c) => c.name().cloned(),
             Self::Element(name) => Some(eco_format!("{name}")),
             Self::Slot(slot) => Some(slot.1.as_str().into()),
-            Self::With(inner) => inner.0.name(),
+            Self::With(inner) => inner.func().name(),
         }
     }
 
@@ -816,7 +1027,11 @@ impl Func {
     pub fn depth(&self) -> u32 {
         match self {
             Self::Closure(c) => c.depth(),
-            Self::With(with) => with.0.depth().max(with.1.depth()).saturating_add(1),
+            Self::With(with) => with
+                .func()
+                .depth()
+                .max(with.args().depth())
+                .saturating_add(1),
             Self::Native(_) | Self::Element(_) | Self::Slot(_) => 0,
         }
     }
@@ -966,8 +1181,52 @@ impl Debug for Closure {
     }
 }
 
+/// A function with some arguments already applied: `f.with(x)`. Its hash
+/// is cached, because a function can be applied to itself, `f.with(f)`, and
+/// a chain of those holds one function many times.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Applied {
+    func: Func,
+    args: Args,
+    hash: LazyHash,
+}
+
+impl Applied {
+    /// A function with arguments applied.
+    pub fn new(func: Func, args: Args) -> Self {
+        Self {
+            func,
+            args,
+            hash: LazyHash::new(true),
+        }
+    }
+
+    /// The function.
+    pub fn func(&self) -> &Func {
+        &self.func
+    }
+
+    /// The arguments applied.
+    pub fn args(&self) -> &Args {
+        &self.args
+    }
+}
+
+impl Hash for Applied {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.hash.write(state, |mut state| {
+            self.func.hash(&mut state);
+            self.args.hash(&mut state);
+        });
+    }
+}
+
 /// The arguments of a call.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+///
+/// Their hash is cached, because a function can return its arguments
+/// (`let f(..a) = a`), which can then be the arguments of another call
+/// many times over: `f(a, a)`. A change to the arguments forgets it.
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Args {
     /// The span of the whole call.
     pub span: Span,
@@ -977,6 +1236,7 @@ pub struct Args {
     /// arguments leaves it an upper bound; arguments that are a value are
     /// never changed, so theirs is exact.
     depth: Depth,
+    hash: LazyHash,
 }
 
 impl Args {
@@ -987,7 +1247,13 @@ impl Args {
             span,
             items,
             depth: Depth(depth),
+            hash: LazyHash::new(true),
         }
+    }
+
+    /// Forgets the hash after the arguments changed.
+    pub(crate) fn changed(&mut self) {
+        self.hash.reset(true);
     }
 
     /// The arguments, positional and named, in order.
@@ -998,6 +1264,14 @@ impl Args {
     /// How deeply the arguments nest: one more than the deepest value.
     pub fn depth(&self) -> u32 {
         self.depth.0
+    }
+}
+
+impl Hash for Args {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.span.hash(state);
+        self.hash
+            .write(state, |mut state| self.items.hash(&mut state));
     }
 }
 
@@ -1048,7 +1322,7 @@ mod tests {
             }]),
         );
         assert_eq!(args.depth(), 3);
-        let with = Func::With(Arc::new((
+        let with = Func::With(Arc::new(Applied::new(
             Func::Element(QualifiedName::unqualified(Name::new("strong").unwrap())),
             args,
         )));
@@ -1132,6 +1406,82 @@ mod tests {
         assert_eq!(dict.depth(), 2);
         assert_eq!(dict.remove("b"), Some(nested(1)));
         assert_eq!(dict.depth(), 1);
+    }
+
+    fn hash_of(value: &impl Hash) -> u64 {
+        let mut state = DefaultHasher::new();
+        value.hash(&mut state);
+        state.finish()
+    }
+
+    #[test]
+    fn a_change_forgets_the_cached_hash() {
+        // An array that holds arrays caches its hash; after each change it
+        // hashes as an array made with the new items does, and so do its
+        // clones made before the change keep the old hash.
+        let mut array = Array::from([nested(2), nested(2)]);
+        let before = hash_of(&array);
+        let clone = array.clone();
+        array.push(nested(3));
+        assert_eq!(
+            hash_of(&array),
+            hash_of(&Array::from([nested(2), nested(2), nested(3)]))
+        );
+        assert_ne!(hash_of(&array), before);
+        assert_eq!(hash_of(&clone), before);
+        array.update(0, |item| *item = Value::Int(1));
+        assert_eq!(
+            hash_of(&array),
+            hash_of(&Array::from([Value::Int(1), nested(2), nested(3)]))
+        );
+        array.pop();
+        array.remove(1);
+        assert_eq!(hash_of(&array), hash_of(&Array::from([Value::Int(1)])));
+
+        let mut dict: Dict = [("a".into(), nested(2))].into_iter().collect();
+        let _ = hash_of(&dict);
+        dict.insert("a".into(), nested(4));
+        let fresh: Dict = [("a".into(), nested(4))].into_iter().collect();
+        assert_eq!(hash_of(&dict), hash_of(&fresh));
+        assert_eq!(dict, fresh);
+        dict.update("a", false, |v| *v = Value::None);
+        let fresh: Dict = [("a".into(), Value::None)].into_iter().collect();
+        assert_eq!(hash_of(&dict), hash_of(&fresh));
+
+        // Arguments forget theirs when an argument is taken.
+        let arg = |value| Arg {
+            span: Span::detached(),
+            name: None,
+            scope: None,
+            value,
+        };
+        let mut args = Args::new(
+            Span::detached(),
+            EcoVec::from([arg(nested(3)), arg(Value::Int(1))]),
+        );
+        let _ = hash_of(&args);
+        args.eat();
+        let fresh = Args::new(Span::detached(), EcoVec::from([arg(Value::Int(1))]));
+        assert_eq!(hash_of(&args), hash_of(&fresh));
+        assert_eq!(args, fresh);
+    }
+
+    #[test]
+    fn values_that_differ_by_a_shared_part_are_unequal() {
+        let mut a = Array::from([nested(2)]);
+        let mut b = Array::from([nested(2)]);
+        for _ in 0..40 {
+            a = Array::from([Value::Array(a.clone()), Value::Array(a)]);
+            b = Array::from([Value::Array(b.clone()), Value::Array(b)]);
+        }
+        assert_eq!(a, b);
+        let c = b.clone();
+        b.update(0, |item| *item = nested(2));
+        assert_ne!(b, c);
+        assert_ne!(a, b);
+        // Hashes once computed tell unequal values apart at once.
+        assert_ne!(hash_of(&a), hash_of(&b));
+        assert_ne!(a, b);
     }
 
     #[test]

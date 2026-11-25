@@ -21,6 +21,12 @@
 //!   environment. Editing the body of one function therefore changes that
 //!   closure, and the closures that capture it, and re-runs their calls; the
 //!   calls of every other function are reused.
+//! - **Keys.** Hashing a call's key, and comparing two results for early
+//!   cutoff, walk values as trees, and a value can hold one part many
+//!   times: a loop that doubles an array by holding it twice makes a tree
+//!   exponentially larger than the value. So containers that hold
+//!   containers cache their hash where their clones share it, and a
+//!   comparison compares each pair of parts once.
 //! - **Variant.** The variant is a key, not an input. A file or call is
 //!   first evaluated for all variants at once. If it reads `variant`, that
 //!   evaluation stops, and it is evaluated again for the build's variant.
@@ -97,8 +103,8 @@ use folio_syntax::ast;
 pub use self::content::{Content, Element, Node, Slot};
 pub use self::error::{EvalError, Tracepoint};
 pub use self::value::{
-    Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module, NativeFunc,
-    Scope, Value,
+    Angle, Applied, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module,
+    NativeFunc, Scope, Value,
 };
 
 use self::error::Stop;

@@ -1054,6 +1054,10 @@ impl<'a> Vm<'a> {
                 _ => false,
             };
             if mutates && library::is_mutating_method(name) {
+                // The copy of the target would share the array's or the
+                // dictionary's storage, and changing it in place would then
+                // copy all of it.
+                drop(target);
                 let args = self.args(call.args(), span, false)?;
                 self.alloc(16, span)?;
                 // What the method adds is at most as deep as its arguments.
@@ -1203,10 +1207,9 @@ impl<'a> Vm<'a> {
             Func::Element(name) => self.instantiate(&name, args, span).map(Value::Content),
             Func::Slot(slot) => self.slot(&slot.0, &slot.1, args, span),
             Func::With(with) => {
-                let (func, applied) = &*with;
-                let mut items = applied.items.clone();
+                let mut items = with.args().items.clone();
                 items.extend(args.items);
-                self.call(func.clone(), Args::new(args.span, items), span)
+                self.call(with.func().clone(), Args::new(args.span, items), span)
             }
         }
     }
@@ -1688,7 +1691,7 @@ fn element_of(value: &Value) -> Option<&QualifiedName> {
     fn func(f: &Func) -> Option<&QualifiedName> {
         match f {
             Func::Element(name) => Some(name),
-            Func::With(with) => func(&with.0),
+            Func::With(with) => func(with.func()),
             _ => None,
         }
     }
@@ -1969,7 +1972,9 @@ impl Args {
     /// Takes the first positional argument.
     pub(crate) fn eat(&mut self) -> Option<Arg> {
         let index = self.items.iter().position(|arg| arg.name.is_none())?;
-        Some(self.items.remove(index))
+        let arg = self.items.remove(index);
+        self.changed();
+        Some(arg)
     }
 
     /// Takes the first positional argument, converted, if there is one.
@@ -1997,6 +2002,7 @@ impl Args {
             .position(|arg| arg.name.as_deref() == Some(name) && arg.scope.is_none())
         {
             let arg = self.items.remove(index);
+            self.changed();
             found = Some(T::from_value(arg.value).at(arg.span)?);
         }
         Ok(found)
@@ -2025,6 +2031,7 @@ impl Args {
             }
         }
         self.items = rest;
+        self.changed();
         Args::new(self.span, sink)
     }
 

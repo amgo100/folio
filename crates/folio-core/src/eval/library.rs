@@ -12,7 +12,7 @@ use folio_syntax::Span;
 use super::content::Content;
 use super::error::{At, EvalError, EvalResult, StrResult, bail};
 use super::ops::{self, a_type};
-use super::value::{Arg, Args, Array, Dict, Func, Module, NativeFunc, Scope, Value};
+use super::value::{Applied, Arg, Args, Array, Dict, Func, Module, NativeFunc, Scope, Value};
 use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
 use crate::db::{Bytes, data_file, source_file};
@@ -851,7 +851,8 @@ pub(crate) fn call_method(
         },
         Value::Func(func) if name == "with" => {
             let applied = std::mem::take(&mut args.items);
-            Value::Func(Func::With(std::sync::Arc::new((
+            args.changed();
+            Value::Func(Func::With(std::sync::Arc::new(Applied::new(
                 func,
                 Args::new(args.span, applied),
             ))))
