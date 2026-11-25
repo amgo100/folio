@@ -175,6 +175,7 @@ impl Vm<'_> {
             }
         }
 
+        let fields = canonical_fields(schema, fields);
         let block = matches!(fields.get("block"), Some(Value::Bool(true)));
         let kind = match name.name.as_str() {
             "raw" | "math" if name.namespace.is_none() && block => ElementKind::Block,
@@ -408,6 +409,63 @@ impl Vm<'_> {
         }
         Ok(Value::Str(path.as_str().into()))
     }
+}
+
+/// The fields of an instance in their canonical order (SPEC §4.3), so that
+/// the order of a call's arguments changes neither the instance nor what is
+/// made from it. The order is the schema's: the positional fields, with the
+/// body where they place it; the other declared fields, in declaration
+/// order; the body, if the positional fields do not place it; and the
+/// universal fields, in the order of [`UNIVERSAL_FIELDS`], each followed by
+/// its versions limited to a variant or target, by scope. A body of slots
+/// stands as its slots, in declaration order.
+pub(crate) fn canonical_fields(schema: &ElementSchema, fields: Dict) -> Dict {
+    let body: Vec<&str> = match &schema.body {
+        Body::Slots(slots) => slots.iter().map(|slot| slot.name.as_str()).collect(),
+        Body::None | Body::Content(_) => vec![BODY],
+    };
+    let mut order: Vec<&str> = Vec::with_capacity(fields.len());
+    for name in &schema.positional {
+        match name.as_str() {
+            BODY => order.extend(&body),
+            field => order.push(field),
+        }
+    }
+    order.extend(schema.fields.iter().map(|decl| decl.name.as_str()));
+    order.extend(&body);
+    // The scoped fields, which only `override` and the layout hints have.
+    let mut scoped: Vec<(usize, &str)> = fields
+        .iter()
+        .filter_map(|(key, _)| {
+            let (field, _) = key.split_once('@')?;
+            let rank = UNIVERSAL_FIELDS.iter().position(|u| *u == field)?;
+            Some((rank, key.as_str()))
+        })
+        .collect();
+    scoped.sort();
+    let mut scoped = scoped.into_iter().peekable();
+    for (rank, universal) in UNIVERSAL_FIELDS.iter().enumerate() {
+        order.push(universal);
+        while let Some((_, key)) = scoped.next_if(|(r, _)| *r == rank) {
+            order.push(key);
+        }
+    }
+
+    let mut out = Dict::new();
+    for key in order {
+        if out.get(key).is_none()
+            && let Some(value) = fields.get(key)
+        {
+            out.insert(key.into(), value.clone());
+        }
+    }
+    // Every field is one of those; any other keeps the order it came in.
+    for (key, value) in fields.iter() {
+        if out.get(key).is_none() {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    out
 }
 
 /// A checked body: content, or the content of each slot.

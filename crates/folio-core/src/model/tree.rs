@@ -10,7 +10,7 @@ use folio_syntax::Span;
 use super::{is_block, schema};
 use crate::db::{Db, Project, source_file};
 use crate::diag::{self, Diagnostic};
-use crate::eval::{Content, Dict, Element, Node, Value, evaluate};
+use crate::eval::{Content, Dict, Element, Node, Value, canonical_fields, evaluate};
 
 /// The typed document tree of one variant (SPEC §2.1): what every stage
 /// after evaluation reads.
@@ -100,6 +100,9 @@ impl Model<'_> {
         root.fields.remove(BODY);
         let body = self.blocks(&rest);
         root.fields.insert(BODY.into(), Value::Content(body));
+        if let Some(schema) = schema(self.db, self.project, &root.name) {
+            root.fields = canonical_fields(schema, root.fields);
+        }
         self.fields(root)
     }
 

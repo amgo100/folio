@@ -214,13 +214,17 @@ pub struct Element {
     /// How layout treats this instance: its schema's kind, except that
     /// `raw` and `math` are blocks when their `block` field is true.
     pub kind: ElementKind,
-    /// The fields given, in the order they were given, then the defaults of
-    /// the declared fields that were not given and do not default to
-    /// `none`. The body is the field `body`, and the content of each slot a
-    /// field of the slot's name. A field limited to a variant or target is
-    /// stored under its name and scope: `override@markscheme`. Universal
-    /// fields are stored only when given; `class` as an array of names, and
-    /// `id` as the label.
+    /// The fields given, and the defaults of the declared fields that were
+    /// not given and do not default to `none`, in the schema's canonical
+    /// order whatever order a call gave them in (SPEC §4.3): the
+    /// positional fields, with the body where they place it, the other
+    /// declared fields, the body if they do not place it, then the
+    /// universal fields. The body is the field `body`, and the content of
+    /// each slot a field of the slot's name, in the slots' order. A field
+    /// limited to a variant or target is stored under its name and scope,
+    /// `override@markscheme`, after the field without one. Universal fields
+    /// are stored only when given; `class` as an array of names, and `id`
+    /// as the label.
     pub fields: Dict,
     /// The label written after it: `fig:ball` for `<fig:ball>`.
     pub label: Option<EcoString>,
