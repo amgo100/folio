@@ -685,9 +685,11 @@ impl FileIds {
 
     /// Frees the id of a path.
     fn release(&mut self, path: &ProjectPath) {
-        if let Some(id) = self.by_path.remove(path) {
-            let index = usize::from(id.into_raw().get()) - FIRST_SOURCE_ID;
-            self.paths[index] = None;
+        if let Some(id) = self.by_path.remove(path)
+            && let Some(index) = usize::from(id.into_raw().get()).checked_sub(FIRST_SOURCE_ID)
+            && let Some(slot) = self.paths.get_mut(index)
+        {
+            *slot = None;
             self.free.insert(index);
         }
     }

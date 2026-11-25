@@ -217,6 +217,27 @@ fn updates_follow_the_disk() {
     assert_eq!(changed(&update), ["main.fol", "new/a.fol"]);
     assert_eq!(world.source("main.fol").unwrap().text(), "= Energy\n");
 
+    // A file replaced by something that is neither a file nor a directory
+    // leaves the world.
+    #[cfg(unix)]
+    {
+        fs::remove_file(root.join("tables/points.csv")).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("tables/points.csv"))
+            .status();
+        if made.is_ok_and(|s| s.success()) {
+            let update = loader
+                .update(
+                    &mut world,
+                    [root.join("tables/points.csv")],
+                    &mut Vec::new(),
+                )
+                .unwrap();
+            assert_eq!(changed(&update), ["tables/points.csv"]);
+            assert!(world.file("tables/points.csv").is_none());
+        }
+    }
+
     // A source that is no longer UTF-8 is removed, with a warning.
     fs::write(root.join("main.fol"), [0xff, 0xfe]).unwrap();
     let mut warnings = Vec::new();
@@ -264,6 +285,20 @@ fn updates_the_manifest() {
     // The root stands for the font directory.
     assert_eq!(changed(&update), ["fonts"]);
     assert_eq!(world.font_files().len(), 1);
+
+    // A hidden file named with a font in the same batch does not hide it.
+    let other = folio::bundled_fonts()[1].clone();
+    fs::write(root.join("fonts/sans.ttf"), other.data().as_ref()).unwrap();
+    fs::write(root.join("fonts/.DS_Store"), b"").unwrap();
+    let update = loader
+        .update(
+            &mut world,
+            [root.join("fonts/.DS_Store"), root.join("fonts/sans.ttf")],
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(changed(&update), ["fonts"]);
+    assert_eq!(world.font_files().len(), 2);
 
     // An event for the project directory reads the manifest again too.
     write(root, "folio.toml", MANIFEST);

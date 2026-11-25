@@ -292,7 +292,8 @@ impl Loader {
 
     /// Reads the files of the project into a world: `.fol` and `.fsty` files
     /// as sources, the others as data files, and removes the sources and
-    /// data files the project no longer has. Warns of files that cannot be
+    /// data files the project no longer has, including those a host set
+    /// itself, such as unsaved editor buffers, which it sets again after. Warns of files that cannot be
     /// read and of sources that are not UTF-8; leaves out files whose paths
     /// a document cannot name. Returns the paths it changed.
     pub fn load(
@@ -323,7 +324,9 @@ impl Loader {
     /// the font directory, or of the lockfile, reads the project's fonts
     /// again. Paths outside the project, hidden ones and outputs are
     /// ignored. A path that a link inside the project leads to is updated
-    /// under the link's path too.
+    /// under the link's path too. A host that keeps sources of its own on
+    /// top of the disk, such as unsaved editor buffers, sets them again
+    /// after an update that changed their paths.
     pub fn update<P: AsRef<Path>>(
         &mut self,
         world: &mut World,
@@ -349,16 +352,14 @@ impl Loader {
                 self.refresh(world, special, &mut update, warnings)?;
             }
         }
-        let fonts: Vec<String> = relative
+        // The fonts are read as a whole, once, and not again if the new
+        // lockfile had them read.
+        let fonts = relative
             .iter()
-            .filter(|rel| is_under(rel, PROJECT_FONT_DIR))
-            .cloned()
-            .collect();
-        for rel in fonts.iter().take(1) {
-            self.refresh(world, rel, &mut update, warnings)?;
-        }
-        for rel in &fonts {
-            relative.remove(rel);
+            .any(|rel| is_under(rel, PROJECT_FONT_DIR) && !is_hidden(rel));
+        relative.retain(|rel| !is_under(rel, PROJECT_FONT_DIR));
+        if fonts && !update.changed.contains(LOCKFILE) {
+            self.refresh(world, PROJECT_FONT_DIR, &mut update, warnings)?;
         }
         // A directory read again covers the paths under it.
         let mut done: Vec<String> = Vec::new();
@@ -423,7 +424,7 @@ impl Loader {
         update: &mut Update,
         warnings: &mut Vec<Diagnostic>,
     ) -> Result<(), LoadError> {
-        if rel.split('/').any(|name| name.starts_with('.')) {
+        if is_hidden(rel) {
             return Ok(());
         }
         if rel.is_empty() {
@@ -491,7 +492,13 @@ impl Loader {
             let mut files = Vec::new();
             let mut links = BTreeMap::new();
             if let Err(e) = self.scan(rel, chain, &mut files, &mut links, warnings) {
+                // As a read of the project leaves it out.
                 warnings.push(unreadable(rel, &e.to_string()));
+                for path in world_paths(world, rel) {
+                    if remove(world, &path) {
+                        update.changed.insert(path);
+                    }
+                }
                 return Ok(());
             }
             self.links.extend(links);
@@ -525,6 +532,13 @@ impl Loader {
                     if remove(world, rel) {
                         update.changed.insert(rel.to_owned());
                     }
+                }
+            }
+        } else {
+            // Neither a file nor a directory, which a read leaves out.
+            for path in world_paths(world, rel) {
+                if remove(world, &path) {
+                    update.changed.insert(path);
                 }
             }
         }
@@ -807,6 +821,12 @@ fn world_paths(world: &World, rel: &str) -> Vec<String> {
         .filter(|path| rel.is_empty() || is_under(path, rel))
         .map(str::to_owned)
         .collect()
+}
+
+/// Whether a project path names a hidden file or directory, or one in a
+/// hidden directory.
+fn is_hidden(path: &str) -> bool {
+    path.split('/').any(|name| name.starts_with('.'))
 }
 
 /// Whether a project path is `dir` or under it.
