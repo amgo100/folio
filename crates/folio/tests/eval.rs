@@ -947,6 +947,17 @@ fn changing_an_array_in_a_loop_takes_linear_time() {
     assert_eq!(quick_text(main, 30), "1 1");
 }
 
+#[test]
+fn removing_dictionary_keys_in_insertion_order_takes_linear_time() {
+    // Removing the first key does not shift every key after it. The order
+    // of the others stays visible after each removal and after re-insertion.
+    let main = "#let d = (:)\n#for i in range(100000) { d.insert(str(i), i) }\n\
+                #for i in range(99997) { let _ = d.remove(str(i)) }\n\
+                #d.insert(\"99997\", 0)\n#d.insert(\"a\", 1)\n\
+                #let _ = d.remove(\"99998\")\n#d.keys().join(\",\")\n";
+    assert_eq!(quick_text(main, 30), "99997,99999,a");
+}
+
 // ---- Components ----
 
 /// A component that provides one element, `question`.

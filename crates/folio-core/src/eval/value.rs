@@ -1,7 +1,7 @@
 //! The values scripts compute with (SPEC §4.4).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter, Write};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, OnceLock};
@@ -9,7 +9,6 @@ use std::sync::{Arc, OnceLock};
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Abs, Color, Em, Name, QualifiedName, Ratio, Scalar};
 use folio_syntax::{Span, SyntaxNode};
-use indexmap::IndexMap;
 
 use super::content::Content;
 use super::vm::NativeFn;
@@ -713,7 +712,7 @@ impl Duration {
 /// because iteration order is visible to scripts.
 #[derive(Clone)]
 pub struct Dict {
-    map: Arc<IndexMap<EcoString, Value>>,
+    map: Arc<Pairs>,
     /// One more than the deepest value, kept exact by the methods.
     nesting: Nesting,
     hash: LazyHash,
@@ -761,7 +760,7 @@ impl Dict {
 
     /// Removes a key, keeping the order of the others.
     pub fn remove(&mut self, key: &str) -> Option<Value> {
-        let value = Arc::make_mut(&mut self.map).shift_remove(key)?;
+        let value = Arc::make_mut(&mut self.map).remove(key)?;
         self.removed(value.depth());
         self.changed();
         Some(value)
@@ -777,7 +776,7 @@ impl Dict {
         f: impl FnOnce(&mut Value) -> R,
     ) -> Option<R> {
         let map = Arc::make_mut(&mut self.map);
-        let existed = map.contains_key(key);
+        let existed = map.get(key).is_some();
         if !existed {
             if !insert {
                 return None;
@@ -870,7 +869,10 @@ impl Debug for Dict {
 
 impl FromIterator<(EcoString, Value)> for Dict {
     fn from_iter<T: IntoIterator<Item = (EcoString, Value)>>(iter: T) -> Self {
-        let map: IndexMap<EcoString, Value> = iter.into_iter().collect();
+        let mut map = Pairs::default();
+        for (key, value) in iter {
+            map.insert(key, value);
+        }
         let nesting = Nesting::measure(map.values());
         Self {
             map: Arc::new(map),
@@ -879,6 +881,116 @@ impl FromIterator<(EcoString, Value)> for Dict {
         }
     }
 }
+
+/// The pairs of a dictionary in insertion order. A removed pair leaves an
+/// empty slot rather than shifting the pairs after it, which would make
+/// removing keys in insertion order take quadratic time; the slots are
+/// compacted once at least half of them are empty, which keeps removal
+/// amortised constant time. Empty slots are invisible: iteration, length,
+/// equality and hashing see only the pairs, in insertion order.
+#[derive(Clone, Default)]
+struct Pairs {
+    /// The pairs in insertion order, `None` where one was removed.
+    slots: Vec<Option<(EcoString, Value)>>,
+    /// The slot of each key. Only looked up, never iterated, so its order
+    /// does not matter.
+    index: HashMap<EcoString, usize>,
+}
+
+impl Pairs {
+    /// The number of pairs.
+    fn len(&self) -> usize {
+        self.index.len()
+    }
+
+    /// Whether there are no pairs.
+    fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    /// The value of a key.
+    fn get(&self, key: &str) -> Option<&Value> {
+        let slot = *self.index.get(key)?;
+        self.slots[slot].as_ref().map(|(_, value)| value)
+    }
+
+    /// The value of a key, to change in place.
+    fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
+        let slot = *self.index.get(key)?;
+        self.slots[slot].as_mut().map(|(_, value)| value)
+    }
+
+    /// Inserts a pair at the end, or replaces the value of an existing key
+    /// in place and returns the old value.
+    fn insert(&mut self, key: EcoString, value: Value) -> Option<Value> {
+        if let Some(&slot) = self.index.get(&key) {
+            let (_, old) = self.slots[slot]
+                .as_mut()
+                .expect("indexed slots hold a pair");
+            return Some(std::mem::replace(old, value));
+        }
+        self.index.insert(key.clone(), self.slots.len());
+        self.slots.push(Some((key, value)));
+        None
+    }
+
+    /// Removes a key, leaving an empty slot.
+    fn remove(&mut self, key: &str) -> Option<Value> {
+        let slot = self.index.remove(key)?;
+        let (_, value) = self.slots[slot].take().expect("indexed slots hold a pair");
+        if self.index.is_empty() {
+            self.slots.clear();
+        } else if self.slots.len() >= 2 * self.index.len() {
+            self.compact();
+        }
+        Some(value)
+    }
+
+    /// Drops the empty slots, keeping the order of the pairs.
+    fn compact(&mut self) {
+        self.slots.retain(Option::is_some);
+        for (slot, pair) in self.slots.iter().enumerate() {
+            let (key, _) = pair.as_ref().expect("only pairs remain");
+            *self.index.get_mut(key).expect("every pair is indexed") = slot;
+        }
+    }
+
+    /// The pairs, in insertion order.
+    fn iter(&self) -> PairsIter<'_> {
+        PairsIter {
+            slots: self.slots.iter(),
+            remaining: self.len(),
+        }
+    }
+
+    /// The values, in insertion order.
+    fn values(&self) -> impl Iterator<Item = &Value> {
+        self.iter().map(|(_, value)| value)
+    }
+}
+
+/// The pairs of a dictionary, skipping empty slots.
+struct PairsIter<'a> {
+    slots: std::slice::Iter<'a, Option<(EcoString, Value)>>,
+    /// The number of pairs not yet yielded.
+    remaining: usize,
+}
+
+impl<'a> Iterator for PairsIter<'a> {
+    type Item = (&'a EcoString, &'a Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, value) = self.slots.by_ref().flatten().next()?;
+        self.remaining -= 1;
+        Some((key, value))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for PairsIter<'_> {}
 
 /// Variables by name: the bindings of a module, or the variables a closure
 /// captured.
@@ -1573,5 +1685,64 @@ mod tests {
         };
         assert_eq!(hash(&a), hash(&b));
         assert_eq!(a.depth(), b.depth());
+    }
+
+    #[test]
+    fn removed_keys_leave_order_equality_hashing_and_depth_as_if_never_inserted() {
+        // Removing keys from the front leaves empty slots, compacted along
+        // the way; the result must match a dictionary built from what is
+        // left, in every way a script or a memoised query can see.
+        let mut dict = Dict::new();
+        for i in 0..100 {
+            let value = if i == 0 { nested(4) } else { Value::Int(i) };
+            dict.insert(eco_format!("{i}"), value);
+        }
+        for i in 0..90 {
+            dict.remove(&eco_format!("{i}"));
+            let left: Dict = dict.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            assert_eq!(dict.len(), 99 - i);
+            assert_eq!(dict.iter().len(), 99 - i);
+            assert_eq!(dict, left);
+            assert_eq!(hash_of(&dict), hash_of(&left));
+            assert_eq!(dict.depth(), left.depth());
+            // Fewer than half of the slots are ever empty, so removal stays
+            // amortised constant time rather than shifting later pairs.
+            assert!(dict.map.slots.len() < 2 * dict.len());
+        }
+        // A removed key inserted again goes to the end; an existing one is
+        // replaced in place.
+        dict.insert("5".into(), Value::Int(5));
+        dict.insert("95".into(), Value::Int(-1));
+        let keys: Vec<_> = dict.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "90", "91", "92", "93", "94", "95", "96", "97", "98", "99", "5"
+            ]
+        );
+        assert_eq!(dict.get("95"), Some(&Value::Int(-1)));
+        assert_eq!(dict.get("0"), None);
+        assert_eq!(dict.remove("0"), None);
+        // Two dictionaries with the same pairs in another order differ.
+        let mut other = Dict::new();
+        other.insert("b".into(), Value::Int(2));
+        other.insert("a".into(), Value::Int(1));
+        let mut ordered = Dict::new();
+        ordered.insert("a".into(), Value::Int(1));
+        ordered.insert("x".into(), Value::Int(0));
+        ordered.insert("b".into(), Value::Int(2));
+        ordered.remove("x");
+        assert_ne!(ordered, other);
+        other.remove("b");
+        other.insert("b".into(), Value::Int(2));
+        assert_eq!(ordered, other);
+        assert_eq!(hash_of(&ordered), hash_of(&other));
+        // Emptying a dictionary empties it.
+        for key in ["a", "b"] {
+            other.remove(key);
+        }
+        assert!(other.is_empty());
+        assert_eq!(other, Dict::new());
+        assert_eq!(hash_of(&other), hash_of(&Dict::new()));
     }
 }
