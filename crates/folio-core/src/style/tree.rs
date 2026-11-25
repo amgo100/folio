@@ -513,9 +513,13 @@ impl<'a> Walker<'a> {
 
     /// The declarations an element makes for itself: its `override`
     /// fields and layout hints (SPEC §5.4), checked against their
-    /// properties.
+    /// properties, lowest priority first. They rank by form, not by the
+    /// order the fields are written in: hints, then scoped hints, then
+    /// `override`, then scoped `override@…`.
     fn inline(&self, element: &Element) -> Vec<Decl> {
-        let mut out = Vec::new();
+        // One list per form, in rank order: [hint, scoped hint, override,
+        // scoped override].
+        let mut ranked: [Vec<Decl>; 4] = Default::default();
         for (key, value) in element.fields.iter() {
             let (field, scope) = match key.split_once('@') {
                 Some((field, scope)) => (field, Some(scope)),
@@ -528,21 +532,22 @@ impl<'a> Walker<'a> {
                     continue;
                 }
             }
+            let scoped = usize::from(scope.is_some());
             if field == "override" {
                 if let Value::Dict(dict) = value {
                     for (name, v) in dict.iter() {
                         if let Some(decl) = self.inline_decl(key, name, v, element.span) {
-                            out.push(decl);
+                            ranked[2 + scoped].push(decl);
                         }
                     }
                 }
             } else if LAYOUT_HINTS.contains(&field)
                 && let Some(decl) = self.inline_decl(key, field, value, element.span)
             {
-                out.push(decl);
+                ranked[scoped].push(decl);
             }
         }
-        out
+        ranked.into_iter().flatten().collect()
     }
 
     /// A declaration of the field `key`: `override` or a hint. The span is
