@@ -76,6 +76,10 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | `style` | Evaluating content and matching a stylesheet's selectors against it finishes without a panic, within small evaluation limits. |
 | `nesting` | A script that nests content, arrays, dictionaries, closures and arguments by applying wrappers in loops compiles to PDF on a 2 MiB stack, or stops at the nesting limit, without a panic or a stack overflow. |
 | `differential` | After each edit of a random sequence to a corpus project's content and stylesheets, applied in place through `World::edit_source`, every build has the outputs, the diagnostics and the span maps of its pages (spans resolved to byte ranges) of a world built afresh from the same texts. It catches stale results in the memoised queries and in the shaping, line-break and page caches, which live outside salsa. |
+| `document` | Evaluating content markup and building its document tree, with no stylesheet, finishes without a panic. |
+| `compile` | A whole build of content with a stylesheet generated from the property registry (each three bytes a selector, a property and a value of its type, among them huge, zero, negative and non-finite lengths and numbers, and page sizes past PDF's limits) goes through pages and the PDF writer without a panic. |
+| `manifest` | Reading a `folio.toml` finishes without a panic, and every build of a valid one compiles a small document. |
+| `lockfile` | Reading a `folio.lock` beside a fixed manifest finishes without a panic, and a valid one compiles. |
 
 The `differential` harness also runs as a property test on stable:
 `cargo test -p folio-testkit --test differential` checks 12 random

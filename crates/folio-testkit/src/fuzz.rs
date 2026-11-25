@@ -14,7 +14,7 @@
 //! | `style` | content and a stylesheet | evaluation, the cascade and selector matching finish without a panic |
 //! | `nesting` | wrappers and how often to apply each | a script that nests values that deeply compiles to PDF on a small stack, or reports the nesting limit, without a panic or an overflow |
 //! | `document` | content markup | evaluation and the document tree finish without a panic, with no stylesheet |
-//! | `build` | content and declarations of the registry's properties | a whole build to pages and a PDF finishes without a panic, whatever the property values: huge, zero, negative or not finite |
+//! | `compile` | content and declarations of the registry's properties | a whole build to pages and a PDF finishes without a panic, whatever the property values: huge, zero, negative or not finite |
 //! | `manifest` | a `folio.toml` | reading it finishes without a panic; a valid one compiles |
 //! | `lockfile` | a `folio.lock` | reading it finishes without a panic; a valid one compiles |
 //! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs, diagnostics and span maps of a world built afresh from the same texts |
@@ -44,7 +44,7 @@ pub const TARGETS: &[(&str, Body)] = &[
     ("nesting", nesting),
     ("differential", differential),
     ("document", document),
-    ("build", build),
+    ("compile", compile),
     ("manifest", manifest),
     ("lockfile", lockfile),
 ];
@@ -609,7 +609,7 @@ pub fn differential_input(seed: u64) -> Vec<u8> {
     random_bytes(seed, 1 + 5 * MAX_EDITS)
 }
 
-/// The manifest of the worlds [`document`] and [`build`] make: one
+/// The manifest of the worlds [`document`] and [`compile`] make: one
 /// stylesheet, which [`document`] leaves empty.
 const BUILD_MANIFEST: &str = "\
 [project]
@@ -641,7 +641,7 @@ pub fn document(data: &[u8]) {
     let _ = folio::document(&world, None);
 }
 
-/// What [`build`] puts declarations on: the elements of the core, and the
+/// What [`compile`] puts declarations on: the elements of the core, and the
 /// page.
 pub const SELECTORS: &[&str] = &[
     "doc",
@@ -662,7 +662,7 @@ pub const SELECTORS: &[&str] = &[
     "sidenote",
 ];
 
-/// Lengths for [`build`]: ordinary, zero, negative, huge, tiny, relative
+/// Lengths for [`compile`]: ordinary, zero, negative, huge, tiny, relative
 /// to a font size, and not finite.
 pub const LENGTHS: &[&str] = &[
     "0pt",
@@ -684,7 +684,7 @@ pub const LENGTHS: &[&str] = &[
     "-1e308pt * 10",
 ];
 
-/// Numbers for [`build`]: ordinary, zero, negative and extreme.
+/// Numbers for [`compile`]: ordinary, zero, negative and extreme.
 pub const NUMBERS: &[&str] = &[
     "0",
     "1",
@@ -698,11 +698,11 @@ pub const NUMBERS: &[&str] = &[
     "-9223372036854775807",
 ];
 
-/// Ratios for [`build`].
+/// Ratios for [`compile`].
 pub const RATIOS: &[&str] = &["0%", "50%", "100%", "-50%", "1000%", "1e300%"];
 
-/// A value of a property type for [`build`], picked by a byte; `None` for
-/// a type [`build`] does not generate, such as a template.
+/// A value of a property type for [`compile`], picked by a byte; `None` for
+/// a type [`compile`] does not generate, such as a template.
 pub fn property_value(ty: &folio_component::PropertyType, pick: u8) -> Option<String> {
     use folio_component::PropertyType as T;
     let pick = usize::from(pick);
@@ -737,11 +737,11 @@ pub fn property_value(ty: &folio_component::PropertyType, pick: u8) -> Option<St
     })
 }
 
-/// The stylesheet [`build`] makes of bytes: for each three, a declaration
+/// The stylesheet [`compile`] makes of bytes: for each three, a declaration
 /// with a selector of [`SELECTORS`], a property of the built-in registry
 /// and a value of its type ([`property_value`]). `page-size` also takes
 /// widths and heights.
-pub fn build_stylesheet(data: &[u8]) -> String {
+pub fn compile_stylesheet(data: &[u8]) -> String {
     static PROPERTIES: OnceLock<Vec<(String, folio_component::PropertyType)>> = OnceLock::new();
     let properties = PROPERTIES.get_or_init(|| {
         folio::style::Properties::new(None, [])
@@ -769,8 +769,8 @@ pub fn build_stylesheet(data: &[u8]) -> String {
 
 /// Builds content with a generated stylesheet to pages and a PDF: the
 /// bytes before the first NUL are the content, those after it the
-/// declarations ([`build_stylesheet`]).
-pub fn build(data: &[u8]) {
+/// declarations ([`compile_stylesheet`]).
+pub fn compile(data: &[u8]) {
     let (content, sheet) = match data.iter().position(|b| *b == 0) {
         Some(nul) => (&data[..nul], &data[nul + 1..]),
         None => (data, &[][..]),
@@ -778,7 +778,7 @@ pub fn build(data: &[u8]) {
     let Ok(content) = std::str::from_utf8(content) else {
         return;
     };
-    let sheet = build_stylesheet(sheet);
+    let sheet = compile_stylesheet(sheet);
     let mut world = fuzz_world(BUILD_MANIFEST, None).expect("the fuzz manifest is valid");
     world.set_source("main.fol", content).expect("a valid path");
     world
@@ -817,17 +817,17 @@ pub fn lockfile(data: &[u8]) {
     let _ = folio::compile(&world, Target::Pdf, None);
 }
 
-/// How many random inputs of [`build`] the seed corpus holds per corpus
+/// How many random inputs of [`compile`] the seed corpus holds per corpus
 /// project.
-pub const BUILD_SEEDS: u64 = 4;
+pub const COMPILE_SEEDS: u64 = 4;
 
-/// The three bytes of [`build_stylesheet`] that declare a property of the
+/// The three bytes of [`compile_stylesheet`] that declare a property of the
 /// built-in registry on a selector of [`SELECTORS`] with a value byte.
 ///
 /// # Panics
 ///
 /// When the selector or the property is unknown.
-pub fn build_decl(selector: &str, property: &str, value: u8) -> [u8; 3] {
+pub fn compile_decl(selector: &str, property: &str, value: u8) -> [u8; 3] {
     let selector = SELECTORS
         .iter()
         .position(|s| *s == selector)
@@ -914,18 +914,18 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
         .collect();
     out.push(("nesting", "mixed.bin".into(), mixed));
     // Content alone, for `document`; content with declarations for
-    // `build`: random ones, and the page and font sizes at the extremes.
+    // `compile`: random ones, and the page and font sizes at the extremes.
     for (name, text) in &contents {
         out.push(("document", name.clone(), text.as_bytes().to_vec()));
     }
     for project in corpus::projects() {
         let entry = project.sources.get("main.fol").cloned().unwrap_or_default();
-        for seed in 0..BUILD_SEEDS {
+        for seed in 0..COMPILE_SEEDS {
             let mut bytes = entry.clone().into_bytes();
             bytes.push(0);
             bytes.extend(random_bytes(seed, 60));
             out.push((
-                "build",
+                "compile",
                 format!("{}-random-{seed}.bin", project.name),
                 bytes,
             ));
@@ -935,9 +935,9 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
                 let i = u8::try_from(i).expect("few lengths");
                 // `page-size` as a width and a height, and `font-size`.
                 [
-                    build_decl("page", "page-size", 2 * i + 1),
-                    build_decl("doc", "font-size", i),
-                    build_decl("paragraph", "indent", i),
+                    compile_decl("page", "page-size", 2 * i + 1),
+                    compile_decl("doc", "font-size", i),
+                    compile_decl("paragraph", "indent", i),
                 ]
             })
             .flatten()
@@ -945,7 +945,7 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
         let mut bytes = entry.into_bytes();
         bytes.push(0);
         bytes.extend(extremes);
-        out.push(("build", format!("{}-extremes.bin", project.name), bytes));
+        out.push(("compile", format!("{}-extremes.bin", project.name), bytes));
     }
     for project in corpus::projects() {
         out.push((

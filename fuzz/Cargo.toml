@@ -71,8 +71,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "build"
-path = "fuzz_targets/build.rs"
+name = "compile"
+path = "fuzz_targets/compile.rs"
 test = false
 doc = false
 bench = false
