@@ -76,9 +76,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// Problems in the document are diagnostics in the result. Compilation is
 /// partial (SPEC §12.2): a construct that fails becomes an error marker in
-/// place and the rest still compiles, so there is output unless nothing
-/// could be produced, as when the entry file is missing. Fails only when
-/// an edit to the world cancels the compilation.
+/// place and the rest still compiles, so a target that writes a file has
+/// output unless nothing could be produced, as when the entry file is
+/// missing ([`Compiled::output`] says which targets write none yet). Fails
+/// only when an edit to the world cancels the compilation.
 pub fn compile(
     world: &World,
     target: Target,

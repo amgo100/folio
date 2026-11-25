@@ -462,6 +462,28 @@ fn a_failed_binding_fails_its_uses_quietly() {
     assert_eq!(repr.matches("error(").count(), 4, "{repr}");
     assert!(repr.contains("\"2\""), "{repr}");
 
+    // A function that uses it fails where it is made and where it is
+    // called, quietly; a failed binding shadows a global of its name.
+    let (repr, messages) = partial(&[(
+        "main.fol",
+        "#let x = 1 / 0\n#let f() = x\n#f() #let calc = 1 / 0\n#calc.max(1, 2)\n",
+    )]);
+    assert_eq!(
+        messages,
+        [
+            "error: cannot divide by zero",
+            "error: cannot divide by zero"
+        ]
+    );
+    assert_eq!(repr.matches("error(").count(), 5, "{repr}");
+    assert!(!repr.contains("\"2\""), "{repr}");
+
+    // A label after a construct that failed is dropped, not given to the
+    // marker.
+    let (repr, messages) = partial(&[("main.fol", "#f(1) <a>\n")]);
+    assert_eq!(messages, ["error: unknown variable: f"]);
+    assert!(!repr.contains("<a>"), "{repr}");
+
     // Across files: the importer neither reports the missing binding nor
     // loses the ones that work.
     let (repr, messages) = partial(&[
@@ -511,6 +533,14 @@ fn errors_in_functions_fail_the_markup_that_calls_them() {
         ]
     );
     assert!(repr.contains("strong(body: [\"b\"]) <b>"), "{repr}");
+}
+
+#[test]
+fn going_too_deep_is_recovered_from() {
+    let (repr, messages) = partial(&[("main.fol", "#let f(n) = f(n + 1)\n#f(0) More.\n")]);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(messages[0].contains("nested more than"), "{messages:?}");
+    assert!(repr.contains("\"More.\""), "{repr}");
 }
 
 #[test]

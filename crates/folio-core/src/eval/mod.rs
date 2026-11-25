@@ -39,9 +39,12 @@
 //! markup recovers: markup inside code fails as a whole, so an error in a
 //! function reaches the markup that called it. The variables that a failed
 //! `let` or import would have bound are poisoned, and using one fails
-//! without an error of its own. Exceeding a limit is not recovered from,
-//! since everything after it would fail too; nor are errors outside
-//! markup, such as a `break` outside a loop.
+//! without an error of its own, and so does a closure that uses one. A
+//! label after a construct that failed is dropped. Exceeding the step or
+//! memory limit is not recovered from, since everything after it would
+//! fail too; nor are errors outside markup, such as a `break` outside a
+//! loop. The depth limit is: the next construct starts at the file's
+//! depth again.
 //!
 //! # Sandbox
 //!

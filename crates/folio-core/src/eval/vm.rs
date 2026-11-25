@@ -8,7 +8,7 @@ use folio_component::{Abs, BODY, Body, Em, Name, QualifiedName, Ratio, Scalar, U
 use folio_syntax::Span;
 use folio_syntax::ast::{self, AstNode, Unit};
 
-use super::captures::captures;
+use super::captures::{captures, free_variables};
 use super::content::{Content, Node};
 use super::element;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
@@ -74,6 +74,11 @@ pub(crate) struct Vm<'a> {
 
 /// What an error marker shows (SPEC §12.2).
 const MARKER: &str = "[error]";
+
+/// Whether an element is an error marker.
+fn is_marker(element: &super::content::Element) -> bool {
+    element.name.namespace.is_none() && element.name.name.as_str() == "error"
+}
 
 /// The variables of an evaluation: the captured variables of a closure,
 /// which cannot be assigned, and the scopes of the code, innermost last.
@@ -286,6 +291,10 @@ impl<'a> Vm<'a> {
             if let ast::Expr::Label(label) = expr {
                 out.trim_end_spaces();
                 match out.last_element_mut() {
+                    // The construct the label was for failed, and was
+                    // reported; a reference to the label must not find its
+                    // marker.
+                    Some(element) if is_marker(element) => {}
                     Some(element) if element.label.is_some() => {
                         self.tolerate(EvalError::new(
                             label.span(),
@@ -330,8 +339,10 @@ impl<'a> Vm<'a> {
     /// Turns a construct of a file's markup that failed into an error
     /// marker in its place (SPEC §12.2), or passes the failure on: in
     /// markup inside code; when the evaluation must start again for the
-    /// build's variant; and when a limit was exceeded, since everything
-    /// after it would fail too. The variables that a failed `let` or
+    /// build's variant; and when the step or memory limit was exceeded,
+    /// since everything after it would fail too. The depth limit is
+    /// recovered from: the constructs after the one that went too deep
+    /// start again at the file's depth. The variables that a failed `let` or
     /// import would have bound are poisoned, so their uses fail without
     /// errors of their own.
     fn recover_from(&mut self, stop: Stop, expr: ast::Expr<'_>) -> EvalResult<Content> {
@@ -725,6 +736,10 @@ impl<'a> Vm<'a> {
         if let Some(value) = self.scopes.get(name) {
             return Ok(value.clone());
         }
+        // A failed binding shadows what the name would otherwise mean.
+        if self.poisoned.contains(name) {
+            return Err(Stop::Reported);
+        }
         match name.as_str() {
             "variant" => return self.variant(),
             "today" => {
@@ -748,9 +763,6 @@ impl<'a> Vm<'a> {
             && error.reason != Reason::Unknown
         {
             bail!(ident.span(), "{error}");
-        }
-        if self.poisoned.contains(name) {
-            return Err(Stop::Reported);
         }
         bail!(ident.span(), "unknown variable: {name}")
     }
@@ -1206,7 +1218,19 @@ impl<'a> Vm<'a> {
                 defaults.push(self.expr(named.expr())?);
             }
         }
-        let captured = captures(closure, |name| self.scopes.get(name).cloned());
+        // A closure that uses a variable whose binding failed fails too, so
+        // that its calls add no errors of their own.
+        let free = free_variables(closure);
+        let own = closure.name().map(|name| name.get().as_str());
+        let poisoned = free.iter().any(|name| {
+            Some(name.as_str()) != own
+                && self.scopes.get(name).is_none()
+                && self.poisoned.contains(name)
+        });
+        if poisoned {
+            return Err(Stop::Reported);
+        }
+        let captured = captures(free, |name| self.scopes.get(name).cloned());
         let closure = Closure::new(
             closure.to_untyped().clone(),
             self.file.clone(),
