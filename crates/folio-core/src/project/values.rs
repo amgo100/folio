@@ -151,6 +151,36 @@ pub struct Date {
     pub day: u8,
 }
 
+impl Date {
+    /// Parses a date as TOML and the command line write it: `2026-11-24`,
+    /// with a four-digit year and two-digit month and day. `None` if the
+    /// text is not such a date or the day does not exist.
+    pub fn parse(text: &str) -> Option<Self> {
+        let digits = |s: &str, len: usize| {
+            (s.len() == len && s.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| s.parse::<u16>().ok())?
+        };
+        let mut parts = text.split('-');
+        let year = digits(parts.next()?, 4)?;
+        let month = u8::try_from(digits(parts.next()?, 2)?).ok()?;
+        let day = u8::try_from(digits(parts.next()?, 2)?).ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let days = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if leap => 29,
+            2 => 28,
+            _ => return None,
+        };
+        (1..=days)
+            .contains(&day)
+            .then_some(Self { year, month, day })
+    }
+}
+
 impl Debug for Date {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
@@ -410,6 +440,31 @@ string_traits!(Lang, ProjectPath, RelativePath, PathPattern);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates() {
+        let date = |s| Date::parse(s).map(|d| d.to_string());
+        assert_eq!(date("2026-11-24").as_deref(), Some("2026-11-24"));
+        assert_eq!(date("2024-02-29").as_deref(), Some("2024-02-29"));
+        assert_eq!(date("2000-02-29").as_deref(), Some("2000-02-29"));
+        for bad in [
+            "",
+            "2026-11",
+            "2026-11-24-1",
+            "2026-1-24",
+            "26-11-24",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-11-31",
+            "2026-11-00",
+            "2026-02-29",
+            "1900-02-29",
+            "+026-11-24",
+            "2026-11-24T00:00",
+        ] {
+            assert_eq!(date(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn project_paths() {

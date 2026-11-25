@@ -2,17 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod cli;
+
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    match std::env::args().nth(1).as_deref() {
-        Some("--version" | "-V") => {
-            println!("folio {}", folio::VERSION);
-            ExitCode::SUCCESS
-        }
-        _ => {
-            eprintln!("folio {}: no commands are implemented yet", folio::VERSION);
-            ExitCode::FAILURE
-        }
-    }
+    cli::run()
 }

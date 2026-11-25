@@ -340,7 +340,7 @@ mode = "local"          # or "strict" (§5.5)
 | `[variants.<name>]` | `targets` (one or more of `pdf`, `docx`, `pptx`, `live`) and overlay `styles` (§6.1) | No variants: the document is built once, for PDF |
 | `[numbering-groups.<name>]` | `variants` and `shared-counters` (§6.1) | No groups |
 | `[formatting]` | `mode`, `strict-paths`, `overrides-sheet`, `allow-overrides-sheet` (default `true`) and `allow-local-packages` (default `false`) (§5.5) | `mode = "local"` |
-| `[output]` | `path` of each output file, with the placeholders `{stem}` (the entry file's name), `{variant}` and `{ext}` (§6.4) | `"out/{stem}-{variant}.{ext}"` |
+| `[output]` | `path` of each output file, with the placeholders `{stem}` (the entry file's name), `{variant}` and `{ext}` (§6.4) | `"out/{stem}-{variant}.{ext}"`, which gives `out/main.pdf` without variants |
 
 - Paths are relative to the directory that holds `folio.toml` and use `/` as separator. The entry file, stylesheets, the overrides sheet, `strict-paths` and the output path stay inside the project; only a component path may leave it.
 - Unknown keys are errors. Every error points at the key or value at fault, and all errors in the file are reported together.
@@ -668,7 +668,7 @@ mark   { display: none; }
 - **No answer leakage**: content removed or replaced in a variant never reaches that variant's outputs in any form: text, PDF tags, alt text, bookmarks, metadata, hidden Word runs, comments, speaker notes, animation steps, data embedded in graphics, or data sent to live clients (animation time functions and display lists).
 - **Leak check by provenance**: every emitted glyph, tag, OOXML run and display-list item carries the id of its source node, and `folio check --leaks` fails if any of them comes from a node removed in the variant. A text search is the second line of defence: text is extracted as a reader would see it (ToUnicode maps in PDF, the OOXML text model with runs joined), normalised, and searched for word sequences of at least six words or 30 characters from hidden nodes, with a project allowlist. The check runs by default in strict and CI builds and covers every target.
 - **Shuffled versions**: `#shuffle(seed: "B")` reorders questions during evaluation, so each version is numbered in printed order; each version and its mark scheme form their own numbering group.
-- **Output naming**: `out/{stem}-{variant}.{ext}` by default, configurable with `[output] path` in the manifest (§4.1).
+- **Output naming**: `out/{stem}-{variant}.{ext}` by default, configurable with `[output] path` in the manifest (§4.1). A project without variants leaves out `{variant}` and one separator (`-`, `_`, `.` or `/`) next to it: the one after it when it starts a path segment, the one before it otherwise. Where that would leave a file name without a stem, as in `out/{variant}.{ext}`, `{variant}` becomes `{stem}`. Its output is `out/main.pdf`.
 
 ## 7. Layout engine
 
@@ -1143,7 +1143,7 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 | Command | Purpose |
 | --- | --- |
 | `folio new <template>` | Create a project from a template or package |
-| `folio build [--variant v] [--target t] [--strict]` | Build outputs; all declared variants by default |
+| `folio build [--variant v] [--target t] [--today date] [--strict]` | Build outputs; all declared variants by default |
 | `folio watch` | Rebuild incrementally and serve the live preview |
 | `folio present` | Run the live presentation with presenter view |
 | `folio check [--layout] [--leaks] [--report overrides]` | Diagnostics without output |
@@ -1152,6 +1152,10 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 | `folio query <selector>` | Print elements as JSON, such as all questions with their marks |
 | `folio components` | List available components, versions and the targets they support |
 | `folio toolchain install [version]` | Install a compiler version into the local toolchain cache; builds run the version pinned in `folio.toml` (§2.4) |
+
+- A command works on the project whose `folio.toml` is in the current directory or the nearest directory above it, or in the directory given with `--root`.
+- `folio build` reads every file of the project except hidden ones, the font directory and the files its builds write. It follows symbolic links only to files and directories inside the project. `--variant` and `--target` may be repeated, and narrow the builds the manifest declares; a variant the manifest does not declare is an error. `--today` sets the date that scripts see as `today` (§4.4), in place of `project.today`. `--compiler current` is described in §2.4.
+- Diagnostics go to standard error with source excerpts (§12). A build with errors writes no output, so a file in `out/` is always from a build without errors; outputs are replaced whole. The exit status is 1 when any build has errors, and 2 when the command line cannot be run.
 
 ### 12.2 Watch and preview
 

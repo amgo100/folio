@@ -5,7 +5,7 @@
 use std::num::NonZeroU16;
 
 use folio_core::project::{
-    ComponentSource, FormattingMode, Lockfile, Manifest, ProjectError, Target,
+    ComponentSource, FormattingMode, Lockfile, Manifest, Name, ProjectError, Target,
 };
 use folio_syntax::{DiagSpanKind, FileId};
 
@@ -238,8 +238,39 @@ fn defaults() {
     assert!(!m.formatting.allow_local_packages.v);
     assert_eq!(m.output.path.v.as_str(), "out/{stem}-{variant}.{ext}");
     assert_eq!(
-        m.output.path.v.resolve("main", "exam", "pdf"),
+        m.output.path.v.resolve("main", Some("exam"), "pdf"),
         "out/main-exam.pdf"
+    );
+}
+
+#[test]
+fn output_paths_without_variants() {
+    let resolve = |pattern: &str| {
+        let m = parse(&format!("{PROJECT}\n[output]\npath = \"{pattern}\"\n"));
+        m.output.path.v.resolve("main", None, "pdf")
+    };
+    assert_eq!(resolve("out/{stem}-{variant}.{ext}"), "out/main.pdf");
+    assert_eq!(resolve("out/{stem}_{variant}.{ext}"), "out/main.pdf");
+    assert_eq!(resolve("out/{variant}/{stem}.{ext}"), "out/main.pdf");
+    assert_eq!(resolve("{variant}/{stem}.{ext}"), "main.pdf");
+    assert_eq!(resolve("out/{variant}-{stem}.{ext}"), "out/main.pdf");
+    assert_eq!(resolve("out/{stem}.{ext}"), "out/main.pdf");
+    assert_eq!(resolve("out/{stem}/{variant}.{ext}"), "out/main/main.pdf");
+    assert_eq!(resolve("{variant}.{ext}"), "main.pdf");
+    assert_eq!(resolve("out/{variant}.{ext}"), "out/main.pdf");
+
+    let m = parse(&format!(
+        "{PROJECT}\n[variants.exam]\ntargets = [\"pdf\", \"live\"]\n"
+    ));
+    let exam = Name::new("exam").unwrap();
+    assert_eq!(
+        m.output_path(Some(&exam), Target::Pdf).as_deref(),
+        Some("out/main-exam.pdf")
+    );
+    assert_eq!(m.output_path(Some(&exam), Target::Live), None);
+    assert_eq!(
+        parse(PROJECT).output_path(None, Target::Pdf).as_deref(),
+        Some("out/main.pdf")
     );
 }
 
@@ -262,7 +293,7 @@ fn today_and_output() {
     assert_eq!(m.project.today.unwrap().v.to_string(), "2026-11-24");
     assert_eq!(m.output.path.v.as_str(), "build/{stem}.{ext}");
     assert_eq!(
-        m.output.path.v.resolve("main", "exam", "pdf"),
+        m.output.path.v.resolve("main", Some("exam"), "pdf"),
         "build/main.pdf"
     );
 }
@@ -273,7 +304,7 @@ fn review_edge_cases() {
     let m = parse(&PROJECT.replace("main.fol", "{variant}.fol"));
     let stem = m.project.entry.v.stem();
     assert_eq!(
-        m.output.path.v.resolve(stem, "exam", "pdf"),
+        m.output.path.v.resolve(stem, Some("exam"), "pdf"),
         "out/{variant}-exam.pdf"
     );
     // A colon is not a drive letter unless a separator or the end follows.
