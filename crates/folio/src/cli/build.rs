@@ -3,9 +3,10 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io;
-use std::path::Path;
+use std::io::{self, Write as _};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use folio::diag::{Files, TextFiles};
 use folio::{
@@ -214,7 +215,11 @@ enum Written {
 }
 
 /// Writes a build's output to `path` in the project, unless the build has
-/// errors. The file is replaced whole, so a reader never sees half of it.
+/// errors. The file is replaced whole, so a reader never sees half of it:
+/// the bytes go to a temporary file of a name no other build uses, which is
+/// then renamed over the output. Symbolic links are followed only inside
+/// the project (SPEC §12.1); an output whose directory or file lies outside
+/// it is refused.
 fn write(root: &Path, path: Option<&str>, compiled: &Compiled) -> Result<Written, String> {
     let (Some(path), Some(bytes)) = (path, &compiled.output) else {
         return Ok(Written::Nothing);
@@ -228,20 +233,104 @@ fn write(root: &Path, path: Option<&str>, compiled: &Compiled) -> Result<Written
     if compiled.has_errors() {
         return Ok(Written::Skipped(path));
     }
-    let file = root.join(&path);
-    let replace = || -> io::Result<()> {
-        if let Some(dir) = file.parent() {
-            fs::create_dir_all(dir)?;
+    let file = resolve(root, &path).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+    replace(&file, bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+    Ok(Written::File(path))
+}
+
+/// The file on disk that the output at `path`, a project path, is written
+/// to: the directories on the way are created if they are missing, and
+/// symbolic links among them, or at the file, are followed only to
+/// directories and files inside the project.
+fn resolve(root: &Path, path: &str) -> io::Result<PathBuf> {
+    let root = root.canonicalize()?;
+    let outside = |what: &str| {
+        io::Error::other(format!(
+            "{what} is a symbolic link to a place outside the project"
+        ))
+    };
+    let (dirs, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let mut dir = root.clone();
+    let mut walked = String::new();
+    for component in dirs.split('/').filter(|c| !c.is_empty()) {
+        if !walked.is_empty() {
+            walked.push('/');
         }
-        let name = file.file_name().unwrap_or_default().to_string_lossy();
-        let temporary = file.with_file_name(format!(".{name}.folio-tmp"));
-        fs::write(&temporary, &bytes[..])?;
-        fs::rename(&temporary, &file).inspect_err(|_| {
+        walked.push_str(component);
+        let next = dir.join(component);
+        match fs::symlink_metadata(&next) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                match fs::create_dir(&next) {
+                    Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+                    _ => {}
+                }
+                // Another build may have created it, or put a link there,
+                // in the meantime: check what is there now.
+                if !fs::symlink_metadata(&next)?.is_dir() {
+                    return Err(io::Error::other(format!("`{walked}` is not a directory")));
+                }
+                dir = next;
+            }
+            Err(e) => return Err(e),
+            Ok(meta) if meta.is_symlink() => {
+                let target = next.canonicalize().map_err(|_| {
+                    io::Error::other(format!("`{walked}` is a broken symbolic link"))
+                })?;
+                if !target.starts_with(&root) {
+                    return Err(outside(&format!("`{walked}`")));
+                }
+                if !target.is_dir() {
+                    return Err(io::Error::other(format!("`{walked}` is not a directory")));
+                }
+                dir = target;
+            }
+            Ok(meta) if meta.is_dir() => dir = next,
+            Ok(_) => return Err(io::Error::other(format!("`{walked}` is not a directory"))),
+        }
+    }
+    let file = dir.join(name);
+    match fs::symlink_metadata(&file) {
+        Ok(meta) if meta.is_symlink() => {
+            let target = file
+                .canonicalize()
+                .map_err(|_| io::Error::other("it is a broken symbolic link"))?;
+            if !target.starts_with(&root) {
+                return Err(outside("it"));
+            }
+            Ok(target)
+        }
+        _ => Ok(file),
+    }
+}
+
+/// Replaces `file` whole with `bytes`, through a temporary file beside it
+/// whose name no other write uses: it holds this process's id and a count,
+/// and is created only if nothing, not even a symbolic link, has that name.
+fn replace(file: &Path, bytes: &[u8]) -> io::Result<()> {
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let name = file.file_name().unwrap_or_default().to_string_lossy();
+    let pid = std::process::id();
+    let (temporary, mut out) = loop {
+        let n = COUNT.fetch_add(1, Ordering::Relaxed);
+        let temporary = file.with_file_name(format!(".{name}.{pid}-{n}.folio-tmp"));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(out) => break (temporary, out),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    };
+    out.write_all(bytes)
+        .and_then(|()| {
+            drop(out);
+            fs::rename(&temporary, file)
+        })
+        .inspect_err(|_| {
             let _ = fs::remove_file(&temporary);
         })
-    };
-    replace().map_err(|e| format!("cannot write `{path}`: {e}"))?;
-    Ok(Written::File(path))
 }
 
 /// An error that points at no source.
@@ -345,6 +434,120 @@ mod tests {
         assert_eq!(
             write(dir.path(), Some("x.docx"), &Compiled::default()),
             Ok(Written::Nothing)
+        );
+    }
+
+    #[test]
+    fn concurrent_writes_do_not_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let contents: Vec<Vec<u8>> = (0..8u8).map(|i| vec![i; 64 * 1024]).collect();
+        std::thread::scope(|scope| {
+            for bytes in &contents {
+                let root = dir.path();
+                scope.spawn(move || {
+                    let compiled = Compiled {
+                        output: Some(bytes.clone().into()),
+                        ..Compiled::default()
+                    };
+                    for _ in 0..20 {
+                        assert_eq!(
+                            write(root, Some("out/main.pdf"), &compiled),
+                            Ok(Written::File("out/main.pdf".into()))
+                        );
+                    }
+                });
+            }
+        });
+        let written = fs::read(dir.path().join("out/main.pdf")).unwrap();
+        assert!(contents.contains(&written));
+        // No temporary file is left behind.
+        assert_eq!(fs::read_dir(dir.path().join("out")).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_follow_symbolic_links_only_inside_the_project() {
+        use std::os::unix::fs::symlink;
+
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = project.path();
+        let ok = Compiled {
+            output: Some(b"%PDF-".to_vec().into()),
+            ..Compiled::default()
+        };
+        let message = |path: &str| write(root, Some(path), &ok).unwrap_err();
+
+        // A directory that links out of the project.
+        symlink(outside.path(), root.join("out")).unwrap();
+        assert_eq!(
+            message("out/main.pdf"),
+            "cannot write `out/main.pdf`: `out` is a symbolic link to a place outside the project"
+        );
+        assert_eq!(
+            message("out/sub/main.pdf"),
+            "cannot write `out/sub/main.pdf`: `out` is a symbolic link to a place outside \
+             the project"
+        );
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+
+        // An output file that links out of the project.
+        fs::remove_file(root.join("out")).unwrap();
+        fs::create_dir(root.join("out")).unwrap();
+        fs::write(outside.path().join("victim"), "keep").unwrap();
+        symlink(outside.path().join("victim"), root.join("out/main.pdf")).unwrap();
+        assert_eq!(
+            message("out/main.pdf"),
+            "cannot write `out/main.pdf`: it is a symbolic link to a place outside the project"
+        );
+        assert_eq!(fs::read(outside.path().join("victim")).unwrap(), b"keep");
+
+        // A link that points nowhere, which writing through would create.
+        symlink(
+            outside.path().join("nothing"),
+            root.join("out/dangling.pdf"),
+        )
+        .unwrap();
+        assert_eq!(
+            message("out/dangling.pdf"),
+            "cannot write `out/dangling.pdf`: it is a broken symbolic link"
+        );
+        assert!(!outside.path().join("nothing").exists());
+
+        // A temporary name taken by a link is passed over, not written
+        // through. Other tests in this process advance the count, so the
+        // first names are all taken.
+        for n in 0..1024 {
+            symlink(
+                outside.path().join("victim"),
+                root.join(format!("out/.x.pdf.{}-{n}.folio-tmp", std::process::id())),
+            )
+            .unwrap();
+        }
+        assert!(write(root, Some("out/x.pdf"), &ok).is_ok());
+        assert_eq!(fs::read(outside.path().join("victim")).unwrap(), b"keep");
+
+        // Links inside the project are followed.
+        fs::create_dir(root.join("build")).unwrap();
+        symlink(root.join("build"), root.join("pdfs")).unwrap();
+        assert_eq!(
+            write(root, Some("pdfs/main.pdf"), &ok),
+            Ok(Written::File("pdfs/main.pdf".into()))
+        );
+        assert_eq!(fs::read(root.join("build/main.pdf")).unwrap(), b"%PDF-");
+        symlink(root.join("build/main.pdf"), root.join("out/alias.pdf")).unwrap();
+        assert!(write(root, Some("out/alias.pdf"), &ok).is_ok());
+        assert!(
+            fs::symlink_metadata(root.join("out/alias.pdf"))
+                .unwrap()
+                .is_symlink()
+        );
+
+        // A file where a directory is needed.
+        fs::write(root.join("file"), "").unwrap();
+        assert_eq!(
+            message("file/main.pdf"),
+            "cannot write `file/main.pdf`: `file` is not a directory"
         );
     }
 }

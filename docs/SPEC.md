@@ -1156,7 +1156,7 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 
 - A command works on the project whose `folio.toml` is in the current directory or the nearest directory above it, or in the directory given with `--root`.
 - `folio build` reads every file of the project except hidden ones, the font directory and the files its builds write. It follows symbolic links only to files and directories inside the project. `--variant` and `--target` may be repeated, and narrow the builds the manifest declares; a variant the manifest does not declare is an error. `--today` sets the date that scripts see as `today` (§4.4), in place of `project.today`. `--compiler current` is described in §2.4.
-- Diagnostics go to standard error with source excerpts (§12). A build with errors writes no output, so a file in `out/` is always from a build without errors; outputs are replaced whole. The exit status is 1 when any build has errors, and 2 when the command line cannot be run.
+- Diagnostics go to standard error with source excerpts (§12). A build with errors writes no output, so a file in `out/` is always from a build without errors; outputs are replaced whole, through a temporary file whose name no other build uses, so builds of one project may run at once. Writes follow symbolic links only to directories and files inside the project; an output that a link would place outside it is an error. The exit status is 1 when any build has errors, and 2 when the command line cannot be run.
 
 ### 12.2 Watch and preview
 
