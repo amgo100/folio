@@ -777,6 +777,8 @@ Margin notes are elements of kind `note`: the built-in `sidenote` and `marginfig
 
 Overfull and underfull lines, unplaceable floats, unresolved references and relaxed widow or orphan constraints are diagnostics with source spans, shown in the command line, the language server and as overlays in the preview and editor. `folio check --layout` runs layout without writing output.
 
+While a feature is not implemented, what it would draw or change is a warning, never a silent loss: an element that layout does not draw yet (once per build and kind, in the targets Folio lays out), a page selector that cannot match yet, and a declaration of a property that no stage reads yet, when it sets a value other than the initial one. A reference to a label that no element has is a warning. Each warning goes with the work that implements its feature.
+
 ## 8. Math
 
 Math is parsed into a semantic math tree and laid out with the font's OpenType MATH table, following TeX's layout rules as parameterised by the font. The same tree is exported as OMML to Office and as MathML for accessibility.
