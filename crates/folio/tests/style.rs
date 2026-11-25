@@ -299,7 +299,10 @@ fn selectors() {
          #exam.question(marks: 3)[Q] #exam.example[#statement[S] #solution[T]]\n",
         &[(
             "styles/main.fsty",
-            "heading + paragraph { indent: 1pt; }\n\
+            // Undo the base stylesheet's spaces, so that only these
+            // rules set them.
+            "paragraph { space-before: 0pt; space-after: 0pt; }\n\
+             heading + paragraph { indent: 1pt; }\n\
              paragraph:first { space-before: 1pt; }\n\
              paragraph:nth(3) { space-before: 3pt; }\n\
              list-item:last { space-after: 9pt; }\n\
@@ -667,12 +670,14 @@ fn equal_styles_share_memory() {
     assert!(ps[0].style.ptr_eq(&ps[1].style));
     assert!(ps[0].style.ptr_eq(&ps[2].style));
     // Untouched groups are shared with the parent or the initial style.
+    // (The base stylesheet sets the spaces of figures, so the section is
+    // compared with the document.)
     let section = first(&styled, "section");
     let block = folio::style::GroupId::BLOCK;
     let figures = all(&styled, "figure");
     assert!(Arc::ptr_eq(
         section.style.group(block),
-        figures[0].style.group(block)
+        first(&styled, "doc").style.group(block)
     ));
     // Equal groups of different styles are shared.
     let text = folio::style::GroupId::TEXT;

@@ -100,7 +100,7 @@ fn a_reflow_confined_to_one_page_reuses_the_other_pages() {
     // A capital made small in a paragraph in the middle of the document,
     // which lies on one page: its lines change, but it keeps its number of
     // lines, so no page break moves.
-    let range = find(&main, "Sentence 5 of paragraph 0 in section 6");
+    let range = find(&main, "Sentence 5 of paragraph 1 in section 6");
     world
         .edit_source("main.fol", range.start..range.start + 1, "s")
         .unwrap();
