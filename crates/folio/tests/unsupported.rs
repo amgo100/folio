@@ -172,10 +172,13 @@ fn a_reference_to_a_missing_label_suggests_a_close_one() {
 
 #[test]
 fn rules_of_other_targets_and_other_pseudo_classes() {
-    // A rule for another target has no effect in this build either way.
+    // A rule for another target has no effect in this build either way, and
+    // a page selector's other errors stay errors.
     let world = world(
         "@target docx { heading { numbering: \"1.\"; } }\n\
-         page:foo { margin-top: 1cm; }\n",
+         page:foo { margin-top: 1cm; }\n\
+         page:nth(0) { margin-top: 1cm; }\n\
+         figure { wrap-gap: 0.6em; }\n",
         "Text.\n",
     );
     let messages: Vec<String> = compile(&world, Target::Pdf)
@@ -185,6 +188,13 @@ fn rules_of_other_targets_and_other_pseudo_classes() {
         .collect();
     assert_eq!(
         messages,
-        ["unknown pseudo-class `:foo`; the rule is ignored"]
+        [
+            // The parser's.
+            "positions are counted from 1",
+            "unknown pseudo-class `:foo`; the rule is ignored",
+            // 6pt at a 10pt font size, as the initial value, but not at
+            // every size.
+            "`wrap-gap` is not implemented yet, so this declaration has no effect",
+        ]
     );
 }

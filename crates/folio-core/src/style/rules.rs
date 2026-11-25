@@ -571,9 +571,10 @@ impl<'a> Compiler<'a> {
     }
 
     /// Warns about the declarations of a compiled rule that set a property
-    /// no stage reads yet. Only for a rule that applies to the build: one
-    /// that is ignored, or that another variant or target has, has no
-    /// effect here anyway. Its selectors share the declarations.
+    /// no stage reads yet. The cascade calls it only for a rule that applies
+    /// to the build: one that another variant or target has has no effect
+    /// here anyway. Nothing is reported for a rule whose selectors were all
+    /// ignored. Its selectors share the declarations.
     fn lint_rule(&self, compiled: &Compiled) {
         let first = compiled
             .rules
@@ -638,14 +639,18 @@ impl<'a> Compiler<'a> {
     /// Warns that a declaration sets a property no stage reads yet, so it
     /// has no effect.
     fn lint_not_implemented(&self, property: &Property, value: Option<&Declared>, span: Span) {
-        // The value as plain data, compared with the initial one; the font
-        // size does not matter for the properties checked.
-        let computed = value.map(|v| compute(v, folio_component::Abs::pt(10.0)).ok());
-        let value = match &computed {
-            Some(Some(value)) => Some(value),
+        // The value as plain data, compared with the initial one. It is
+        // computed at two font sizes: a value in ems that equals the
+        // initial value at one size is not initial at the other.
+        let at = |size: f64| value.map(|v| compute(v, folio_component::Abs::pt(size)).ok());
+        let (computed, other) = (at(10.0), at(13.0));
+        let value = match (&computed, &other) {
+            (Some(Some(a)), Some(Some(b))) if a == b => Some(a),
+            // In ems: judged as set.
+            (Some(Some(_)), Some(Some(_))) => None,
             // A value that cannot be computed is not judged.
-            Some(None) => return,
-            None => None,
+            (Some(_), _) => return,
+            (None, _) => None,
         };
         if let Some(feature) = not_implemented(property, value) {
             diag::report(
@@ -803,6 +808,10 @@ impl<'a> Compiler<'a> {
                             "first" | "last" | "nth" | "left" | "right"
                         )
                     {
+                        // A malformed position is still an error.
+                        if name.get().as_str() == "nth" {
+                            position("nth")?;
+                        }
                         self.warn(
                             span,
                             eco_format!(
