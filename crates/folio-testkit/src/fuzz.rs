@@ -13,7 +13,7 @@
 //! | `reparse` | an edit to markup or a stylesheet | incremental reparsing equals a full parse; node identities follow the edit |
 //! | `style` | content and a stylesheet | evaluation, the cascade and selector matching finish without a panic |
 //! | `nesting` | wrappers and how often to apply each | a script that nests values that deeply compiles to PDF on a small stack, or reports the nesting limit, without a panic or an overflow |
-//! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs and diagnostics of a world built afresh from the same texts |
+//! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs, diagnostics and span maps of a world built afresh from the same texts |
 //!
 //! A target panics when a check fails; libFuzzer records the input.
 
@@ -23,7 +23,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use folio::{BuildMode, Limits, Name, Target, World};
+use folio::{BuildMode, Fragment, FragmentItem, Limits, Name, Target, World, span_map};
 use folio_syntax::{NodeIds, Source, SyntaxNode, parse, parse_stylesheet};
 
 use crate::corpus;
@@ -411,7 +411,7 @@ impl Edits {
     /// and what it inserts (an index into [`CONTENT_SNIPPETS`] or
     /// [`SHEET_SNIPPETS`], wrapped to one more than its length, which
     /// inserts nothing). Bytes left over are ignored. `None` without a
-    /// project byte.
+    /// project byte and at least one edit.
     pub fn decode(data: &[u8]) -> Option<Self> {
         let (&first, rest) = data.split_first()?;
         // Read once: the fuzzer runs the target many times a second.
@@ -422,7 +422,11 @@ impl Edits {
             .chunks_exact(5)
             .take(MAX_EDITS)
             .map(|op| op.try_into().expect("chunks of five"))
-            .collect();
+            .collect::<Vec<_>>();
+        // Without an edit, there is nothing to compare.
+        if ops.is_empty() {
+            return None;
+        }
         Some(Self { project, ops })
     }
 
@@ -458,8 +462,9 @@ impl Edits {
 
     /// Applies the edits one at a time to a world through
     /// [`World::edit_source`], compiling every build of the project after
-    /// each, and checks each time that the outputs and the diagnostics
-    /// equal those of a world built afresh from the same texts.
+    /// each, and checks each time that the outputs, the diagnostics and the
+    /// span maps of laid-out pages equal those of a world built afresh
+    /// from the same texts.
     ///
     /// The incremental world is compiled before the first edit too, so
     /// that its queries and its shaping, line-break and page caches hold
@@ -515,9 +520,55 @@ impl Edits {
                     a.0 == b.0,
                     "{build}: the output of an incremental compile differs from a fresh one after the edits {applied:#?}"
                 );
+                if corpus::laid_out(*target) {
+                    assert_eq!(
+                        span_map(&world, variant.as_ref(), *target),
+                        span_map(&fresh_world, variant.as_ref(), *target),
+                        "{build}: the span map of an incremental compile differs from a fresh one after the edits {applied:#?}"
+                    );
+                }
             }
         }
     }
+}
+
+/// Where each box and glyph of a build's pages comes from, by page, in
+/// painting order: a file and a byte range, or `None` for one that names
+/// no source. Pages and glyph runs reused from a cache must point at the
+/// nodes of the current revision, which the output bytes do not show.
+fn span_map(
+    world: &World,
+    variant: Option<&Name>,
+    target: Target,
+) -> Vec<Vec<Option<(String, Range<usize>)>>> {
+    fn walk(world: &World, fragment: &Fragment, out: &mut Vec<Option<(String, Range<usize>)>>) {
+        let located = |l: Option<folio::diag::Location>| l.map(|l| (l.path.to_string(), l.bytes));
+        out.push(located(span_map::locate_fragment(world, fragment)));
+        for (_, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(group) => walk(world, group, out),
+                FragmentItem::Text(run) => out.extend(
+                    run.glyphs
+                        .iter()
+                        .map(|glyph| located(span_map::locate_glyph(world, glyph))),
+                ),
+                _ => {}
+            }
+        }
+    }
+    let Some(pages) = folio::pages(world, target, variant).expect("nothing cancels the compile")
+    else {
+        return Vec::new();
+    };
+    pages
+        .pages
+        .iter()
+        .map(|page| {
+            let mut out = Vec::new();
+            walk(world, &page.fragment, &mut out);
+            out
+        })
+        .collect()
 }
 
 /// A build's output and diagnostics.

@@ -105,13 +105,26 @@ fn a_reflow_confined_to_one_page_reuses_the_other_pages() {
         .edit_source("main.fol", range.start..range.start + 1, "s")
         .unwrap();
     let after = pages(&world);
-    assert_eq!(before.pages.len(), after.pages.len());
+    // What the test assumes of the layout: every page keeps its number of
+    // lines, so no break moved.
+    let lines = |p: &Pages| p.pages.iter().map(|p| p.lines.len()).collect::<Vec<_>>();
+    assert_eq!(lines(&before), lines(&after), "the edit moved a page break");
 
     // The page itself is dressed as a box of the document; its body's
     // content is what the cache shares.
-    let body = |p: &Page| match &p.fragment.items[0].1 {
-        FragmentItem::Group(body) => body.items.as_ptr(),
-        _ => panic!("a page holds its body"),
+    let body = |p: &Page| {
+        let body = p
+            .fragment
+            .items
+            .iter()
+            .find_map(|(_, item)| match item {
+                FragmentItem::Group(body) => Some(body),
+                _ => None,
+            })
+            .expect("a page holds its body");
+        // Empty vectors share one pointer.
+        assert!(!body.items.is_empty(), "an empty page");
+        body.items.as_ptr()
     };
     let changed: Vec<usize> = before
         .pages

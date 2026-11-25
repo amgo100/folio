@@ -75,7 +75,7 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | `reparse` | An incremental reparse after an edit equals a full parse, and node identities follow the edit. |
 | `style` | Evaluating content and matching a stylesheet's selectors against it finishes without a panic, within small evaluation limits. |
 | `nesting` | A script that nests content, arrays, dictionaries, closures and arguments by applying wrappers in loops compiles to PDF on a 2 MiB stack, or stops at the nesting limit, without a panic or a stack overflow. |
-| `differential` | After each edit of a random sequence to a corpus project's content and stylesheets, applied in place through `World::edit_source`, every build has the outputs and diagnostics (spans resolved to byte ranges) of a world built afresh from the same texts. It catches stale results in the memoised queries and in the shaping, line-break and page caches, which live outside salsa. |
+| `differential` | After each edit of a random sequence to a corpus project's content and stylesheets, applied in place through `World::edit_source`, every build has the outputs, the diagnostics and the span maps of its pages (spans resolved to byte ranges) of a world built afresh from the same texts. It catches stale results in the memoised queries and in the shaping, line-break and page caches, which live outside salsa. |
 
 The `differential` harness also runs as a property test on stable:
 `cargo test -p folio-testkit --test differential` checks 12 random

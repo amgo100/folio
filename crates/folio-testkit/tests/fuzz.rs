@@ -140,8 +140,9 @@ fn edits_with_a_nul_do_not_encode() {
 
 #[test]
 fn incremental_edits_decode_within_the_text() {
-    // No project byte: nothing to do.
+    // No project byte, or no edit: nothing to do.
     assert!(fuzz::Edits::decode(&[]).is_none());
+    assert!(fuzz::Edits::decode(&[0, 1, 2, 3, 4]).is_none());
     // A project and two edits; trailing bytes are ignored.
     let edits = fuzz::Edits::decode(&[0, 0, 0xff, 0xff, 15, 0, 1, 3, 0, 2, 200, 9]).unwrap();
     assert_eq!(edits.ops.len(), 2);

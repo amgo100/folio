@@ -2,7 +2,8 @@
 //! random sequences of edits to the content and stylesheets of the corpus
 //! projects, applied in place to one world, after each of which every
 //! build must have the outputs and diagnostics of a world built afresh
-//! from the same texts ([`folio_testkit::fuzz::Edits::check`]).
+//! from the same texts ([`folio_testkit::fuzz::Edits::check`]), and the
+//! same span maps.
 //!
 //! It catches results that outlive their inputs: in the memoised queries,
 //! and in the shaping, line-break and page caches, which live outside
