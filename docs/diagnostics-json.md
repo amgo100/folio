@@ -72,7 +72,7 @@ A related location or a fix whose span no longer resolves is left out, and so is
 | `variant` | string or `null` | The variant; `null` for a project without variants. |
 | `target` | string | The target, as `folio.toml` names it: `"pdf"`, `"docx"`, `"pptx"` or `"live"`. |
 | `path` | string or `null` | The output's path, relative to the project directory, when the build has one; always `null` from `folio check`. |
-| `status` | string | `"written"`: the output was written. `"skipped"`: it was not, because the build has errors. `"none"`: the target writes no file, or has no writer yet. `"failed"`: the build or the write failed, and a diagnostic says why. `"checked"`: `folio check` checked the build, which writes nothing; the path is then `null`. |
+| `status` | string | `"written"`: the output was written. `"skipped"`: it was not, because the build has errors. `"none"`: the target writes no file, or has no writer yet. `"failed"`: the build or the write failed, and a diagnostic says why. `"checked"`: `folio check` checked the build, which writes nothing; the path is then `null`. From `folio check`, `"failed"` means the check failed, or the output could not be placed where `[output] path` puts it. |
 
 ## Compatibility
 

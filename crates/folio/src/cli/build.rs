@@ -196,11 +196,15 @@ fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
             // A check writes nothing, but finds what would stop the write.
             Some(Done::Checked { errors, writes }) => {
                 let path = path.as_deref().filter(|_| writes);
-                if let Err(message) = check_write(&root, path, errors) {
-                    report.diagnostics(&world, &[error(message)]);
-                    failed = true;
-                }
-                report.build(build(None, Status::Checked));
+                let status = match check_write(&root, path, errors) {
+                    Ok(()) => Status::Checked,
+                    Err(message) => {
+                        report.diagnostics(&world, &[error(message)]);
+                        failed = true;
+                        Status::Failed
+                    }
+                };
+                report.build(build(None, status));
                 continue;
             }
             Some(Done::Compiled(compiled)) => compiled,
@@ -326,12 +330,14 @@ fn write(root: &Path, path: Option<&str>, compiled: &Compiled) -> Result<Written
     Ok(Written::File(path))
 }
 
-/// Finds what would stop [`write`] from writing a build's output to `path`
+/// Finds what would stop [`write`] from placing a build's output at `path`
 /// in the project, for `folio check`, without writing or creating
 /// anything: a path that is not in the project, and for a build without
 /// errors (`errors`), a directory on the way that a link places outside
-/// the project or that is not a directory. `path` is `None` when the build
-/// would write no file.
+/// the project or that is not a directory. What only writing finds, such
+/// as a directory where the file would go or one that cannot be written
+/// to, is not checked. `path` is `None` when the build would write no
+/// file.
 fn check_write(root: &Path, path: Option<&str>, errors: bool) -> Result<(), String> {
     let Some(path) = path else {
         return Ok(());

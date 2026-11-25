@@ -76,10 +76,10 @@ pub struct Pages {
     /// The pages, at least one.
     pub pages: EcoVec<Page>,
     /// The content hash of each page, in the order of [`Pages::pages`]:
-    /// a hash of what the page shows, its geometry, glyphs and paint,
-    /// that leaves out the sources its fragments and glyphs name. Two pages
-    /// that look the same have the same hash, whatever their sources'
-    /// span numbers.
+    /// a hash of what the page shows, its geometry, glyphs and paint, and
+    /// the faces its glyph runs name by index, that leaves out the sources
+    /// its fragments and glyphs name. Two pages that look the same have
+    /// the same hash, whatever their sources' span numbers.
     pub hashes: EcoVec<u64>,
 }
 
@@ -197,6 +197,17 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
 
     // The page and its body are boxes of the document.
     let root = source_ref(text.root.span);
+    // Glyph runs name their fonts by index into the faces, so the faces
+    // are part of what every page shows.
+    let mut faces = Fx::default();
+    fonts.faces().hash(&mut faces);
+    let faces = faces.finish();
+    let keyed = |hash: u64| {
+        let mut keyed = Fx::default();
+        keyed.write_u64(hash);
+        keyed.write_u64(faces);
+        keyed.finish()
+    };
     let mut pages = EcoVec::new();
     let mut hashes = EcoVec::new();
     let mut start = 0;
@@ -207,7 +218,7 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
             && (pages.len() % 2 == 0) != odd
         {
             let fragment = blank(&master);
-            hashes.push(content_hash(&fragment));
+            hashes.push(keyed(content_hash(&fragment)));
             pages.push(Page {
                 fragment: dress(&fragment, root),
                 lines: EcoVec::new(),
@@ -215,7 +226,7 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         }
         let (out, fragment) = cache.page(&flow, master, start, start == 0, now, root);
         report(db, &out);
-        hashes.push(out.hash);
+        hashes.push(keyed(out.hash));
         let lines = flow.origins[start..start + out.leaves]
             .iter()
             .filter_map(|origin| match *origin {

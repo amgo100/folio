@@ -544,11 +544,19 @@ fn intern<T: Eq>(map: &Interned<T>, key: u64, value: T, now: u64) -> Arc<T> {
 /// A fast hasher for hashes kept in memory, such as change detection and
 /// lookup keys, never written out: each word is mixed in by a rotation,
 /// an exclusive or and a multiplication by an odd constant, as rustc's
-/// `FxHasher` does. Each step is a bijection of the state for a given word
-/// and of the word for a given state, so two inputs of the same length
-/// that differ in one word always hash differently.
-#[derive(Debug, Copy, Clone, Default)]
+/// `FxHasher` does, from a state that is not zero. Each step is a
+/// bijection of the state for a given word and of the word for a given
+/// state, so two inputs of the same shape that differ in one word always
+/// hash differently; bytes are mixed in with their length, so byte strings
+/// of different lengths do not run together.
+#[derive(Debug, Copy, Clone)]
 pub(super) struct Fx(u64);
+
+impl Default for Fx {
+    fn default() -> Self {
+        Self(0x243f_6a88_85a3_08d3)
+    }
+}
 
 impl Fx {
     const K: u64 = 0x517c_c1b7_2722_0a95;
@@ -560,6 +568,7 @@ impl Fx {
 
 impl Hasher for Fx {
     fn write(&mut self, bytes: &[u8]) {
+        self.mix(bytes.len() as u64);
         let mut chunks = bytes.chunks_exact(8);
         for chunk in &mut chunks {
             self.mix(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
