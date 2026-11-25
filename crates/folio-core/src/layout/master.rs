@@ -20,12 +20,27 @@ pub struct PageMaster {
     pub body: Rect,
 }
 
+/// The smallest width or height of a page: PDF's limit (SPEC §11.1).
+pub(crate) const MIN_PAGE_SIDE: Abs = Abs::pt(3.0);
+
+/// The largest width or height of a page: PDF's limit of 14,400 units of
+/// 1pt, 200 inches (SPEC §11.1).
+pub(crate) const MAX_PAGE_SIDE: Abs = Abs::pt(14_400.0);
+
 impl PageMaster {
     /// The master of a `page { .. }` style: `page-size` (a paper size or
     /// a width and a height), and the margins. The inner margin is on the
     /// left of every page: documents are one-sided until masters mirror
-    /// (§7.1).
+    /// (§7.1). A side outside PDF's limits is clamped to them
+    /// ([`PageMaster::checked`]).
     pub fn of(page: &ComputedStyle, props: &Properties) -> Self {
+        Self::checked(page, props).0
+    }
+
+    /// The master of a `page { .. }` style, as [`PageMaster::of`] makes
+    /// it, and the size `page-size` asked for when a side of it was outside
+    /// PDF's limits of 3pt and 14,400pt, and so was clamped.
+    pub fn checked(page: &ComputedStyle, props: &Properties) -> (Self, Option<Size>) {
         let a4 = Size::new(Abs::mm(210.0), Abs::mm(297.0));
         let size = match page.value(props, props.builtin("page-size")) {
             Some(Value::Keyword(k)) => match k.as_str() {
@@ -48,7 +63,10 @@ impl PageMaster {
             }
             _ => a4,
         };
-        let size = Size::new(size.width.max(Abs::pt(1.0)), size.height.max(Abs::pt(1.0)));
+        let clamp = |side: Abs| side.max(MIN_PAGE_SIDE).min(MAX_PAGE_SIDE);
+        let requested = size;
+        let size = Size::new(clamp(size.width), clamp(size.height));
+        let clamped = (size != requested).then_some(requested);
         let margin = |name: &str| length(page, props, name).max(Abs::zero());
         let (top, bottom) = (margin("margin-top"), margin("margin-bottom"));
         let (inner, outer) = (margin("margin-inner"), margin("margin-outer"));
@@ -56,10 +74,11 @@ impl PageMaster {
             (size.width - inner - outer).max(Abs::pt(1.0)),
             (size.height - top - bottom).max(Abs::pt(1.0)),
         );
-        Self {
+        let master = Self {
             size,
             body: Rect::new(Point::new(inner, top), body),
-        }
+        };
+        (master, clamped)
     }
 }
 

@@ -105,7 +105,10 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let styled = step_styled(db, build)?;
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
-    let master = PageMaster::of(&styled.page, props);
+    let (master, requested) = PageMaster::checked(&styled.page, props);
+    if let Some(requested) = requested {
+        report_page_size(db, build, master, requested, text.root.span);
+    }
     let flow = Flow::new(
         text,
         db.layout_cache(),
@@ -168,6 +171,48 @@ fn blank(master: &PageMaster) -> Fragment {
     let mut page = Fragment::new(master.size);
     page.push_fragment(master.body.origin, Fragment::new(master.body.size));
     page
+}
+
+/// Reports a page size outside PDF's limits (SPEC §11.1), at the last
+/// `page-size` declaration of the cascade, or at the document when the
+/// size is the default.
+fn report_page_size(
+    db: &dyn Db,
+    build: Build<'_>,
+    master: PageMaster,
+    requested: Size,
+    root: Span,
+) {
+    let cascade = crate::style::cascade(db, build);
+    let page_size = cascade.properties.builtin("page-size");
+    let span = cascade
+        .rules
+        .iter()
+        .flat_map(|rule| &rule.declarations)
+        .filter(|decl| decl.prop == page_size)
+        .last()
+        .map_or(root, |decl| decl.span);
+    let side = |a: Abs| {
+        if a.to_pt().abs() < 1e6 {
+            eco_format!("{:.1}pt", a.to_pt())
+        } else {
+            eco_format!("{:e}pt", a.to_pt())
+        }
+    };
+    diag::report(
+        db,
+        Diagnostic::warning(
+            span,
+            eco_format!(
+                "this page size, {} by {}, is outside what PDF allows; the pages are {} by {}",
+                side(requested.width),
+                side(requested.height),
+                side(master.size.width),
+                side(master.size.height),
+            ),
+        )
+        .with_hint("a side of a PDF page is 3pt to 14,400pt (200in)"),
+    );
 }
 
 /// Reports what a page relaxed or could not fit.
