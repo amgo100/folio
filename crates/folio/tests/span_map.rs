@@ -25,6 +25,7 @@ const DOCUMENT: &str = "= Office hours\n\n\
     ```rust\nlet office = 1;\n  let affluent;\n```\n\n\
     - A list item with difficult scaffolding.\n\n\
     #figure[In a figure: sufficiently afflicted traffic officials.]\n\n\
+    Joined #([text] + \"plus\") and #figure([Figured] + \"inside\").\n\n\
     The end, with incomprehensibilities and characteristically flamboyant affirmations.\n";
 
 fn world(style: &str, text: &str) -> World {
@@ -50,6 +51,7 @@ struct Seen {
     hebrew: usize,
     inserted_hyphens: usize,
     repeated_hyphens: usize,
+    joined: usize,
 }
 
 /// Checks that every glyph of the pages resolves to the source it shows,
@@ -116,6 +118,12 @@ fn check_glyph(
                 assert_eq!(written, shown, "{what}");
             }
         }
+        // A string joined to content shows as the expression or element
+        // that holds it.
+        SyntaxKind::Parenthesized | SyntaxKind::FuncCall => {
+            assert!(written.contains(shown), "{what}");
+            seen.joined += 1;
+        }
         SyntaxKind::Space => assert!(written.trim().is_empty() && !written.is_empty(), "{what}"),
         SyntaxKind::Escape => assert_eq!(written, format!("\\{shown}"), "{what}"),
         SyntaxKind::Shorthand => assert_eq!(written, "--", "{what}"),
@@ -148,6 +156,7 @@ fn every_glyph_resolves_to_the_source_it_shows() {
     assert!(seen.ligatures > 0, "no ligature: {seen:?}");
     assert!(seen.hebrew > 0, "no Hebrew: {seen:?}");
     assert!(seen.inserted_hyphens > 0, "no hyphenated line: {seen:?}");
+    assert!(seen.joined >= 2, "no joined string: {seen:?}");
 }
 
 #[test]

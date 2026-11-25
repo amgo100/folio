@@ -85,6 +85,7 @@ pub struct Glyph {
     /// text that it shows. A glyph whose text runs across two nodes names
     /// the first, with the part of its text that the first gives; a hyphen
     /// that a line break inserts shows no text of its node, and names the
-    /// empty range where the break is.
+    /// empty range where the break is. A range that runs past the node's
+    /// text stands for the whole node.
     pub source: (SourceRef, Range<u32>),
 }

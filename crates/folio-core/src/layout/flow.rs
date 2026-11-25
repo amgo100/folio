@@ -139,21 +139,33 @@ impl ParagraphInfo {
     /// The source of the bytes `range` of the paragraph's text, as a glyph
     /// that shows them names it ([`folio_component::Glyph::source`]): the
     /// node the first byte comes from, with the bytes of its text that the
-    /// range shows up to the node's end; or the paragraph's element, with
-    /// no bytes, where no node gave the text. An empty range is a position
-    /// in the node whose text it starts.
+    /// range shows up to the node's end; or the whole of the paragraph's
+    /// element where no node gave the text. An empty range, such as where a
+    /// break inserts a hyphen, is a position in the node of the text before
+    /// it.
     pub(super) fn source(&self, range: Range<usize>) -> (SourceRef, Range<u32>) {
         let at = range.start;
-        let i = self.sources.partition_point(|s| s.range.end <= at);
+        let probe = if range.is_empty() {
+            at.saturating_sub(1)
+        } else {
+            at
+        };
+        let i = self.sources.partition_point(|s| s.range.end <= probe);
         match self.sources.get(i) {
-            Some(source) if source.range.start <= at => {
+            Some(source) if source.range.start <= probe => {
                 let within = source.within(range);
                 (
                     source_ref(source.span),
                     offset(within.start)..offset(within.end),
                 )
             }
-            _ => (source_ref(self.span), 0..0),
+            _ => {
+                let whole = TextSource::WHOLE;
+                (
+                    source_ref(self.span),
+                    offset(whole.start)..offset(whole.end),
+                )
+            }
         }
     }
 }

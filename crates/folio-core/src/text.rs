@@ -121,11 +121,18 @@ pub struct TextSource {
     pub span: Span,
     /// The bytes of the node's text that the range is. As long as `range`
     /// where the paragraph has the node's text as it is; else, as for the
-    /// line breaks of `raw`, the bytes the range stands for as a whole.
+    /// line breaks of `raw`, the bytes the range stands for as a whole, or
+    /// [`TextSource::WHOLE`] for text that the node gave in no way the span
+    /// map can follow.
     pub within: Range<usize>,
 }
 
 impl TextSource {
+    /// The bytes of a node's text that stand for the whole node: they run
+    /// past the end of any text, so the span map resolves them to all of
+    /// it ([`crate::span_map::text_range`]).
+    pub const WHOLE: Range<usize> = 0..usize::MAX;
+
     /// The bytes of the node's text that the part `part` of the
     /// paragraph's text shows, where `part` starts in this range: the same
     /// part of the node's text, cut at the end of the range, or all of
@@ -167,6 +174,7 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
         pending: Vec::new(),
         blocks: Vec::new(),
         root: None,
+        owner: Span::detached(),
     };
     collector.element(&doc.root, &styled.root);
 
@@ -222,6 +230,9 @@ struct Collector<'a> {
     blocks: Vec<TextBlock>,
     /// The root block, once it is done.
     root: Option<TextBlock>,
+    /// The innermost element being collected that the document model did
+    /// not make: the source of text that records no node of its own.
+    owner: Span,
 }
 
 /// A paragraph's text as it is collected.
@@ -274,8 +285,25 @@ impl Collector<'_> {
     /// block of the element's.
     fn element(&mut self, element: &Element, node: &StyledNode) {
         self.open(&node.style, element.span);
+        let owner = self.own(element);
         self.element_content(element, node);
+        self.owner = owner;
         self.close();
+    }
+
+    /// Makes an element the owner of text without a node of its own,
+    /// unless the document model made it (a paragraph, list or section,
+    /// whose span is that of its first node or heading), and returns the
+    /// previous owner.
+    fn own(&mut self, element: &Element) -> Span {
+        let previous = self.owner;
+        let made = ["paragraph", "list", "enum", "terms", "section"]
+            .iter()
+            .any(|name| is_builtin(&element.name, name));
+        if !made && !element.span.is_detached() {
+            self.owner = element.span;
+        }
+        previous
     }
 
     fn element_content(&mut self, element: &Element, node: &StyledNode) {
@@ -356,19 +384,22 @@ impl Collector<'_> {
     ) {
         for node in content.nodes() {
             match node {
-                // Text that records no node, such as a string given as
-                // content, is the element's.
-                Node::Text { text, span: own } => out.push(text, style, own.or(span)),
+                // Text that records no node, such as a string joined to
+                // content, stands for the whole element that holds it.
+                Node::Text { text, span: own } if own.is_detached() => {
+                    out.push_part(text, style, self.owner, TextSource::WHOLE, false);
+                }
+                Node::Text { text, span: own } => out.push(text, style, *own),
                 // A space next to a forced line break would start or end a
                 // line, so it is dropped.
                 Node::Space(own) | Node::Parbreak(own) => {
                     if !out.text.ends_with('\u{2028}') {
-                        out.push(" ", style, own.or(span));
+                        out.push_implied(" ", style, own.or(span));
                     }
                 }
                 Node::Linebreak(own) => {
                     out.trim_space();
-                    out.push("\u{2028}", style, own.or(span));
+                    out.push_implied("\u{2028}", style, own.or(span));
                 }
                 Node::Quote { double, span: own } => {
                     let lang = self.settings(style, span).lang;
@@ -423,7 +454,9 @@ impl Collector<'_> {
                 Child::Element(e) => Some((*e, *node)),
                 Child::Part(..) => None,
             });
+            let owner = self.own(element);
             self.inline(body, style, element.span, &mut body_kids, out, anchored);
+            self.owner = owner;
             return;
         }
         // Inline math, an image, a reference: an object layout sizes.
@@ -591,12 +624,27 @@ impl Collector<'_> {
 impl Builder {
     /// Appends text in a style; `span` is the node it is the text of.
     fn push(&mut self, text: &str, style: &ComputedStyle, span: Span) {
-        self.push_part(text, style, span, 0..text.len());
+        self.push_part(text, style, span, 0..text.len(), false);
+    }
+
+    /// Appends a space or line break that markup implies, the text of node
+    /// `span`. Problems with its style are reported at the text around it,
+    /// not at the whitespace.
+    fn push_implied(&mut self, text: &str, style: &ComputedStyle, span: Span) {
+        self.push_part(text, style, span, 0..text.len(), true);
     }
 
     /// Appends text in a style that is the bytes `within` of the text of
-    /// node `span` (see [`TextSource::within`]).
-    fn push_part(&mut self, text: &str, style: &ComputedStyle, span: Span, within: Range<usize>) {
+    /// node `span` (see [`TextSource::within`]); `implied` as for
+    /// [`Self::push_implied`].
+    fn push_part(
+        &mut self,
+        text: &str,
+        style: &ComputedStyle,
+        span: Span,
+        within: Range<usize>,
+        implied: bool,
+    ) {
         if text.is_empty() {
             return;
         }
@@ -611,7 +659,8 @@ impl Builder {
                 within,
             });
         }
-        self.extend(start..end, style, false, span);
+        let report = if implied { Span::detached() } else { span };
+        self.extend(start..end, style, false, report);
     }
 
     /// Appends the text of a `raw` element, `text`, with its line breaks as
@@ -621,9 +670,9 @@ impl Builder {
         let mut at = 0;
         for (i, line) in text.split('\n').enumerate() {
             if i > 0 {
-                self.push_part("\u{2028}", style, span, at - 1..at);
+                self.push_part("\u{2028}", style, span, at - 1..at, false);
             }
-            self.push_part(line, style, span, at..at + line.len());
+            self.push_part(line, style, span, at..at + line.len(), false);
             at += line.len() + 1;
         }
     }
