@@ -1,5 +1,9 @@
 # The determinism check (crates/folio/tests/determinism.rs) compares the
 # corpus outputs with digests recorded on another machine: the sources must
 # have the same bytes on every checkout, whatever `core.autocrlf` says.
-tests/pdf/corpus/** text eol=lf
+tests/corpus/** text eol=lf
 crates/folio/tests/determinism/** text eol=lf
+# Golden files are compared byte for byte.
+tests/golden/** text eol=lf
+# Fuzz inputs are bytes, whatever they look like.
+fuzz/regressions/** -text

@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 /// The corpus directory.
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/pdf/corpus")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus")
 }
 
 /// Copies a directory and everything in it.

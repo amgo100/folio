@@ -1,0 +1,23 @@
+[package]
+name = "folio-testkit"
+description = "Folio's test infrastructure: the shared corpus, layout golden files, fuzz harnesses, the reference document and benchmarks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+folio.workspace = true
+folio-component.workspace = true
+folio-syntax.workspace = true
+
+[dev-dependencies]
+gungraun.workspace = true
+
+[[bench]]
+name = "compile"
+harness = false
+
+[lints]
+workspace = true

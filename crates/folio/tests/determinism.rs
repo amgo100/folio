@@ -1,7 +1,7 @@
 //! Deterministic output (SPEC §2.4): the same inputs and the same compiler
 //! version give byte-identical outputs.
 //!
-//! The test builds the whole corpus in `tests/pdf/corpus` (every variant and
+//! The test builds the whole corpus in `tests/corpus` (every variant and
 //! target each project declares) in two child processes of this test binary
 //! that differ in everything that must not matter:
 //!
@@ -49,7 +49,7 @@ const SHARED: &str = "shared";
 
 /// The corpus directory.
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/pdf/corpus")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus")
 }
 
 /// The recorded digests of the corpus outputs.

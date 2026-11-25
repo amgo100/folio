@@ -1,5 +1,5 @@
 //! PDF output (SPEC §11.1) through the whole pipeline: the documents of
-//! the test corpus in `tests/pdf/corpus` are tagged PDF/UA-1, with the
+//! the test corpus in `tests/corpus` are tagged PDF/UA-1, with the
 //! structure of their content, their metadata and their bookmarks, and
 //! compile to the same bytes every time.
 //!
@@ -14,7 +14,7 @@ use folio::{Diagnostic, Name, Severity, Target, World};
 
 /// The corpus directory.
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/pdf/corpus")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus")
 }
 
 /// A world with a corpus project: its manifest and every source file.
