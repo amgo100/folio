@@ -1386,7 +1386,11 @@ impl<'a> Vm<'a> {
         } else {
             let anywhere = args.without_spans();
             let memo = self.exact(key, depth, |depth| lookup(&anywhere, depth));
-            if matches!(&memo.outcome, Err(Stop::Error(error)) if error.has_detached_span()) {
+            // Only errors can show the spans the key left out: those of the
+            // call, and those that files it imported recovered from.
+            let detached = matches!(&memo.outcome, Err(Stop::Error(error)) if error.has_detached_span())
+                || memo.recovered.iter().any(EvalError::has_detached_span);
+            if detached {
                 self.exact(key, depth, |depth| lookup(&args, depth))
             } else {
                 memo
