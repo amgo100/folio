@@ -479,6 +479,57 @@ fn inline_declarations_rank_by_form() {
     }
 }
 
+/// Positional pseudo-classes and `+` count the elements of the body only;
+/// parts (content fields other than the body) are not siblings and have
+/// no position (SPEC §5.1).
+#[test]
+fn parts_are_not_siblings() {
+    // The indent of each paragraph in a figure with a caption, and of
+    // each paragraph of a document with a title, with one rule.
+    let indents = |rule: &str| {
+        let world = world(
+            "#doc(title: [T])\n\nA.\n\nB.\n\nC.\n\n#figure(caption: [Caption])[\n  D.\n\n  E.\n\n  F.\n]\n",
+            &[("styles/main.fsty", &format!("{rule} {{ indent: 1pt; }}\n"))],
+        );
+        let exam = styled(&world, "exam", Target::Pdf);
+        all(&exam, "paragraph")
+            .into_iter()
+            .map(|p| get(&exam, p, "indent") == pt(1.0))
+            .collect::<Vec<_>>()
+    };
+    let (t, f) = (true, false);
+    assert_eq!(indents("figure > paragraph:first"), [f, f, f, t, f, f]);
+    assert_eq!(indents("figure > paragraph:last"), [f, f, f, f, f, t]);
+    assert_eq!(indents("figure > paragraph:nth(1)"), [f, f, f, t, f, f]);
+    assert_eq!(indents("figure > paragraph:nth(3)"), [f, f, f, f, f, t]);
+    assert_eq!(indents("doc > paragraph:first"), [t, f, f, f, f, f]);
+    assert_eq!(indents("doc > paragraph:nth(2)"), [f, t, f, f, f, f]);
+    assert_eq!(indents("paragraph + paragraph"), [f, t, t, f, t, t]);
+
+    // A part has no position and no previous sibling, and the body's
+    // elements do not see it before them.
+    let caption = |rule: &str| {
+        let world = world(
+            "#figure(caption: [Caption])[\n  D.\n]\n",
+            &[("styles/main.fsty", &format!("{rule} {{ indent: 1pt; }}\n"))],
+        );
+        let exam = styled(&world, "exam", Target::Pdf);
+        let caption = all(&exam, "caption")[0];
+        let paragraph = all(&exam, "paragraph")[0];
+        (
+            get(&exam, caption, "indent") == pt(1.0),
+            get(&exam, paragraph, "indent") == pt(1.0),
+        )
+    };
+    assert_eq!(caption("caption:first"), (false, false));
+    assert_eq!(caption("caption:last"), (false, false));
+    assert_eq!(caption("caption:nth(1)"), (false, false));
+    assert_eq!(caption("caption + paragraph"), (false, false));
+    assert_eq!(caption("paragraph + caption"), (false, false));
+    // Parts stay addressable by name.
+    assert_eq!(caption("figure > caption"), (true, false));
+}
+
 #[test]
 fn scoped_rules_apply_inside_their_element() {
     let world = world(
