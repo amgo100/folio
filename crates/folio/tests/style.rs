@@ -431,6 +431,54 @@ fn local_overrides_and_hints() {
     );
 }
 
+/// Inline declarations rank by form, whatever order their fields are
+/// written in (SPEC §5.4): hints, then scoped hints, then `override`, then
+/// scoped `override@…`.
+#[test]
+fn inline_declarations_rank_by_form() {
+    // Each pair, in both orders; the winner is the same either way.
+    let cases = [
+        // A hint against the override attribute.
+        ("width: 1pt, override: (width: 2pt)", 2.0, 2.0),
+        ("override: (width: 2pt), width: 1pt", 2.0, 2.0),
+        // The override attribute against a scoped one.
+        (
+            "override: (width: 1pt), override@markscheme: (width: 2pt)",
+            1.0,
+            2.0,
+        ),
+        (
+            "override@markscheme: (width: 2pt), override: (width: 1pt)",
+            1.0,
+            2.0,
+        ),
+        // A hint against a scoped override.
+        ("width: 1pt, override@markscheme: (width: 2pt)", 1.0, 2.0),
+        ("override@markscheme: (width: 2pt), width: 1pt", 1.0, 2.0),
+        // A hint against a scoped hint.
+        ("width: 1pt, width@markscheme: 2pt", 1.0, 2.0),
+        ("width@markscheme: 2pt, width: 1pt", 1.0, 2.0),
+        // A scoped hint against the override attribute.
+        ("width@markscheme: 2pt, override: (width: 1pt)", 1.0, 1.0),
+        ("override: (width: 1pt), width@markscheme: 2pt", 1.0, 1.0),
+    ];
+    for (fields, exam_wins, markscheme_wins) in cases {
+        let world = world(&format!("#figure({fields})[]\n"), &[]);
+        let exam = styled(&world, "exam", Target::Pdf);
+        let markscheme = styled(&world, "markscheme", Target::Pdf);
+        assert_eq!(
+            get(&exam, all(&exam, "figure")[0], "width"),
+            pt(exam_wins),
+            "exam: {fields}"
+        );
+        assert_eq!(
+            get(&markscheme, all(&markscheme, "figure")[0], "width"),
+            pt(markscheme_wins),
+            "markscheme: {fields}"
+        );
+    }
+}
+
 #[test]
 fn scoped_rules_apply_inside_their_element() {
     let world = world(
