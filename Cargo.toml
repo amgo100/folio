@@ -33,6 +33,9 @@ hypher = "0.1.8"
 icu_segmenter = "2.4.0"
 fontdb = { version = "0.24.0", default-features = false, features = ["std", "fs", "fontconfig"] }
 indexmap = "2.14.2"
+# The scripting layer's `calc` functions: a portable maths library, so that
+# they give the same bits on every platform (SPEC §2.4).
+libm = "0.2.16"
 # PDF output (SPEC §11.1): tagging, PDF/UA, PDF/A and font subsetting. No
 # default features: Folio shapes text itself and has no images yet.
 krilla = { version = "0.8.2", default-features = false }

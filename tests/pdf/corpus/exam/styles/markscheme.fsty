@@ -1,0 +1,3 @@
+// The mark scheme overlay: answers set smaller, so it paginates
+// differently from the paper.
+doc { font-size: 10pt; }

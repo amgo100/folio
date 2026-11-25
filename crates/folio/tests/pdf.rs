@@ -10,7 +10,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use folio::{Diagnostic, Severity, Target, World};
+use folio::{Diagnostic, Name, Severity, Target, World};
 
 /// The corpus directory.
 fn corpus() -> PathBuf {
@@ -55,16 +55,31 @@ fn projects() -> Vec<(String, PathBuf)> {
 }
 
 fn build(world: &World) -> (Vec<u8>, Vec<Diagnostic>) {
-    let compiled = folio::compile(world, Target::Pdf, None).unwrap();
+    build_variant(world, None)
+}
+
+fn build_variant(world: &World, variant: Option<&Name>) -> (Vec<u8>, Vec<Diagnostic>) {
+    let compiled = folio::compile(world, Target::Pdf, variant).unwrap();
     let pdf = compiled.output.clone().expect("a PDF");
     (pdf.to_vec(), compiled.diagnostics.to_vec())
+}
+
+/// The variants a project builds as PDF: `None` for a project without
+/// variants.
+fn pdf_variants(world: &World) -> Vec<Option<Name>> {
+    world
+        .builds()
+        .into_iter()
+        .filter(|(_, target)| *target == Target::Pdf)
+        .map(|(variant, _)| variant)
+        .collect()
 }
 
 /// The text of a build's paragraphs as a reader should extract it: in
 /// order, one paragraph per line, without the objects that layout does
 /// not draw yet.
-fn expected_text(world: &World) -> String {
-    let text = folio::text(world, Target::Pdf, None).unwrap().unwrap();
+fn expected_text(world: &World, variant: Option<&Name>) -> String {
+    let text = folio::text(world, Target::Pdf, variant).unwrap().unwrap();
     let mut out = String::new();
     for paragraph in text.paragraphs.iter() {
         let line: String = paragraph
@@ -80,33 +95,66 @@ fn expected_text(world: &World) -> String {
     out
 }
 
-/// Every corpus document is a PDF/UA-1 file whose structure follows its
-/// content, and compiles to the same bytes in a new world.
+/// Every corpus document, in each variant it builds as PDF, is a PDF/UA-1
+/// file whose structure follows its content, and compiles to the same bytes
+/// in a new world.
 #[test]
 fn corpus_is_pdf_ua_1() {
     let out = std::env::var_os("FOLIO_PDF_OUT").map(PathBuf::from);
     let projects = projects();
     assert!(projects.len() >= 3, "the corpus has its documents");
-    for (name, dir) in projects {
+    for (project_name, dir) in projects {
         let world = project(&dir);
-        let (pdf, diagnostics) = build(&world);
-        let problems: Vec<&Diagnostic> = diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error || d.message.contains("PDF"))
-            .collect();
-        assert!(problems.is_empty(), "{name}: {problems:#?}");
-        let text = String::from_utf8_lossy(&pdf);
-        assert!(text.contains("<pdfuaid:part>1</pdfuaid:part>"), "{name}");
-        for element in ["/S/Document", "/S/Title", "/S/Sect", "/S/H1", "/S/P"] {
-            assert!(text.contains(element), "{name} has no {element}");
+        for variant in pdf_variants(&world) {
+            check_pdf(
+                &project_name,
+                &dir,
+                &world,
+                variant.as_ref(),
+                out.as_deref(),
+            );
         }
-        assert!(text.contains("/Type/Outlines"), "{name}");
-        assert_eq!(build(&project(&dir)).0, pdf, "{name} is deterministic");
-        if let Some(out) = &out {
-            fs::create_dir_all(out).unwrap();
-            fs::write(out.join(format!("{name}.pdf")), &pdf).unwrap();
-            fs::write(out.join(format!("{name}.txt")), expected_text(&world)).unwrap();
-        }
+    }
+}
+
+/// Checks one PDF of a corpus project, and writes it to `out`.
+fn check_pdf(
+    project_name: &str,
+    dir: &Path,
+    world: &World,
+    variant: Option<&Name>,
+    out: Option<&Path>,
+) {
+    // Named as `folio build` names its outputs (SPEC §6.4).
+    let name = match variant {
+        Some(variant) => format!("{project_name}-{variant}"),
+        None => project_name.to_string(),
+    };
+    let (pdf, diagnostics) = build_variant(world, variant);
+    let problems: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error || d.message.contains("PDF"))
+        .collect();
+    assert!(problems.is_empty(), "{name}: {problems:#?}");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("<pdfuaid:part>1</pdfuaid:part>"), "{name}");
+    for element in ["/S/Document", "/S/Title", "/S/Sect", "/S/H1", "/S/P"] {
+        assert!(text.contains(element), "{name} has no {element}");
+    }
+    assert!(text.contains("/Type/Outlines"), "{name}");
+    assert_eq!(
+        build_variant(&project(dir), variant).0,
+        pdf,
+        "{name} is deterministic"
+    );
+    if let Some(out) = out {
+        fs::create_dir_all(out).unwrap();
+        fs::write(out.join(format!("{name}.pdf")), &pdf).unwrap();
+        fs::write(
+            out.join(format!("{name}.txt")),
+            expected_text(world, variant),
+        )
+        .unwrap();
     }
 }
 

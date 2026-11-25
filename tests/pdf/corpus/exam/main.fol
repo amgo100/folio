@@ -44,3 +44,16 @@ A uniform ladder of length 6.0 m and weight 260 N rests against a smooth vertica
 A uniform ladder of length 4.0 m and weight 270 N rests against a smooth vertical wall, with its foot on rough horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from slipping.
 
 A uniform ladder of length 5.0 m and weight 280 N rests against a smooth vertical wall, with its foot on rough horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from slipping.
+
+#if variant == "markscheme" [
+  #let g = 9.81
+
+  = Mark scheme
+
+  + Time to reach the sea: #calc.round((12 + calc.sqrt(12 * 12 + 2 * g * 30)) / g, digits: 2) s; speed: #calc.round(calc.sqrt(12 * 12 + 2 * g * 30), digits: 1) m/s. Award one mark for each, and one for using g = 9.81 m/s².
+  + Force: 0.75 N; work done: 6.75 J.
+  + Award one mark for the statement and one for noting that the forces act on different bodies.
+  + Resultant force: 5400 N, towards the centre of the bend.
+
+  Section B, first projectile: range #calc.round(10 * 10 * calc.sin(40deg) / g, digits: 2) m, maximum height #calc.round(calc.pow(10 * calc.sin(20deg), 2) / (2 * g), digits: 3) m, time of flight #calc.round(2 * 10 * calc.sin(20deg) / g, digits: 3) s.
+]
