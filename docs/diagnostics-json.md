@@ -1,6 +1,6 @@
 # Diagnostics as JSON
 
-`folio build --diagnostics json` writes one JSON document to standard error when the command ends, in place of the source excerpts and the `wrote …` lines it writes by default (SPEC §12, §12.1). Apart from the cases below, standard error then holds that document and nothing else, so a program can parse all of it. The exit status is the same as without the flag.
+`folio build --diagnostics json` writes one JSON document to standard error when the command ends, in place of the source excerpts and the `wrote …` lines it writes by default (SPEC §12, §12.1). `folio check --diagnostics json` writes the same document: the diagnostics that `folio build` would report, and each build it checked with the status `"checked"` and no path, as a check writes nothing. Apart from the cases below, standard error then holds that document and nothing else, so a program can parse all of it. The exit status is the same as without the flag.
 
 Some messages are still plain text, with no document or before it:
 
@@ -41,7 +41,7 @@ Some messages are still plain text, with no document or before it:
 | --- | --- | --- |
 | `version` | integer | The version of this shape: `1`. |
 | `diagnostics` | array of diagnostics | Every diagnostic of the command, in the order the terminal would show them. A diagnostic that several builds report appears once. |
-| `builds` | array of builds | The builds that were compiled, in the manifest's order, each once. It is empty when the command stopped before compiling, for example because the manifest has errors. |
+| `builds` | array of builds | The builds that were compiled or checked, in the manifest's order, each once. It is empty when the command stopped before compiling, for example because the manifest has errors. |
 
 ### A diagnostic
 
@@ -71,8 +71,8 @@ A related location or a fix whose span no longer resolves is left out, and so is
 | --- | --- | --- |
 | `variant` | string or `null` | The variant; `null` for a project without variants. |
 | `target` | string | The target, as `folio.toml` names it: `"pdf"`, `"docx"`, `"pptx"` or `"live"`. |
-| `path` | string or `null` | The output's path, relative to the project directory, when the build has one. |
-| `status` | string | `"written"`: the output was written. `"skipped"`: it was not, because the build has errors. `"none"`: the target writes no file, or has no writer yet. `"failed"`: the build or the write failed, and a diagnostic says why. |
+| `path` | string or `null` | The output's path, relative to the project directory, when the build has one; always `null` from `folio check`. |
+| `status` | string | `"written"`: the output was written. `"skipped"`: it was not, because the build has errors. `"none"`: the target writes no file, or has no writer yet. `"failed"`: the build or the write failed, and a diagnostic says why. `"checked"`: `folio check` checked the build, which writes nothing; the path is then `null`. |
 
 ## Compatibility
 

@@ -401,19 +401,18 @@ pub(super) struct Flow {
 
 impl Flow {
     /// Flattens a build's blocks and lines. `layouts` and `slots` hold the
-    /// lines and line slots of each paragraph of `text`; `cache` memoises
-    /// the hyphens they need.
+    /// lines and line slots of each paragraph of `text`; `caches` memoise
+    /// the hyphens they need and share what earlier flows built.
     pub(super) fn new(
         text: &Text,
-        cache: &Cache,
-        shared: &Shared,
-        now: u64,
+        caches: Caches<'_>,
         layouts: &[Arc<ParagraphLayout>],
         slots: &[LineSlot],
         props: &Properties,
         fonts: &Fonts,
         width: Abs,
     ) -> Self {
+        let Caches { cache, shared, now } = caches;
         let mut builder = Builder {
             text,
             cache,
@@ -462,8 +461,23 @@ impl Flow {
 /// by content. Kept with the page cache, by its clock.
 #[derive(Default)]
 pub(super) struct Shared {
-    paragraphs: Mutex<HashMap<u64, Vec<(Arc<ParagraphInfo>, u64)>>>,
-    blocks: Mutex<HashMap<u64, Vec<(Arc<BlockBox>, u64)>>>,
+    paragraphs: Interned<ParagraphInfo>,
+    blocks: Interned<BlockBox>,
+}
+
+/// Values by a hash of their content, each with the clock when a flow last
+/// used it.
+type Interned<T> = Mutex<HashMap<u64, Vec<(Arc<T>, u64)>>>;
+
+/// The caches a flow is built with.
+#[derive(Copy, Clone)]
+pub(super) struct Caches<'a> {
+    /// Memoises the hyphens that lines need.
+    pub cache: &'a Cache,
+    /// Shares paragraphs and blocks with earlier flows.
+    pub shared: &'a Shared,
+    /// The page cache's clock, for `shared`.
+    pub now: u64,
 }
 
 impl Shared {
@@ -505,7 +519,7 @@ impl Shared {
 
     /// Forgets what no flow has used in the last `age` ticks of the clock.
     pub(super) fn sweep(&self, now: u64, age: u64) {
-        fn sweep<T>(map: &Mutex<HashMap<u64, Vec<(Arc<T>, u64)>>>, now: u64, age: u64) {
+        fn sweep<T>(map: &Interned<T>, now: u64, age: u64) {
             let mut map = lock(map);
             for bucket in map.values_mut() {
                 bucket.retain(|(_, used)| used + age >= now);
@@ -519,12 +533,7 @@ impl Shared {
 
 /// The `Arc` of a value equal to `value` in `map` under `key`, or of
 /// `value`, now kept there.
-fn intern<T: Eq>(
-    map: &Mutex<HashMap<u64, Vec<(Arc<T>, u64)>>>,
-    key: u64,
-    value: T,
-    now: u64,
-) -> Arc<T> {
+fn intern<T: Eq>(map: &Interned<T>, key: u64, value: T, now: u64) -> Arc<T> {
     let mut map = lock(map);
     let bucket = map.entry(key).or_default();
     if let Some((shared, used)) = bucket.iter_mut().find(|(v, _)| **v == value) {

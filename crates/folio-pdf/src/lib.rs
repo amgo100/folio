@@ -458,9 +458,9 @@ fn metadata(info: &Info) -> Metadata {
     metadata
 }
 
-/// How many times this thread has written a document, for tests.
 #[cfg(test)]
 thread_local! {
+    /// How many times this thread has written a document, for tests.
     static RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -520,10 +520,11 @@ impl Dry {
             return;
         }
         let gid = GlyphId::new(u32::from(glyph));
+        // The validator names the last such character.
         let invalid = text
             .chars()
-            .filter(|&c| matches!(c as u32, 0x0 | 0xFEFF | 0xFFFE))
-            .last();
+            .rev()
+            .find(|&c| matches!(c as u32, 0x0 | 0xFEFF | 0xFFFE));
         let error = match invalid {
             Some(c) => ValidationError::InvalidCodepointMapping(font.clone(), gid, c, location),
             None if text.is_empty() => {

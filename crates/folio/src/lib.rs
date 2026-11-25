@@ -4,7 +4,8 @@
 //!
 //! A host builds a [`World`] from the project's manifest and lockfile, sets
 //! the sources and files it reads from disk, and compiles a variant for a
-//! target. Every stage is a memoised query (SPEC §2.3): after an edit,
+//! target, or only checks it ([`check`]): every stage but Emit, with the
+//! same diagnostics and no output. Every stage is a memoised query (SPEC §2.3): after an edit,
 //! compiling again re-runs only the queries the edit affects, and stops early
 //! where a re-run query returns what it returned before. An edit cancels
 //! compilations still running on other handles of the world.

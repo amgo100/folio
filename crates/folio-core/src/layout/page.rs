@@ -44,7 +44,9 @@ use ecow::{EcoVec, eco_format};
 use folio_component::{Abs, Fragment, FragmentItem, Path, Point, Shape, Size, SourceRef, Stroke};
 use folio_syntax::Span;
 
-use super::flow::{Boundary, Constraint, Flow, Item, KEEP, Leaf, Origin, Part, Shared, Walk};
+use super::flow::{
+    Boundary, Caches, Constraint, Flow, Item, KEEP, Leaf, Origin, Part, Shared, Walk,
+};
 use super::lines;
 use super::master::{BlockBox, PageMaster};
 use super::set::set_line;
@@ -140,11 +142,14 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let master = PageMaster::of(&styled.page, props);
     let cache = db.page_cache();
     let now = cache.tick();
+    let caches = Caches {
+        cache: db.layout_cache(),
+        shared: &cache.shared,
+        now,
+    };
     let flow = Flow::new(
         text,
-        db.layout_cache(),
-        &cache.shared,
-        now,
+        caches,
         &lines.paragraphs,
         &lines.slots,
         props,
