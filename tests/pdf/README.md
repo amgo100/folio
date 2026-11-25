@@ -101,6 +101,25 @@ The viewers schools use most (browser viewers, Chromebooks, Apple devices, inter
 
 krilla 0.8.2 writes no `/Trans` (its page settings have none); PDF/A and PDF/UA allow it (PDF/A-2 forbids only `PresSteps`). The prototype adds it afterwards.
 
+## Test corpus (§11.1)
+
+`corpus/` holds the documents that Folio's PDF output is checked with (issue #32): `notes` (three A5 pages of physics notes: headings at three levels, all three kinds of list, a sidenote, a figure with a caption, a code block, hyphenation across a page break), `exam` (two A4 pages of an exam paper: instructions, numbered questions), and `polish` (Polish text with its quotation marks, hyphenation and a line that repeats an explicit hyphen).
+
+`cargo test -p folio --test pdf` compiles each, checks that krilla's PDF/UA-1 validator accepted it, that it has the structure elements, metadata and bookmarks it should, and that it compiles to the same bytes in a new world. That test is part of `scripts/check.sh`. With `FOLIO_PDF_OUT=<dir>` it also writes each PDF and the text a reader should extract from it (the document's paragraphs, one per line).
+
+```
+python tests/pdf/corpus.py [--verapdf <command>] [--pdftotext <command>] [--out <dir>]
+```
+
+runs that test and checks every PDF with veraPDF's PDF/UA-1 profile and with Poppler's `pdftotext -raw`, whose output must be the expected text: a soft hyphen at a line break joins the lines around it, a line that ends in a hyphen after a letter joins the next without a space, and other white space is one space. It needs Java and Poppler; it is not part of `scripts/check.sh`.
+
+Results (veraPDF 1.28.2, Poppler 24, Linux, November 2026): all three documents pass PDF/UA-1 (106 rules) and their text round-trips.
+
+Two behaviours of readers shaped the writer:
+
+- A hyphen that a line break inserts and a hyphen typed in the text are the same glyph, and a ToUnicode map gives a glyph one text. So every hyphen maps to `-`, and the span of an inserted hyphen has the actual text U+00AD (a repeated Polish hyphen has an empty one). Mapping the inserted hyphen's glyph to U+00AD instead made krilla give the other uses of the glyph actual text of their own, which overrode the empty actual text of a repeated hyphen.
+- `pdftotext` ignores the structure tree, so artifacts are extracted too, but honours actual text, which it puts on a line of its own.
+
 ## Dependency maintenance (§2.2), November 2026
 
 | Crate | Latest release | Activity |

@@ -1,0 +1,4 @@
+page { page-size: A4; margin-top: 20mm; margin-bottom: 20mm; margin-inner: 20mm; margin-outer: 20mm; }
+doc { font: "STIX Two Text"; font-size: 11pt; }
+heading { font: "Source Sans 3"; font-size: 13pt; space-before: 12pt; space-after: 6pt; keep-with-next: true; }
+enum-item { space-before: 6pt; }

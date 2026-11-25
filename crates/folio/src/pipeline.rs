@@ -7,22 +7,28 @@
 //! - **Fixed-layout targets** (PDF, live) go through Layout: the text
 //!   stage, the paragraph builder and the page builder read the
 //!   step-styled tree, and [`emit`] hands the pages to the target's
-//!   writer. PDF writes a file; the live renderer (M7) will take the pages
-//!   and writes none.
+//!   writer. PDF writes a file, tagged with the structure of the text
+//!   stage's blocks ([`structure`]); the live renderer (M7) will take the
+//!   pages and writes none.
 //! - **Office targets** (DOCX, PPTX) take the step-styled tree itself,
 //!   using Layout only for measurement. Their writers come with M4 and M5;
 //!   until then a build for them styles the document, reports what it
 //!   finds, and produces nothing.
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{FontId, Target};
-use folio_core::db::{Build, Bytes, Db, build_output};
+use folio_component::{FontId, QualifiedName, SourceRef, Target};
+use folio_core::db::{Build, Bytes, Db, build_output, source_file};
 use folio_core::diag::{self, Diagnostic};
+use folio_core::eval::Value;
 use folio_core::fonts::{Fonts, fonts};
 use folio_core::layout::pages;
+use folio_core::model::document;
 use folio_core::pipeline::step_styled;
 use folio_core::project::ProjectPath;
-use folio_syntax::DiagSpan;
+use folio_core::span_map::{source_ref, span};
+use folio_core::text::{Text, TextBlock, TextFlow, text};
+use folio_pdf::{ListKind, Role, Tag};
+use folio_syntax::{DiagSpan, Span, SubRange};
 
 /// What compiling a build produces, without its diagnostics, which
 /// [`crate::compile`] collects.
@@ -56,12 +62,64 @@ pub(crate) fn emit(db: &dyn Db, build: Build<'_>) -> Option<Bytes> {
     match target {
         Target::Pdf => {
             let pages = pages(db, build).as_ref()?;
-            let fonts = FontTable(fonts(db, build.project(db)));
+            let text = text(db, build).as_ref()?;
+            let project = build.project(db);
+            let doc = document(db, project, build.variant(db).clone()).as_ref()?;
+            let fonts = FontTable(fonts(db, project));
+            let structure = structure(&text.root, text);
+            let plain = |field: &str| match doc.root.field(field) {
+                Some(Value::Content(content)) => Some(content.plain_text()),
+                Some(Value::Str(text)) => Some(text.clone()),
+                _ => None,
+            };
+            let lang = project.manifest(db).project.lang.v.as_str();
+            // The title as it is shown, with the language's quotation
+            // marks, if it is shown.
+            let shown = text.root.children.iter().find_map(|child| match child {
+                TextFlow::Block(block)
+                    if block.part.as_ref().is_some_and(|p| p.as_str() == "title") =>
+                {
+                    block_text(block, text)
+                }
+                _ => None,
+            });
+            let info = folio_pdf::Info {
+                title: shown.or_else(|| plain("title").and_then(clean)),
+                subject: plain("subject").and_then(clean),
+                lang: Some(lang.into()),
+            };
             let document = folio_pdf::Document {
                 pages: pages.pages.iter().map(|page| &page.fragment).collect(),
                 fonts: &fonts,
+                structure: &structure,
+                info,
             };
-            Some(folio_pdf::write(&document).into())
+            // Problems without a source of their own concern the document.
+            let whole = document_span(db, build, doc.root.span);
+            let at = |source: SourceRef| {
+                if source.is_detached() {
+                    whole
+                } else {
+                    span(source).into()
+                }
+            };
+            match folio_pdf::write(&document) {
+                Ok(written) => {
+                    for warning in written.warnings {
+                        let mut diagnostic =
+                            Diagnostic::warning(at(warning.source), warning.message);
+                        if let Some(hint) = warning.hint {
+                            diagnostic = diagnostic.with_hint(hint);
+                        }
+                        diag::report(db, diagnostic);
+                    }
+                    Some(written.bytes.into())
+                }
+                Err(error) => {
+                    diag::report(db, Diagnostic::error(at(error.source), error.message));
+                    None
+                }
+            }
         }
         Target::Live => {
             pages(db, build).as_ref()?;
@@ -87,6 +145,91 @@ pub(crate) fn emit(db: &dyn Db, build: Build<'_>) -> Option<Bytes> {
             None
         }
     }
+}
+
+/// Where a problem of the whole document is reported: at its `#doc` call,
+/// or, without one, at the first character of the entry file. `root` is
+/// the span of the document's root element.
+fn document_span(db: &dyn Db, build: Build<'_>, root: Span) -> DiagSpan {
+    let project = build.project(db);
+    let entry = project.manifest(db).project.entry.v.clone();
+    let Some(file) = source_file(db, project, entry) else {
+        return root.into();
+    };
+    let source = file.source(db);
+    if source.root().span() != root {
+        return root.into();
+    }
+    let first = source.text().chars().next().map_or(0, char::len_utf8);
+    DiagSpan::from_span(root, SubRange::new(0, first))
+}
+
+/// The structure of a document for the PDF writer: a node for every block
+/// of the text stage, whose boxes the page builder's fragments are, with
+/// the role of its element or part (SPEC §11.1).
+pub(crate) fn structure(block: &TextBlock, text: &Text) -> Tag {
+    let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
+    let mut tag = Tag::new(role, source_ref(block.span));
+    if role == Role::Heading {
+        tag.text = block_text(block, text);
+    }
+    tag.children = block
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            TextFlow::Block(block) => Some(structure(block, text)),
+            TextFlow::Paragraph(_) => None,
+        })
+        .collect();
+    tag
+}
+
+/// The text of the paragraphs a block holds directly, as [`clean`] gives
+/// it.
+fn block_text(block: &TextBlock, text: &Text) -> Option<EcoString> {
+    let mut words = String::new();
+    for child in &block.children {
+        if let TextFlow::Paragraph(index) = child {
+            words.push(' ');
+            words.push_str(text.paragraphs[*index].shaped.text());
+        }
+    }
+    clean(words.into())
+}
+
+/// The structure role of an element, or of its part `part`. An element
+/// that PDF has no standard type for, such as a component's, is a group.
+fn role(element: &QualifiedName, part: Option<&str>) -> Role {
+    let builtin = match element.namespace {
+        None => element.name.as_str(),
+        Some(_) => "",
+    };
+    match (builtin, part) {
+        ("doc", None) => Role::Document,
+        ("doc", Some("title")) => Role::Title,
+        ("section", None) => Role::Section,
+        ("heading", None) => Role::Heading,
+        ("paragraph", None) => Role::Paragraph,
+        ("list", None) => Role::List(ListKind::Bulleted),
+        ("enum", None) => Role::List(ListKind::Numbered),
+        ("terms", None) => Role::List(ListKind::Terms),
+        ("list-item" | "enum-item" | "terms-item", None) => Role::ListItem,
+        ("terms-item", Some("term")) => Role::Label,
+        ("sidenote", None) => Role::Note,
+        ("raw", None) => Role::Code,
+        (_, Some("caption")) => Role::Caption,
+        _ => Role::Group,
+    }
+}
+
+/// Text for metadata and bookmarks: line breaks and runs of spaces as one
+/// space, objects (U+FFFC) left out, and `None` if nothing is left.
+fn clean(text: EcoString) -> Option<EcoString> {
+    let words: Vec<&str> = text
+        .split(|c: char| c.is_whitespace() || c == '\u{FFFC}')
+        .filter(|w| !w.is_empty())
+        .collect();
+    (!words.is_empty()).then(|| words.join(" ").into())
 }
 
 /// Warns that a build's target has no writer yet, at the target in the

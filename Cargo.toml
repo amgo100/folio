@@ -33,6 +33,9 @@ hypher = "0.1.8"
 icu_segmenter = "2.4.0"
 fontdb = { version = "0.24.0", default-features = false, features = ["std", "fs", "fontconfig"] }
 indexmap = "2.14.2"
+# PDF output (SPEC §11.1): tagging, PDF/UA, PDF/A and font subsetting. No
+# default features: Folio shapes text itself and has no images yet.
+krilla = { version = "0.8.2", default-features = false }
 # Maps files of the immutable font cache (SPEC §2.3, §14.2).
 memmap2 = "0.9.12"
 # Property tests (SPEC §14.2), without forking test processes.

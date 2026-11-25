@@ -10,7 +10,8 @@ publish.workspace = true
 [dependencies]
 folio-component.workspace = true
 folio-fonts.workspace = true
-
+ecow.workspace = true
+krilla.workspace = true
 
 [lints]
 workspace = true
