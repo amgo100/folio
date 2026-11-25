@@ -516,8 +516,8 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compiles a rule, as [`Self::compile_rule`], without the warnings of
-    /// [`Self::lint_rule`]: for a scoped rule in content, which is compiled
-    /// before it is known to apply.
+    /// [`Self::lint_rule`]: for a scoped rule in content, whose caller lints
+    /// it once it applies (not yet done: #243).
     pub(super) fn rule<'s>(
         &self,
         values: &Values<'_>,
@@ -573,7 +573,7 @@ impl<'a> Compiler<'a> {
     /// to the build: one that another variant or target has has no effect
     /// here anyway. Nothing is reported for a rule whose selectors were all
     /// ignored. Its selectors share the declarations.
-    fn lint_rule(&self, compiled: &Compiled) {
+    pub(super) fn lint_rule(&self, compiled: &Compiled) {
         let first = compiled
             .rules
             .first()
