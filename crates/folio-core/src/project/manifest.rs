@@ -302,6 +302,23 @@ fn braced(names: &[&str]) -> EcoString {
 }
 
 impl Manifest {
+    /// The compiler version that the text of a `folio.toml` pins, read
+    /// without checking the rest of the file, or `None` when the file has no
+    /// valid `project.compiler`. `file` is the id that the span points into.
+    ///
+    /// A host reads the pin this way before it parses the manifest, so that
+    /// a manifest written for another compiler version, with keys or an
+    /// edition this version does not know, is handed to the version it pins
+    /// (SPEC §2.4).
+    pub fn compiler_pin(text: &str, file: FileId) -> Option<Spanned<semver::Version>> {
+        let mut cx = Cx::new(file);
+        let doc = cx.parse(text);
+        let project = Table::root(&doc)
+            .get("project")?
+            .table(&mut cx, "`[project]`".into())?;
+        project.get("compiler")?.parse(&mut cx, parse_compiler)
+    }
+
     /// Parse the text of a `folio.toml`. `file` is the id that the spans of
     /// the model and of errors point into.
     ///

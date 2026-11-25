@@ -37,7 +37,7 @@ mod hash;
 
 pub use self::book::{FaceKey, FontBook};
 pub use self::bundled::{BUNDLED_FAMILIES, bundled};
-pub use self::cache::FontCache;
+pub use self::cache::{FontCache, cache_root};
 pub use self::data::FontData;
 pub use self::discover::{
     FONT_EXTENSIONS, PROJECT_FONT_DIR, SystemFont, is_font_path, project_fonts, system_fonts,

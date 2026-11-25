@@ -1,9 +1,11 @@
-//! The commands of SPEC §12.1 and their arguments. `folio build` is
-//! implemented; the other commands, and the flags of `folio build` for
-//! later features, are parsed and rejected as not yet supported.
+//! The commands of SPEC §12.1 and their arguments. `folio build` and
+//! `folio toolchain install` are implemented; the other commands, and the
+//! flags of `folio build` for later features, are parsed and rejected as
+//! not yet supported.
 
 mod build;
 mod project;
+mod toolchain;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -50,15 +52,15 @@ enum Command {
     Query(Later),
     /// List the available components (not yet supported)
     Components(Later),
-    /// Install a compiler version (not yet supported)
-    Toolchain(Later),
+    /// Manage the compiler versions that projects pin
+    Toolchain(toolchain::ToolchainArgs),
 }
 
 impl Command {
     /// The command's name, for a command that is not supported yet.
     fn later(&self) -> Option<&'static str> {
         Some(match self {
-            Self::Build(_) => return None,
+            Self::Build(_) | Self::Toolchain(_) => return None,
             Self::New(_) => "new",
             Self::Watch(_) => "watch",
             Self::Present(_) => "present",
@@ -67,7 +69,6 @@ impl Command {
             Self::Promote(_) => "promote",
             Self::Query(_) => "query",
             Self::Components(_) => "components",
-            Self::Toolchain(_) => "toolchain",
         })
     }
 }
@@ -179,7 +180,13 @@ fn parse_date(text: &str) -> Result<Date, String> {
 
 /// Runs the command line.
 pub(crate) fn run() -> ExitCode {
-    let cli = Cli::parse();
+    let args: Vec<OsString> = std::env::args_os().collect();
+    // Before the arguments are parsed, so that flags only the pinned
+    // version knows reach it.
+    if let Some(status) = toolchain::dispatch(args.get(1..).unwrap_or_default()) {
+        return status;
+    }
+    let cli = Cli::parse_from(args);
     let later = match &cli.command {
         Command::Build(args) => args.later().map(|flag| format!("`folio build {flag}`")),
         command => command.later().map(|name| format!("`folio {name}`")),
@@ -190,6 +197,7 @@ pub(crate) fn run() -> ExitCode {
     }
     match cli.command {
         Command::Build(args) => build::build(&args),
+        Command::Toolchain(args) => toolchain::toolchain(&args),
         _ => unreachable!("every other command is rejected above"),
     }
 }

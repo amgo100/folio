@@ -18,6 +18,28 @@ use std::sync::{Mutex, PoisonError};
 use crate::file::{FontFile, FontOrigin};
 use crate::hash::FontHash;
 
+/// Folio's cache directory, which holds the font cache and the toolchain
+/// cache (SPEC §2.4): `$FOLIO_CACHE_DIR` when the variable is set,
+/// otherwise `folio` in the user's cache directory (`$XDG_CACHE_HOME` or
+/// `~/.cache` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on
+/// Windows). `None` when there is no such directory.
+pub fn cache_root() -> Option<PathBuf> {
+    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    if let Some(dir) = var("FOLIO_CACHE_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    let base = if cfg!(windows) {
+        var("LOCALAPPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        var("HOME").map(|home| PathBuf::from(home).join("Library/Caches"))
+    } else {
+        var("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| var("HOME").map(|home| PathBuf::from(home).join(".cache")))
+    };
+    Some(base?.join("folio"))
+}
+
 /// The immutable font cache in a directory.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct FontCache {
@@ -35,26 +57,10 @@ impl FontCache {
         &self.dir
     }
 
-    /// The default directory: `$FOLIO_CACHE_DIR/fonts` when the variable is
-    /// set, otherwise `fonts` in Folio's directory in the user's cache
-    /// directory (`$XDG_CACHE_HOME` or `~/.cache` on Linux,
-    /// `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows). `None`
-    /// when there is no such directory.
+    /// The default directory: `fonts` in Folio's cache directory
+    /// ([`cache_root`]). `None` when there is no such directory.
     pub fn default_dir() -> Option<PathBuf> {
-        let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
-        if let Some(dir) = var("FOLIO_CACHE_DIR") {
-            return Some(PathBuf::from(dir).join("fonts"));
-        }
-        let base = if cfg!(windows) {
-            var("LOCALAPPDATA").map(PathBuf::from)
-        } else if cfg!(target_os = "macos") {
-            var("HOME").map(|home| PathBuf::from(home).join("Library/Caches"))
-        } else {
-            var("XDG_CACHE_HOME")
-                .map(PathBuf::from)
-                .or_else(|| var("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        };
-        Some(base?.join("folio").join("fonts"))
+        cache_root().map(|root| root.join("fonts"))
     }
 
     /// The path a file with this hash is stored at.
