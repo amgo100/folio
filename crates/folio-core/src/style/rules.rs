@@ -549,6 +549,17 @@ impl<'a> Compiler<'a> {
                 None => out.rules.push(rule),
             }
         }
+        // A rule that is ignored has no effect anyway.
+        if !out.rules.is_empty() || !out.steps.is_empty() {
+            for decl in &declarations {
+                let property = self.properties.get(decl.prop);
+                let value = match &decl.value {
+                    DeclValue::Value(value) => Some(value),
+                    DeclValue::Template(_) => None,
+                };
+                self.lint_not_implemented(property, value, decl.span);
+            }
+        }
         out
     }
 
@@ -570,7 +581,6 @@ impl<'a> Compiler<'a> {
             };
             let property = self.properties.get(prop);
             let value = if property.ty == PropertyType::Template && !is_keyword_value(decl) {
-                self.lint_not_implemented(property, None, span);
                 DeclValue::Template(decl.to_untyped().clone())
             } else {
                 let Some(value) = values.declaration(decl) else {
@@ -589,7 +599,6 @@ impl<'a> Compiler<'a> {
                     diag::report(self.db, diagnostic);
                     continue;
                 }
-                self.lint_not_implemented(property, Some(&value), span);
                 DeclValue::Value(value)
             };
             out.push(Decl { prop, value, span });
@@ -605,8 +614,9 @@ impl<'a> Compiler<'a> {
         let computed = value.map(|v| compute(v, folio_component::Abs::pt(10.0)).ok());
         let value = match &computed {
             Some(Some(value)) => Some(value),
-            // A value that cannot be computed yet is not the initial one.
-            Some(None) | None => None,
+            // A value that cannot be computed is not judged.
+            Some(None) => return,
+            None => None,
         };
         if let Some(feature) = not_implemented(property, value) {
             diag::report(
@@ -758,9 +768,7 @@ impl<'a> Compiler<'a> {
                     };
                     // Masters by position come with page masters (SPEC
                     // §7.1); until then the page's view has no position.
-                    if out.name == Some(NodeName::Page)
-                        && matches!(name.get().as_str(), "first" | "left" | "right")
-                    {
+                    if out.name == Some(NodeName::Page) {
                         self.warn(
                             span,
                             eco_format!(
@@ -838,6 +846,15 @@ impl<'a> Compiler<'a> {
                     "`page.{class}` cannot match yet: there are no named page masters, \
                      so the rule is ignored"
                 ),
+            );
+            return None;
+        }
+        // The page's view has no label or fields either.
+        if out.name == Some(NodeName::Page) && (out.label.is_some() || !out.attrs.is_empty()) {
+            self.warn(
+                compound.span(),
+                "this page selector cannot match yet: a page has no label or fields, \
+                 so the rule is ignored",
             );
             return None;
         }

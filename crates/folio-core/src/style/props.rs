@@ -236,9 +236,12 @@ impl Properties {
 /// feature, for a warning that the declaration has no effect (SPEC §7.9).
 /// Its initial value, and `placement: here`, which is where layout puts
 /// every float, ask for nothing. Each entry goes with the work that reads
-/// the property: `numbering` with counters (#44), `display` with variants
-/// and visibility (SPEC §6.3), `template` with render templates (§5.3),
-/// and the others with page and float layout (§7.1, §7.3).
+/// the property: numbering and references with counters (#44), `display`
+/// with variants and visibility (SPEC §6.3), `template` with render
+/// templates (§5.3), and the others with page, table and float layout
+/// (§7.1, §7.3, §7.4). Properties of other targets (slides, animation,
+/// export) and of drawings are not listed: a static or PDF build ignores
+/// them by design.
 pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Option<&'static str> {
     if property.name.namespace.is_some() {
         return None;
@@ -250,13 +253,21 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
         return None;
     }
     Some(match property.name.name.as_str() {
-        "display" => "showing and hiding content with `display`",
-        "numbering" => "numbering",
+        "display" | "show-only" => "showing and hiding content",
+        "numbering" | "counter-reset" | "marker" | "marker-position" => {
+            "numbering, counters and list markers"
+        }
+        "ref-format" => "references",
         "width" => "block widths",
+        "trailer" => "block trailers",
+        "column-tracks" => "tables",
         "grid-snap" | "baseline-grid" => "the baseline grid",
-        "header" | "footer" => "running headers and footers",
+        "header" | "footer" | "content" => "page headers, footers and content",
+        "margin-column" => "margin columns",
         "template" => "render templates",
-        "placement" => "placing floats other than in the flow",
+        "placement" | "side" | "float-order" | "wrap" | "wrap-gap" | "wrap-shape" => {
+            "placing floats and notes other than in the flow"
+        }
         _ => return None,
     })
 }

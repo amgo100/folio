@@ -69,7 +69,11 @@ fn a_reference_and_maths_are_reported() {
 
 #[test]
 fn lists_the_warnings_for_what_is_not_supported() {
-    let style = "page:first { margin-top: 1cm; }\n\
+    let style = "page:first { margin-top: 1cm; header: \"Ignored\"; }\n\
+                 page:nth(2) { margin-top: 1cm; }\n\
+                 page[size] { margin-top: 1cm; }\n\
+                 figure { side: outer; }\n\
+                 heading { counter-reset: q; marker: none; }\n\
                  page:left { margin-top: 1cm; }\n\
                  page.landscape { margin-top: 1cm; }\n\
                  heading { numbering: \"1.\"; }\n\
@@ -101,6 +105,18 @@ fn lists_the_warnings_for_what_is_not_supported() {
             "`page.landscape` cannot match yet: there are no named page masters, so the rule is ignored",
             "page.landscape",
         ),
+        warning(
+            "`page:nth` cannot match yet: pages are not told apart by position, so the rule is ignored",
+            ":nth(2)",
+        ),
+        warning(
+            "this page selector cannot match yet: a page has no label or fields, so the rule is ignored",
+            "page[size]",
+        ),
+        warning(&not_implemented("side"), "side: outer;"),
+        warning(&not_implemented("counter-reset"), "counter-reset: q;"),
+        warning(&not_implemented("marker"), "marker: none;"),
+        // The `header` of the ignored `page:first` rule is not reported.
         warning(&not_implemented("numbering"), "numbering: \"1.\";"),
         warning(&not_implemented("display"), "display: hidden;"),
         warning(&not_implemented("width"), "width: 50%;"),
