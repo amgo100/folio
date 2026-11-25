@@ -151,22 +151,21 @@ impl ParagraphInfo {
             at
         };
         let i = self.sources.partition_point(|s| s.range.end <= probe);
-        match self.sources.get(i) {
+        // An empty range stays empty, even where the node's text is not
+        // the paragraph's as it is: it is a position, and the PDF writer
+        // tells a hyphen a break inserts by it.
+        let (span, within) = match self.sources.get(i) {
             Some(source) if source.range.start <= probe => {
-                let within = source.within(range);
-                (
-                    source_ref(source.span),
-                    offset(within.start)..offset(within.end),
-                )
+                (source.span, source.within(range.clone()))
             }
-            _ => {
-                let whole = TextSource::WHOLE;
-                (
-                    source_ref(self.span),
-                    offset(whole.start)..offset(whole.end),
-                )
-            }
-        }
+            _ => (self.span, TextSource::WHOLE),
+        };
+        let within = if range.is_empty() {
+            within.end..within.end
+        } else {
+            within
+        };
+        (source_ref(span), offset(within.start)..offset(within.end))
     }
 }
 

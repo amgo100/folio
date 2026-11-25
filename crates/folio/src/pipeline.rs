@@ -73,8 +73,18 @@ pub(crate) fn emit(db: &dyn Db, build: Build<'_>) -> Option<Bytes> {
                 _ => None,
             };
             let lang = project.manifest(db).project.lang.v.as_str();
+            // The title as it is shown, with the language's quotation
+            // marks, if it is shown.
+            let shown = text.root.children.iter().find_map(|child| match child {
+                TextFlow::Block(block)
+                    if block.part.as_ref().is_some_and(|p| p.as_str() == "title") =>
+                {
+                    block_text(block, text)
+                }
+                _ => None,
+            });
             let info = folio_pdf::Info {
-                title: plain("title").and_then(clean),
+                title: shown.or_else(|| plain("title").and_then(clean)),
                 subject: plain("subject").and_then(clean),
                 lang: Some(lang.into()),
             };
@@ -161,14 +171,7 @@ pub(crate) fn structure(block: &TextBlock, text: &Text) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
     let mut tag = Tag::new(role, source_ref(block.span));
     if role == Role::Heading {
-        let mut words = String::new();
-        for child in &block.children {
-            if let TextFlow::Paragraph(index) = child {
-                words.push(' ');
-                words.push_str(text.paragraphs[*index].shaped.text());
-            }
-        }
-        tag.text = clean(words.into());
+        tag.text = block_text(block, text);
     }
     tag.children = block
         .children
@@ -179,6 +182,19 @@ pub(crate) fn structure(block: &TextBlock, text: &Text) -> Tag {
         })
         .collect();
     tag
+}
+
+/// The text of the paragraphs a block holds directly, as [`clean`] gives
+/// it.
+fn block_text(block: &TextBlock, text: &Text) -> Option<EcoString> {
+    let mut words = String::new();
+    for child in &block.children {
+        if let TextFlow::Paragraph(index) = child {
+            words.push(' ');
+            words.push_str(text.paragraphs[*index].shaped.text());
+        }
+    }
+    clean(words.into())
 }
 
 /// The structure role of an element, or of its part `part`. An element

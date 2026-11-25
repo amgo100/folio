@@ -429,27 +429,31 @@ impl Writer<'_> {
     /// the structure node `node`.
     fn text(&mut self, surface: &mut Surface<'_>, run: &GlyphRun, at: Point, node: usize) {
         self.tagger.advance();
-        let Some(font) = self.font(run) else {
-            return;
-        };
-        let size = pt(run.size);
         // Two hyphens at line ends are not text: the one a break inserts,
-        // which shows no text of its source, and the one a line repeats
-        // (Polish, after a break at an explicit hyphen), which shows the
-        // source of the glyph drawn just before it. Their glyphs keep the
-        // text `-`, so that the font's ToUnicode map stays one character
-        // per glyph, and the span's actual text says what they are: U+00AD,
-        // as ISO 32000 asks of hyphens that layout adds, and nothing. So a
+        // which names an empty range of its source, and the one a line
+        // repeats (Polish, after a break at an explicit hyphen), which shows
+        // the same bytes of its source as the glyph drawn just before it.
+        // That is told only where the source shows exactly the hyphen's
+        // bytes, as text written as it is does; a hyphen from a node that
+        // maps as a whole is left as text. Their glyphs keep the text `-`,
+        // so that the font's ToUnicode map stays one character per glyph,
+        // and the span's actual text says what they are: U+00AD, as ISO
+        // 32000 asks of hyphens that layout adds, and nothing. So a
         // hyphenated word extracts whole.
         let hyphen = !run.glyphs.is_empty() && matches!(run.text.as_str(), "-" | "\u{2010}");
         let inserted = hyphen && run.glyphs.iter().all(|g| g.source.1.is_empty());
         let repeated = hyphen
             && !inserted
-            && self
-                .last
-                .as_ref()
-                .is_some_and(|last| run.glyphs.iter().all(|g| &g.source == last));
+            && self.last.as_ref().is_some_and(|last| {
+                run.glyphs
+                    .iter()
+                    .all(|g| &g.source == last && g.source.1.len() == run.text.len())
+            });
         self.last = run.glyphs.last().map(|g| g.source.clone());
+        let Some(font) = self.font(run) else {
+            return;
+        };
+        let size = pt(run.size);
         let actual = if inserted {
             Some("\u{AD}")
         } else if repeated {

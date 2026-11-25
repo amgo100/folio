@@ -138,6 +138,20 @@ fn notes_have_every_role() {
     );
 }
 
+/// The title in the metadata is the title as shown, with the language's
+/// quotation marks.
+#[test]
+fn metadata_title_as_shown() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n";
+    let mut world = World::new(manifest).unwrap();
+    let main = "#doc(title: [The \"ideal\" gas])\n\nA ball falls.\n";
+    world.set_source("main.fol", main).unwrap();
+    let (pdf, diagnostics) = build(&world);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">The \u{201C}ideal\u{201D} gas</rdf:li>"), "{text}");
+}
+
 /// A document without a title is written tagged, but cannot claim
 /// PDF/UA-1, which requires one; that is no warning.
 #[test]

@@ -46,8 +46,12 @@ def verapdf(command, path):
     """Returns (compliant, failed rules)."""
     result = subprocess.run(command + ["-f", "ua1", "--format", "xml", path],
                             capture_output=True, check=False)
-    root = ET.fromstring(result.stdout)
-    report = next(root.iter("validationReport"))
+    try:
+        root = ET.fromstring(result.stdout)
+        report = next(root.iter("validationReport"))
+    except (ET.ParseError, StopIteration):
+        sys.exit(f"veraPDF gave no report for {path}:\n"
+                 + result.stderr.decode("utf-8", "replace"))
     failed = sorted({
         f"{rule.get('clause')}-{rule.get('testNumber')}"
         for rule in report.iter("rule") if rule.get("status") == "failed"
@@ -92,6 +96,8 @@ def main():
     if not shutil.which(verapdf_cmd[0]):
         sys.exit(f"veraPDF not found: {args.verapdf}")
     pdftotext_cmd = shlex.split(args.pdftotext)
+    if not shutil.which(pdftotext_cmd[0]):
+        sys.exit(f"pdftotext not found: {args.pdftotext}")
 
     with tempfile.TemporaryDirectory() as tmp:
         out = args.out or tmp

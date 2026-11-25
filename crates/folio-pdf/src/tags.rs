@@ -62,6 +62,8 @@ struct Out<'a> {
     body: Option<usize>,
     /// How many sections it is in, itself included.
     sections: u16,
+    /// For a heading with text, where its first box is: its page and top.
+    top: Option<(usize, f32)>,
 }
 
 /// What a node written is.
@@ -109,6 +111,7 @@ impl<'a> Tagger<'a> {
             text: None,
             body: None,
             sections,
+            top: None,
         });
         self.nodes.len() - 1
     }
@@ -153,11 +156,8 @@ impl<'a> Tagger<'a> {
         let out = &mut self.nodes[node];
         out.cursor = Some(index);
         out.entered[index] = Some(child);
-        if tag.role == Role::Heading
-            && let Some(text) = tag.text.as_ref().filter(|t| !t.is_empty())
-        {
-            let level = sections.clamp(1, 6);
-            self.headings.push((level, text.clone(), self.page, pt(y)));
+        if tag.role == Role::Heading {
+            self.nodes[child].top = Some((self.page, pt(y)));
         }
         child
     }
@@ -166,12 +166,19 @@ impl<'a> Tagger<'a> {
     pub(crate) fn content(&mut self, node: usize, id: Identifier) {
         let target = self.text_target(node);
         let out = &mut self.nodes[target];
+        // A heading is in the outline once it shows something, as it is
+        // in the tree only then.
         if let Kind::Input(tag) = out.kind
             && tag.role == Role::Heading
-            && tag.text.as_ref().is_none_or(|t| t.is_empty())
             && out.kids.is_empty()
         {
-            self.untitled.push(tag.source);
+            match (tag.text.as_ref().filter(|t| !t.is_empty()), out.top) {
+                (Some(text), Some((page, y))) => {
+                    let level = out.sections.clamp(1, 6);
+                    self.headings.push((level, text.clone(), page, y));
+                }
+                _ => self.untitled.push(tag.source),
+            }
         }
         out.kids.push(Kid::Content(id));
     }

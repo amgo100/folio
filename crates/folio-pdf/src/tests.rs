@@ -505,6 +505,21 @@ fn falls_back_from_pdf_ua_1_with_a_reason() {
     assert!(pdf.contains("/S/H1"));
 }
 
+/// A heading that shows nothing, here for want of its font, has no
+/// bookmark, as it has no structure element.
+#[test]
+fn undrawn_headings_have_no_bookmark() {
+    let pages = [one_page()];
+    let structure = structure();
+    let document = Document {
+        fonts: &NoFonts,
+        ..document(&pages, &structure)
+    };
+    let (tree, headings) = tagged(&document);
+    assert!(tree.is_empty(), "{tree}");
+    assert!(headings.is_empty(), "{headings:?}");
+}
+
 /// Text in a font that cannot be loaded is left out, with a warning at
 /// its source.
 #[test]
@@ -547,4 +562,26 @@ fn no_pages() {
     let written = write(&document(&[], &structure)).unwrap();
     assert!(written.warnings.is_empty(), "{:?}", written.warnings);
     assert!(text(&written.bytes).contains("/Type/Pages/Count 1"));
+}
+
+/// A hyphen in a run of its own after text from a node that maps as a
+/// whole names the same source as the glyph before it, but is text: it is
+/// not taken for a repeated hyphen.
+#[test]
+fn hyphens_from_whole_nodes_stay_text() {
+    let structure = tag(Role::Document, 1, vec![tag(Role::Paragraph, 3, vec![])]);
+    let whole = |_| 0..u32::MAX;
+    let pages = [page(vec![boxed(
+        1,
+        vec![boxed(
+            3,
+            vec![
+                run_with("co", 23, whole),
+                run_with("-", 23, whole),
+                run_with("op", 23, whole),
+            ],
+        )],
+    )])];
+    let written = write(&document(&pages, &structure)).unwrap();
+    assert!(!text(&written.bytes).contains("/ActualText"));
 }
