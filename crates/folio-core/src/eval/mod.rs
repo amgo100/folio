@@ -109,6 +109,7 @@ mod vm;
 
 use std::collections::{BTreeSet, VecDeque};
 
+use ecow::EcoVec;
 use folio_component::Name;
 use folio_syntax::ast;
 
@@ -191,6 +192,13 @@ pub(crate) struct Memo<T> {
     /// The deepest call or import the evaluation made, counted from the
     /// depth it was evaluated at: that depth if it made none.
     pub reached: u32,
+    /// The errors that markup turned into markers, in this evaluation and
+    /// in the evaluations of the files and calls it used. They are
+    /// reported by whoever uses the evaluation in the end, not by its
+    /// query, because an evaluation can be replaced by another one of the
+    /// same file or call (at another depth, for a variant, or with spans)
+    /// whose errors differ.
+    pub recovered: EcoVec<EvalError>,
 }
 
 /// Evaluates a project's entry file for a variant (`None` for a project
@@ -206,6 +214,9 @@ pub fn evaluate(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<
     // A missing entry file is reported by `build_files`.
     let file = source_file(db, project, entry)?;
     let memo = eval_file_for(db, project, file, &Mode::Variant(variant), 0);
+    for error in &memo.recovered {
+        diag::report(db, error.clone().into());
+    }
     match &memo.outcome {
         Ok(module) => Some(module.content().clone()),
         Err(Stop::Error(error)) => {
@@ -259,17 +270,11 @@ fn eval_file(
         )
         .into()),
     };
-    // An evaluation for all variants that read `variant` is done again for
-    // the build's variant, which reports the same errors.
-    if !matches!(outcome, Err(Stop::NeedsVariant)) {
-        for error in vm.recovered {
-            diag::report(db, error.into());
-        }
-    }
     Memo {
         outcome,
         cost: vm.cost,
         reached: vm.reached,
+        recovered: vm.recovered.into_iter().collect(),
     }
 }
 
@@ -299,6 +304,7 @@ pub(crate) fn call_closure(
         outcome,
         cost: vm.cost,
         reached: vm.reached,
+        recovered: vm.recovered.into_iter().collect(),
     }
 }
 
@@ -315,7 +321,11 @@ pub(crate) fn call_function(
     span: folio_syntax::Span,
 ) -> Result<Value, EvalError> {
     let mut vm = Vm::new(db, project, file, Mode::Shared, 0, Scope::default());
-    match vm.call(func, args, span) {
+    let result = vm.call(func, args, span);
+    for error in std::mem::take(&mut vm.recovered) {
+        diag::report(db, error.into());
+    }
+    match result {
         Ok(value) => Ok(value),
         Err(Stop::Error(error)) => Err(*error),
         Err(Stop::NeedsVariant) => Err(EvalError::new(

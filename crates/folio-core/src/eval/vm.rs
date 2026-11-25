@@ -81,8 +81,9 @@ pub(crate) struct Vm<'a> {
     /// and cleared inside code, so that an error in a function reaches the
     /// markup that called it, with its trace.
     pub(crate) recover: bool,
-    /// The errors that markup turned into markers, which the file's query
-    /// reports.
+    /// The errors that markup turned into markers, here and in the
+    /// evaluations of the files and calls this one used, for whoever uses
+    /// this evaluation to report ([`Memo::recovered`]).
     pub(crate) recovered: Vec<EvalError>,
     /// The variables that a `let` or an import that failed would have
     /// bound. Reading one fails without another error, since the failure
@@ -1374,12 +1375,13 @@ impl<'a> Vm<'a> {
         } else {
             let anywhere = args.without_spans();
             let memo = self.exact(key, depth, |depth| lookup(&anywhere, depth));
-            if matches!(memo.outcome, Err(Stop::Error(_))) {
+            if matches!(&memo.outcome, Err(Stop::Error(error)) if error.has_detached_span()) {
                 self.exact(key, depth, |depth| lookup(&args, depth))
             } else {
                 memo
             }
         };
+        self.recovered.extend(memo.recovered.iter().cloned());
         self.charge(memo.cost, span)?;
         match &memo.outcome {
             Ok(value) => Ok(value.clone()),
@@ -1761,6 +1763,7 @@ impl<'a> Vm<'a> {
         let memo = self.exact(key, depth, |depth| {
             eval_file_for(db, project, file, &mode, depth)
         });
+        self.recovered.extend(memo.recovered.iter().cloned());
         self.charge(memo.cost, span)?;
         match &memo.outcome {
             Ok(module) => Ok(module.clone()),

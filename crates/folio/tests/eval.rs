@@ -821,6 +821,24 @@ fn calls_near_the_depth_limit_are_exact_at_any_depth() {
         ["error: calls and imports are nested more than 64 deep"],
         "{repr}"
     );
+
+    // At depth 1 the library's call reaches an error the limit stops it
+    // from reaching at its real depth. That evaluation is not used, and
+    // its error is not reported.
+    let (_, messages) = partial(&[
+        ("main.fol", "#import \"a.fol\": r\n"),
+        ("a.fol", "#import \"b.fol\": r\n"),
+        ("b.fol", "#import \"c.fol\": r\n"),
+        ("c.fol", "#import \"d.fol\": r\n"),
+        (
+            "d.fol",
+            "#let down(n) = if n == 0 { nope } else { down(n - 1) }\n#let r = down(62)\n",
+        ),
+    ]);
+    assert_eq!(
+        messages,
+        ["error: calls and imports are nested more than 64 deep"]
+    );
 }
 
 #[test]
