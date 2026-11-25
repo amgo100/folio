@@ -241,7 +241,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         chains: HashMap::new(),
         settings: HashMap::new(),
         reported: HashSet::new(),
-        report: matches!(build.target(db), Target::Pdf | Target::Live),
+        laid_out: matches!(build.target(db), Target::Pdf | Target::Live),
         pending: Vec::new(),
         blocks: Vec::new(),
         root: None,
@@ -276,9 +276,9 @@ struct Collector<'a> {
     settings: HashMap<ComputedStyle, Settings>,
     /// Values already reported, so each is reported once per build.
     reported: HashSet<EcoString>,
-    /// Whether to report values that shaping and breaking cannot use: only
-    /// for the targets Folio lays out.
-    report: bool,
+    /// Whether Folio lays the build out: only then are values that shaping
+    /// and breaking cannot use reported.
+    laid_out: bool,
     pending: Vec<CollectedParagraph>,
     /// The blocks being collected, innermost last.
     blocks: Vec<TextBlock>,
@@ -672,7 +672,7 @@ impl Collector<'_> {
     }
 
     fn report_once(&mut self, key: EcoString, diagnostic: Diagnostic) {
-        if self.report && self.reported.insert(key) {
+        if self.laid_out && self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
     }

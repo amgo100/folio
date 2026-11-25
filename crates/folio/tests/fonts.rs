@@ -607,3 +607,14 @@ fn a_build_that_is_not_laid_out_checks_fonts_but_not_shaping_settings() {
         ]
     );
 }
+
+#[test]
+fn spaces_alone_do_not_ask_for_a_font() {
+    // The space between the two words is set in the document's chain,
+    // which has no font; it needs no glyph, so nothing is reported.
+    let compiled = compile(&world(
+        "doc { font: \"Nonexistent\"; }\nstrong { font: \"Source Serif 4\"; }\n",
+        "*Hi* *there*\n",
+    ));
+    assert_eq!(messages(&compiled), []);
+}

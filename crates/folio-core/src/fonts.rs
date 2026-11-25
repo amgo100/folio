@@ -447,6 +447,9 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
     let pdf = build.target(db) == Target::Pdf;
 
     let mut chains: HashMap<Request, EcoVec<usize>> = HashMap::new();
+    // The requests whose families were checked, which is done at the first
+    // text set in them that has a glyph to draw.
+    let mut checked: HashSet<Request> = HashSet::new();
     let mut unknown: HashSet<EcoString> = HashSet::new();
     let mut used: HashSet<usize> = HashSet::new();
     for paragraph in &text.paragraphs {
@@ -455,6 +458,7 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
         // The characters no font has, by chain and by the source node they
         // are the text of, in order.
         let mut missing: Vec<(EcoVec<usize>, Span, Vec<char>)> = Vec::new();
+        let mut groups: HashMap<(EcoVec<usize>, Span), usize> = HashMap::new();
         for (segment, info) in segments.iter().zip(&paragraph.segments) {
             if !matches!(segment.kind, SegmentKind::Text { .. }) {
                 continue;
@@ -462,23 +466,32 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
             let range = segment.range.clone();
             let span = || segment_span(paragraph, string, range.clone());
             let request = Request::of(&info.style, props);
-            let chain = chains.entry(request.clone()).or_insert_with(|| {
-                let mut chain = EcoVec::new();
+            let chain = chains
+                .entry(request.clone())
+                .or_insert_with(|| {
+                    request
+                        .families
+                        .iter()
+                        .filter_map(|family| fonts.select(family, request.variant))
+                        .collect()
+                })
+                .clone();
+            // Spaces and invisible characters need no glyph: a chain that
+            // only they ask for is not reported, though the face that sets
+            // them still decides their width.
+            let visible = string[range.clone()].chars().any(|c| !ignorable(c));
+            if visible && checked.insert(request.clone()) {
                 for family in &request.families {
-                    match fonts.select(family, request.variant) {
-                        Some(face) => chain.push(face),
-                        None => {
-                            if unknown.insert(family.to_lowercase()) {
-                                report_unknown(db, fonts, family, span());
-                            }
-                        }
+                    if fonts.select(family, request.variant).is_none()
+                        && unknown.insert(family.to_lowercase())
+                    {
+                        report_unknown(db, fonts, family, span());
                     }
                 }
                 if chain.is_empty() {
                     report_no_chain(db, &request, span());
                 }
-                chain
-            });
+            }
             if chain.is_empty() {
                 continue;
             }
@@ -494,16 +507,10 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
                             continue;
                         }
                         let at = source_span(paragraph, range.start + i).unwrap_or(paragraph.span);
-                        let group = match missing
-                            .iter()
-                            .position(|(ch, sp, _)| ch == chain && *sp == at)
-                        {
-                            Some(k) => k,
-                            None => {
-                                missing.push((chain.clone(), at, Vec::new()));
-                                missing.len() - 1
-                            }
-                        };
+                        let group = *groups.entry((chain.clone(), at)).or_insert_with(|| {
+                            missing.push((chain.clone(), at, Vec::new()));
+                            missing.len() - 1
+                        });
                         let chars = &mut missing[group].2;
                         if !chars.contains(&c) {
                             chars.push(c);
@@ -519,11 +526,13 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
 }
 
 /// The source node whose text a byte of a paragraph's text is, if any.
+/// The sources are in order and do not overlap.
 fn source_span(paragraph: &CollectedParagraph, at: usize) -> Option<Span> {
-    paragraph
-        .sources
-        .iter()
-        .find(|s| s.range.contains(&at))
+    let sources = &paragraph.sources;
+    let i = sources.partition_point(|s| s.range.end <= at);
+    sources
+        .get(i)
+        .filter(|s| s.range.contains(&at))
         .map(|s| s.span)
 }
 
