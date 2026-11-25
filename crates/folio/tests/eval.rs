@@ -451,6 +451,86 @@ fn failing_constructs_become_error_markers() {
 }
 
 #[test]
+fn a_failed_compound_assignment_keeps_the_variable() {
+    // The operation fails and is reported; the variable keeps its value,
+    // so its later uses see it rather than `none`.
+    let (repr, messages) = partial(&[(
+        "main.fol",
+        "#let x = 1\n#let s = \"ab\"\n#let a = (1,)\n\
+         #{ x += \"a\" } #{ s *= -1 } #{ a -= 1 } #{ x /= 0 }\n\
+         #x #s #a.len()\n",
+    )]);
+    assert_eq!(
+        messages,
+        [
+            "error: cannot add an int and a str",
+            "error: cannot repeat a negative number of times",
+            "error: cannot subtract an array and an int",
+            "error: cannot divide by zero",
+        ]
+    );
+    assert!(
+        repr.ends_with("\"1\", space, \"ab\", space, \"1\", space]"),
+        "{repr}"
+    );
+    // A sum that grows the place in place still works.
+    assert_eq!(
+        text("#let s = \"a\"\n#{ s += \"b\" }\n#let c = [x]\n#{ c += \"y\" }\n#s #c"),
+        "ab xy"
+    );
+}
+
+#[test]
+fn a_stray_break_or_return_in_a_file_fails_only_itself() {
+    // Each is an error at its own span, the construct it came from becomes
+    // a marker, and the rest of the file evaluates (SPEC §12.2).
+    let main = "A #break B\n\n#if true { return } C\n\n#continue\n\nD\n";
+    let (repr, messages) = partial(&[("main.fol", main)]);
+    assert_eq!(
+        messages,
+        [
+            "error: cannot break outside of a loop",
+            "error: cannot return outside of a function",
+            "error: cannot continue outside of a loop",
+        ]
+    );
+    assert_eq!(repr.matches("error(").count(), 3, "{repr}");
+    for text in ["\"A\"", "\"B\"", "\"C\"", "\"D\""] {
+        assert!(repr.contains(text), "{text} in {repr}");
+    }
+    // The return points at itself, not at the file.
+    let errors = errors("#if true { return }\n");
+    assert!(errors.contains("^^^^^^"), "{errors}");
+    // In a loop or a function they still leave it.
+    assert_eq!(
+        text("#for i in range(5) [#i #if i == 2 { break }]\n#let f() = { return 7; 8 }\n#f()"),
+        "0 1 2 7"
+    );
+}
+
+#[test]
+fn data_files_keep_the_order_of_their_keys() {
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            (
+                "main.fol",
+                "#json(\"d.json\").keys().join(\",\") \
+                 #json(\"d.json\").m.keys().join(\",\") \
+                 #toml(\"d.toml\").keys().join(\",\") \
+                 #toml(\"d.toml\").b.keys().join(\",\")\n",
+            ),
+            (
+                "d.json",
+                "{\"z\": 1, \"a\": 2, \"m\": {\"y\": 1, \"b\": 2}}",
+            ),
+            ("d.toml", "z = 1\na = 2\n[b]\ny = 1\nc = 2\n[a2]\nq = 1\n"),
+        ],
+    );
+    assert_eq!(logged.text(None), "z,a,m y,b z,a,b,a2 y,c");
+}
+
+#[test]
 fn a_failed_binding_fails_its_uses_quietly() {
     // The `let` fails and is reported; its uses become markers without
     // errors of their own, and the other bindings still work.
