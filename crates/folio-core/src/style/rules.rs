@@ -381,13 +381,22 @@ impl Gather<'_> {
                     let inner_items: Vec<_> = overlay.items().collect();
                     self.items(path, &inner_items, inner, applies && matches);
                 }
+                // No stage reads render templates yet (SPEC §5.3, §7.9).
+                StyleItem::Render(render) => {
+                    if applies && matches!(self.target, Target::Pdf | Target::Live) {
+                        diag::report(
+                            self.db,
+                            Diagnostic::warning(
+                                render.to_untyped().span(),
+                                "render templates are not implemented yet, so this `render` \
+                                 block has no effect",
+                            ),
+                        );
+                    }
+                }
                 // Read by the stages they belong to: Office export
-                // (SPEC §11.2), render templates (§5.3) and slide masters
-                // (§11.3).
-                StyleItem::Export(_)
-                | StyleItem::Render(_)
-                | StyleItem::SlideMaster(_)
-                | StyleItem::SlideLayout(_) => {}
+                // (SPEC §11.2) and slide masters (§11.3).
+                StyleItem::Export(_) | StyleItem::SlideMaster(_) | StyleItem::SlideLayout(_) => {}
             }
         }
     }
@@ -644,11 +653,10 @@ impl<'a> Compiler<'a> {
         let (computed, other) = (at(10.0), at(13.0));
         let value = match (&computed, &other) {
             (Some(Some(a)), Some(Some(b))) if a == b => Some(a),
-            // In ems: judged as set.
-            (Some(Some(_)), Some(Some(_))) => None,
-            // A value that cannot be computed is not judged.
-            (Some(_), _) => return,
-            (None, _) => None,
+            // A value that cannot be computed at all is not judged.
+            (Some(None), Some(None)) => return,
+            // In ems, or computed at one size only: judged as set.
+            (Some(_), _) | (None, _) => None,
         };
         if let Some(feature) = not_implemented(property, value) {
             diag::report(

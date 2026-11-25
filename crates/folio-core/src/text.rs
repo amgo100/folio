@@ -372,15 +372,25 @@ impl Collector<'_> {
             return;
         }
         // An element with no content to set, such as a component's block
-        // without fields of content, draws nothing yet. A misplaced `#doc`
-        // is reported by the document model.
+        // without fields of content: layout draws its box, and nothing in
+        // it. A misplaced `#doc` is reported by the document model.
         if !is_builtin(&element.name, "doc")
             && !element
                 .fields
                 .iter()
                 .any(|(_, value)| matches!(value, eval::Value::Content(_)))
         {
-            self.not_laid_out(element);
+            self.report_once(
+                eco_format!("not-laid-out:{}", element.name),
+                Diagnostic::warning(
+                    element.span,
+                    eco_format!(
+                        "`{}` is not laid out yet, so the output shows at most its box",
+                        element.name
+                    ),
+                )
+                .with_hint("this version of Folio checks it but does not draw what it holds"),
+            );
             return;
         }
         // The body and the parts, in the order of the element's fields, as

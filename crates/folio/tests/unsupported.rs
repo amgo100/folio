@@ -203,3 +203,17 @@ fn rules_of_other_targets_and_other_pseudo_classes() {
         ]
     );
 }
+
+#[test]
+fn a_render_block_is_reported_in_a_laid_out_build() {
+    let world = world("render strong {\n  body: slot(body);\n}\n", "Text.\n");
+    let message = "render templates are not implemented yet, so this `render` block has no effect";
+    let pdf: Vec<String> = compile(&world, Target::Pdf)
+        .diagnostics
+        .iter()
+        .map(|d| d.message.to_string())
+        .collect();
+    assert_eq!(pdf, [message]);
+    let docx = compile(&world, Target::Docx);
+    assert!(docx.diagnostics.iter().all(|d| d.message != message));
+}
