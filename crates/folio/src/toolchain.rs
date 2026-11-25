@@ -105,10 +105,16 @@ impl Toolchains {
         ChannelInfo::parse(std::str::from_utf8(&bytes).ok()?).ok()
     }
 
+    /// The file that holds the last `channel.toml` that [`install`] stored,
+    /// with its signature. Deleting it forgets what the channel said.
+    pub fn stored_channel_path(&self) -> PathBuf {
+        self.dir.join(STORED_CHANNEL_FILE)
+    }
+
     /// The signature and bytes of the last `channel.toml` that [`install`]
     /// stored, unverified.
     fn stored_channel(&self) -> Option<(Vec<u8>, Vec<u8>)> {
-        let mut stored = fs::read(self.dir.join(STORED_CHANNEL_FILE)).ok()?;
+        let mut stored = fs::read(self.stored_channel_path()).ok()?;
         let end = stored.iter().position(|&b| b == b'\n')?;
         let bytes = stored.split_off(end + 1);
         Some((stored, bytes))
@@ -341,8 +347,9 @@ pub trait Fetch {
 /// A transfer gives up when it moves less than 1,000 bytes a second for a
 /// minute, or when it has taken an hour; an hour gets a 100 MB binary
 /// through at 30 kB/s, slower than a crowded school network. A
-/// failed transfer is tried again up to three times, but not after an hour,
-/// so a download that never finishes ends within two hours.
+/// failed transfer is tried again up to three times, but no try starts
+/// after an hour, so a transfer that never finishes ends after about two
+/// hours.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Curl;
 
@@ -493,9 +500,9 @@ pub fn install(
 /// Stores a `channel.toml` of `channel`, verified, and its signature in the
 /// toolchain cache, unless the copy stored there already is as new. A lock
 /// file keeps concurrent installs from storing an older copy over a newer
-/// one between the check and the write, where the file system can lock;
-/// one file holds both, so the copy and its signature are replaced
-/// together. Fails silently.
+/// one between the check and the write; where the file system cannot
+/// lock, it stores without one. One file holds both, so the copy and its
+/// signature are replaced together. Fails silently.
 fn store_channel(
     toolchains: &Toolchains,
     channel: &Channel,
@@ -504,9 +511,20 @@ fn store_channel(
     signature: &[u8],
 ) {
     let dir = toolchains.dir();
-    let lock = fs::File::create(dir.join(".channel.lock"));
-    // Held until the function returns.
-    let _locked = lock.as_ref().map(fs::File::lock);
+    let Ok(lock) = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(".channel.lock"))
+    else {
+        return;
+    };
+    // Held until `lock` is dropped, when the function returns.
+    match lock.lock() {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
+        Err(_) => return,
+    }
     if toolchains
         .stored_serial(&channel.keys)
         .is_some_and(|(stored, _)| stored >= info.serial)

@@ -116,13 +116,20 @@ fn install(args: &InstallArgs) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(e @ InstallError::ChannelReplayed { .. }) => fail(
-            e.to_string(),
-            &[
-                "try again later or on another network; if it keeps happening, tell the Folio \
-               project",
-            ],
-        ),
+        Err(e @ InstallError::ChannelReplayed { .. }) => {
+            let reset = format!(
+                "if the Folio project says it lowered the serial, delete `{}`",
+                toolchains.stored_channel_path().display()
+            );
+            fail(
+                e.to_string(),
+                &[
+                    "try again later or on another network; if it keeps happening, tell the \
+                     Folio project",
+                    &reset,
+                ],
+            )
+        }
         Err(e) => fail(e.to_string(), &[]),
     }
 }
