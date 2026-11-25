@@ -116,9 +116,14 @@ fn install(args: &InstallArgs) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(e @ InstallError::ChannelReplayed { .. }) => {
+        Err(e @ InstallError::ChannelReplayed { serial, stored }) => {
+            let what = if serial < stored {
+                "lowered the serial"
+            } else {
+                "published other contents under the same serial"
+            };
             let reset = format!(
-                "if the Folio project says it lowered the serial, delete `{}`",
+                "if the Folio project says it {what}, delete `{}`",
                 toolchains.stored_channel_path().display()
             );
             fail(
