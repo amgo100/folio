@@ -451,6 +451,88 @@ fn failing_constructs_become_error_markers() {
 }
 
 #[test]
+fn a_failed_compound_assignment_keeps_the_variable() {
+    // The operation fails and is reported; the variable keeps its value,
+    // so its later uses see it rather than `none`.
+    let (repr, messages) = partial(&[(
+        "main.fol",
+        "#let x = 1\n#let s = \"ab\"\n#let a = (1,)\n\
+         #{ x += \"a\" } #{ s *= -1 } #{ a -= 1 } #{ x /= 0 }\n\
+         #x #s #a.len()\n",
+    )]);
+    assert_eq!(
+        messages,
+        [
+            "error: cannot add an int and a str",
+            "error: cannot repeat a negative number of times",
+            "error: cannot subtract an array and an int",
+            "error: cannot divide by zero",
+        ]
+    );
+    assert!(
+        repr.ends_with("\"1\", space, \"ab\", space, \"1\", space]"),
+        "{repr}"
+    );
+    // A sum that grows the place in place still works.
+    assert_eq!(
+        text("#let s = \"a\"\n#{ s += \"b\" }\n#let c = [x]\n#{ c += \"y\" }\n#s #c"),
+        "ab xy"
+    );
+}
+
+#[test]
+fn a_stray_break_or_return_in_a_file_fails_only_itself() {
+    // Each is an error at its own span, the construct it came from becomes
+    // a marker, and the rest of the file evaluates (SPEC §12.2).
+    let main = "A #break B\n\n#if true { return } C\n\n#continue\n\n\
+                #{ (return) + 1 } D\n";
+    let (repr, messages) = partial(&[("main.fol", main)]);
+    assert_eq!(
+        messages,
+        [
+            "error: cannot break outside of a loop",
+            "error: cannot return outside of a function",
+            "error: cannot continue outside of a loop",
+            "error: cannot add a none and an int",
+        ]
+    );
+    assert_eq!(repr.matches("error(").count(), 4, "{repr}");
+    for text in ["\"A\"", "\"B\"", "\"C\"", "\"D\""] {
+        assert!(repr.contains(text), "{text} in {repr}");
+    }
+    // The return points at itself, not at the file.
+    let errors = errors("#if true { return }\n");
+    assert!(errors.contains("^^^^^^"), "{errors}");
+    // In a loop or a function they still leave it.
+    assert_eq!(
+        text("#for i in range(5) [#i #if i == 2 { break }]\n#let f() = { return 7; 8 }\n#f()"),
+        "0 1 2 7"
+    );
+}
+
+#[test]
+fn data_files_keep_the_order_of_their_keys() {
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            (
+                "main.fol",
+                "#json(\"d.json\").keys().join(\",\") \
+                 #json(\"d.json\").m.keys().join(\",\") \
+                 #toml(\"d.toml\").keys().join(\",\") \
+                 #toml(\"d.toml\").b.keys().join(\",\")\n",
+            ),
+            (
+                "d.json",
+                "{\"z\": 1, \"a\": 2, \"m\": {\"y\": 1, \"b\": 2}}",
+            ),
+            ("d.toml", "z = 1\na = 2\n[b]\ny = 1\nc = 2\n[a2]\nq = 1\n"),
+        ],
+    );
+    assert_eq!(logged.text(None), "z,a,m y,b z,a,b,a2 y,c");
+}
+
+#[test]
 fn a_failed_binding_fails_its_uses_quietly() {
     // The `let` fails and is reported; its uses become markers without
     // errors of their own, and the other bindings still work.
@@ -661,6 +743,139 @@ fn editing_a_function_reevaluates_only_its_callers() {
     // Compiling again without an edit runs nothing.
     logged.text(None);
     assert_eq!(logged.take(), BTreeMap::new());
+}
+
+#[test]
+fn a_library_imported_from_two_depths_is_evaluated_once() {
+    // `lib` is imported by the entry file and by `mid`, which the entry
+    // file imports: at depths 1 and 2.
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            (
+                "main.fol",
+                "#import \"mid.fol\": twice\n#import \"lib.fol\": double\n\
+                 #twice(1) #double(5)\n",
+            ),
+            (
+                "mid.fol",
+                "#import \"lib.fol\": double\n#let twice(x) = double(double(x))\n",
+            ),
+            ("lib.fol", "#let double(x) = x * 2\n"),
+        ],
+    );
+    assert_eq!(logged.text(None), "4 10");
+    let executed = logged.take();
+    assert_eq!(executed.get("eval_file"), Some(&3), "{executed:?}");
+}
+
+#[test]
+fn the_same_call_at_two_sites_is_evaluated_once() {
+    // Two sites in the entry file, and one in a file it imports, which
+    // evaluates at a greater depth.
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            (
+                "main.fol",
+                "#import \"lib.fol\": double, four\n#double(2) #double(2) #four\n",
+            ),
+            ("lib.fol", "#let double(x) = x * 2\n#let four = double(2)\n"),
+        ],
+    );
+    assert_eq!(logged.text(None), "4 4 4");
+    assert_eq!(logged.calls(), 1);
+
+    // An error still points at the site that made it.
+    let report = errors("#let f(x) = x\n#f(1)\n#f(1, 2)\n");
+    assert!(report.contains("unexpected argument"), "{report}");
+    assert!(report.contains("main.fol:3:7"), "{report}");
+
+    // Arguments taken by a sink keep their spans: an error about them
+    // points at the call that passed them.
+    let report = errors("#let f(..a) = a\n#let g(x) = x\n#g(..f(1))\n#g(..f(1, 2))\n");
+    assert!(report.contains("main.fol:4:"), "{report}");
+    assert!(!report.contains("main.fol:3:"), "{report}");
+}
+
+#[test]
+fn calls_near_the_depth_limit_are_exact_at_any_depth() {
+    // `down(n)` recurses n calls deep. A call that fits at one depth is
+    // reused there, and the same call from a deeper import fails where the
+    // limit is reached, as it would without memoisation.
+    let main = "#import \"a.fol\": r\n#let down(n) = if n == 0 { 0 } else { down(n - 1) + 1 }\n\
+                #down(60) #r\n";
+    let (repr, messages) = partial(&[
+        ("main.fol", main),
+        ("a.fol", "#import \"b.fol\": r\n"),
+        ("b.fol", "#import \"c.fol\": r\n"),
+        ("c.fol", "#import \"d.fol\": r\n"),
+        (
+            "d.fol",
+            "#let down(n) = if n == 0 { 0 } else { down(n - 1) + 1 }\n#let r = down(60)\n",
+        ),
+    ]);
+    assert!(repr.starts_with("[\"60\""), "{repr}");
+    assert_eq!(
+        messages,
+        ["error: calls and imports are nested more than 64 deep"],
+        "{repr}"
+    );
+
+    // At depth 1 the library's call reaches an error the limit stops it
+    // from reaching at its real depth. That evaluation is not used, and
+    // its error is not reported.
+    let (_, messages) = partial(&[
+        ("main.fol", "#import \"a.fol\": r\n"),
+        ("a.fol", "#import \"b.fol\": r\n"),
+        ("b.fol", "#import \"c.fol\": r\n"),
+        ("c.fol", "#import \"d.fol\": r\n"),
+        (
+            "d.fol",
+            "#let down(n) = if n == 0 { nope } else { down(n - 1) }\n#let r = down(62)\n",
+        ),
+    ]);
+    assert_eq!(
+        messages,
+        ["error: calls and imports are nested more than 64 deep"]
+    );
+}
+
+#[test]
+fn an_error_brought_by_many_imports_is_kept_once() {
+    // Each file imports the next one twice, so the last one's error is
+    // reached along 2^18 paths. It is kept once at each file, not once per
+    // path.
+    let mut files: Vec<(String, String)> = (0..18)
+        .map(|i| {
+            let path = if i == 0 {
+                "main.fol".to_owned()
+            } else {
+                format!("f{i}.fol")
+            };
+            let next = format!("f{}.fol", i + 1);
+            (
+                path,
+                format!("#import \"{next}\": x\n#import \"{next}\": y\n"),
+            )
+        })
+        .collect();
+    files.push((
+        "f18.fol".into(),
+        "#let x = 1\n#let y = 2\n#(1 + \"a\")\n".into(),
+    ));
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        send.send(partial(&files).1)
+    });
+    let messages = receive
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("evaluation finishes in time");
+    assert_eq!(messages, ["error: cannot add an int and a str"]);
 }
 
 #[test]

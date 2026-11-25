@@ -15,12 +15,24 @@
 //!   [`Module`]: its top-level bindings and its content. An import or
 //!   include reads the imported file's query, so a file is evaluated once
 //!   however often it is imported.
-//! - **Calls.** Each call of a closure is a query keyed by the closure, the
-//!   arguments and the call depth. A closure holds its syntax and the values
+//! - **Calls.** Each call of a closure is a query keyed by the closure and
+//!   the arguments without their spans, so the same call at two sites is
+//!   evaluated once. Spans reach a call's result only through its errors
+//!   and argument sinks: a closure with a sink is keyed with them, and a
+//!   call that fails is evaluated again with them, so its errors point at
+//!   the arguments. A closure holds its syntax and the values
 //!   of the variables it uses from outside (its captures), not its whole
 //!   environment. Editing the body of one function therefore changes that
 //!   closure, and the closures that capture it, and re-runs their calls; the
 //!   calls of every other function are reused.
+//! - **Depth.** Depth matters only to the depth limit, so a file, and a
+//!   call made from a file's own code, is evaluated at depth 1 wherever it
+//!   is imported or made. Each evaluation reports the deepest call or
+//!   import it made, and the caller moves that to its real depth: if it
+//!   stays within the limit the result is the same, and otherwise the file
+//!   or call is evaluated again at its real depth, where it fails as it
+//!   would have. A call made inside a call is keyed by its depth, which
+//!   grows along every chain of calls, so recursion ends at the limit.
 //! - **Keys.** Hashing a call's key, and comparing two results for early
 //!   cutoff, walk values as trees, and a value can hold one part many
 //!   times: a loop that doubles an array by holding it twice makes a tree
@@ -81,8 +93,8 @@
 //!
 //! Imports cannot form a cycle: import paths are string literals, and an
 //! import of a file that imports, directly or not, the importing file is an
-//! error. The depth of a call is part of its key, so a recursive call is a
-//! different query from its caller. The interpreter grows its stack when it
+//! error. A call made inside a call is keyed by its depth, so a recursive
+//! call is a different query from its caller. The interpreter grows its stack when it
 //! runs low, so deep expressions in deep calls do not exhaust the stack of
 //! the thread that compiles.
 
@@ -97,6 +109,7 @@ mod vm;
 
 use std::collections::{BTreeSet, VecDeque};
 
+use ecow::EcoVec;
 use folio_component::Name;
 use folio_syntax::ast;
 
@@ -170,11 +183,22 @@ pub(crate) enum Mode {
     Variant(Option<Name>),
 }
 
-/// The result of a memoised evaluation, and what it cost.
+/// The result of a memoised evaluation, what it cost, and how deeply it
+/// nested calls and imports.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct Memo<T> {
     pub outcome: Result<T, Stop>,
     pub cost: Cost,
+    /// The deepest call or import the evaluation made, counted from the
+    /// depth it was evaluated at: that depth if it made none.
+    pub reached: u32,
+    /// The errors that markup turned into markers, in this evaluation and
+    /// in the evaluations of the files and calls it used. They are
+    /// reported by whoever uses the evaluation in the end, not by its
+    /// query, because an evaluation can be replaced by another one of the
+    /// same file or call (at another depth, for a variant, or with spans)
+    /// whose errors differ.
+    pub recovered: EcoVec<EvalError>,
 }
 
 /// Evaluates a project's entry file for a variant (`None` for a project
@@ -190,6 +214,9 @@ pub fn evaluate(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<
     // A missing entry file is reported by `build_files`.
     let file = source_file(db, project, entry)?;
     let memo = eval_file_for(db, project, file, &Mode::Variant(variant), 0);
+    for error in &memo.recovered {
+        diag::report(db, error.clone().into());
+    }
     match &memo.outcome {
         Ok(module) => Some(module.content().clone()),
         Err(Stop::Error(error)) => {
@@ -218,8 +245,9 @@ pub(crate) fn eval_file_for<'db>(
     }
 }
 
-/// Evaluates a content file into a module. `depth` is the depth of the
-/// import that asked for it: one more than the importer's.
+/// Evaluates a content file into a module. `depth` is the depth it is
+/// evaluated at: 0 for the entry file, and 1 for an imported file unless
+/// it reaches the depth limit at its import's depth (see the module docs).
 #[salsa::tracked(returns(ref))]
 fn eval_file(
     db: &dyn Db,
@@ -233,6 +261,7 @@ fn eval_file(
     let mut vm = Vm::new(db, project, path.clone(), mode, depth, Scope::default());
     // The file's markup compiles around what fails (see the module docs).
     vm.recover = true;
+    vm.file_level = true;
     let outcome = match source.root().cast::<ast::Markup<'_>>() {
         Some(markup) => vm.module(markup, path.stem()),
         None => Err(EvalError::new(
@@ -241,21 +270,18 @@ fn eval_file(
         )
         .into()),
     };
-    // An evaluation for all variants that read `variant` is done again for
-    // the build's variant, which reports the same errors.
-    if !matches!(outcome, Err(Stop::NeedsVariant)) {
-        for error in vm.recovered {
-            diag::report(db, error.into());
-        }
-    }
     Memo {
         outcome,
         cost: vm.cost,
+        reached: vm.reached,
+        recovered: vm.recovered.into_iter().collect(),
     }
 }
 
-/// Calls a closure. `depth` is the depth of this call: one more than its
-/// caller's.
+/// Calls a closure. `depth` is the depth the call is evaluated at: 1 for a
+/// call made from a file's code unless it reaches the depth limit at its
+/// own depth, and one more than its caller's for a call made in a call (see
+/// the module docs).
 #[salsa::tracked(returns(ref))]
 pub(crate) fn call_closure(
     db: &dyn Db,
@@ -277,6 +303,8 @@ pub(crate) fn call_closure(
     Memo {
         outcome,
         cost: vm.cost,
+        reached: vm.reached,
+        recovered: vm.recovered.into_iter().collect(),
     }
 }
 
@@ -293,7 +321,11 @@ pub(crate) fn call_function(
     span: folio_syntax::Span,
 ) -> Result<Value, EvalError> {
     let mut vm = Vm::new(db, project, file, Mode::Shared, 0, Scope::default());
-    match vm.call(func, args, span) {
+    let result = vm.call(func, args, span);
+    for error in std::mem::take(&mut vm.recovered) {
+        diag::report(db, error.into());
+    }
+    match result {
         Ok(value) => Ok(value),
         Err(Stop::Error(error)) => Err(*error),
         Err(Stop::NeedsVariant) => Err(EvalError::new(

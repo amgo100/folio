@@ -104,8 +104,8 @@ fn counts(items: &[(&str, usize)]) -> BTreeMap<String, usize> {
 
 /// The stages a build runs from Style to Emit (SPEC §2.1), and the build
 /// queries around them.
-const STAGES: &str =
-    "styles select sequence resolve step_style text lines pages pdf_input pdf_check emit";
+const STAGES: &str = "styles select sequence resolve step_style collect_text text lines pages \
+                      pdf_input pdf_check emit";
 
 #[test]
 fn compiles_end_to_end_to_pdf() {
@@ -217,8 +217,12 @@ fn the_pipeline_forks_after_step_styling() {
     // DOCX takes the step-styled tree, without laying it out, and has no
     // writer yet.
     let docx = logged.compile("exam", Target::Docx);
+    // Its text is collected and set in fonts, for the font checks, but not
+    // shaped.
     let executed = logged.take();
-    assert!(executed.contains_key("step_style"), "{executed:?}");
+    for query in ["step_style", "collect_text", "check_fonts"] {
+        assert!(executed.contains_key(query), "{query}: {executed:?}");
+    }
     for stage in ["text", "lines", "pages"] {
         assert!(!executed.contains_key(stage), "{stage}: {executed:?}");
     }

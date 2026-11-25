@@ -16,7 +16,8 @@
 //!   of one script, and each run is set in the first font of the `font`
 //!   chain that has all its characters, or character by character in the
 //!   first that has each.
-//! - **Checks** ([`check_fonts`]): a family that no face has is a warning;
+//! - **Checks** ([`check_fonts`]), of the segments the text stage sets, so
+//!   of every character a build draws: a family that no face has is a warning;
 //!   a character that no font of the chain has is an error, never a silent
 //!   empty box; an unpinned system font is allowed in watch mode, a warning
 //!   in a build and an error in a CI build or with strict formatting; and a
@@ -35,13 +36,14 @@ use folio_fonts::{
     FaceKey, Font, FontBook, FontFile, FontOrigin, FontStyle, FontVariant, SystemFont,
 };
 use folio_syntax::{DiagSpan, Span};
+use folio_text::SegmentKind;
 
 use crate::db::{Build, BuildMode, Db, Project};
 use crate::diag::{self, Diagnostic};
-use crate::model::document;
 use crate::pipeline::step_styled;
 use crate::project::{FormattingMode, LockedFont};
 use crate::style::{ComputedStyle, Properties};
+use crate::text::{CollectedParagraph, collect_text};
 
 /// What pins a face, so that a build with it gives the same output on
 /// another machine (SPEC §2.4).
@@ -424,13 +426,18 @@ impl Request {
 /// Checks the fonts a build's text is set in: reports families that no
 /// face has, characters that no font of their chain has, unpinned system
 /// fonts as the build mode says, and fonts that forbid embedding in a PDF.
+///
+/// It reads the segments of the text stage ([`collect_text`]), so it sees every
+/// character the build sets, whatever made it: markup's text, the text of
+/// `raw`, a link's destination shown as text, the quotation marks of the
+/// text's language.
 #[salsa::tracked]
 pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
     let project = build.project(db);
     let Some(styled) = step_styled(db, build) else {
         return;
     };
-    let Some(doc) = document(db, project, build.variant(db).clone()) else {
+    let Some(text) = collect_text(db, build) else {
         return;
     };
     let fonts = fonts(db, project);
@@ -441,64 +448,150 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
 
     let mut chains: HashMap<Request, EcoVec<usize>> = HashMap::new();
     let mut unknown: HashSet<EcoString> = HashSet::new();
+    // The requests whose families were checked, and the faces.
+    let mut checked: HashSet<Request> = HashSet::new();
     let mut used: HashSet<usize> = HashSet::new();
-    crate::style::for_each_text(&doc.root, &styled.root, &mut |style, text, span| {
-        let request = Request::of(style, props);
-        let chain = chains.entry(request.clone()).or_insert_with(|| {
-            let mut chain = EcoVec::new();
-            for family in &request.families {
-                match fonts.select(family, request.variant) {
-                    Some(face) => chain.push(face),
-                    None => {
-                        if unknown.insert(family.to_lowercase()) {
-                            report_unknown(db, fonts, family, span);
-                        }
-                    }
+    // Requests and faces met only at segments of spaces and invisible
+    // characters so far, with where. They are checked there only if no
+    // text with a glyph to draw asks for them, so a diagnostic points at
+    // text rather than at a blank where it can.
+    let mut blank_requests: Vec<(Request, Span)> = Vec::new();
+    let mut blank_faces: Vec<(usize, Span)> = Vec::new();
+    let mut check_request = |request: &Request, chain: &[usize], span: Span| {
+        for family in &request.families {
+            if fonts.select(family, request.variant).is_none()
+                && unknown.insert(family.to_lowercase())
+            {
+                report_unknown(db, fonts, family, span);
+            }
+        }
+        if chain.is_empty() {
+            report_no_chain(db, request, span);
+        }
+    };
+    for paragraph in &text.paragraphs {
+        let string = paragraph.paragraph.text.as_str();
+        let segments = &paragraph.paragraph.segments;
+        // The characters no font has, by chain and by the source node they
+        // are the text of, in order.
+        let mut missing: Vec<(EcoVec<usize>, Span, Vec<char>)> = Vec::new();
+        let mut groups: HashMap<(EcoVec<usize>, Span), usize> = HashMap::new();
+        for (segment, info) in segments.iter().zip(&paragraph.segments) {
+            if !matches!(segment.kind, SegmentKind::Text { .. }) {
+                continue;
+            }
+            let range = segment.range.clone();
+            let span = || segment_span(paragraph, string, range.clone());
+            let request = Request::of(&info.style, props);
+            let chain = chains
+                .entry(request.clone())
+                .or_insert_with(|| {
+                    request
+                        .families
+                        .iter()
+                        .filter_map(|family| fonts.select(family, request.variant))
+                        .collect()
+                })
+                .clone();
+            // Spaces need no glyph but are set in a face all the same,
+            // which gives their width; without one, layout drops them.
+            let visible = string[range.clone()].chars().any(|c| !ignorable(c));
+            if !checked.contains(&request) {
+                if visible {
+                    checked.insert(request.clone());
+                    check_request(&request, &chain, span());
+                } else if !blank_requests.iter().any(|(r, _)| *r == request) {
+                    blank_requests.push((request.clone(), span()));
                 }
             }
             if chain.is_empty() {
-                // Reported once per chain, rather than every character of
-                // every text set in it.
-                let names: Vec<String> =
-                    request.families.iter().map(|f| format!("`{f}`")).collect();
-                let message = if names.is_empty() {
-                    EcoString::from("the text has no font: `font` names no family")
-                } else {
-                    eco_format!("no font of the `font` chain is available: {}", names.join(", "))
-                };
-                diag::report(
-                    db,
-                    Diagnostic::error(span, message).with_hint(
-                        "name an available family in `font`, such as the bundled `New Computer Modern`",
-                    ),
-                );
+                continue;
             }
-            chain
-        });
-        if chain.is_empty() {
-            return;
-        }
-        let mut missing: Vec<char> = Vec::new();
-        for run in fonts.resolve(chain, text) {
-            match run.face {
-                Some(face) => {
-                    if used.insert(face) {
-                        check_face(db, &fonts.faces[face], span, mode, strict, pdf);
+            match info.face {
+                Some(face) if !used.contains(&face) => {
+                    if visible {
+                        used.insert(face);
+                        check_face(db, &fonts.faces[face], span(), mode, strict, pdf);
+                    } else if !blank_faces.iter().any(|(f, _)| *f == face) {
+                        blank_faces.push((face, span()));
                     }
                 }
+                Some(_) => {}
                 None => {
-                    for c in text[run.range].chars().filter(|&c| !ignorable(c)) {
-                        if !missing.contains(&c) {
-                            missing.push(c);
+                    for (i, c) in string[range.clone()].char_indices() {
+                        if ignorable(c) {
+                            continue;
+                        }
+                        let at = source_span(paragraph, range.start + i).unwrap_or(paragraph.span);
+                        let group = *groups.entry((chain.clone(), at)).or_insert_with(|| {
+                            missing.push((chain.clone(), at, Vec::new()));
+                            missing.len() - 1
+                        });
+                        let chars = &mut missing[group].2;
+                        if !chars.contains(&c) {
+                            chars.push(c);
                         }
                     }
                 }
             }
         }
-        if !missing.is_empty() {
-            report_missing(db, fonts, chain, &missing, span);
+        for (chain, span, chars) in missing {
+            report_missing(db, fonts, &chain, &chars, span);
         }
-    });
+    }
+    for (request, span) in blank_requests {
+        if !checked.contains(&request) {
+            check_request(&request, &chains[&request], span);
+        }
+    }
+    for (face, span) in blank_faces {
+        if !used.contains(&face) {
+            check_face(db, &fonts.faces[face], span, mode, strict, pdf);
+        }
+    }
+}
+
+/// The source node whose text a byte of a paragraph's text is, if any.
+/// The sources are in order and do not overlap.
+fn source_span(paragraph: &CollectedParagraph, at: usize) -> Option<Span> {
+    let sources = &paragraph.sources;
+    let i = sources.partition_point(|s| s.range.end <= at);
+    sources
+        .get(i)
+        .filter(|s| s.range.contains(&at))
+        .map(|s| s.span)
+}
+
+/// Where to report a problem with a segment of a paragraph: the source of
+/// its first character that has a glyph, else of its first character, else
+/// the element whose content the paragraph is.
+fn segment_span(paragraph: &CollectedParagraph, text: &str, range: Range<usize>) -> Span {
+    text[range.clone()]
+        .char_indices()
+        .find(|&(_, c)| !ignorable(c))
+        .and_then(|(i, _)| source_span(paragraph, range.start + i))
+        .or_else(|| source_span(paragraph, range.start))
+        .unwrap_or(paragraph.span)
+}
+
+/// Reports a `font` chain of which no family is available, once per chain
+/// rather than for every character set in it.
+fn report_no_chain(db: &dyn Db, request: &Request, span: Span) {
+    let names: Vec<String> = request.families.iter().map(|f| format!("`{f}`")).collect();
+    let message = if names.is_empty() {
+        EcoString::from("the text has no font: `font` names no family")
+    } else {
+        eco_format!(
+            "no font of the `font` chain is available: {}",
+            names.join(", ")
+        )
+    };
+    diag::report(
+        db,
+        Diagnostic::error(span, message).with_hint(
+            "name an available family in `font`, such as the bundled `New Computer Modern`",
+        ),
+    );
 }
 
 fn report_unknown(db: &dyn Db, fonts: &Fonts, family: &str, span: Span) {

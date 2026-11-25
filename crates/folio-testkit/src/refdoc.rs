@@ -92,6 +92,28 @@ figure { space-before: 8pt; space-after: 8pt; }
 terms-item { space-before: 2pt; }
 ";
 
+/// The variants of [`generate_variants`]'s project, as the exam and mark
+/// scheme of SPEC §6.1 with a third that shares the mark scheme's answers.
+pub const VARIANTS: [&str; 3] = ["exam", "markscheme", "teacher"];
+
+/// The manifest of [`generate_variants`]'s project: [`VARIANTS`], each
+/// built as PDF, the mark scheme with a stylesheet overlay.
+const VARIANTS_MANIFEST: &str = "\
+[variants.exam]
+targets = [\"pdf\"]
+
+[variants.markscheme]
+targets = [\"pdf\"]
+styles = [\"styles/markscheme.fsty\"]
+
+[variants.teacher]
+targets = [\"pdf\"]
+";
+
+/// The mark scheme's overlay: the whole mark scheme set smaller, so that
+/// it is shaped and paginates apart from the other two variants.
+const MARKSCHEME_STYLESHEET: &str = "doc { font-size: 10pt; }\n";
+
 /// Generates a document: its project, named `reference` for
 /// [`Spec::REFERENCE`] and `refdoc-{pages}` otherwise.
 pub fn generate(spec: &Spec) -> Project {
@@ -100,21 +122,83 @@ pub fn generate(spec: &Spec) -> Project {
     } else {
         format!("refdoc-{}", spec.pages)
     };
-    let mut generator = Generator {
-        rng: Rng(0x5eed_f011_0b00_00c5),
-        out: String::new(),
-        figure: 0,
-        equation: 0,
-        table: 0,
-    };
-    generator.document(spec);
     Project {
         name,
         manifest: MANIFEST.into(),
         sources: BTreeMap::from([
-            ("main.fol".to_string(), generator.out),
+            ("main.fol".to_string(), Generator::new(false).document(spec)),
             ("styles/reference.fsty".to_string(), STYLESHEET.to_string()),
         ]),
+    }
+}
+
+/// Generates a document with the three [`VARIANTS`] (SPEC §6): the
+/// document of [`generate`], which the exam variant shows unchanged, with
+/// an answer after the running text of every page that only the mark
+/// scheme and teacher variants show. The answers are added to the page's
+/// text, so those two variants run a little longer than `spec.pages`. Its project
+/// is named as [`generate`]'s with `-variants` appended.
+pub fn generate_variants(spec: &Spec) -> Project {
+    let mut project = generate(spec);
+    project.name.push_str("-variants");
+    project.manifest.push('\n');
+    project.manifest.push_str(VARIANTS_MANIFEST);
+    project
+        .sources
+        .insert("main.fol".into(), Generator::new(true).document(spec));
+    project.sources.insert(
+        "styles/markscheme.fsty".into(),
+        MARKSCHEME_STYLESHEET.into(),
+    );
+    project
+}
+
+/// An edit to a generated document's sources, for the benchmarks: the
+/// same edit for the instruction counts and the wall-clock times.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Edit {
+    /// The file, relative to the project's root.
+    pub path: String,
+    /// The bytes it replaces.
+    pub range: std::ops::Range<usize>,
+    /// What it puts in their place.
+    pub with: &'static str,
+}
+
+impl Edit {
+    /// A one-word edit: "The", the first word of the first paragraph that
+    /// starts after the middle of `main.fol`, becomes "This", so that its
+    /// paragraph and the pages after it may reflow.
+    pub fn word(project: &Project) -> Self {
+        let text = &project.sources["main.fol"];
+        let middle = text.ceil_char_boundary(text.len() / 2);
+        let start = text[middle..]
+            .find("\n\nThe ")
+            .map(|i| middle + i + 2)
+            .expect("a paragraph after the middle");
+        Self {
+            path: "main.fol".into(),
+            range: start..start + "The".len(),
+            with: "This",
+        }
+    }
+
+    /// A stylesheet edit (SPEC §14.1): the body's font size, 11pt, becomes
+    /// 12pt, so that every page reflows.
+    pub fn style(project: &Project) -> Self {
+        let path = "styles/reference.fsty";
+        let text = &project.sources[path];
+        let rule = text.find("doc {").expect("a rule for the body");
+        let start = rule
+            + text[rule..]
+                .find("font-size: 11pt")
+                .expect("the body's font size")
+            + "font-size: ".len();
+        Self {
+            path: path.into(),
+            range: start..start + "11pt".len(),
+            with: "12pt",
+        }
     }
 }
 
@@ -237,14 +321,32 @@ const CLAUSES: &[&str] = &[
 #[derive(Debug)]
 struct Generator {
     rng: Rng,
+    /// The answers' own generator, so that they leave the rest of the
+    /// document as [`generate`] writes it.
+    answer_rng: Rng,
     out: String,
     figure: usize,
     equation: usize,
     table: usize,
+    /// Whether every page ends with an answer that the exam variant hides.
+    answers: bool,
 }
 
 impl Generator {
-    fn document(&mut self, spec: &Spec) {
+    fn new(answers: bool) -> Self {
+        Self {
+            rng: Rng(0x5eed_f011_0b00_00c5),
+            answer_rng: Rng(0xa115_3e45_0b00_00c5),
+            out: String::new(),
+            figure: 0,
+            equation: 0,
+            table: 0,
+            answers,
+        }
+    }
+
+    /// Writes the document and returns its markup.
+    fn document(mut self, spec: &Spec) -> String {
         let _ = writeln!(
             self.out,
             "#doc(title: [Reference document], subject: \"{} pages, generated for benchmarks\")\n",
@@ -288,7 +390,25 @@ impl Generator {
                     _ => {}
                 }
             }
+            if self.answers {
+                self.answer(page);
+            }
         }
+        self.out
+    }
+
+    /// An answer to the page's questions, shown by every variant but the
+    /// exam.
+    fn answer(&mut self, page: usize) {
+        std::mem::swap(&mut self.rng, &mut self.answer_rng);
+        let sentences = [self.sentence(), self.sentence()];
+        std::mem::swap(&mut self.rng, &mut self.answer_rng);
+        let _ = writeln!(
+            self.out,
+            "#if variant != \"exam\" [\n  Answer {}: {}\n]\n",
+            page + 1,
+            sentences.join(" ")
+        );
     }
 
     /// A heading of a level.

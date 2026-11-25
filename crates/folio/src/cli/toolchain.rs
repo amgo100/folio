@@ -9,7 +9,7 @@ use std::process::{Command, ExitCode};
 
 use clap::{Args, Subcommand};
 use folio::diag::TextFiles;
-use folio::toolchain::{self, Channel, Curl, Toolchains};
+use folio::toolchain::{self, Channel, Curl, InstallError, Toolchains};
 use folio::{Diagnostic, Manifest, World};
 use folio_syntax::DiagSpan;
 use semver::Version;
@@ -115,6 +115,25 @@ fn install(args: &InstallArgs) -> ExitCode {
                 print(&TextFiles::new(), &[warning], color);
             }
             ExitCode::SUCCESS
+        }
+        Err(e @ InstallError::ChannelReplayed { serial, stored }) => {
+            let what = if serial < stored {
+                "lowered the serial"
+            } else {
+                "published other contents under the same serial"
+            };
+            let reset = format!(
+                "if the Folio project says it {what}, delete `{}`",
+                toolchains.stored_channel_path().display()
+            );
+            fail(
+                e.to_string(),
+                &[
+                    "try again later or on another network; if it keeps happening, tell the \
+                     Folio project",
+                    &reset,
+                ],
+            )
         }
         Err(e) => fail(e.to_string(), &[]),
     }

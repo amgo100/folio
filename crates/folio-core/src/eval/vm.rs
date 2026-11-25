@@ -7,6 +7,7 @@ use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Abs, BODY, Body, Em, Name, QualifiedName, Ratio, Scalar, UNIVERSAL_FIELDS};
 use folio_syntax::Span;
 use folio_syntax::ast::{self, AstNode, Unit};
+use indexmap::IndexSet;
 
 use super::captures::{captures, free_variables};
 use super::content::{Content, Node};
@@ -17,7 +18,7 @@ use super::ops::{self, a_type};
 use super::value::{
     Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module, Scope, Value,
 };
-use super::{Cost, Limits, MAX_NESTING, Mode, eval_file_for, globals, reachable, today};
+use super::{Cost, Limits, MAX_NESTING, Memo, Mode, eval_file_for, globals, reachable, today};
 use crate::component::Reason;
 use crate::db::{Db, Project, component_host, source_file};
 use crate::project::ProjectPath;
@@ -39,7 +40,20 @@ pub(crate) type NativeFn = fn(&mut Vm<'_>, &mut Args) -> EvalResult<Value>;
 enum Flow {
     Break(Span),
     Continue(Span),
-    Return(Option<Value>),
+    Return(Span, Option<Value>),
+}
+
+impl Flow {
+    /// The error of a `break`, `continue` or `return` that reached a place
+    /// it cannot leave: `return` outside of a function, the others outside
+    /// of a loop.
+    fn stray(self) -> EvalError {
+        match self {
+            Flow::Break(span) => EvalError::new(span, "cannot break outside of a loop"),
+            Flow::Continue(span) => EvalError::new(span, "cannot continue outside of a loop"),
+            Flow::Return(span, _) => EvalError::new(span, "cannot return outside of a function"),
+        }
+    }
 }
 
 /// The state of one evaluation: of a file, or of one closure call.
@@ -49,8 +63,13 @@ pub(crate) struct Vm<'a> {
     /// The file the code being evaluated is in, which paths are relative to.
     pub(crate) file: ProjectPath,
     mode: Mode,
-    /// The depth of the call or import being evaluated.
+    /// The depth of the call or import being evaluated, as its query is
+    /// keyed: see [`Vm::exact`].
     depth: u32,
+    /// The deepest call or import made so far, at least `depth`.
+    pub(crate) reached: u32,
+    /// Whether this evaluates a file's own code rather than a call.
+    pub(crate) file_level: bool,
     globals: &'a Scope,
     scopes: Scopes,
     limits: Limits,
@@ -63,9 +82,11 @@ pub(crate) struct Vm<'a> {
     /// and cleared inside code, so that an error in a function reaches the
     /// markup that called it, with its trace.
     pub(crate) recover: bool,
-    /// The errors that markup turned into markers, which the file's query
-    /// reports.
-    pub(crate) recovered: Vec<EvalError>,
+    /// The errors that markup turned into markers, here and in the
+    /// evaluations of the files and calls this one used, for whoever uses
+    /// this evaluation to report ([`Memo::recovered`]).
+    /// Each error is kept once, however many imports and calls bring it.
+    pub(crate) recovered: IndexSet<EvalError>,
     /// The variables that a `let` or an import that failed would have
     /// bound. Reading one fails without another error, since the failure
     /// was reported where it happened.
@@ -131,6 +152,8 @@ impl<'a> Vm<'a> {
             file,
             mode,
             depth,
+            reached: depth,
+            file_level: false,
             globals: globals(db, project),
             scopes: Scopes {
                 captured,
@@ -140,7 +163,7 @@ impl<'a> Vm<'a> {
             cost: Cost::default(),
             flow: None,
             recover: false,
-            recovered: Vec::new(),
+            recovered: IndexSet::new(),
             poisoned: BTreeSet::new(),
         }
     }
@@ -187,13 +210,11 @@ impl<'a> Vm<'a> {
     /// Evaluates a file's markup into a module.
     pub(crate) fn module(&mut self, markup: ast::Markup<'_>, name: &str) -> EvalResult<Module> {
         let content = self.markup(markup)?;
-        match self.flow.take() {
-            Some(Flow::Break(span)) => bail!(span, "cannot break outside of a loop"),
-            Some(Flow::Continue(span)) => bail!(span, "cannot continue outside of a loop"),
-            Some(Flow::Return(_)) => {
-                bail!(markup.span(), "cannot return outside of a function")
-            }
-            None => {}
+        // A file's markup recovers, so it reported a stray `break`,
+        // `continue` or `return` and went on, leaving none here. Should one
+        // reach this point anyway, it fails the file rather than vanishing.
+        if let Some(flow) = self.flow.take() {
+            return Err(flow.stray().into());
         }
         let scope = self.scopes.layers.pop().unwrap_or_default();
         let failed = std::mem::take(&mut self.poisoned);
@@ -249,9 +270,8 @@ impl<'a> Vm<'a> {
         args.finish()?;
         let value = self.expr(syntax.body())?;
         match self.flow.take() {
-            Some(Flow::Return(value)) => Ok(value.unwrap_or_default()),
-            Some(Flow::Break(span)) => bail!(span, "cannot break outside of a loop"),
-            Some(Flow::Continue(span)) => bail!(span, "cannot continue outside of a loop"),
+            Some(Flow::Return(_, value)) => Ok(value.unwrap_or_default()),
+            Some(flow) => Err(flow.stray().into()),
             None => Ok(value),
         }
     }
@@ -315,6 +335,14 @@ impl<'a> Vm<'a> {
                 continue;
             }
             let content = match self.markup_expr(expr) {
+                // A file's own markup is in no loop or function (code turns
+                // recovery off), so a `break`, `continue` or `return` that
+                // reaches it fails the construct it came from, and the
+                // markup goes on (SPEC §12.2).
+                Ok(_) if self.recover && self.flow.is_some() => {
+                    let flow = self.flow.take().expect("checked above");
+                    self.recover_from(flow.stray().into(), expr)?
+                }
                 Ok(content) => content,
                 Err(stop) => self.recover_from(stop, expr)?,
             };
@@ -332,7 +360,7 @@ impl<'a> Vm<'a> {
         if !self.recover {
             return Err(error.into());
         }
-        self.recovered.push(error);
+        self.recovered.insert(error);
         Ok(())
     }
 
@@ -354,7 +382,7 @@ impl<'a> Vm<'a> {
             Stop::NeedsVariant => return Err(stop),
             Stop::Error(error) => {
                 let message = error.message.clone();
-                self.recovered.push(*error);
+                self.recovered.insert(*error);
                 message
             }
             Stop::Reported if expr.to_untyped().diagnosis().errors => "this does not parse".into(),
@@ -589,6 +617,49 @@ impl<'a> Vm<'a> {
         Ok(depth)
     }
 
+    /// Takes on the recovered errors of an evaluation this one uses.
+    fn take_on(&mut self, errors: &[EvalError]) {
+        for error in errors {
+            if !self.recovered.contains(error) {
+                self.recovered.insert(error.clone());
+            }
+        }
+    }
+
+    /// The depth key of a call or import made here at depth `depth`. Depth
+    /// matters to an evaluation only through the limit, so the evaluation
+    /// of a file, and of a call made from a file's own code, is keyed at
+    /// depth 1 wherever it happens, and is shared by imports and calls at
+    /// every depth (SPEC §2.3). A call made inside a call is keyed at its
+    /// depth, which grows along every chain of calls, so that recursion
+    /// ends at the limit; imports cannot recurse, since they form no
+    /// cycle.
+    fn depth_key(&self, depth: u32, import: bool) -> u32 {
+        if import || self.file_level { 1 } else { depth }
+    }
+
+    /// The evaluation of a call or import made at depth `depth`: the one
+    /// `run` gives at depth key `key` if it stays within the depth limit
+    /// when moved to `depth`, where it is the same, or else the one at
+    /// `depth` itself, which fails where the limit is reached. Counts how
+    /// deep it went.
+    fn exact<'m, T>(
+        &mut self,
+        key: u32,
+        depth: u32,
+        run: impl Fn(u32) -> &'m Memo<T>,
+    ) -> &'m Memo<T> {
+        let moved = |memo: &Memo<T>| memo.reached - key + depth;
+        let mut memo = run(key);
+        if key != depth && moved(memo) > self.limits.depth {
+            memo = run(depth);
+            self.reached = self.reached.max(memo.reached);
+        } else {
+            self.reached = self.reached.max(moved(memo));
+        }
+        memo
+    }
+
     fn expr_inner(&mut self, expr: ast::Expr<'_>) -> EvalResult<Value> {
         let span = expr.span();
         match expr {
@@ -710,7 +781,7 @@ impl<'a> Vm<'a> {
             }
             ast::Expr::FuncReturn(ret) => {
                 let value = ret.body().map(|body| self.expr(body)).transpose()?;
-                self.flow = Some(Flow::Return(value));
+                self.flow = Some(Flow::Return(span, value));
                 Ok(Value::None)
             }
             ast::Expr::ScopedRule(rule) => Ok(Value::Content(Content::node(Node::Rule(
@@ -898,7 +969,19 @@ impl<'a> Vm<'a> {
                     MulAssign => Mul,
                     _ => Div,
                 };
-                let value = self.apply(op, lhs, rhs, span)?;
+                // The place is empty now, so that a string, array or content
+                // it held grows in place rather than being copied. If the
+                // operation fails, the place gets its value back: with
+                // error recovery, later uses still see it.
+                let value = match self.apply_keeping(op, lhs, rhs, span) {
+                    Ok(value) => value,
+                    Err((stop, lhs)) => {
+                        // The operation's error is the one to report, even
+                        // if finding the place again fails.
+                        let _ = self.assign(binary.lhs(), false, lhs, span);
+                        return Err(stop);
+                    }
+                };
                 self.assign(binary.lhs(), false, value, span)?;
                 Ok(Value::None)
             }
@@ -928,13 +1011,58 @@ impl<'a> Vm<'a> {
     /// Applies an arithmetic operator, counting what a concatenation or
     /// repetition allocates before it happens.
     fn apply(&mut self, op: ast::BinOp, lhs: Value, rhs: Value, span: Span) -> EvalResult<Value> {
+        self.charge_op(op, &lhs, &rhs, span)?;
+        Self::operate(op, lhs, rhs, span)
+    }
+
+    /// Applies an arithmetic operator like [`Vm::apply`], but gives the
+    /// left operand back if it fails. A sum that extends the left operand
+    /// in place, which cannot fail once charged, consumes it without a
+    /// copy; any other operation works on a clone, which is cheap for the
+    /// values it applies to or which it replaces anyway.
+    fn apply_keeping(
+        &mut self,
+        op: ast::BinOp,
+        lhs: Value,
+        rhs: Value,
+        span: Span,
+    ) -> Result<Value, (Stop, Value)> {
+        if let Err(stop) = self.charge_op(op, &lhs, &rhs, span) {
+            return Err((stop, lhs));
+        }
+        let in_place = op == ast::BinOp::Add
+            && matches!(
+                (&lhs, &rhs),
+                (
+                    Value::Str(_) | Value::Content(_),
+                    Value::Str(_) | Value::Content(_)
+                ) | (Value::Array(_), Value::Array(_))
+                    | (Value::Dict(_), Value::Dict(_))
+            );
+        if in_place {
+            let result = Self::operate(op, lhs, rhs, span);
+            debug_assert!(result.is_ok(), "a sum in place cannot fail");
+            return result.map_err(|stop| (stop, Value::None));
+        }
+        Self::operate(op, lhs.clone(), rhs, span).map_err(|stop| (stop, lhs))
+    }
+
+    /// Counts what an arithmetic operator allocates against the memory
+    /// limit, before it runs.
+    fn charge_op(
+        &mut self,
+        op: ast::BinOp,
+        lhs: &Value,
+        rhs: &Value,
+        span: Span,
+    ) -> EvalResult<()> {
         let grows = |v: &Value| {
             matches!(
                 v,
                 Value::Str(_) | Value::Array(_) | Value::Content(_) | Value::Dict(_)
             )
         };
-        let bytes = match (op, &lhs, &rhs) {
+        let bytes = match (op, lhs, rhs) {
             (ast::BinOp::Add, a, b) if grows(a) && grows(b) => b.shallow_size(),
             (ast::BinOp::Mul, a, Value::Int(n)) | (ast::BinOp::Mul, Value::Int(n), a)
                 if grows(a) =>
@@ -944,7 +1072,11 @@ impl<'a> Vm<'a> {
             }
             _ => 0,
         };
-        self.alloc(bytes, span)?;
+        self.alloc(bytes, span)
+    }
+
+    /// Runs an arithmetic operator, which the caller has charged for.
+    fn operate(op: ast::BinOp, lhs: Value, rhs: Value, span: Span) -> EvalResult<Value> {
         match op {
             ast::BinOp::Add => ops::add(lhs, rhs),
             ast::BinOp::Sub => ops::sub(lhs, rhs),
@@ -1216,28 +1348,55 @@ impl<'a> Vm<'a> {
 
     /// Calls a closure through its memoised query: for all variants first,
     /// and for this evaluation's variant if the call reads `variant`.
+    ///
+    /// The call's key leaves out where it was made, so that the same call
+    /// at two sites is evaluated once (SPEC §2.3): the depth (see
+    /// [`Vm::depth_key`]) and the spans of the arguments, which only errors
+    /// and argument sinks can show. A closure with a sink is called with
+    /// its arguments' spans; a call without them that fails is evaluated
+    /// again with them, so that its errors point at the arguments.
     fn call_closure(&mut self, closure: Closure, args: Args, span: Span) -> EvalResult<Value> {
         let depth = self.deeper(span)?;
+        let key = self.depth_key(depth, false);
         let name = closure.name().cloned();
-        let shared = super::call_closure(
-            self.db,
-            self.project,
-            closure.clone(),
-            args.clone(),
-            depth,
-            Mode::Shared,
-        );
-        let memo = match (&shared.outcome, &self.mode) {
-            (Err(Stop::NeedsVariant), Mode::Variant(_)) => super::call_closure(
-                self.db,
-                self.project,
-                closure,
-                args,
+        let (db, project, mode) = (self.db, self.project, self.mode.clone());
+        let lookup = |args: &Args, depth: u32| {
+            let shared = super::call_closure(
+                db,
+                project,
+                closure.clone(),
+                args.clone(),
                 depth,
-                self.mode.clone(),
-            ),
-            _ => shared,
+                Mode::Shared,
+            );
+            match (&shared.outcome, &mode) {
+                (Err(Stop::NeedsVariant), Mode::Variant(_)) => super::call_closure(
+                    db,
+                    project,
+                    closure.clone(),
+                    args.clone(),
+                    depth,
+                    mode.clone(),
+                ),
+                _ => shared,
+            }
         };
+        let memo = if closure.has_sink() {
+            self.exact(key, depth, |depth| lookup(&args, depth))
+        } else {
+            let anywhere = args.without_spans();
+            let memo = self.exact(key, depth, |depth| lookup(&anywhere, depth));
+            // Only errors can show the spans the key left out: those of the
+            // call, and those that files it imported recovered from.
+            let detached = matches!(&memo.outcome, Err(Stop::Error(error)) if error.has_detached_span())
+                || memo.recovered.iter().any(EvalError::has_detached_span);
+            if detached {
+                self.exact(key, depth, |depth| lookup(&args, depth))
+            } else {
+                memo
+            }
+        };
+        self.take_on(&memo.recovered);
         self.charge(memo.cost, span)?;
         match &memo.outcome {
             Ok(value) => Ok(value.clone()),
@@ -1471,7 +1630,7 @@ impl<'a> Vm<'a> {
                 self.flow = None;
                 false
             }
-            Some(Flow::Return(_)) => true,
+            Some(Flow::Return(..)) => true,
             None => false,
         }
     }
@@ -1614,7 +1773,12 @@ impl<'a> Vm<'a> {
                 .into());
         }
         let depth = self.deeper(span)?;
-        let memo = eval_file_for(self.db, self.project, file, &self.mode, depth);
+        let key = self.depth_key(depth, true);
+        let (db, project, mode) = (self.db, self.project, self.mode.clone());
+        let memo = self.exact(key, depth, |depth| {
+            eval_file_for(db, project, file, &mode, depth)
+        });
+        self.take_on(&memo.recovered);
         self.charge(memo.cost, span)?;
         match &memo.outcome {
             Ok(module) => Ok(module.clone()),
