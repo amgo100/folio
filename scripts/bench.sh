@@ -14,7 +14,9 @@
 #   cargo install gungraun-runner --version <version> --locked
 #
 # --wall times the M0 exit check and the reference document with an
-# optimised build and fails when the M0 exit check exceeds 200 ms (p95).
+# optimised build: full compile, edits, the preview path (edit to pages),
+# a stylesheet edit, three variants, times per stage and a typing session.
+# It fails only when the M0 exit check exceeds 200 ms (p95).
 # Its numbers mean something on the reference machine of SPEC §14.1; run it
 # there nightly.
 set -euo pipefail
