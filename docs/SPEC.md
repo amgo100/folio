@@ -1366,11 +1366,11 @@ Reference machine: a four-core laptop processor from 2023 with 16 GB of memory, 
 | Three variants, warm, in parallel | 1.3× one variant | 2× |
 | Peak memory of the core process | 300 MB | 600 MB |
 
-These are release criteria. Benchmarks run on every merge on a dedicated runner; the regression gate uses instruction counts (`iai-callgrind`), which are stable on shared hardware, and fails above 3%. Wall-clock targets are checked nightly on the reference machine.
+These are release criteria. Benchmarks run on every merge on a dedicated runner; the regression gate uses instruction counts (Gungraun, formerly `iai-callgrind`), which are stable on shared hardware, and fails above 3%. Wall-clock targets are checked nightly on the reference machine.
 
 ### 14.2 Testing
 
-- **Golden files** for layout (page images compared with a perceptual threshold), OOXML (normalised XML) and animation (the sequence of step states).
+- **Golden files** for layout (page images compared with a perceptual threshold; text dumps of the fragment tree until the rasteriser of M1), OOXML (normalised XML) and animation (the sequence of step states).
 - **Office checks**: outputs opened in Word and PowerPoint on a licensed self-hosted Windows runner, and in LibreOffice on standard CI, for repair prompts, style integrity and animation playback. Standard CI also validates every DOCX and PPTX output against the OOXML schemas with the Open XML SDK validator, which runs on Linux, so schema errors are caught on every merge.
 - **Leak tests** (§6.4) on every variant of the test corpus.
 - **Determinism** (§2.4): the test corpus, every variant and target, is built in two processes that differ in build strategy (fresh worlds one at a time, or parallel builds on one world after an edit and its revert), thread count, hash seeds, time zone, locale, `SOURCE_DATE_EPOCH` and working directory, and the outputs and diagnostics are compared byte for byte. The SHA-256 digests of the outputs are recorded in the repository, so a build on another machine or operating system is compared with the machine that recorded them.

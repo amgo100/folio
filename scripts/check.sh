@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs every check a change must pass before it is pushed: build, tests
-# (including the dependency-direction check), clippy, rustfmt, rustdoc, the
-# MSRV check and cargo-deny. Usage: scripts/check.sh [--fast]
+# (including the dependency-direction check, golden files and fuzz
+# regressions), clippy, rustfmt, rustdoc, the MSRV check and cargo-deny.
+# Usage: scripts/check.sh [--fast]
 #   --fast  skip the MSRV check and cargo-deny
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -48,5 +49,8 @@ if ! cargo deny --version >/dev/null 2>&1; then
     exit 1
 fi
 cargo deny check
+
+step "cargo-deny (fuzz workspace)"
+cargo deny --manifest-path fuzz/Cargo.toml check
 
 step "all checks passed"

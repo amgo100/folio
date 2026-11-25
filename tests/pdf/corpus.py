@@ -1,4 +1,4 @@
-"""Checks the PDFs that Folio writes for the test corpus in tests/pdf/corpus
+"""Checks the PDFs that Folio writes for the test corpus in tests/corpus
 (SPEC §11.1, issue #32): each must pass veraPDF's PDF/UA-1 profile, and the
 text that `pdftotext` extracts from it must be the document's text.
 

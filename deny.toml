@@ -30,6 +30,14 @@ allow = [
 confidence-threshold = 0.9
 # The list anticipates the dependencies of SPEC §2.2; most are not in the tree yet.
 unused-allowed-license = "allow"
+# libFuzzer, which the fuzz targets in `fuzz/` link (a workspace of its own,
+# checked by `scripts/check.sh` with this file), is under the permissive
+# University of Illinois/NCSA licence. It is a test tool, never shipped.
+# The main workspace does not have it, so cargo-deny warns there that the
+# exception is unmatched; that warning is expected.
+exceptions = [
+    { name = "libfuzzer-sys", allow = ["NCSA"] },
+]
 
 [licenses.private]
 # Workspace crates are not published and have no licence field until the

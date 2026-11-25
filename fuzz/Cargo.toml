@@ -1,0 +1,50 @@
+# The fuzz targets of SPEC §14.2, for `cargo fuzz` (nightly Rust). A
+# workspace of its own, so that libFuzzer stays out of the main one; the
+# targets' bodies are in `folio-testkit` (`src/fuzz.rs`), where `cargo test`
+# replays `regressions/` on stable. `scripts/fuzz.sh` runs them.
+[package]
+name = "folio-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+folio-testkit = { path = "../crates/folio-testkit" }
+libfuzzer-sys = "0.4.13"
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "markup"
+path = "fuzz_targets/markup.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stylesheet"
+path = "fuzz_targets/stylesheet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reparse"
+path = "fuzz_targets/reparse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "style"
+path = "fuzz_targets/style.rs"
+test = false
+doc = false
+bench = false

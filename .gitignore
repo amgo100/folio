@@ -2,4 +2,4 @@
 __pycache__/
 /tests/pdf/prototype/target
 # What `folio build` writes for the corpus.
-/tests/pdf/corpus/*/out/
+/tests/corpus/*/out/
