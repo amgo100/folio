@@ -104,7 +104,7 @@ fn counts(items: &[(&str, usize)]) -> BTreeMap<String, usize> {
 
 /// The stages a build runs from Style to Emit (SPEC §2.1), and the build
 /// queries around them.
-const STAGES: &str = "styles select sequence resolve step_style collect_text text lines pages \
+const STAGES: &str = "styles select sequence resolve_counters resolve step_style collect_text text lines pages \
                       pdf_input pdf_check emit";
 
 #[test]
