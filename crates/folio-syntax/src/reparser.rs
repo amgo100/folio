@@ -374,14 +374,54 @@ fn expand(node: &SyntaxNode) -> bool {
 
 /// Whether `at_start` would still be true after this node given the
 /// previous value of the property.
+///
+/// The parser sets `at_start` from the trivia just before the next token,
+/// wherever that trivia ended up in the tree: an unclosed `*` or `_` stops
+/// at a paragraph break and keeps it inside its own markup. So a node that
+/// is not trivia itself still counts the newlines in the trivia it ends
+/// with. (Not in typst-syntax v0.15.1, which looks only at the node's own
+/// kind, so that the `=` in `*.\n\n=\nsei` is reparsed as text after an
+/// edit behind it.)
 fn next_at_start(node: &SyntaxNode, at_start: &mut bool) {
+    match trailing_newline(node) {
+        Trailing::Transparent(newline) => *at_start |= newline,
+        Trailing::Token(newline) => *at_start = newline,
+    }
+}
+
+/// What the trivia a node ends with does to `at_start`.
+enum Trailing {
+    /// The node holds only trivia and empty nodes: it keeps the previous
+    /// value, set to true if this holds a newline.
+    Transparent(bool),
+    /// The node holds a token: the value is whether a newline follows the
+    /// last one.
+    Token(bool),
+}
+
+/// Reads a node's trailing trivia from its end, stopping at the last token.
+fn trailing_newline(node: &SyntaxNode) -> Trailing {
     let kind = node.kind();
     if kind.is_trivia() {
-        *at_start |= kind == SyntaxKind::Parbreak
-            || (kind == SyntaxKind::Space && node.leaf_text().chars().any(is_newline));
-    } else {
-        *at_start = false;
+        return Trailing::Transparent(
+            kind == SyntaxKind::Parbreak
+                || (kind == SyntaxKind::Space && node.leaf_text().chars().any(is_newline)),
+        );
     }
+    if node.is_empty() {
+        return Trailing::Transparent(false);
+    }
+    if !node.is_inner() {
+        return Trailing::Token(false);
+    }
+    let mut newline = false;
+    for child in node.children().rev() {
+        match trailing_newline(child) {
+            Trailing::Transparent(nl) => newline |= nl,
+            Trailing::Token(nl) => return Trailing::Token(newline || nl),
+        }
+    }
+    Trailing::Transparent(newline)
 }
 
 /// Update `nesting` based on the node.
@@ -544,6 +584,10 @@ mod tests {
         test("a ```typst hello```", Edit::Range(16..17), "", All);
         test("a{b}c", Edit::At(1), "#", All);
         test("a#{b}c", Edit::Match("#"), "", All);
+        // An unclosed strong or emph keeps the paragraph break, so the heading
+        // marker after it is still at the start of a line.
+        test("*.\n\n=\nsei", Edit::At(7), "", Incr("=\nsei"));
+        test("_a\n\n= b\nc~d~e", Edit::At(9), "x", Incr("= b\ncx~d"));
     }
 
     /// Test incremental reparsing of code and content blocks.
