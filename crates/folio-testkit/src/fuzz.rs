@@ -663,7 +663,8 @@ pub const SELECTORS: &[&str] = &[
 ];
 
 /// Lengths for [`compile`]: ordinary, zero, negative, huge, tiny, relative
-/// to a font size, and not finite.
+/// to a font size, at and past the limit of a length (SPEC §5.1), and not
+/// finite.
 pub const LENGTHS: &[&str] = &[
     "0pt",
     "1pt",
@@ -675,6 +676,9 @@ pub const LENGTHS: &[&str] = &[
     "14400pt",
     "20000pt",
     "1e6pt",
+    "-1e6pt",
+    "1000001pt",
+    "1e5em",
     "1e12pt",
     "1e300pt",
     "-1e300pt",
