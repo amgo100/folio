@@ -458,14 +458,10 @@ fn a_font_change_sends_every_page_again() {
     let first = updated(&events, |u| u.pages > 0);
     let mut ws = connect(&preview, preview.token(), None).unwrap();
     receive_from(&mut ws, first.revision);
-    // A font file in the project's font directory: the pages' hashes may
-    // stay, but every page is drawn again.
-    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("../folio-fonts/bundled");
-    let font = std::fs::read_dir(&bundled)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| p.extension().is_some_and(|e| e == "otf" || e == "ttf"))
-        .expect("a bundled font file");
+    // A font file in the project's font directory, of a family the exam
+    // does not use: the pages' hashes stay, but every page is drawn again.
+    let font =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../folio-fonts/bundled/NewCM10-Regular.otf");
     let fonts = dir.path().join("fonts");
     std::fs::create_dir(&fonts).unwrap();
     std::fs::copy(&font, fonts.join(font.file_name().unwrap())).unwrap();

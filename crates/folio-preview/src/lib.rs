@@ -336,8 +336,9 @@ impl Preview {
         let root = std::path::absolute(&options.root).unwrap_or_else(|_| options.root.clone());
         let token: Arc<str> = http::token().map_err(|e| Error(e.to_string()))?.into();
         // The watcher starts before the project is read, so that a change
-        // saved meanwhile queues for the engine. Nothing runs until every
-        // part has started, so a failure leaves nothing behind.
+        // saved meanwhile queues for the engine, which starts last. When a
+        // part fails to start, those started before it are stopped: the
+        // watcher and server by being dropped, the server's thread joined.
         let pending = engine::prepare(&root, &options)?;
         let engine = pending.handle.clone();
         let watcher = match options.watch {
@@ -360,6 +361,7 @@ impl Preview {
             engine,
             server: Some(server),
             _watcher: watcher,
+            // The engine's first: `wait` joins it before the server's.
             threads: vec![engine_thread, server_thread],
         })
     }
@@ -390,11 +392,24 @@ impl Preview {
         );
     }
 
-    /// Blocks until the preview stops, which only [`Self::stop`] from
-    /// another handle or the end of the process does.
-    pub fn wait(mut self) {
-        for thread in self.threads.drain(..) {
+    /// Serves until the process ends. Returns only when the engine fails,
+    /// which is a bug: then it stops the server, and says so.
+    pub fn wait(mut self) -> Result<(), Error> {
+        let mut threads = self.threads.drain(..);
+        let engine = threads.next().map(JoinHandle::join);
+        let rest: Vec<_> = threads.collect();
+        if let Some(server) = self.server.take() {
+            server.stop();
+        }
+        for thread in rest {
             let _ = thread.join();
+        }
+        match engine {
+            Some(Err(_)) => Err(Error(
+                "the preview stopped: the compiler failed while reading the project;                  this is a bug in Folio"
+                    .into(),
+            )),
+            _ => Ok(()),
         }
     }
 

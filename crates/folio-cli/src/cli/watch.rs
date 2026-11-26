@@ -82,8 +82,10 @@ pub(crate) fn watch(args: &WatchArgs) -> ExitCode {
     };
     println!("Preview at {}", preview.url());
     println!("Press Ctrl-C to stop.");
-    preview.wait();
-    ExitCode::SUCCESS
+    match preview.wait() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(e.to_string()),
+    }
 }
 
 /// Warns when the project pins another compiler version: the preview
@@ -115,8 +117,10 @@ fn updated(event: &Event, shown: &Mutex<Option<Shown>>, color: bool) {
         return;
     };
     let mut shown = shown.lock().unwrap_or_else(|e| e.into_inner());
-    let now = (update.diagnostics.clone(), update.banner.clone());
-    if shown.as_ref() == Some(&now) {
+    if shown
+        .as_ref()
+        .is_some_and(|(d, b)| *d == update.diagnostics && *b == update.banner)
+    {
         return;
     }
     print(&*update.files, &update.diagnostics, color);
@@ -129,7 +133,7 @@ fn updated(event: &Event, shown: &Mutex<Option<Shown>>, color: bool) {
             update.pages
         ),
     }
-    *shown = Some(now);
+    *shown = Some((update.diagnostics.clone(), update.banner.clone()));
 }
 
 /// Writes the outputs of a quiet revision, as `folio build` does: only
