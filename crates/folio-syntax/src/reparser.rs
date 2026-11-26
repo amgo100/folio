@@ -584,7 +584,7 @@ mod tests {
         test("a ```typst hello```", Edit::Range(16..17), "", All);
         test("a{b}c", Edit::At(1), "#", All);
         test("a#{b}c", Edit::Match("#"), "", All);
-        // An unclosed strong keeps the paragraph break, so the heading
+        // An unclosed strong or emph keeps the paragraph break, so the heading
         // marker after it is still at the start of a line.
         test("*.\n\n=\nsei", Edit::At(7), "", Incr("=\nsei"));
         test("_a\n\n= b\nc~d~e", Edit::At(9), "x", Incr("= b\ncx~d"));
