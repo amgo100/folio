@@ -376,8 +376,9 @@ impl DisplayList {
 
     /// The items whose box contains a point, topmost first: glyphs by
     /// the box from their pen position to the next, a font size high
-    /// above the baseline and a quarter of it below; paths and frames by
-    /// their bounds; nested fragments by their box. What a click in a
+    /// above the baseline and a quarter of it below; paths by the bounds
+    /// of their points, widened by as far as their stroke reaches; frames
+    /// and nested fragments by their box. What a click in a
     /// preview leads to (SPEC §12.2).
     pub fn hit(&self, x: f32, y: f32) -> Vec<Hit> {
         let mut hits = Vec::new();
@@ -402,7 +403,22 @@ impl DisplayList {
                     }
                 }
                 Command::Path(shape) => {
-                    if bounds(&shape.segments).is_some_and(|b| b.contains(x, y)) {
+                    // A stroke reaches half its width past the path, and a
+                    // miter join up to the miter limit times that.
+                    let reach = shape.stroke.as_ref().map_or(0.0, |stroke| {
+                        let half = stroke.thickness.abs() / 2.0;
+                        match stroke.join {
+                            LineJoin::Miter => half * stroke.miter_limit.max(1.0),
+                            _ => half,
+                        }
+                    });
+                    let area = bounds(&shape.segments).map(|b| Rect {
+                        x: b.x - reach,
+                        y: b.y - reach,
+                        width: b.width + 2.0 * reach,
+                        height: b.height + 2.0 * reach,
+                    });
+                    if area.is_some_and(|b| b.contains(x, y)) {
                         hits.push(Hit {
                             item: index,
                             glyph: None,

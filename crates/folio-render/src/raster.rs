@@ -333,10 +333,15 @@ fn path(pixmap: &mut sk::Pixmap, shape: &PathShape, scale: f32) {
                 LineJoin::Round => sk::LineJoin::Round,
                 LineJoin::Bevel => sk::LineJoin::Bevel,
             },
-            dash: stroke
-                .dash
-                .as_ref()
-                .and_then(|(array, phase)| sk::StrokeDash::new(array.clone(), *phase)),
+            dash: stroke.dash.as_ref().and_then(|(array, phase)| {
+                // An odd number of lengths repeats, as in PDF and SVG;
+                // tiny-skia takes only an even number.
+                let mut array = array.clone();
+                if array.len() % 2 == 1 {
+                    array.extend_from_within(..);
+                }
+                sk::StrokeDash::new(array, *phase)
+            }),
         };
         pixmap.stroke_path(&path, &paint(stroke.color), &sk_stroke, transform, None);
     }

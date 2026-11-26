@@ -250,3 +250,44 @@ fn svg_output() {
     assert!(text.ends_with("</svg>\n"));
     assert_eq!(svg(&list, &vec![font], &mut Outlines::new()), text);
 }
+
+/// A horizontal line 2pt thick from (10, 10) to (90, 10), dashed with one
+/// length, which repeats: 10 on, 10 off.
+fn dashed_line() -> DisplayList {
+    use folio_component::{Dash, Stroke};
+    let mut path = Path::new();
+    path.move_to(Point::new(Abs::pt(10.0), Abs::pt(10.0)));
+    path.line_to(Point::new(Abs::pt(90.0), Abs::pt(10.0)));
+    let mut stroke = Stroke::solid(Color::BLACK, Abs::pt(2.0));
+    stroke.dash = Some(Dash {
+        array: [Abs::pt(10.0)].into_iter().collect(),
+        phase: Abs::zero(),
+    });
+    let mut page = Fragment::new(Size::new(Abs::pt(100.0), Abs::pt(20.0)));
+    page.push(
+        Point::zero(),
+        FragmentItem::Shape {
+            shape: Shape::stroked(path, stroke),
+            source: SourceRef(9),
+        },
+    );
+    DisplayList::from_fragment(&page)
+}
+
+#[test]
+fn odd_dash_arrays_repeat() {
+    let list = dashed_line();
+    let none: Vec<FontBytes<'_>> = Vec::new();
+    let image = render(&list, &none, &mut Outlines::new(), &Options::default()).unwrap();
+    assert_eq!(pixel(&image, 15, 10)[0], 0, "a dash");
+    assert_eq!(pixel(&image, 25, 10)[0], 255, "a gap");
+    assert_eq!(pixel(&image, 35, 10)[0], 0, "the next dash");
+}
+
+#[test]
+fn strokes_are_hit_beside_their_path() {
+    let list = dashed_line();
+    assert_eq!(list.hit(50.0, 10.8).len(), 1);
+    assert_eq!(list.hit(50.0, 9.2).len(), 1);
+    assert!(list.hit(50.0, 15.0).is_empty());
+}

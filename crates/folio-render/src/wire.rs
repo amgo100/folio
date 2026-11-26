@@ -65,6 +65,12 @@ const SEG_CLOSE: u8 = 3;
 
 const PAINT_SOLID: u8 = 0;
 
+/// How many elements of a list the decoder reserves room for before it
+/// reads them: a count only bounds how many elements the bytes left could
+/// hold, and an element takes more memory than its fewest bytes, so a
+/// longer list grows as it is read.
+const PREALLOCATE: usize = 256;
+
 /// A decoded message.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
@@ -76,6 +82,9 @@ pub enum Message {
 }
 
 /// Encodes a whole display list.
+///
+/// Its lengths must be finite, as those of a list made from a fragment
+/// are: [`decode`] refuses a message with one that is not.
 pub fn encode(list: &DisplayList) -> Vec<u8> {
     let mut w = Writer::header(KIND_LIST);
     w.f32(list.width);
@@ -134,8 +143,9 @@ pub fn encode_spans(spans: &SpanMap) -> Vec<u8> {
 ///
 /// When the bytes are not a message of this version of the format, or are
 /// cut short, or hold a length that is not finite or text that is not
-/// UTF-8. Decoding never panics and allocates no more than the input's
-/// size warrants, whatever the bytes.
+/// UTF-8. Decoding never panics, whatever the bytes, and allocates memory
+/// in proportion to the elements it has read, which the input's size
+/// bounds, never to a count the input claims.
 pub fn decode(bytes: &[u8]) -> Result<Message, DecodeError> {
     let mut r = Reader { bytes, pos: 0 };
     if r.take(3)? != MAGIC {
@@ -517,7 +527,7 @@ impl<'a> Reader<'a> {
         let span = self.span()?;
         // A tag, a length and a span of two varints at least.
         let count = self.count(4)?;
-        let mut items = Vec::with_capacity(count);
+        let mut items = Vec::with_capacity(count.min(PREALLOCATE));
         for _ in 0..count {
             let tag = self.uint()?;
             let len = usize::try_from(self.uint()?).map_err(|_| DecodeError::Overflow)?;
@@ -548,7 +558,7 @@ impl<'a> Reader<'a> {
     fn spans(&mut self) -> Result<SpanMap, DecodeError> {
         let span = self.span()?;
         let count = self.count(3)?;
-        let mut items = Vec::with_capacity(count);
+        let mut items = Vec::with_capacity(count.min(PREALLOCATE));
         for _ in 0..count {
             let span = self.span()?;
             let glyphs = self.count(3)?;
@@ -570,7 +580,7 @@ impl<'a> Reader<'a> {
         let text = std::str::from_utf8(self.take(len)?).map_err(|_| DecodeError::Text)?;
         // An id, an advance, flags, a range and a source: 10 bytes at least.
         let count = self.count(10)?;
-        let mut glyphs = Vec::with_capacity(count);
+        let mut glyphs = Vec::with_capacity(count.min(PREALLOCATE));
         let mut text_end = 0u32;
         let mut prev = (node, 0);
         for _ in 0..count {
@@ -612,7 +622,7 @@ impl<'a> Reader<'a> {
 
     fn path(&mut self) -> Result<PathShape, DecodeError> {
         let count = self.count(1)?;
-        let mut segments = Vec::with_capacity(count);
+        let mut segments = Vec::with_capacity(count.min(PREALLOCATE));
         for _ in 0..count {
             segments.push(match self.u8()? {
                 SEG_MOVE => Segment::MoveTo(self.point()?),

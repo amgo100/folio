@@ -74,13 +74,13 @@ fn check_build(
         failures.push(message);
     }
     expected.push(path);
-    for list in golden::display_lists(pages) {
-        let decoded = wire::decode(&wire::encode(&list));
-        assert_eq!(
-            decoded,
-            Ok(wire::Message::List(list)),
-            "{name}: a page does not survive the wire format"
-        );
+    for (i, list) in golden::display_lists(pages).into_iter().enumerate() {
+        if wire::decode(&wire::encode(&list)) != Ok(wire::Message::List(list)) {
+            failures.push(format!(
+                "{name}: page {} does not survive the wire format",
+                i + 1
+            ));
+        }
     }
     let stem = name.strip_suffix(".txt").unwrap_or(name);
     for (i, image) in golden::page_images(world, pages).iter().enumerate() {
