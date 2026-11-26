@@ -91,10 +91,14 @@ pub(crate) struct GlyphInfo {
     pub extended: bool,
     /// The kerns of each corner (top right, top left, bottom right, bottom
     /// left): bands of a maximum height and a kern.
-    pub kerns: [Option<Vec<(Option<f64>, f64)>>; 4],
+    pub kerns: [Option<Kern>; 4],
     pub horizontal: Option<Construction>,
     pub vertical: Option<Construction>,
 }
+
+/// The bands of a corner's kern: each up to a height (none for the last),
+/// with its kern.
+pub(crate) type Kern = Vec<(Option<f64>, f64)>;
 
 /// How a glyph grows along an axis: larger variants, and an assembly of
 /// parts for anything larger still.

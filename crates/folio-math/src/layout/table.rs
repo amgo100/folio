@@ -120,7 +120,7 @@ fn layout_table(
     let mut cols: Vec<Vec<Cell>> = (0..ncols).map(|_| Vec::with_capacity(nrows)).collect();
     let mut heights = vec![(0.0f64, 0.0f64); nrows];
     for (r, row) in rows.iter().enumerate() {
-        for c in 0..ncols {
+        for (c, col) in cols.iter_mut().enumerate() {
             let mut columns = match row.get(c) {
                 Some(cell) => ctx.layout_aligned(cell.nodes(), cell_style),
                 None => vec![Vec::new()],
@@ -135,7 +135,7 @@ fn layout_table(
             let height = measure_row(&columns);
             heights[r].0 = heights[r].0.max(height.0.max(paren_ascent));
             heights[r].1 = heights[r].1.max(height.1.max(paren_descent));
-            cols[c].push(Cell { columns, height });
+            col.push(Cell { columns, height });
         }
     }
 

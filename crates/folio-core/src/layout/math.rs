@@ -248,12 +248,12 @@ fn lay_out(
 
 /// An equation's number, set in the math font.
 fn set_number(text: &EcoString, options: &MathOptions, span: Span) -> Option<Number> {
-    let (width, ascent, descent, items) = layout_text(text, options, source_ref(span))?;
+    let set = layout_text(text, options, source_ref(span))?;
     Some(Number {
-        width,
-        ascent,
-        descent,
-        items,
+        width: set.width,
+        ascent: set.ascent,
+        descent: set.descent,
+        items: set.items,
     })
 }
 

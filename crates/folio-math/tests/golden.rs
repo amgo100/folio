@@ -204,11 +204,10 @@ fn dump_items(out: &mut String, items: &[(Point, FragmentItem)]) {
                     .collect();
                 writeln!(
                     out,
-                    "    text {} {} at {} {}: {:?} {}",
+                    "    text {} {} at {}pt: {:?} {}",
                     pt(pos.x),
                     pt(pos.y),
                     pt(run.size),
-                    "pt",
                     run.text.as_str(),
                     glyphs.join(" ")
                 )

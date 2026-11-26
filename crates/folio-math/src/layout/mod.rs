@@ -260,14 +260,22 @@ pub fn layout_display(
     }
 }
 
+/// Text set in the math font.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct SetText {
+    /// How wide it is.
+    pub width: Abs,
+    /// How far it reaches above its baseline.
+    pub ascent: Abs,
+    /// How far it reaches below its baseline.
+    pub descent: Abs,
+    /// What it draws, positioned from the start of its baseline (y down).
+    pub items: EcoVec<(Point, FragmentItem)>,
+}
+
 /// Lays out text in the math font, upright, at the size of the text around
-/// formulas: an equation's number, with its width, ascent and descent.
-/// `None` when the font cannot set it.
-pub fn layout_text(
-    text: &str,
-    options: &MathOptions,
-    source: SourceRef,
-) -> Option<(Abs, Abs, Abs, EcoVec<(Point, FragmentItem)>)> {
+/// formulas: an equation's number. `None` when the font cannot set it.
+pub fn layout_text(text: &str, options: &MathOptions, source: SourceRef) -> Option<SetText> {
     let ctx = Ctx::new(options);
     let style = Style::new(MathSize::Text);
     let glyph = GlyphFragment::new(
@@ -282,12 +290,12 @@ pub fn layout_text(
     let frame = glyph.into_frame();
     let mut items = EcoVec::new();
     ctx.flatten(&frame, 0.0, -frame.baseline, &|_| source, &mut items);
-    Some((
-        Abs::pt(frame.width),
-        Abs::pt(frame.baseline),
-        Abs::pt(frame.descent()),
+    Some(SetText {
+        width: Abs::pt(frame.width),
+        ascent: Abs::pt(frame.baseline),
+        descent: Abs::pt(frame.descent()),
         items,
-    ))
+    })
 }
 
 /// The style a part of a formula is set in.
@@ -471,7 +479,7 @@ impl Ctx {
     /// Lays out a row into one fragment of a class.
     pub(crate) fn layout_row(&mut self, row: &Row, style: Style, class: MathClass) -> MathFragment {
         let fragments = self.layout_fragments(row.nodes(), style, false);
-        self.into_fragment(fragments, style, class)
+        self.group(fragments, style, class)
     }
 
     /// The fragments of a sequence of nodes, spaced.
@@ -490,8 +498,8 @@ impl Ctx {
 
     /// Fragments as one fragment: itself if there is one, else a frame of
     /// them that is like text where they all are.
-    pub(crate) fn into_fragment(
-        &mut self,
+    pub(crate) fn group(
+        &self,
         mut fragments: Vec<MathFragment>,
         style: Style,
         class: MathClass,
@@ -614,7 +622,7 @@ impl Ctx {
                     ..style
                 };
                 let fragments = self.layout_fragments(styled.body.nodes(), inner, false);
-                let fragment = self.into_fragment(fragments, style, class);
+                let fragment = self.group(fragments, style, class);
                 out.push(fragment);
             }
             Node::AlignPoint(_) => {}

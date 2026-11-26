@@ -126,7 +126,7 @@ pub struct Lines {
     /// whose content it is, and where that starts from the left of the
     /// body. A line's `x` is relative to its slot.
     pub slots: EcoVec<LineSlot>,
-    /// The build's formulas laid out ([`maths()`]): the paragraphs were
+    /// The build's formulas laid out ([`Maths`]): the paragraphs were
     /// broken with their inline formulas' sizes, and the page builder
     /// draws them and sizes the blocks of displays.
     pub maths: Maths,

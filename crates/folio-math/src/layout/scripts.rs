@@ -46,7 +46,7 @@ pub(crate) fn layout_attach(
     } else {
         let tr = match (primes, sup) {
             (Some(primes), Some(sup)) => {
-                Some(ctx.into_fragment(vec![primes, sup], style.sup(), MathClass::Normal))
+                Some(ctx.group(vec![primes, sup], style.sup(), MathClass::Normal))
             }
             (primes, sup) => primes.or(sup),
         };
