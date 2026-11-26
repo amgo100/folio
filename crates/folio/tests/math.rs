@@ -277,17 +277,6 @@ fn names_read_the_scripts_bindings() {
     );
 }
 
-#[test]
-fn quantities_are_set_as_written_until_they_are_supported() {
-    // `qty`, `unit` and `num` come with #42.
-    assert_eq!(
-        tree("$qty(2.31, \"m\", pm: 0.02)$"),
-        "[op(qty), delim('(', [num(2.31), punct(,), text(\"m\"), punct(,), text(\"pm\"), \
-         punct(:), \
-         num(0.02)], ')')]"
-    );
-}
-
 // ---- Errors ----
 
 /// An error and the source its span points at.

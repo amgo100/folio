@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use ecow::{EcoString, eco_format};
 use folio_component::{Name, QualifiedName};
-use folio_math::{self as math, Atom, Formula, Line, MathClass, Row};
+use folio_math::{self as math, Atom, Formula, Line, MathClass, Number, Row, Unit};
 use folio_syntax::ast::{self, AstNode, MathTextKind};
 use folio_syntax::{Span, SubRange, SyntaxKind};
 
@@ -339,20 +339,12 @@ impl Vm<'_> {
             && let Some(value) = self.math_binding(&name)?
         {
             if let Value::Func(func) = value {
-                let args = self.math_func_args(call.args())?;
+                let args = self.math_func_args(call.args(), false)?;
                 let result = self.call(func, args, span)?;
                 return self.place_in_math(result, level, span, out);
             }
             self.place_in_math(value, level, callee.span(), out)?;
-            return self.call_as_group(call.args(), false, out);
-        }
-        if PENDING.contains(&name.as_str()) {
-            out.push(math::Node::Operator(math::Operator {
-                name: name.clone(),
-                limits: false,
-                span: callee.span(),
-            }));
-            return self.call_as_group(call.args(), true, out);
+            return self.call_as_group(call.args(), out);
         }
         match math_item(&name, true) {
             Some(MathItem::Func(func)) => {
@@ -369,7 +361,7 @@ impl Vm<'_> {
                         self.math_expr(ast::Expr::MathFieldAccess(access), Level::Nested, out)?
                     }
                 }
-                self.call_as_group(call.args(), false, out)
+                self.call_as_group(call.args(), out)
             }
             None => match callee {
                 ast::MathAccess::MathIdent(_) => Err(unknown_name(&name, callee.span()).into()),
@@ -382,11 +374,10 @@ impl Vm<'_> {
 
     /// The arguments of a call that is not a function's, set as they were
     /// written: in parentheses, separated by commas and semicolons. Named
-    /// arguments are errors, except in the calls of [`PENDING`].
+    /// arguments are errors.
     fn call_as_group(
         &mut self,
         args: ast::MathArgs<'_>,
-        named: bool,
         out: &mut Vec<math::Node>,
     ) -> EvalResult<()> {
         let mut body = Vec::new();
@@ -394,15 +385,6 @@ impl Vm<'_> {
             match item {
                 ast::MathArgItem::Arg(ast::Arg::Pos(expr)) => {
                     self.math_expr(expr, Level::Nested, &mut body)?
-                }
-                ast::MathArgItem::Arg(ast::Arg::Named(arg)) if named => {
-                    body.push(math::Node::Text(Atom {
-                        text: arg.name().get().clone(),
-                        class: MathClass::Normal,
-                        span: arg.name().span(),
-                    }));
-                    body.push(math::Node::symbol(':', arg.span()));
-                    self.math_expr(arg.expr(), Level::Nested, &mut body)?;
                 }
                 ast::MathArgItem::Arg(arg) => {
                     bail!(
@@ -431,8 +413,10 @@ impl Vm<'_> {
 
     /// The arguments of a script's function called in an equation: each
     /// positional or named argument an inline formula, unless it is a
-    /// string or code embedded with `#`, which keep their values.
-    fn math_func_args(&mut self, args: ast::MathArgs<'_>) -> EvalResult<Args> {
+    /// string or code embedded with `#`, which keep their values. With
+    /// `values`, in an argument of a quantity, numbers and bound names are
+    /// values too ([`value_in_math`](Self::value_in_math)).
+    fn math_func_args(&mut self, args: ast::MathArgs<'_>, values: bool) -> EvalResult<Args> {
         let mut items = Vec::new();
         for item in args.arg_items() {
             if item.ends_in_semicolon {
@@ -449,7 +433,13 @@ impl Vm<'_> {
                 }
             };
             let span = expr.span();
-            let value = self.math_arg_value(expr)?;
+            let value = match values {
+                true => match self.value_in_math(expr)? {
+                    Some(value) => value,
+                    None => self.math_arg_value(expr)?,
+                },
+                false => self.math_arg_value(expr)?,
+            };
             items.push(Arg {
                 span,
                 name,
@@ -484,6 +474,9 @@ impl Vm<'_> {
     ) -> EvalResult<math::Node> {
         let mut pos: Vec<(ast::Expr<'_>, bool)> = Vec::new();
         let mut delim: Option<(ast::Expr<'_>, Span)> = None;
+        let mut pm: Option<ast::Expr<'_>> = None;
+        let mut digits: Option<ast::Expr<'_>> = None;
+        let numeric = matches!(func, MathFunc::Quantity | MathFunc::Num);
         for item in args.arg_items() {
             match item.arg {
                 ast::Arg::Pos(expr) => pos.push((expr, item.ends_in_semicolon)),
@@ -491,6 +484,12 @@ impl Vm<'_> {
                     if func == MathFunc::Matrix && named.name().get() == "delim" =>
                 {
                     delim = Some((named.expr(), named.span()));
+                }
+                ast::Arg::Named(named) if numeric && named.name().get() == "pm" => {
+                    pm = Some(named.expr());
+                }
+                ast::Arg::Named(named) if numeric && named.name().get() == "digits" => {
+                    digits = Some(named.expr());
                 }
                 ast::Arg::Named(named) => bail!(
                     named.span(),
@@ -512,6 +511,45 @@ impl Vm<'_> {
         }
         let exprs: Vec<ast::Expr<'_>> = pos.iter().map(|&(expr, _)| expr).collect();
         Ok(match func {
+            MathFunc::Quantity | MathFunc::Unit | MathFunc::Num => {
+                let (value, unit) = match (func, exprs.as_slice()) {
+                    (MathFunc::Quantity, &[value, unit]) => (Some(value), Some(unit)),
+                    (MathFunc::Unit, &[unit]) => (None, Some(unit)),
+                    (MathFunc::Num, &[value]) => (Some(value), None),
+                    (MathFunc::Quantity, _) => {
+                        return Err(arity(name, span, "a value and a unit").into());
+                    }
+                    (MathFunc::Unit, _) => return Err(arity(name, span, "a unit").into()),
+                    _ => return Err(arity(name, span, "a value").into()),
+                };
+                let value = match value {
+                    Some(expr) => Some((self.math_number(expr)?, expr.span())),
+                    None => None,
+                };
+                let pm = match pm {
+                    Some(expr) => Some((self.math_number(expr)?, expr.span())),
+                    None => None,
+                };
+                let unit = match unit {
+                    Some(expr) => match self.value_in_math(expr)? {
+                        Some(value) => Some(Spanned::of(value, expr)),
+                        None => {
+                            return Err(EvalError::new(expr.span(), "expected a unit")
+                                .with_hint("a unit is written in quotes: `\"m s^-2\"`")
+                                .into());
+                        }
+                    },
+                    None => None,
+                };
+                let digits = match digits {
+                    Some(expr) => match self.value_in_math(expr)? {
+                        Some(value) => Some((value, expr.span())),
+                        None => bail!(expr.span(), "expected an integer"),
+                    },
+                    None => None,
+                };
+                math::Node::Quantity(Arc::new(quantity(value, pm, unit, digits, span)?))
+            }
             MathFunc::Frac => {
                 let [num, den] =
                     self.math_args::<2>(name, &exprs, span, "a numerator and a denominator")?;
@@ -653,6 +691,64 @@ impl Vm<'_> {
                 }))
             }
         })
+    }
+
+    /// The number an argument of `qty` or `num` gives: a decimal literal as
+    /// written in the equation (`9.81`, `-0.5`, `6.02e23`), which keeps its
+    /// digits, or a value as [`value_in_math`](Self::value_in_math) gives
+    /// it.
+    fn math_number(&mut self, expr: ast::Expr<'_>) -> EvalResult<Number> {
+        let span = expr.span();
+        if let Some(text) = literal_text(expr) {
+            match Number::parse(&text) {
+                Ok(number) => return Ok(number),
+                // A literal that is out of range says so.
+                Err(message)
+                    if text
+                        .trim_start_matches(['-', '−', '+'])
+                        .starts_with(|c: char| c.is_ascii_digit()) =>
+                {
+                    return Err(EvalError::new(span, message).into());
+                }
+                Err(_) => {}
+            }
+        }
+        match self.value_in_math(expr)? {
+            Some(value) => number_of(&value, span),
+            None => Err(EvalError::new(span, "expected a number")
+                .with_hint("write a number such as `9.81` or `6.02e23`, or a value with `#`")
+                .into()),
+        }
+    }
+
+    /// The value of an argument of `qty`, `unit` or `num` in an equation,
+    /// as a script sees it: a number as an integer or a float, a name the
+    /// script binds as its value, a call of a script's function, whose
+    /// arguments are such values too (`range-of(speed, angle)`), a string,
+    /// or code embedded with `#`. `None` for other math, which is no value.
+    fn value_in_math(&mut self, expr: ast::Expr<'_>) -> EvalResult<Option<Value>> {
+        if !is_math(expr) {
+            return self.math_arg_value(expr).map(Some);
+        }
+        if let Some(text) = literal_text(expr)
+            && let Ok(number) = Number::parse(&text)
+        {
+            return Ok(Some(number_value(&number)));
+        }
+        match expr {
+            ast::Expr::MathIdent(ident) => self.math_binding(ident.get()),
+            ast::Expr::MathCall(call) => {
+                let ast::MathAccess::MathIdent(ident) = call.callee() else {
+                    return Ok(None);
+                };
+                let Some(Value::Func(func)) = self.math_binding(ident.get())? else {
+                    return Ok(None);
+                };
+                let args = self.math_func_args(call.args(), true)?;
+                self.call(func, args, call.span()).map(Some)
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Exactly `N` positional arguments, each as a row.
@@ -830,10 +926,169 @@ fn tex_sub_range(text: &str, range: std::ops::Range<usize>) -> Option<SubRange> 
     SubRange::new(range.start - before.len_utf8(), range.start)
 }
 
-/// The quantity functions of SPEC §8.1, which #42 adds. Until then a call
-/// of one is set as written, its name upright before its arguments in
-/// parentheses, so equations that use them still build.
-const PENDING: &[&str] = &["qty", "unit", "num"];
+/// A value with the span of the expression it came from, and the text of
+/// that expression when it is a string literal written without escapes,
+/// so that an error can point into it.
+pub(super) struct Spanned {
+    value: Value,
+    span: Span,
+    literal: bool,
+}
+
+impl Spanned {
+    /// The value of an expression.
+    fn of(value: Value, expr: ast::Expr<'_>) -> Self {
+        let literal = match (&value, expr) {
+            (Value::Str(text), ast::Expr::Str(_)) => {
+                expr.to_untyped().leaf_text().len() == text.len() + 2
+            }
+            _ => false,
+        };
+        Self {
+            value,
+            span: expr.span(),
+            literal,
+        }
+    }
+
+    /// A value whose errors point at all of `span`.
+    pub(super) fn new(value: Value, span: Span) -> Self {
+        Self {
+            value,
+            span,
+            literal: false,
+        }
+    }
+}
+
+/// The text of a math expression that may be a decimal literal, without
+/// its spaces: `-9.81`, `6.02e23` (which math reads as a number and a
+/// name). `None` for an expression that is not math.
+fn literal_text(expr: ast::Expr<'_>) -> Option<String> {
+    if !is_math(expr) {
+        return None;
+    }
+    Some(
+        expr.to_untyped()
+            .full_text()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect(),
+    )
+}
+
+/// A number as a script's value: an integer when it is one that fits, a
+/// float otherwise.
+fn number_value(number: &Number) -> Value {
+    let text = number.to_string();
+    if number.frac.is_empty()
+        && number.exponent.is_none()
+        && let Ok(n) = text.parse::<i64>()
+    {
+        return Value::Int(n);
+    }
+    Value::Float(folio_component::Scalar::new(
+        text.parse::<f64>().unwrap_or(f64::NAN),
+    ))
+}
+
+/// The number a value gives for `qty` or `num`: an integer, a float, or a
+/// string holding a decimal literal, which keeps its digits as written
+/// (`"9.80"`).
+pub(super) fn number_of(value: &Value, span: Span) -> EvalResult<Number> {
+    match value {
+        Value::Int(n) => Ok(Number::from_int(*n)),
+        Value::Float(f) => Number::from_float(f.get())
+            .ok_or_else(|| EvalError::new(span, "a quantity cannot be NaN or infinite").into()),
+        Value::Str(text) => Number::parse(text).map_err(|message| {
+            EvalError::new(span, message)
+                .with_hint("a number in a string is written as in code: `\"9.80\"`, `\"6.02e23\"`")
+                .into()
+        }),
+        other => bail!(
+            span,
+            "expected a number, found {}",
+            a_type(other.type_name())
+        ),
+    }
+}
+
+/// The most significant figures `digits:` can ask for.
+const MAX_FIGURES: i64 = 100;
+
+/// Builds what `qty`, `unit` and `num` make, in math and in code: checks
+/// the uncertainty, reads the unit, and rounds the value to `digits`
+/// significant figures.
+pub(super) fn quantity(
+    value: Option<(Number, Span)>,
+    pm: Option<(Number, Span)>,
+    unit: Option<Spanned>,
+    digits: Option<(Value, Span)>,
+    span: Span,
+) -> EvalResult<math::Quantity> {
+    if let Some((pm, at)) = &pm
+        && pm.negative
+    {
+        bail!(*at, "an uncertainty cannot be negative");
+    }
+    let unit = match unit {
+        None => None,
+        Some(Spanned {
+            value: Value::Str(text),
+            span: at,
+            literal,
+        }) => Some(Unit::parse(&text).map_err(|error| {
+            let mut eval_error = EvalError::new(at, error.message);
+            if literal {
+                eval_error = eval_error
+                    .with_sub_range(SubRange::new(error.range.start + 1, error.range.end + 1));
+            }
+            if let Some(hint) = error.hint {
+                eval_error = eval_error.with_hint(hint);
+            }
+            Stop::from(eval_error)
+        })?),
+        Some(Spanned {
+            value, span: at, ..
+        }) => {
+            return Err(EvalError::new(
+                at,
+                eco_format!("expected a unit, found {}", a_type(value.type_name())),
+            )
+            .with_hint("a unit is written in quotes: `\"m s^-2\"`")
+            .into());
+        }
+    };
+    let figures = match digits {
+        None | Some((Value::None, _)) => None,
+        Some((Value::Int(n), _)) if (1..=MAX_FIGURES).contains(&n) => Some(n as u32),
+        Some((value, at)) => {
+            return Err(EvalError::new(
+                at,
+                match value {
+                    Value::Int(n) => eco_format!("{n} is not a number of significant figures"),
+                    other => {
+                        eco_format!("expected an integer, found {}", a_type(other.type_name()))
+                    }
+                },
+            )
+            .with_hint(eco_format!(
+                "`digits` is the number of significant figures, from 1 to {MAX_FIGURES}"
+            ))
+            .into());
+        }
+    };
+    let value = value.map(|(number, _)| match figures {
+        Some(figures) => number.round(figures),
+        None => number,
+    });
+    Ok(math::Quantity {
+        value,
+        pm: pm.map(|(number, _)| number),
+        unit,
+        span,
+    })
+}
 
 /// Whether an expression in an equation is math, rather than a string or
 /// code embedded with `#`.

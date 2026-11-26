@@ -8,8 +8,13 @@
 //! of their own keys ([`folio_component::LocaleString`]), English at least; a word that a
 //! component lacks in a language falls back to the core's, then to the
 //! component's English.
+//!
+//! It also holds how numbers are written in each language (SPEC §8.1): the
+//! decimal marker of quantities and numbers, a point in English and a
+//! comma in Polish ([`number_format`]).
 
-use folio_component::Registered;
+use folio_component::{Registered, Value};
+use folio_math::NumberFormat;
 use folio_text::Lang;
 
 /// The languages whose words the core has, by primary subtag, English
@@ -75,6 +80,41 @@ pub fn component_word<'a>(component: &'a Registered, lang: &Lang, key: &str) -> 
         .or_else(|| component.locale_string("en", key).map(Word::plain))
 }
 
+/// The languages that write a decimal comma, by primary subtag; every
+/// other language writes a point. The languages of Europe write a comma,
+/// except English, Irish, Maltese and Swiss German (`de-CH`, which writes a
+/// point).
+const COMMA_LANGUAGES: &[&str] = &[
+    "be", "bg", "bs", "ca", "cs", "da", "de", "el", "es", "et", "eu", "fi", "fo", "fr", "gl", "hr",
+    "hu", "id", "is", "it", "kk", "lt", "lv", "mk", "nb", "nl", "nn", "no", "pl", "pt", "ro", "ru",
+    "sk", "sl", "sq", "sr", "sv", "tr", "uk", "vi",
+];
+
+/// The decimal marker of a language: `,` in Polish, `.` in English.
+pub fn decimal_marker(lang: &Lang) -> char {
+    let tag = lang.as_str();
+    if tag.eq_ignore_ascii_case("de-CH") || tag.eq_ignore_ascii_case("de-LI") {
+        return '.';
+    }
+    if COMMA_LANGUAGES.contains(&lang.primary()) {
+        ','
+    } else {
+        '.'
+    }
+}
+
+/// How quantities and numbers are written in text of a language, with the
+/// computed value of the `decimal-marker` property: `point` or `comma`,
+/// or `auto` (or no value) for the language's own marker.
+pub fn number_format(lang: &Lang, decimal_marker_value: Option<&Value>) -> NumberFormat {
+    let marker = match decimal_marker_value {
+        Some(Value::Keyword(k)) if k.as_str() == "point" => '.',
+        Some(Value::Keyword(k)) if k.as_str() == "comma" => ',',
+        _ => decimal_marker(lang),
+    };
+    NumberFormat::with_marker(marker)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +130,31 @@ mod tests {
         // English for a language the core has no words in.
         assert_eq!(word(&de, "equation"), Some(Word::plain("Equation")));
         assert_eq!(word(&pl, "nothing"), None);
+    }
+
+    #[test]
+    fn decimal_markers_by_language() {
+        let lang = |tag: &str| Lang::new(tag).unwrap();
+        assert_eq!(decimal_marker(&lang("en")), '.');
+        assert_eq!(decimal_marker(&lang("en-GB")), '.');
+        assert_eq!(decimal_marker(&lang("pl")), ',');
+        assert_eq!(decimal_marker(&lang("de")), ',');
+        assert_eq!(decimal_marker(&lang("de-CH")), '.');
+        assert_eq!(decimal_marker(&lang("ja")), '.');
+        let comma = Value::Keyword(folio_component::Name::new("comma").unwrap());
+        let point = Value::Keyword(folio_component::Name::new("point").unwrap());
+        assert_eq!(
+            number_format(&lang("en"), Some(&comma)),
+            NumberFormat::COMMA
+        );
+        assert_eq!(
+            number_format(&lang("pl"), Some(&point)),
+            NumberFormat::POINT
+        );
+        assert_eq!(
+            number_format(&lang("pl"), Some(&Value::Auto)),
+            NumberFormat::COMMA
+        );
+        assert_eq!(number_format(&lang("en"), None), NumberFormat::POINT);
     }
 }
