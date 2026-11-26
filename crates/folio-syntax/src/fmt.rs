@@ -493,6 +493,28 @@ impl Walk {
         }
     }
 
+    /// Whether the line that starts with token `i` opens a content block
+    /// whose markup starts on that line and goes on below it. Moving such a
+    /// line would move its list markers away from the markup lines below,
+    /// whose indentation stays, so it keeps its indentation too.
+    fn opens_markup(&self, i: usize) -> bool {
+        let mut blocks: Vec<bool> = Vec::new();
+        for (j, token) in self.tokens.iter().enumerate().skip(i) {
+            if j > i && count_newlines(&self.text[self.gaps[j].range.0..self.gaps[j].range.1]) > 0 {
+                break;
+            }
+            if token.opens() {
+                let after = &self.gaps[j + 1];
+                let inline = count_newlines(&self.text[after.range.0..after.range.1]) == 0
+                    && self.tokens.get(j + 1).is_some_and(|t| !t.closes());
+                blocks.push(token.parent == SyntaxKind::ContentBlock && inline);
+            } else if token.closes() {
+                blocks.pop();
+            }
+        }
+        blocks.contains(&true)
+    }
+
     /// Decides every gap.
     fn run(self) -> Edits {
         let mut edits = Edits::new();
@@ -531,7 +553,7 @@ impl Walk {
                 (Some(_), Some(next)) if newlines > 0 => {
                     let new_indent: EcoString = if next.closes() && !open.is_empty() {
                         open.last().cloned().unwrap_or_default()
-                    } else if gap.markup {
+                    } else if gap.markup || self.opens_markup(i) {
                         trailing_indent(text).into()
                     } else {
                         let mut base = open.last().cloned().unwrap_or_default();
@@ -623,19 +645,18 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
         }
     };
 
-    // Around comments, brackets and braces space as around other tokens.
-    if next.is_comment() && prev.kind == K::LeftParen && prev.opens() {
+    // Around comments, brackets and braces space as around other tokens,
+    // but a comment keeps the alignment it was given.
+    if next.is_comment() && !text.is_empty() {
+        return text.into();
+    }
+    if next.is_comment() && prev.kind == K::LeftParen && prev.opens()
+        || prev.is_comment() && next.kind == K::RightParen && next.closes()
+    {
         return "".into();
     }
-    if prev.is_comment() && next.kind == K::RightParen && next.closes()
-        || next.is_comment() && prev.kind == K::LeftBrace && is_spaced_block(prev.parent)
-        || prev.is_comment() && next.kind == K::RightBrace && is_spaced_block(next.parent)
-    {
-        return if prev.is_comment() && next.kind == K::RightParen {
-            "".into()
-        } else {
-            " ".into()
-        };
+    if prev.is_comment() && next.kind == K::RightBrace && is_spaced_block(next.parent) {
+        return " ".into();
     }
     if next.is_comment() {
         // Comments keep the alignment they were given.
@@ -694,6 +715,8 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
     // One space.
     if matches!(prev.kind, K::Comma | K::Semicolon) && !separated && !next.closes()
         || prev.kind == K::RightBrace && is_rule_block(prev.parent) && !next.closes()
+        || prev.kind == K::RightBrace && next.kind == K::Else
+        || prev.kind == K::Else
         || named_colon(prev)
         || binding_eq(prev)
         || binding_eq(next)
@@ -856,6 +879,14 @@ mod tests {
         markup("#{x}\n", "#{ x }\n");
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
+        markup("#{\n[- x\n  - y]\n}\n", "#{\n[- x\n  - y]\n}\n");
+        markup("#f(\n[+ x\n  + y])\n", "#f(\n[+ x\n  + y])\n");
+        markup(
+            "#{\nif a {b}else{c}\n}\n",
+            "#{\n  if a { b } else { c }\n}\n",
+        );
+        style("a {   // x\n}\n", "a {   // x\n}\n");
+        markup("#f(   // x\n  1)\n", "#f(   // x\n  1)\n");
         markup("#f(/* c */ a)\n", "#f(/* c */ a)\n");
         markup("#f(// c\n  a)\n", "#f(// c\n  a)\n");
         style("a{/* c */b:c}", "a { /* c */ b: c }\n");

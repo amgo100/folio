@@ -73,6 +73,13 @@ fn formatting_is_idempotent_and_keeps_meaning() {
             "{}: formatting changed the tree",
             path.display()
         );
+        // SPEC's examples are written in the canonical style.
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert!(
+            !name.starts_with("spec-") || edits.is_empty(),
+            "{}: SPEC's example is not formatted:\n{once}",
+            path.display()
+        );
         let again = fmt::format(&reparsed).unwrap();
         assert!(
             again.is_empty(),
