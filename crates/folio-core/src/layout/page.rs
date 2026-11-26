@@ -128,7 +128,8 @@ fn same(a: &Fragment, b: &Fragment) -> bool {
     let shared = a.items.as_ptr() == b.items.as_ptr() && a.items.len() == b.items.len();
     if shared {
         a.size == b.size
-            && a.location() == b.location()
+            // Span maps name sources, not instances.
+            && a.source == b.source
             && a.first_baseline == b.first_baseline
             && a.last_baseline == b.last_baseline
             && a.keep_with_next == b.keep_with_next

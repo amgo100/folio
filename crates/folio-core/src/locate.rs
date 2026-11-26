@@ -62,7 +62,9 @@ pub(crate) struct Locator {
 impl Locator {
     /// The most an instance number counts to, in the bits below the two
     /// that say what made the element: one short of all of them, so that
-    /// none is [`Location::UNKNOWN_INSTANCE`].
+    /// none is [`Location::UNKNOWN_INSTANCE`]. A billion instances of one
+    /// span lie far beyond evaluation's step and memory limits, so the
+    /// count never reaches it in practice.
     const COUNT: u32 = (1 << 30) - 2;
 
     /// The location of the next instance that `made` makes from `span`.
@@ -98,7 +100,8 @@ pub struct StyledChildren<'a> {
     /// Where the next lookup starts.
     at: usize,
     /// The index of each element's node, made at the first lookup that
-    /// does not find its node next.
+    /// does not find its node next. Locations are unique in the document
+    /// tree, so each names one node.
     index: Option<HashMap<Location, usize>>,
 }
 

@@ -75,6 +75,8 @@ pub struct TextBlock {
     /// The element, or the element whose part the block is.
     pub span: Span,
     /// The location of that element: which instance of it the block is.
+    /// The blocks of its parts share it, and [`Self::part`] tells them
+    /// apart.
     pub location: Location,
     /// The name of that element: what the block is, for the writers that
     /// tag output by meaning, such as PDF's structure tree (SPEC §11.1).

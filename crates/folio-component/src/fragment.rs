@@ -25,7 +25,8 @@ pub struct Fragment {
     /// [`SourceRef::DETACHED`] for a box that no node makes.
     pub source: SourceRef,
     /// Which instance of the element made from `source` the box is: with
-    /// `source`, the instance's [`Location`]. `0` for a box that no node
+    /// `source`, the instance's [`Location`]. The boxes of an element's
+    /// parts carry the element's location. `0` for a box that no node
     /// makes.
     pub instance: u32,
     /// The content, positioned relative to the top-left corner, in painting
