@@ -473,7 +473,11 @@ fn a_font_change_sends_every_page_again() {
     let next = updated(&events, |u| u.revision > first.revision);
     assert_eq!(next.lists, (0..next.pages).collect::<Vec<_>>());
     let received = receive_from(&mut ws, next.revision);
-    assert_eq!(received.frames.len(), next.pages, "the client gets every page");
+    assert_eq!(
+        received.frames.len(),
+        next.pages,
+        "the client gets every page"
+    );
     assert!(
         received
             .frames
