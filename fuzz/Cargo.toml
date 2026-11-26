@@ -90,3 +90,10 @@ path = "fuzz_targets/lockfile.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "wire"
+path = "fuzz_targets/wire.rs"
+test = false
+doc = false
+bench = false
