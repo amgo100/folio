@@ -162,7 +162,10 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
             };
             let (laid, unset) = lay_out(db.layout_cache(), m, &options, resolution);
             // Each number once a build, however many formulas it numbers.
-            for text in unset.into_iter().filter(|t| unset_numbers.insert(t.clone())) {
+            for text in unset
+                .into_iter()
+                .filter(|t| unset_numbers.insert(t.clone()))
+            {
                 diag::report(
                     db,
                     Diagnostic::warning(
@@ -257,7 +260,9 @@ fn choose_font(
                 db,
                 Diagnostic::warning(
                     span,
-                    eco_format!("{name} cannot be read as a math font, so maths is set in {MATH_FONT}"),
+                    eco_format!(
+                        "{name} cannot be read as a math font, so maths is set in {MATH_FONT}"
+                    ),
                 ),
             );
             (font, EcoString::from(MATH_FONT))
