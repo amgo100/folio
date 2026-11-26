@@ -67,11 +67,9 @@ impl Command {
     /// The command's name, for a command that is not supported yet.
     fn later(&self) -> Option<&'static str> {
         Some(match self {
-            Self::Build(_)
-            | Self::Check(_)
-            | Self::Fmt(_)
-            | Self::Lsp(_)
-            | Self::Toolchain(_) => return None,
+            Self::Build(_) | Self::Check(_) | Self::Fmt(_) | Self::Lsp(_) | Self::Toolchain(_) => {
+                return None;
+            }
             Self::New(_) => "new",
             Self::Watch(_) => "watch",
             Self::Present(_) => "present",
