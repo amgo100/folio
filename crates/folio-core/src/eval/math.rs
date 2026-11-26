@@ -155,11 +155,14 @@ impl Vm<'_> {
                 }),
                 MathTextKind::Grapheme(grapheme) => atom(grapheme.clone(), span),
             }),
-            ast::Expr::MathIdent(ident) => self.math_name(ident.get(), span, out)?,
+            ast::Expr::MathIdent(ident) => self.math_name(ident.get(), level, span, out)?,
             ast::Expr::MathFieldAccess(access) => {
                 let name = access.to_untyped().full_text();
                 match folio_math::symbol(&name) {
                     Some(c) => out.push(symbol(c, span)),
+                    None if matches!(math_item(&name, true), Some(MathItem::Func(_))) => {
+                        return Err(not_called(&name, span).into());
+                    }
                     None => return Err(unknown_symbol(&name, span).into()),
                 }
             }
@@ -175,12 +178,9 @@ impl Vm<'_> {
             }
             ast::Expr::MathAlignPoint(_) => {
                 if level == Level::Nested {
-                    return Err(EvalError::new(
-                        span,
-                        "an alignment point can only be at the top level of a line or a case",
-                    )
-                    .with_hint("`&` aligns the lines of an equation, or the parts of a case")
-                    .into());
+                    return Err(misplaced_align_point(span)
+                        .with_hint("`&` aligns the lines of an equation, or the parts of a case")
+                        .into());
                 }
                 out.push(math::Node::AlignPoint(span));
             }
@@ -239,11 +239,11 @@ impl Vm<'_> {
                     span,
                 })));
             }
-            ast::Expr::MathCall(call) => self.math_call(call, out)?,
+            ast::Expr::MathCall(call) => self.math_call(call, level, out)?,
             // Code embedded with `#`.
             _ => {
                 let value = self.expr(expr)?;
-                self.place_in_math(value, span, out)?;
+                self.place_in_math(value, level, span, out)?;
             }
         }
         Ok(())
@@ -253,11 +253,12 @@ impl Vm<'_> {
     fn math_name(
         &mut self,
         name: &EcoString,
+        level: Level,
         span: Span,
         out: &mut Vec<math::Node>,
     ) -> EvalResult<()> {
         if let Some(value) = self.math_binding(name)? {
-            return self.place_in_math(value, span, out);
+            return self.place_in_math(value, level, span, out);
         }
         match math_item(name, false) {
             Some(MathItem::Symbol(c)) => out.push(symbol(c, span)),
@@ -267,13 +268,7 @@ impl Vm<'_> {
                 span,
             })),
             Some(MathItem::Differential) => out.push(math::Node::Differential(span)),
-            Some(MathItem::Func(_)) => {
-                return Err(EvalError::new(span, eco_format!("`{name}` is a function"))
-                    .with_hint(eco_format!(
-                        "call it with its arguments in parentheses: `{name}(..)`"
-                    ))
-                    .into());
-            }
+            Some(MathItem::Func(_)) => return Err(not_called(name, span).into()),
             None => return Err(unknown_name(name, span).into()),
         }
         Ok(())
@@ -282,7 +277,12 @@ impl Vm<'_> {
     /// A call in an equation: of a script's function, of a function of
     /// math, or of something that is not a function, which is set before
     /// its arguments in parentheses, as `f(x)` is.
-    fn math_call(&mut self, call: ast::MathCall<'_>, out: &mut Vec<math::Node>) -> EvalResult<()> {
+    fn math_call(
+        &mut self,
+        call: ast::MathCall<'_>,
+        level: Level,
+        out: &mut Vec<math::Node>,
+    ) -> EvalResult<()> {
         let span = call.span();
         let callee = call.callee();
         let name: EcoString = match callee {
@@ -295,9 +295,9 @@ impl Vm<'_> {
             if let Value::Func(func) = value {
                 let args = self.math_func_args(call.args())?;
                 let result = self.call(func, args, span)?;
-                return self.place_in_math(result, span, out);
+                return self.place_in_math(result, level, span, out);
             }
-            self.place_in_math(value, callee.span(), out)?;
+            self.place_in_math(value, level, callee.span(), out)?;
             return self.call_as_group(call.args(), false, out);
         }
         if PENDING.contains(&name.as_str()) {
@@ -317,7 +317,7 @@ impl Vm<'_> {
             Some(_) => {
                 match callee {
                     ast::MathAccess::MathIdent(ident) => {
-                        self.math_name(ident.get(), ident.span(), out)?
+                        self.math_name(ident.get(), Level::Nested, ident.span(), out)?
                     }
                     ast::MathAccess::MathFieldAccess(access) => {
                         self.math_expr(ast::Expr::MathFieldAccess(access), Level::Nested, out)?
@@ -518,8 +518,8 @@ impl Vm<'_> {
                 let [base, accent] =
                     self.math_args::<2>(name, &exprs, span, "a base and an accent")?;
                 let accent = combining(&accent).ok_or_else(|| {
-                    EvalError::new(exprs[1].span(), "an accent is one character")
-                        .with_hint("as in `accent(x, \"~\")` or `accent(x, arrow.r)`")
+                    EvalError::new(exprs[1].span(), "this is not an accent")
+                        .with_hint("an accent is one character, as in `accent(x, \"~\")` or `accent(x, arrow.r)`")
                 })?;
                 math::Node::Accent(Arc::new(math::Accent { base, accent, span }))
             }
@@ -663,41 +663,61 @@ impl Vm<'_> {
     }
 
     /// Places a value in a formula: a formula as its row, content that is
-    /// a formula or text, a number, or a string as text.
+    /// a formula or text, a number, or a string as text. What it places at
+    /// `level` may hold alignment points only where `level` allows them.
     fn place_in_math(
         &mut self,
         value: Value,
+        level: Level,
         span: Span,
         out: &mut Vec<math::Node>,
     ) -> EvalResult<()> {
         match value {
             Value::None => {}
             Value::Int(n) => number(&n.to_string(), span, out),
-            Value::Float(f) => number(&Value::Float(f).repr(), span, out),
-            Value::Str(text) => out.push(math::Node::Text(Atom {
-                text,
-                class: MathClass::Normal,
-                span,
-            })),
-            Value::Math(formula) => self.splice(&formula, span, out)?,
+            Value::Float(f) => float(f.get(), span, out)?,
+            Value::Str(text) => out.push(text_atom(text, span)),
+            Value::Math(formula) => self.splice(&formula, level, span, out)?,
             Value::Content(content) => {
+                // Runs of text and spaces become one text each.
+                let mut run: Option<(EcoString, Span)> = None;
                 for node in content.nodes() {
                     match node {
-                        Node::Text { text, span: own } => out.push(math::Node::Text(Atom {
-                            text: text.clone(),
-                            class: MathClass::Normal,
-                            span: if own.is_detached() { span } else { *own },
-                        })),
-                        Node::Space(_) => {}
+                        Node::Text { text, span: own } => {
+                            let own = if own.is_detached() { span } else { *own };
+                            run.get_or_insert_with(|| (EcoString::new(), own))
+                                .0
+                                .push_str(text);
+                            continue;
+                        }
+                        Node::Space(_) => {
+                            if let Some((text, _)) = &mut run {
+                                text.push(' ');
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    if let Some((text, at)) = run.take() {
+                        out.push(text_atom(text.trim_end().into(), at));
+                    }
+                    match node {
                         Node::Element(element)
                             if element.name
                                 == QualifiedName::unqualified(
                                     Name::new("math").expect("a valid name"),
                                 ) =>
                         {
-                            match element.field("tree") {
-                                Some(Value::Math(formula)) => self.splice(formula, span, out)?,
-                                _ => bail!(span, "LaTeX math cannot be placed in native math yet"),
+                            match (element.field("tree"), element.field("tex")) {
+                                (Some(Value::Math(formula)), _) => {
+                                    self.splice(formula, level, span, out)?
+                                }
+                                (_, Some(Value::Str(_))) => {
+                                    bail!(span, "LaTeX math cannot be placed in native math yet")
+                                }
+                                // Markup makes every `math` element with
+                                // one of the two; scripts cannot call it.
+                                _ => {}
                             }
                         }
                         _ => {
@@ -710,6 +730,12 @@ impl Vm<'_> {
                         }
                     }
                 }
+                if let Some((text, at)) = run {
+                    let text = text.trim_end();
+                    if !text.is_empty() {
+                        out.push(text_atom(text.into(), at));
+                    }
+                }
             }
             other => bail!(
                 span,
@@ -720,10 +746,11 @@ impl Vm<'_> {
         Ok(())
     }
 
-    /// Places a formula's row in another formula.
+    /// Places a formula's row in another formula, at `level`.
     fn splice(
         &mut self,
         formula: &Formula,
+        level: Level,
         span: Span,
         out: &mut Vec<math::Node>,
     ) -> EvalResult<()> {
@@ -737,6 +764,16 @@ impl Vm<'_> {
             )
             .into());
         };
+        if level == Level::Nested
+            && row
+                .nodes()
+                .iter()
+                .any(|node| matches!(node, math::Node::AlignPoint(_)))
+        {
+            return Err(misplaced_align_point(span)
+                .with_hint("this formula holds an alignment point `&`")
+                .into());
+        }
         self.alloc(row.nodes().len() as u64 * NODE, span)?;
         out.extend(row.nodes().iter().cloned());
         Ok(())
@@ -897,7 +934,8 @@ fn closing(open: char) -> Option<char> {
 }
 
 /// The combining character of an accent given as one character: `~` or
-/// `∼` is a combining tilde. A combining character stays as it is.
+/// `∼` is a combining tilde. A combining mark stays as it is; any other
+/// character is no accent.
 fn combining(row: &Row) -> Option<char> {
     let [node] = row.nodes() else {
         return None;
@@ -924,7 +962,8 @@ fn combining(row: &Row) -> Option<char> {
         '→' => '\u{20D7}',
         '←' => '\u{20D6}',
         '↔' => '\u{20E1}',
-        c => c,
+        c if is_combining(c) => c,
+        _ => return None,
     })
 }
 
@@ -935,6 +974,64 @@ fn cells(n: usize) -> EcoString {
     } else {
         eco_format!("{n} cells")
     }
+}
+
+/// The error of an alignment point where none can stand.
+fn misplaced_align_point(span: Span) -> EvalError {
+    EvalError::new(
+        span,
+        "an alignment point can only be at the top level of a line or a case",
+    )
+}
+
+/// Upright text.
+fn text_atom(text: EcoString, span: Span) -> math::Node {
+    math::Node::Text(Atom {
+        text,
+        class: MathClass::Normal,
+        span,
+    })
+}
+
+/// A float as it is set: its digits, or a mantissa times a power of ten
+/// for one that Rust writes with an exponent (`6.02e23`), or infinity.
+fn float(value: f64, span: Span, out: &mut Vec<math::Node>) -> EvalResult<()> {
+    if value.is_nan() {
+        bail!(span, "NaN cannot be placed in an equation");
+    }
+    if value.is_infinite() {
+        if value < 0.0 {
+            out.push(symbol('−', span));
+        }
+        out.push(symbol('∞', span));
+        return Ok(());
+    }
+    let text = format!("{value:?}");
+    let Some((mantissa, exponent)) = text.split_once('e') else {
+        number(&text, span, out);
+        return Ok(());
+    };
+    number(mantissa, span, out);
+    out.push(symbol('×', span));
+    let mut power = Vec::new();
+    number(exponent, span, &mut power);
+    out.push(math::Node::Attach(Arc::new(math::Attach {
+        base: Row::new([math::Node::Number(Atom {
+            text: "10".into(),
+            class: MathClass::Normal,
+            span,
+        })]),
+        sub: None,
+        sup: Some(Row::new(power)),
+        primes: 0,
+        span,
+    })));
+    Ok(())
+}
+
+/// Whether a character is a combining mark of the blocks that hold accents.
+fn is_combining(c: char) -> bool {
+    matches!(c, '\u{300}'..='\u{36F}' | '\u{1AB0}'..='\u{1AFF}' | '\u{1DC0}'..='\u{1DFF}' | '\u{20D0}'..='\u{20FF}' | '\u{FE20}'..='\u{FE2F}')
 }
 
 /// The error of a function of math called with the wrong arguments.
@@ -954,6 +1051,13 @@ fn unknown_name(name: &str, span: Span) -> EvalError {
     }
     error.with_hint(eco_format!(
         "text in an equation is written in quotes: `\"{name}\"`"
+    ))
+}
+
+/// The error of a function of math named without its arguments.
+fn not_called(name: &str, span: Span) -> EvalError {
+    EvalError::new(span, eco_format!("`{name}` is a function")).with_hint(eco_format!(
+        "call it with its arguments in parentheses: `{name}(..)`"
     ))
 }
 

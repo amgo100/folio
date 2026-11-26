@@ -133,6 +133,11 @@ fn lines_alignment_points_and_labels() {
     // labelled too.
     assert_eq!(tree("$a \\ b \\ $"), "[a] \\ [b]");
     assert_eq!(tree("$x <eq:x>$"), "[x] <eq:x>");
+    // The closing `$` may stand on a line of its own.
+    assert_eq!(
+        tree("$\n  v = u + a t <eq:v>\n$"),
+        "display [v, rel(=), u, vary(+), a, t] <eq:v>"
+    );
 }
 
 #[test]
@@ -227,6 +232,22 @@ fn text_numbers_and_embedded_values() {
         tree("$\"kg\" #(1 + 2) #(-3.5) #\"text\" #none$"),
         "[text(\"kg\"), num(3), vary(−), num(3.5), text(\"text\")]"
     );
+    // Floats that Rust writes with an exponent are a power of ten.
+    assert_eq!(
+        tree("$#(6.02e23) #(-1e-7) #float(\"inf\")$"),
+        "[num(6.02), bin(×), attach([num(10)], sup: [num(23)]), vary(−), num(1), bin(×), \
+         attach([num(10)], sup: [vary(−), num(7)]), sym(∞)]"
+    );
+    // Content that is only text is one text, with its spaces.
+    assert_eq!(
+        tree("#let t = [speed of light]\n$#t = c$"),
+        "[text(\"speed of light\"), rel(=), c]"
+    );
+    // A formula shown in markup is an inline equation again.
+    assert_eq!(
+        formulas("#let e = $x^2$\n#e.tree"),
+        ["[attach([x], sup: [num(2)])]"]
+    );
     // A formula is placed as its row, from a binding or embedded as code.
     assert_eq!(
         formulas("#let k = $1/2 m v^2$\n$E_k = #k$ $x = #$a + b$$"),
@@ -303,12 +324,16 @@ fn unknown_names_and_symbols() {
             error("`frac` is a function", "frac"),
         ]
     );
+    assert_eq!(
+        errors("$dot.double$"),
+        [error("`dot.double` is a function", "dot.double")]
+    );
 }
 
 #[test]
 fn misplaced_breaks_alignment_points_and_labels() {
     assert_eq!(
-        errors("$(a & b)$ $frac(a \\ b, c)$"),
+        errors("$(a & b)$ $frac(a \\ b, c)$ #let a = $x & y$\n$sqrt(#a)$ $#a$"),
         [
             error(
                 "an alignment point can only be at the top level of a line or a case",
@@ -317,6 +342,12 @@ fn misplaced_breaks_alignment_points_and_labels() {
             error(
                 "a line break can only be at the top level of an equation",
                 "\\"
+            ),
+            // A formula with an alignment point can be placed only where
+            // one can stand.
+            error(
+                "an alignment point can only be at the top level of a line or a case",
+                "a"
             ),
         ]
     );
@@ -327,7 +358,7 @@ fn wrong_arguments() {
     assert_eq!(
         errors(
             "$frac(a)$ $vec(1, 2)$ $mat(1, 2; 3)$ $mat(delim: \"x\", a)$ \
-             $sqrt(x, y: 1)$ $frac(a; b)$"
+             $sqrt(x, y: 1)$ $frac(a; b)$ $accent(x, y)$"
         ),
         [
             error("`frac` takes a numerator and a denominator", "frac(a)"),
@@ -342,6 +373,7 @@ fn wrong_arguments() {
                 "a semicolon separates the rows of `mat(..)`, not the arguments of `frac`",
                 "a"
             ),
+            error("this is not an accent", "y"),
         ]
     );
 }

@@ -792,10 +792,10 @@ impl Lexer<'_> {
     }
 
     /// Whether the `<` just eaten starts a label that ends a line of an
-    /// equation: `<eq:suvat>` followed, after spaces, by a line break `\`,
-    /// the closing `$` or the end of the text (SPEC §8.1). Anywhere else,
-    /// `<` is less-than or starts a shorthand such as `<=`, so `a<b>c` is
-    /// a comparison.
+    /// equation: `<eq:suvat>` followed, after whitespace and comments, by
+    /// a line break `\`, the closing `$` or the end of the text (SPEC
+    /// §8.1). Anywhere else, `<` is less-than or starts a shorthand such as
+    /// `<=`, so `a<b>c` is a comparison.
     fn at_math_label(&self) -> bool {
         let mut s = self.s;
         if !s.at(is_label_start) {
@@ -805,7 +805,17 @@ impl Lexer<'_> {
         if !s.eat_if('>') {
             return false;
         }
-        s.eat_while([' ', '\t']);
+        loop {
+            s.eat_while(char::is_whitespace);
+            if s.eat_if("//") {
+                s.eat_until(is_newline);
+            } else if s.eat_if("/*") {
+                s.eat_until("*/");
+                s.eat_if("*/");
+            } else {
+                break;
+            }
+        }
         if s.done() || s.at('$') {
             return true;
         }

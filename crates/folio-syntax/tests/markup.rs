@@ -177,6 +177,16 @@ fn math_labels_end_lines() {
         assert_eq!(count(&root(text), SyntaxKind::Label), 0, "{text}");
     }
     assert_eq!(count(&root("$x <eq:a>$"), SyntaxKind::Label), 1);
+    // Whitespace, newlines and comments may stand between a label and what
+    // ends its line.
+    for text in [
+        "$\n  v = u + a t <eq:v>\n$",
+        "$ v <eq:v> // the first\n \\ w $",
+        "$ v <eq:v> /* the last */ $",
+    ] {
+        ok(text);
+        assert_eq!(count(&root(text), SyntaxKind::Label), 1, "{text}");
+    }
     // A label's name is checked as in markup.
     assert_eq!(errors("$ x <eq:> $"), ["labels cannot end with `:`"]);
 }

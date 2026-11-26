@@ -568,7 +568,11 @@ impl<'a> Vm<'a> {
                 let recover = std::mem::replace(&mut self.recover, false);
                 let value = self.expr(expr);
                 self.recover = recover;
-                display(value?, span)
+                match value? {
+                    // A formula shows as an inline equation.
+                    Value::Math(formula) => self.math_content(formula, false, span)?,
+                    value => display(value, span),
+                }
             }
         })
     }
