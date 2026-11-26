@@ -5,6 +5,7 @@ use ecow::EcoVec;
 
 use crate::draw::Shape;
 use crate::geom::{Abs, Point, Rect, Size};
+use crate::image::Image;
 use crate::text::{GlyphRun, Location, SourceRef};
 
 /// A positioned box produced by layout. Pages and slides are fragments.
@@ -124,6 +125,9 @@ pub enum FragmentItem {
     /// stage that lays its content out, and a writer draws an object
     /// whose content is not laid out yet as an empty frame.
     Object(ObjectBox),
+    /// An image, scaled to its box, positioned by its top-left corner
+    /// (SPEC §7.2, §11.1).
+    Image(ImageBox),
 }
 
 /// The box of an object (SPEC §7.2): content that is not text, laid out by
@@ -138,6 +142,18 @@ pub struct ObjectBox {
     pub baseline: Abs,
     /// The element instance it is the box of; its source is the element's
     /// node, as glyphs and shapes name theirs.
+    pub location: Location,
+}
+
+/// An image as layout places it: the image file, drawn to fill its box.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct ImageBox {
+    /// The size it is drawn at.
+    pub size: Size,
+    /// The image.
+    pub image: Image,
+    /// The element instance it shows (an `image`); its source is the
+    /// element's node, as glyphs and shapes name theirs.
     pub location: Location,
 }
 

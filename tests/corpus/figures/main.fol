@@ -1,0 +1,21 @@
+#doc(title: [Figures in the flow], subject: "Images of every format, sized and captioned")
+
+= Waves on a string
+
+A transverse wave on a string is drawn below as a graph of displacement against distance (@fig:wave). Its amplitude is the height of a crest above the axis.
+
+#figure[#image("assets/wave.png", alt: "A sine wave over one and a half wavelengths, drawn on two axes")][A displacement–distance graph] <fig:wave>
+
+The circuit in @fig:circuit is drawn as an SVG file, so it stays sharp at any zoom; the field in @fig:field comes from a PDF file.
+
+#figure[#image("assets/circuit.svg", alt: "A cell, a resistor and a lamp in series", width: 60%)][A series circuit] <fig:circuit>
+
+#figure[#image("assets/field.pdf", alt: "Field lines curving from a positive charge on the left to a negative charge on the right")][The field between two charges] <fig:field>
+
+= Pictures
+
+A photograph is kept as the JPEG it is:
+
+#figure[#image("assets/photo.jpg", alt: "A yellow disc on a blue and green gradient", width: 4cm)][A photograph]
+
+Small pictures can stand in a line of text, such as a marker #image("assets/marker.webp", alt: "a red disc", width: 8pt) or a spring #image("assets/spring.gif", alt: "a zigzag spring", width: 24pt) between words.

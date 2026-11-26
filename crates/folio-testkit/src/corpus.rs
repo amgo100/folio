@@ -31,11 +31,14 @@ pub struct Project {
     /// The `.fol` and `.fsty` sources, by path relative to the project's
     /// directory, with `/` between components.
     pub sources: BTreeMap<String, String>,
+    /// The data files, such as images, by path as the sources are.
+    pub files: BTreeMap<String, Vec<u8>>,
 }
 
 impl Project {
-    /// Reads a project directory: its manifest and every `.fol` and `.fsty`
-    /// file under it. The corpus has no data files, fonts or lockfiles.
+    /// Reads a project directory: its manifest, every `.fol` and `.fsty`
+    /// file under it, and its other files, such as images, as data files.
+    /// The corpus has no fonts or lockfiles.
     pub fn read(dir: &Path) -> io::Result<Self> {
         let name = dir
             .file_name()
@@ -44,23 +47,30 @@ impl Project {
             .to_string();
         let manifest = fs::read_to_string(dir.join("folio.toml"))?;
         let mut sources = BTreeMap::new();
+        let mut files = BTreeMap::new();
         let mut stack = vec![dir.to_path_buf()];
         while let Some(next) = stack.pop() {
             for entry in fs::read_dir(&next)? {
                 let path = entry?.path();
                 if path.is_dir() {
                     stack.push(path);
-                } else if matches!(
-                    path.extension().and_then(|e| e.to_str()),
-                    Some("fol" | "fsty")
-                ) {
+                } else {
                     let relative = path
                         .strip_prefix(dir)
                         .map_err(io::Error::other)?
                         .to_str()
-                        .ok_or_else(|| io::Error::other("a source needs a UTF-8 path"))?
+                        .ok_or_else(|| io::Error::other("a file needs a UTF-8 path"))?
                         .replace('\\', "/");
-                    sources.insert(relative, fs::read_to_string(&path)?);
+                    match path.extension().and_then(|e| e.to_str()) {
+                        Some("fol" | "fsty") => {
+                            sources.insert(relative, fs::read_to_string(&path)?);
+                        }
+                        // The manifest, and what a build writes.
+                        _ if relative == "folio.toml" || relative.starts_with("out/") => {}
+                        _ => {
+                            files.insert(relative, fs::read(&path)?);
+                        }
+                    }
                 }
             }
         }
@@ -68,6 +78,7 @@ impl Project {
             name,
             manifest,
             sources,
+            files,
         })
     }
 
@@ -85,6 +96,11 @@ impl Project {
         for (path, text) in &self.sources {
             world
                 .set_source(path, text)
+                .unwrap_or_else(|e| panic!("{}: cannot set {path}: {e}", self.name));
+        }
+        for (path, bytes) in &self.files {
+            world
+                .set_file(path, bytes.clone())
                 .unwrap_or_else(|e| panic!("{}: cannot set {path}: {e}", self.name));
         }
         world

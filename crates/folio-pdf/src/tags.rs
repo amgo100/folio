@@ -44,8 +44,28 @@ pub(crate) struct Tagger<'a> {
     /// The sources of headings with content but no text, which cannot
     /// have a title.
     untitled: Vec<SourceRef>,
+    /// The sources of figures with content but no alternate description.
+    undescribed: Vec<SourceRef>,
     /// The `Link` node of each run of a link's glyphs, by the run's index.
     links: Vec<Option<usize>>,
+}
+
+/// What the tagger gives: the tag tree, the headings for the outline, and
+/// the nodes PDF/UA-1 does not allow as they are.
+pub(crate) struct Finished {
+    pub(crate) tree: TagTree,
+    pub(crate) headings: Vec<Heading>,
+    pub(crate) missing: Missing,
+}
+
+/// The nodes of a tag tree that lack what PDF/UA-1 asks of them, by their
+/// sources, which krilla's validator does not name.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Missing {
+    /// Headings with content but no text.
+    pub(crate) untitled: Vec<SourceRef>,
+    /// Figures with content but no alternate description.
+    pub(crate) undescribed: Vec<SourceRef>,
 }
 
 /// A heading for the outline: its level, text, page and top.
@@ -106,6 +126,7 @@ impl<'a> Tagger<'a> {
             leading: true,
             headings: Vec::new(),
             untitled: Vec::new(),
+            undescribed: Vec::new(),
             links: Vec::new(),
         };
         tagger.push(Kind::Top, std::slice::from_ref(root), 0);
@@ -180,6 +201,7 @@ impl<'a> Tagger<'a> {
     pub(crate) fn content(&mut self, node: usize, id: Identifier, link: Option<usize>) {
         let target = self.text_target(node);
         self.note_heading(target);
+        self.note_figure(target);
         let Some(link) = link else {
             self.nodes[target].kids.push(Kid::Content(id));
             return;
@@ -234,6 +256,20 @@ impl<'a> Tagger<'a> {
         }
     }
 
+    /// Notes a figure without an alternate description when `target`,
+    /// which content is about to be added to, is one that shows nothing
+    /// yet.
+    fn note_figure(&mut self, target: usize) {
+        let out = &self.nodes[target];
+        if let Kind::Input(tag) = out.kind
+            && tag.role == Role::Figure
+            && out.kids.is_empty()
+            && tag.text.as_ref().is_none_or(|t| t.trim().is_empty())
+        {
+            self.undescribed.push(tag.source);
+        }
+    }
+
     /// Where a child of `role` of a node goes: into the node, or for a
     /// list item's body, into its `LBody`.
     fn container(&mut self, node: usize, role: Role) -> usize {
@@ -267,6 +303,7 @@ impl<'a> Tagger<'a> {
                     | Role::Caption
                     | Role::Code
                     | Role::Formula
+                    | Role::Figure
             ),
             Kind::Top | Kind::ListBody | Kind::Link => false,
         };
@@ -285,8 +322,8 @@ impl<'a> Tagger<'a> {
     }
 
     /// The tag tree, in the document's language, the headings for the
-    /// outline, and the sources of headings without text.
-    pub(crate) fn finish(self, lang: Option<&str>) -> (TagTree, Vec<Heading>, Vec<SourceRef>) {
+    /// outline, and what PDF/UA-1 does not allow in it.
+    pub(crate) fn finish(self, lang: Option<&str>) -> Finished {
         let mut tree = TagTree::new().with_lang(lang.map(String::from));
         let mut taken: Vec<Option<Out<'a>>> = self.nodes.into_iter().map(Some).collect();
         // The document's node is the tree's root `Document`; content the
@@ -310,7 +347,14 @@ impl<'a> Tagger<'a> {
                 }
             }
         }
-        (tree, self.headings, self.untitled)
+        Finished {
+            tree,
+            headings: self.headings,
+            missing: Missing {
+                untitled: self.untitled,
+                undescribed: self.undescribed,
+            },
+        }
     }
 }
 
@@ -364,6 +408,7 @@ fn group(out: Out<'_>, nodes: &mut [Option<Out<'_>>]) -> Option<TagGroup> {
             Role::Note => KTag::Note.into(),
             Role::Code => KTag::Code.into(),
             Role::Formula => KTag::Formula(tag.text.as_ref().map(|t| t.to_string())).into(),
+            Role::Figure => KTag::Figure(tag.text.as_ref().map(|t| t.to_string())).into(),
         },
     };
     let children: Vec<Node> = out

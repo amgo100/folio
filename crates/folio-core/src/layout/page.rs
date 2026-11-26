@@ -587,6 +587,11 @@ fn content_hash(fragment: &Fragment) -> u64 {
                     object.size.hash(h);
                     object.baseline.hash(h);
                 }
+                FragmentItem::Image(image) => {
+                    4u8.hash(h);
+                    image.size.hash(h);
+                    image.image.hash(h);
+                }
             }
         }
     }

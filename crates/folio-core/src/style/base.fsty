@@ -27,8 +27,8 @@ list-item > paragraph, enum-item > paragraph, terms-item > paragraph {
 }
 terms-item > term { font-weight: bold; }
 
-// Figures stand apart from the text.
-figure { space-before: 1em; space-after: 1em; }
+// Figures stand apart from the text, centred.
+figure { space-before: 1em; space-after: 1em; align: center; }
 
 // `strong` and `emph` say what text is (SPEC §4.3); this is how it looks.
 strong { font-weight: bold; }

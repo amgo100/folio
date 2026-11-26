@@ -518,6 +518,7 @@ impl Edits {
                 name: self.project.name.clone(),
                 manifest: self.project.manifest.clone(),
                 sources: sources.clone(),
+                files: self.project.files.clone(),
             };
             let fresh_world = fresh_project.world(BuildMode::Ci);
             let fresh = compile_builds(&fresh_world, &builds);

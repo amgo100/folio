@@ -493,3 +493,187 @@ fn reads_channel_files() {
     assert_eq!(info.unwrap().serial, 1200);
     assert!(ChannelInfo::parse("version = ").is_err());
 }
+
+/// A compiler that has `folio watch`: it shows the help of `watch --port 0
+/// --help`, and otherwise records how it was run as [`FAKE_COMPILER`] does.
+const FAKE_WATCHER: &[u8] = b"#!/bin/sh\n\
+    if [ \"$*\" = 'watch --port 0 --help' ]; then exit 0; fi\n\
+    printf '%s\\n' \"$FOLIO_DISPATCHED_BY\" \"$@\" > \"$FOLIO_FAKE_LOG\"\nexit 7\n";
+
+#[cfg(unix)]
+#[test]
+fn watches_with_the_pinned_version() {
+    let channel = FakeChannel::new("0.0.0");
+    channel.release("77.0.0", FAKE_WATCHER);
+    channel.release("76.0.0", FAKE_COMPILER);
+    let cache = tempfile::tempdir().unwrap();
+    let toolchains = Toolchains::new(cache.path().join("toolchains"));
+    install(&channel, "77.0.0", &toolchains).unwrap();
+    install(&channel, "76.0.0", &toolchains).unwrap();
+
+    // The pinned version previews and writes the outputs, with the same
+    // arguments, flags it alone knows included.
+    let dir = project("77.0.0", "");
+    let output = folio(
+        dir.path(),
+        cache.path(),
+        &["watch", "--port", "8123", "--from-the-future"],
+    );
+    assert_eq!(output.status.code(), Some(7), "{}", stderr(&output));
+    let log = fs::read_to_string(dir.path().join("fake.log")).unwrap();
+    assert_eq!(
+        log,
+        format!(
+            "{}\nwatch\n--port\n8123\n--from-the-future\n",
+            folio::VERSION
+        )
+    );
+
+    // A pinned version without `folio watch` is not run, and the error
+    // names it and how to watch with this version.
+    let dir = project("76.0.0", "");
+    let output = folio(dir.path(), cache.path(), &["watch"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("the project pins compiler 76.0.0, which has no `folio watch`"),
+        "{text}"
+    );
+    assert!(text.contains("folio.toml:4"), "{text}");
+    assert!(text.contains("`folio watch --compiler current`"), "{text}");
+    // Only asked whether it has the command.
+    let log = fs::read_to_string(dir.path().join("fake.log")).unwrap();
+    assert_eq!(
+        log,
+        format!("{}\nwatch\n--port\n0\n--help\n", folio::VERSION)
+    );
+    assert!(!dir.path().join("out").exists());
+
+    // A pinned binary that cannot run is reported as such, as for `folio
+    // build`.
+    use std::os::unix::fs::PermissionsExt;
+    let binary = toolchains.binary(&Version::new(77, 0, 0));
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o644)).unwrap();
+    let dir = project("77.0.0", "");
+    let output = folio(dir.path(), cache.path(), &["watch"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("cannot run Folio 77.0.0"), "{text}");
+    assert!(!text.contains("has no `folio watch`"), "{text}");
+}
+
+/// Once the pin changes while `folio watch` runs, it writes no outputs and
+/// says so.
+#[test]
+fn watch_stops_writing_when_the_pin_changes() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    struct Running(std::process::Child);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let cache = tempfile::tempdir().unwrap();
+    let dir = project(folio::VERSION, "");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_folio"))
+        .args(["watch"])
+        .current_dir(dir.path())
+        .env("FOLIO_CACHE_DIR", cache.path())
+        .env_remove("FOLIO_DISPATCHED_BY")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let _running = Running(child);
+    let (send, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            if send.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let wait_for = |what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match lines.recv_timeout(left) {
+                Ok(line) if line.contains(what) => return,
+                Ok(_) => {}
+                Err(_) => panic!("no line with {what:?}"),
+            }
+        }
+    };
+    let pdf = dir.path().join("out/main.pdf");
+    wait_for("wrote");
+    assert!(pdf.is_file());
+    fs::remove_dir_all(dir.path().join("out")).unwrap();
+
+    let manifest = fs::read_to_string(dir.path().join("folio.toml")).unwrap();
+    fs::write(
+        dir.path().join("folio.toml"),
+        manifest.replace(folio::VERSION, "99.0.0"),
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.fol"), "= Forces and motion\n").unwrap();
+    wait_for("the project now pins compiler 99.0.0");
+    assert!(!pdf.exists());
+}
+
+#[test]
+fn watch_fails_on_a_pin_that_is_not_installed() {
+    let cache = tempfile::tempdir().unwrap();
+    let dir = project("78.0.0", "");
+    let output = folio(dir.path(), cache.path(), &["watch"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains(&format!(
+            "the project pins compiler 78.0.0, but this is Folio {}",
+            folio::VERSION
+        )),
+        "{text}"
+    );
+    assert!(text.contains("`folio toolchain install 78.0.0`"), "{text}");
+    assert!(text.contains("`--compiler current`"), "{text}");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn watches_with_this_version_when_asked() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let cache = tempfile::tempdir().unwrap();
+    let dir = project("78.0.0", "");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_folio"))
+        .args(["watch", "--compiler", "current"])
+        .current_dir(dir.path())
+        .env("FOLIO_CACHE_DIR", cache.path())
+        .env_remove("FOLIO_DISPATCHED_BY")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let first = BufReader::new(child.stdout.take().unwrap())
+        .lines()
+        .next()
+        .map(Result::unwrap);
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        first
+            .as_deref()
+            .is_some_and(|line| line.starts_with("Preview at http://")),
+        "{first:?}"
+    );
+    let text = stderr(&output);
+    assert!(text.contains("not the pinned 78.0.0"), "{text}");
+}

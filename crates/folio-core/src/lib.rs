@@ -17,6 +17,7 @@ pub mod db;
 pub mod diag;
 pub mod eval;
 pub mod fonts;
+pub mod image;
 pub mod layout;
 pub mod locale;
 pub mod locate;
