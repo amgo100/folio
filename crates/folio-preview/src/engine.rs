@@ -8,7 +8,7 @@
 //! cancelled check drops its handle at once (SPEC §2.3).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -96,13 +96,36 @@ pub(crate) struct PageEntry {
     pub(crate) spans: Arc<[u8]>,
 }
 
-/// The fonts of a build, by the ids glyph runs name them by.
+/// The fonts of a build, by the ids glyph runs name them by. A face is
+/// read only when a page is rendered or a client asks for it, since
+/// reading a system face reads its file.
 #[derive(Debug, Default)]
-pub(crate) struct FontTable(pub(crate) Vec<Option<folio_fonts::Font>>);
+pub(crate) struct FontTable {
+    faces: Vec<(folio::Face, OnceLock<Option<folio_fonts::Font>>)>,
+}
+
+impl FontTable {
+    /// The table of a build's fonts.
+    fn new(fonts: &folio::Fonts) -> Self {
+        Self {
+            faces: fonts
+                .faces()
+                .iter()
+                .map(|face| (face.clone(), OnceLock::new()))
+                .collect(),
+        }
+    }
+
+    /// The font with an id, read on first use.
+    pub(crate) fn get(&self, id: usize) -> Option<&folio_fonts::Font> {
+        let (face, read) = self.faces.get(id)?;
+        read.get_or_init(|| face.font()).as_ref()
+    }
+}
 
 impl folio_render::Fonts for FontTable {
     fn font(&self, id: FontId) -> Option<folio_render::FontBytes<'_>> {
-        let font = self.0.get(usize::try_from(id.0).ok()?)?.as_ref()?;
+        let font = self.get(usize::try_from(id.0).ok()?)?;
         Some(folio_render::FontBytes {
             data: font.data(),
             index: font.index(),
@@ -175,6 +198,7 @@ pub(crate) fn start(root: &Path, options: &Options) -> Result<Started, Error> {
     let mut engine = Engine {
         settings,
         root: root.to_path_buf(),
+        canonical: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
         loader,
         world: None,
         errors: None,
@@ -213,6 +237,9 @@ pub(crate) struct Started {
 struct Engine {
     settings: Settings,
     root: PathBuf,
+    /// The project directory with links resolved, as some systems name
+    /// the paths of events.
+    canonical: PathBuf,
     loader: Loader,
     /// `None` while `folio.toml` or `folio.lock` keeps the project from
     /// loading.
@@ -395,7 +422,10 @@ impl Engine {
 
     /// The project path of a path from an event, if it is in the project.
     fn loader_path(&self, path: &Path) -> Option<String> {
-        let rel = path.strip_prefix(&self.root).ok()?;
+        let rel = path
+            .strip_prefix(&self.root)
+            .or_else(|_| path.strip_prefix(&self.canonical))
+            .ok()?;
         let parts: Option<Vec<&str>> = rel.components().map(|c| c.as_os_str().to_str()).collect();
         Some(parts?.join("/"))
     }
@@ -653,11 +683,7 @@ fn check(
             fonts: published.fonts.clone(),
         });
     };
-    let fonts = match before {
-        // The same fonts, unless they changed, which sends every page.
-        Some(_) if !published.fonts.0.is_empty() => published.fonts.clone(),
-        _ => Arc::new(font_table(world)?),
-    };
+    let fonts = Arc::new(FontTable::new(&folio::fonts(world).ok()?));
     let (changed, remapped) = match before {
         Some(before) => (pages.changed(before), pages.remapped(before)),
         None => ((0..pages.pages.len()).collect(), Vec::new()),
@@ -699,14 +725,6 @@ fn entry(pages: &Pages, index: usize, generation: u64) -> PageEntry {
         bytes,
         spans,
     }
-}
-
-/// The fonts of a build; `None` when an edit cancelled the query.
-fn font_table(world: &World) -> Option<FontTable> {
-    let fonts = folio::fonts(world).ok()?;
-    Some(FontTable(
-        fonts.faces().iter().map(|face| face.font()).collect(),
-    ))
 }
 
 /// The files diagnostics point into, with the manifest and lockfile when

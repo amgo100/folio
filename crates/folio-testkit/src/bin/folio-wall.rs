@@ -39,9 +39,9 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use folio::{BuildMode, Name, Target, World};
-use folio_testkit::corpus::Project;
 use folio_preview::{Event, Preview};
 use folio_testkit::corpus;
+use folio_testkit::corpus::Project;
 use folio_testkit::refdoc::{self, Edit, Spec};
 use tokio_tungstenite::tungstenite::{self, Message, WebSocket};
 
@@ -149,7 +149,10 @@ fn watching() -> Prepared {
     while received(&mut client) < revision {}
     let file = dir.path().join("main.fol");
     let text = std::fs::read_to_string(&file).expect("the entry file");
-    assert!(text.contains(WATCH_EDIT.0), "the edit's text is in the exam");
+    assert!(
+        text.contains(WATCH_EDIT.0),
+        "the edit's text is in the exam"
+    );
     let edited = text.replacen(WATCH_EDIT.0, WATCH_EDIT.1, 1);
     Prepared::Watching(Box::new(Watching {
         _dir: dir,

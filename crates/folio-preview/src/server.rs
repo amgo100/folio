@@ -221,7 +221,7 @@ fn font(shared: &Shared, n: &str) -> Vec<u8> {
     let Some(font) = n
         .parse::<usize>()
         .ok()
-        .and_then(|n| published.fonts.0.get(n).cloned().flatten())
+        .and_then(|n| published.fonts.get(n).cloned())
     else {
         return http::error("404 Not Found");
     };
