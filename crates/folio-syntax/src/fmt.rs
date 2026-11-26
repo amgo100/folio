@@ -549,7 +549,7 @@ impl Walk {
                 // left open, where a line break would be part of the comment.
                 (Some(prev), None)
                     if prev.kind == SyntaxKind::BlockComment
-                        && !self.text[prev.range.0..prev.range.1].ends_with("*/") =>
+                        && comment_is_open(&self.text[prev.range.0..prev.range.1]) =>
                 {
                     None
                 }
@@ -772,6 +772,27 @@ fn edge(text: &str, newlines: usize) -> EcoString {
     }
 }
 
+/// Whether a block comment is left open at the end of the file. Block
+/// comments nest, as the lexer reads them.
+fn comment_is_open(comment: &str) -> bool {
+    let bytes = comment.as_bytes();
+    let (mut depth, mut i) = (0usize, 0);
+    while i < bytes.len() {
+        match (bytes[i], bytes.get(i + 1)) {
+            (b'/', Some(b'*')) => {
+                depth += 1;
+                i += 2;
+            }
+            (b'*', Some(b'/')) => {
+                depth = depth.saturating_sub(1);
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    depth > 0
+}
+
 /// The number of line breaks in whitespace, a `\r\n` counting once.
 fn count_newlines(text: &str) -> usize {
     let mut count = 0;
@@ -925,6 +946,9 @@ mod tests {
         markup("#{\n}\n", "#{\n}\n");
         markup("= Hi  \n/* the rest", "= Hi\n/* the rest");
         style("a { b: c; } /* x", "a { b: c; } /* x");
+        style("a { } /* x /* y */", "a { } /* x /* y */");
+        style("a { } /*/", "a { } /*/");
+        style("a { } /* x /* y */ */", "a { } /* x /* y */ */\n");
         style("a { b/* c */: c; }", "a { b /* c */: c; }\n");
         markup("#{\n[- x\n  - y]\n}\n", "#{\n[- x\n  - y]\n}\n");
         for frozen in [
