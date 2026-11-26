@@ -452,23 +452,24 @@ pub(super) fn replace(
     // Where the temporary file really is, which the rename and the clean-up
     // go through, so a directory swapped after the check is not followed.
     let mut placed = temporary.clone();
-    let result = out
-        .write_all(bytes)
-        .and_then(|()| match permissions {
-            Some(permissions) => out.set_permissions(permissions),
-            None => Ok(()),
-        })
-        .and_then(|()| out.sync_all())
-        .and_then(|()| {
-            drop(out);
-            placed = temporary.canonicalize()?;
-            match placed.parent() {
-                Some(dir) if dir.starts_with(root) => fs::rename(&placed, dir.join(&*name)),
-                _ => Err(io::Error::other(
-                    "a directory on the way was replaced by a link out of the project",
-                )),
-            }
-        });
+    // The permissions come first, so the text is never readable by more
+    // than the file's were.
+    let result = match permissions {
+        Some(permissions) => out.set_permissions(permissions),
+        None => Ok(()),
+    }
+    .and_then(|()| out.write_all(bytes))
+    .and_then(|()| out.sync_all())
+    .and_then(|()| {
+        drop(out);
+        placed = temporary.canonicalize()?;
+        match placed.parent() {
+            Some(dir) if dir.starts_with(root) => fs::rename(&placed, dir.join(&*name)),
+            _ => Err(io::Error::other(
+                "a directory on the way was replaced by a link out of the project",
+            )),
+        }
+    });
     if result.is_err() {
         let _ = fs::remove_file(&placed);
     }

@@ -510,8 +510,6 @@ impl Walk {
             let newlines = count_newlines(text);
 
             let new: Option<EcoString> = match (prev, next) {
-                // The end of the file.
-                (Some(_), None) => Some("\n".into()),
                 // Other whitespace than spaces, tabs and line feeds, such as
                 // a form feed, is left as it is.
                 _ if !ascii => {
@@ -520,6 +518,8 @@ impl Walk {
                     }
                     None
                 }
+                // The end of the file.
+                (Some(_), None) => Some("\n".into()),
                 // The start of the file: markup keeps the indentation of
                 // its first line.
                 (None, Some(_)) if gap.markup => {
@@ -554,6 +554,13 @@ impl Walk {
                     let mut new = EcoString::from(if newlines > 1 { "\n\n" } else { "\n" });
                     new.push_str(&new_indent);
                     Some(new)
+                }
+                // Tokens that touch in markup stay touching: a space there
+                // would be a space in the text.
+                (Some(prev), Some(next))
+                    if text.is_empty() && (is_markup(prev.parent) || is_markup(next.parent)) =>
+                {
+                    None
                 }
                 (Some(prev), Some(next)) => Some(if gap.markup {
                     inline_markup(text, next)
@@ -658,7 +665,8 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
     let combinator = |t: Token| matches!(t.kind, K::Gt | K::Plus) && t.parent == K::Selector;
 
     // No space.
-    if matches!(next.kind, K::Comma | K::Semicolon) && !separated
+    if next.kind == K::Comma
+        || next.kind == K::Semicolon && !separated
         || named_colon(next)
         || prev.kind == K::LeftParen && prev.opens()
         || next.kind == K::RightParen && next.closes()
@@ -756,6 +764,7 @@ mod tests {
         style("$accent:#1f5fa8;", "$accent: #1f5fa8;\n");
         style("a { margin: 0 -1mm; }", "a { margin: 0 -1mm; }\n");
         style("a:step(1,3-4) { b: c; }", "a:step(1,3-4) { b: c; }\n");
+        style("a:step( 1 , 2 ) { }", "a:step(1, 2) { }\n");
         style("a[level=1] { }", "a[level=1] { }\n");
         style("a {}", "a {}\n");
     }
@@ -829,6 +838,17 @@ mod tests {
         markup("#{x}\n", "#{ x }\n");
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
+        for touching in [
+            "#x// c\n",
+            "#f(x)// c\n",
+            "#let x = 1// c\n",
+            "Text/* c */\n",
+            "a/* c */b\n",
+            "#x;b\n",
+            "#let x = 1;more\n",
+        ] {
+            markup(touching, touching);
+        }
         markup(
             "#{\n  if a {\n    x\n  }\n  else {\n    y\n  }\n}\n",
             "#{\n  if a {\n    x\n  }\n  else {\n    y\n  }\n}\n",
