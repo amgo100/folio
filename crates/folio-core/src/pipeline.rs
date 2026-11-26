@@ -198,11 +198,30 @@ pub fn settle(db: &dyn Db, build: Build<'_>) -> PageNumbers {
 
 /// Warns at each page-number reference whose target's page did not
 /// settle, so its number was frozen, and at each whose target the build's
-/// layout puts on no page, so it shows [`UNRESOLVED`].
+/// layout puts on no page, so it shows [`UNRESOLVED`]; and at each
+/// footnote numbered per page whose page did not settle.
 ///
 /// [`UNRESOLVED`]: crate::resolve::UNRESOLVED
 fn report_unsettled(db: &dyn Db, resolution: &Resolution) {
     let numbers = &resolution.pages;
+    for footnote in &resolution.footnotes {
+        if resolution.footnotes_per_page && numbers.unsettled.contains(&footnote.location) {
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    footnote.span,
+                    eco_format!(
+                        "the page of this footnote did not settle after {EXTRA_PASSES} more layout \
+                         passes, so its number, counted on its page, may be wrong"
+                    ),
+                )
+                .with_hint(
+                    "the width of footnote numbers moves this footnote between pages; rewording \
+                     the text before it settles it",
+                ),
+            );
+        }
+    }
     for r in &resolution.references {
         let Some(target) = r.target.filter(|_| r.page.is_some()) else {
             continue;

@@ -33,6 +33,15 @@
 //!   `1.1` would. A reference to a label that no shown element has, or to
 //!   an element without a counter, is a warning, and shows [`UNRESOLVED`].
 //!
+//! - **Footnotes** (SPEC §7.8): a footnote counts with the counter
+//!   `footnote`, and its number is its marker, at its anchor and before its
+//!   note. `counter-reset: footnote` restarts it at the elements it applies
+//!   to, so `heading[level=1] { counter-reset: footnote; }` numbers the
+//!   footnotes of each section from 1; on `page`, it restarts on every
+//!   page, which only layout knows: the page-number fixpoint measures each
+//!   footnote's page like a page-number reference's target
+//!   ([`Resolution::set_pages`]), so per-page numbers are in the layout
+//!   part of the flow state (SPEC §2.3).
 //! - **Page-number references**: a reference with the page form shows the
 //!   page its target is on (`page 4`), which only layout knows. Resolve
 //!   gives each the page numbers of the pass before
@@ -181,10 +190,32 @@ pub struct Resolution {
     pub references: EcoVec<Reference>,
     /// The page numbers the page-number references show
     /// ([`Resolution::set_pages`]): of the pass before, for the targets of
-    /// the references in the order they are first referred to. Empty when
-    /// the build has no page-number references.
+    /// the references in the order they are first referred to, then, when
+    /// footnotes are numbered per page, the footnotes. Empty when the build
+    /// has neither.
     pub pages: PageNumbers,
+    /// The footnotes, in document order.
+    pub footnotes: EcoVec<Footnote>,
+    /// Whether footnotes are numbered from 1 on every page: `page {
+    /// counter-reset: footnote; }`.
+    pub footnotes_per_page: bool,
     index: Index,
+}
+
+/// A footnote, as its numbers per page are set ([`Resolution::set_pages`]).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Footnote {
+    /// The `footnote` element instance.
+    pub location: Location,
+    /// Its value of the counter `footnote` in document order, which
+    /// `counter-reset` on elements restarts.
+    pub value: u64,
+    /// The pattern of its `numbering`, if it has one.
+    pub pattern: Option<Pattern>,
+    /// Whether its marker is its number, rather than a string or none.
+    pub numbered_marker: bool,
+    /// Where it was made.
+    pub span: Span,
 }
 
 /// Lookups into a [`Resolution`] by location, made once.
@@ -206,6 +237,8 @@ impl PartialEq for Resolution {
             && self.labels == other.labels
             && self.references == other.references
             && self.pages == other.pages
+            && self.footnotes == other.footnotes
+            && self.footnotes_per_page == other.footnotes_per_page
     }
 }
 
@@ -218,6 +251,8 @@ impl Hash for Resolution {
         self.labels.hash(state);
         self.references.hash(state);
         self.pages.hash(state);
+        self.footnotes.hash(state);
+        self.footnotes_per_page.hash(state);
     }
 }
 
@@ -249,15 +284,22 @@ impl Resolution {
         Some(&self.references[*self.index.references.get(&location)?])
     }
 
-    /// The targets of the page-number references, each once, in the order
-    /// they are first referred to.
+    /// What layout must find the pages of: the targets of the page-number
+    /// references, each once, in the order they are first referred to,
+    /// then, when footnotes are numbered per page, the footnotes.
     pub fn page_targets(&self) -> Vec<Location> {
         let mut seen = HashSet::new();
+        let footnotes = self
+            .footnotes
+            .iter()
+            .filter(|_| self.footnotes_per_page)
+            .map(|f| f.location);
         self.references
             .iter()
             .filter(|r| r.page.is_some())
             .filter_map(|r| r.target)
             .map(|t| t.location)
+            .chain(footnotes)
             .filter(|l| seen.insert(*l))
             .collect()
     }
@@ -265,8 +307,14 @@ impl Resolution {
     /// Sets the page-number references with the page numbers of a pass
     /// ([`page_refs`]): each shows its word and its target's page, or
     /// [`UNRESOLVED`] where the pass did not find its target on a page.
+    /// When footnotes are numbered per page, each is numbered among the
+    /// footnotes of its page, as the pass found them; before any pass
+    /// knows a page, in document order.
     pub fn set_pages(&mut self, numbers: &PageNumbers) {
         let numbers = numbers.for_targets(self.page_targets());
+        if self.footnotes_per_page {
+            self.number_footnotes(&numbers);
+        }
         for r in self.references.make_mut() {
             let (Some(word), Some(target)) = (&r.page, r.target) else {
                 continue;
@@ -282,6 +330,38 @@ impl Resolution {
             };
         }
         self.pages = numbers;
+    }
+
+    /// Numbers the footnotes among those of their pages: a footnote on
+    /// another page than the one before it, or whose counter an element
+    /// restarted, is numbered 1. Footnotes on no known page count on from
+    /// the one before, so before any page is known they keep their
+    /// numbers in document order.
+    fn number_footnotes(&mut self, numbers: &PageNumbers) {
+        let mut previous: Option<(Option<u32>, u64)> = None;
+        for i in 0..self.footnotes.len() {
+            let footnote = &self.footnotes[i];
+            let page = numbers.page(footnote.location);
+            let value = match previous {
+                Some((before, n)) if before == page && footnote.value != 1 => n + 1,
+                _ => 1,
+            };
+            previous = Some((page, value));
+            let target = Target::element(footnote.location);
+            let number = footnote.pattern.as_ref().map(|p| p.format(&[value]));
+            let numbered = footnote.numbered_marker;
+            if let Some(&n) = self.index.numbers.get(&target) {
+                let entry = &mut self.numbers.make_mut()[n];
+                entry.values = EcoVec::from([value]);
+                entry.number = number.clone();
+            }
+            if numbered
+                && let Some(number) = number
+                && let Some(&m) = self.index.markers.get(&footnote.location)
+            {
+                self.markers.make_mut()[m].text = eco_format!("{number}{NBSP}");
+            }
+        }
     }
 
     fn reindex(&mut self) {
@@ -331,6 +411,7 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
         refs: Vec::new(),
         styles: HashMap::new(),
     };
+    walk.out.footnotes_per_page = page_resets(db, build, styled);
     walk.element(&doc.root, &styled.root);
     // Numbers and labels are looked up as references resolve.
     walk.out.reindex();
@@ -338,6 +419,62 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
     let mut out = walk.out;
     out.reindex();
     out
+}
+
+/// Whether `counter-reset` on `page` restarts the footnotes on every page.
+/// Reports the other counters it names, which do not restart per page.
+fn page_resets(db: &dyn Db, build: Build<'_>, styled: &Styled) -> bool {
+    let props = &styled.properties;
+    let names: Vec<EcoString> = match styled.page.value(props, props.builtin("counter-reset")) {
+        None | Some(StyleValue::None) => return false,
+        Some(StyleValue::Array(items)) => items.iter().filter_map(counter_name).collect(),
+        Some(value) => counter_name(value).into_iter().collect(),
+    };
+    let mut footnotes = false;
+    for name in names {
+        if name == "footnote" {
+            footnotes = true;
+            continue;
+        }
+        diag::report(
+            db,
+            Diagnostic::warning(
+                page_reset_span(db, build),
+                eco_format!("only footnotes are numbered per page, so `{name}` does not restart on each page"),
+            )
+            .with_hint(
+                "restart other counters at the elements that start their sections, such as \
+                 `heading[level=1] { counter-reset: figure; }`",
+            ),
+        );
+    }
+    footnotes
+}
+
+/// Where the `counter-reset` that applies to `page` is declared: the last
+/// rule that matches the page and declares it, as the style stage matches
+/// them.
+fn page_reset_span(db: &dyn Db, build: Build<'_>) -> Span {
+    let cascade = crate::style::cascade(db, build.base(db));
+    let reset = cascade.properties.builtin("counter-reset");
+    let page = crate::style::NodeView {
+        subject: crate::style::Subject {
+            name: crate::style::NodeName::Page,
+            classes: EcoVec::new(),
+            label: None,
+            fields: EcoVec::new(),
+        },
+        pos: crate::style::Position::default(),
+        prev: EcoVec::new(),
+        children: EcoVec::new(),
+    };
+    cascade
+        .rules
+        .iter()
+        .filter(|rule| rule.selector.matches(&[&page]))
+        .flat_map(|rule| &rule.declarations)
+        .rfind(|decl| decl.prop == reset)
+        .map_or_else(Span::detached, |decl| decl.span)
 }
 
 /// The property ids the walk reads.
@@ -527,7 +664,26 @@ impl Walk<'_> {
         if numbered || element.label.is_some() {
             self.styles.insert(element.location, style.clone());
         }
+        let markers = self.out.markers.len();
         self.marker(element, node, numbered, &counted);
+        if is_builtin(&element.name, "footnote")
+            && let Some(number) = self.out.numbers.last()
+            && number.target.location == element.location
+        {
+            let marker = self.out.markers.get(markers);
+            let numbered_marker = marker.is_some()
+                && !matches!(
+                    style.value(self.props, self.ids.marker),
+                    Some(StyleValue::Str(_))
+                );
+            self.out.footnotes.push(Footnote {
+                location: element.location,
+                value: number.values.last().copied().unwrap_or(1),
+                pattern: self.pattern(style),
+                numbered_marker,
+                span: element.span,
+            });
+        }
         self.restart_within(element);
 
         if is_builtin(&element.name, "ref")
@@ -700,7 +856,7 @@ impl Walk<'_> {
     /// Whether a name is a counter: a built-in one, or that of an element a
     /// component declares with one.
     fn is_counter(&mut self, name: &str) -> bool {
-        if ["heading", "figure", "sidenote", "equation"].contains(&name) {
+        if ["heading", "figure", "footnote", "sidenote", "equation"].contains(&name) {
             return true;
         }
         let Some(qualified) = QualifiedName::new(name) else {

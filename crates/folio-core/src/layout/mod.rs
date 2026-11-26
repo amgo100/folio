@@ -65,6 +65,7 @@
 
 mod cache;
 mod flow;
+mod footnote;
 pub mod linebreak;
 mod master;
 mod math;
@@ -146,8 +147,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let maths = maths(db, build).unwrap_or_default();
 
     let width = PageMaster::of(&styled.page, props).body.size.width;
-    let (slots, display_widths) =
-        flow::slots(&text.root, props, width, text.paragraphs.len(), &text.maths);
+    let (slots, display_widths) = flow::slots(text, props, width);
     let slots: EcoVec<LineSlot> = slots.into();
     // The paragraph builder places lines relative to their slots.
     let widths: Vec<[LineSlot; 1]> = slots

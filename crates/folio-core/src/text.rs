@@ -10,6 +10,12 @@
 //!   note's or float's anchor) the object character, which layout sizes.
 //!   The blocks of notes and floats anchored in a paragraph are paragraphs
 //!   of their own.
+//! - **Footnotes** (SPEC §7.8): a footnote's anchor is its marker, set in
+//!   the footnote's style where it stands ([`TextParagraph::notes`]), and
+//!   its blocks are a flow of their own ([`Text::notes`]), which the page
+//!   builder places at the foot of the anchor's page. Their paragraphs are
+//!   paragraphs of the build like any other, after the paragraph they are
+//!   anchored in.
 //! - **Generated text** (SPEC §4.5): a reference is the text the Resolve
 //!   stage gave it (`Figure 2`), and an element's marker (its number, a
 //!   list item's bullet, a figure's word and number) starts its first
@@ -70,6 +76,20 @@ pub struct Text {
     /// The formulas, inline and display, in document order: what math
     /// layout sets (SPEC §8.2).
     pub maths: EcoVec<TextMath>,
+    /// The footnotes, each the block of its `footnote` element, in the
+    /// order of their anchors (SPEC §7.8). They are in no block of
+    /// [`Text::root`]: the page builder places them at the foot of a page.
+    pub notes: EcoVec<TextBlock>,
+}
+
+/// The anchor of a footnote in a paragraph: its marker, or an object
+/// character where it has none.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TextAnchor {
+    /// The bytes of the paragraph's text that the anchor is.
+    pub range: Range<usize>,
+    /// The footnote, as an index into [`Text::notes`].
+    pub note: usize,
 }
 
 /// A formula of a build, as math layout reads it: an inline formula, which
@@ -179,6 +199,9 @@ pub struct TextParagraph {
     /// The element each object character of the text stands for, in the
     /// order of the text.
     pub objects: EcoVec<TextObject>,
+    /// The anchors of the footnotes in the paragraph, in the order of the
+    /// text.
+    pub notes: EcoVec<TextAnchor>,
 }
 
 /// An object character of a paragraph's text (SPEC §7.2): content that is
@@ -272,12 +295,14 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
             segments: p.segments.clone(),
             sources: p.sources.clone(),
             objects: p.objects.clone(),
+            notes: p.notes.clone(),
         })
         .collect();
     Some(Text {
         paragraphs,
         root: collected.root.clone(),
         maths: collected.maths.clone(),
+        notes: collected.notes.clone(),
     })
 }
 
@@ -290,6 +315,8 @@ pub struct Collected {
     pub root: TextBlock,
     /// The formulas, as [`Text::maths`].
     pub maths: EcoVec<TextMath>,
+    /// The footnotes, as [`Text::notes`].
+    pub notes: EcoVec<TextBlock>,
 }
 
 /// A paragraph of a build, split into segments set in their fonts, before
@@ -310,6 +337,8 @@ pub struct CollectedParagraph {
     pub sources: EcoVec<TextSource>,
     /// As [`TextParagraph::objects`].
     pub objects: EcoVec<TextObject>,
+    /// As [`TextParagraph::notes`].
+    pub notes: EcoVec<TextAnchor>,
 }
 
 /// The paragraphs of a build, collected from the styled tree and set in
@@ -348,6 +377,8 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         resolution,
         markers: Vec::new(),
         maths: Vec::new(),
+        notes: Vec::new(),
+        in_note: false,
     };
     collector.element(&doc.root, &styled.root);
 
@@ -356,6 +387,11 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         paragraphs: collector.pending.into_iter().collect(),
         root,
         maths: collector.maths.into_iter().collect(),
+        notes: collector
+            .notes
+            .into_iter()
+            .map(|note| note.expect("every footnote is collected"))
+            .collect(),
     })
 }
 
@@ -396,7 +432,16 @@ struct Collector<'a> {
     markers: Vec<Pending>,
     /// The formulas, in document order.
     maths: Vec<TextMath>,
+    /// The footnotes, each `None` from its anchor until its blocks are
+    /// collected, after the paragraph it is anchored in.
+    notes: Vec<Option<TextBlock>>,
+    /// Whether it collects a footnote's blocks.
+    in_note: bool,
 }
+
+/// An element anchored in a paragraph whose content is blocks, and for a
+/// footnote, its index in [`Text::notes`].
+type Anchored<'a> = (&'a Element, &'a StyledNode, Option<usize>);
 
 /// A marker waiting for the paragraph it starts.
 struct Pending {
@@ -414,6 +459,8 @@ struct Builder {
     sources: Vec<TextSource>,
     /// The elements its object characters stand for.
     objects: Vec<TextObject>,
+    /// The anchors of its footnotes.
+    anchors: Vec<TextAnchor>,
     /// A quotation mark whose form waits for the character after it.
     quote: Option<Quote>,
 }
@@ -611,13 +658,33 @@ impl Collector<'_> {
             &mut anchored,
         );
         self.finish(builder, style, owner);
-        for (element, node) in anchored {
-            self.element(element, node);
+        for (element, node, note) in anchored {
+            match note {
+                Some(index) => self.note(element, node, index),
+                None => self.element(element, node),
+            }
         }
     }
 
+    /// Collects the blocks of footnote `index` into a tree of their own,
+    /// whose root is the footnote's block (SPEC §7.8).
+    fn note(&mut self, element: &Element, node: &StyledNode, index: usize) {
+        let blocks = std::mem::take(&mut self.blocks);
+        let root = self.root.take();
+        let markers = std::mem::take(&mut self.markers);
+        let in_note = std::mem::replace(&mut self.in_note, true);
+        self.element(element, node);
+        self.in_note = in_note;
+        let note = self.root.take();
+        self.root = root;
+        self.blocks = blocks;
+        self.markers = markers;
+        self.notes[index] = note;
+    }
+
     /// Adds inline content to a paragraph. Elements anchored in it whose
-    /// content is blocks (notes, floats) go to `anchored`.
+    /// content is blocks (notes, floats) go to `anchored`, a footnote with
+    /// its index in [`Text::notes`].
     fn inline<'a>(
         &mut self,
         content: &'a Content,
@@ -625,7 +692,7 @@ impl Collector<'_> {
         span: Span,
         kids: &mut StyledChildren<'a>,
         out: &mut Builder,
-        anchored: &mut Vec<(&'a Element, &'a StyledNode)>,
+        anchored: &mut Vec<Anchored<'a>>,
     ) {
         for node in content.nodes() {
             match node {
@@ -673,15 +740,55 @@ impl Collector<'_> {
         element: &'a Element,
         node: &'a StyledNode,
         out: &mut Builder,
-        anchored: &mut Vec<(&'a Element, &'a StyledNode)>,
+        anchored: &mut Vec<Anchored<'a>>,
     ) {
         let style = &node.style;
         match element.kind {
             ElementKind::Inline => {}
+            // A footnote: its marker here, its blocks at the foot of the
+            // page.
+            ElementKind::Note if is_builtin(&element.name, "footnote") => {
+                if self.in_note {
+                    self.report_once(
+                        "footnote-in-footnote".into(),
+                        Diagnostic::warning(
+                            element.span,
+                            "a footnote inside a footnote is not placed, so the output shows \
+                             only its marker",
+                        )
+                        .with_hint("write its text into the outer footnote"),
+                    );
+                }
+                let index = self.notes.len();
+                self.notes.push(None);
+                let marker = self
+                    .resolution
+                    .marker(element.location)
+                    .filter(|m| m.part.is_none())
+                    .map(|m| m.text.trim_end_matches(crate::resolve::NBSP))
+                    .filter(|text| !text.is_empty());
+                // A quotation mark before the anchor is not part of it.
+                out.flush_quote(Some(
+                    marker.and_then(|t| t.chars().next()).unwrap_or(OBJECT),
+                ));
+                let start = out.text.len();
+                match marker {
+                    Some(text) => {
+                        out.push_part(text, style, element.span, TextSource::WHOLE, false);
+                    }
+                    None => out.object(style, element, node.location),
+                }
+                out.anchors.push(TextAnchor {
+                    range: start..out.text.len(),
+                    note: index,
+                });
+                anchored.push((element, node, Some(index)));
+                return;
+            }
             // A note or float anchored here: its content is blocks.
             _ => {
                 out.object(style, element, node.location);
-                anchored.push((element, node));
+                anchored.push((element, node, None));
                 return;
             }
         }
@@ -850,6 +957,7 @@ impl Collector<'_> {
             segments: styles,
             sources: builder.sources.into_iter().collect(),
             objects: builder.objects.into_iter().collect(),
+            notes: builder.anchors.into_iter().collect(),
         });
     }
 

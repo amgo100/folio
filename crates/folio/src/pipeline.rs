@@ -332,17 +332,31 @@ pub(crate) fn structure(
         match child {
             TextFlow::Block(block) => tag.children.push(structure(block, text, alt)),
             TextFlow::Paragraph(index) => {
+                let paragraph = &text.paragraphs[*index];
                 // A formula's first chunk; the others continue it.
-                let formulas = text.paragraphs[*index]
+                let formulas = paragraph
                     .objects
                     .iter()
-                    .filter(|object| object.math.is_some_and(|m| m.chunk == 0));
-                for object in formulas {
-                    let mut formula = Tag::new(Role::Formula, source_ref(object.span));
-                    formula.instance = object.location.instance;
-                    formula.text = formula_alt(text, object.span, alt);
-                    tag.children.push(formula);
-                }
+                    .filter(|object| object.math.is_some_and(|m| m.chunk == 0))
+                    .map(|object| {
+                        let mut formula = Tag::new(Role::Formula, source_ref(object.span));
+                        formula.instance = object.location.instance;
+                        formula.text = formula_alt(text, object.span, alt);
+                        (object.at, formula)
+                    });
+                // A footnote's note, whose boxes the page builder draws
+                // inside the paragraph's on the page of its anchor
+                // (SPEC §7.8, §11.1).
+                let notes = paragraph.notes.iter().map(|anchor| {
+                    (
+                        anchor.range.start,
+                        structure(&text.notes[anchor.note], text, alt),
+                    )
+                });
+                let mut children: Vec<(usize, Tag)> = formulas.chain(notes).collect();
+                children.sort_by_key(|(at, _)| *at);
+                tag.children
+                    .extend(children.into_iter().map(|(_, child)| child));
             }
         }
     }
@@ -423,13 +437,20 @@ fn alt_text(written: &str) -> Option<EcoString> {
 }
 
 /// The text of the paragraphs a block holds directly, as [`clean`] gives
-/// it.
+/// it, without the anchors of footnotes.
 fn block_text(block: &TextBlock, text: &Text) -> Option<EcoString> {
     let mut words = String::new();
     for child in &block.children {
         if let TextFlow::Paragraph(index) = child {
+            let paragraph = &text.paragraphs[*index];
+            let shown = paragraph.shaped.text();
+            let mut at = 0;
             words.push(' ');
-            words.push_str(text.paragraphs[*index].shaped.text());
+            for anchor in &paragraph.notes {
+                words.push_str(&shown[at..anchor.range.start]);
+                at = anchor.range.end;
+            }
+            words.push_str(&shown[at..]);
         }
     }
     clean(words.into())
@@ -453,7 +474,7 @@ fn role(element: &QualifiedName, part: Option<&str>) -> Role {
         ("terms", None) => Role::List(ListKind::Terms),
         ("list-item" | "enum-item" | "terms-item", None) => Role::ListItem,
         ("terms-item", Some("term")) => Role::Label,
-        ("sidenote", None) => Role::Note,
+        ("footnote" | "sidenote", None) => Role::Note,
         ("raw", None) => Role::Code,
         ("math", None) => Role::Formula,
         (_, Some("caption")) => Role::Caption,
