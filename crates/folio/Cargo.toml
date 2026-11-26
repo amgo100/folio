@@ -1,6 +1,6 @@
 [package]
 name = "folio"
-description = "The Folio compiler: library API and command-line interface"
+description = "The Folio compiler library: the memoised compile pipeline and `folio::World`"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,6 @@ folio-fonts.workspace = true
 folio-pdf.workspace = true
 folio-syntax.workspace = true
 folio-text.workspace = true
-clap.workspace = true
 codespan-reporting.workspace = true
 ecow = { workspace = true, features = ["serde"] }
 ed25519-dalek.workspace = true
