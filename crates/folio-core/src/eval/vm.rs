@@ -540,27 +540,21 @@ impl<'a> Vm<'a> {
                     label,
                 )
             }
-            // Math is kept as source until the math tree exists (M1).
+            // Native math becomes a formula of the math tree (SPEC §8.1).
             ast::Expr::Equation(eq) => {
                 self.step(span)?;
-                let body = eq.body().to_untyped().full_text();
-                self.builtin(
-                    "math",
-                    [
-                        ("text", Value::Str(body.trim().into())),
-                        ("block", Value::Bool(eq.block())),
-                    ],
-                    span,
-                )?
+                let formula = self.formula(eq.body(), span)?;
+                self.math_content(formula, eq.block(), span)?
             }
+            // LaTeX input is kept as source until it is read into the same
+            // tree (#41).
             ast::Expr::TexEquation(eq) => {
                 self.step(span)?;
                 self.builtin(
                     "math",
                     [
-                        ("text", Value::Str(eq.body().trim().into())),
                         ("block", Value::Bool(eq.block())),
-                        ("tex", Value::Str(eq.mode().into())),
+                        ("tex", Value::Str(eq.body().into())),
                     ],
                     span,
                 )?
@@ -814,6 +808,20 @@ impl<'a> Vm<'a> {
             self.alloc(rhs.shallow_size(), span)?;
         }
         ops::join(lhs, rhs).at(span)
+    }
+
+    /// The value a name has in the script's own scopes, which an equation
+    /// reads before the names of math (SPEC §8.1): `None` when no scope
+    /// binds it, and a stop without an error of its own when a failed
+    /// binding poisoned it.
+    pub(super) fn math_binding(&self, name: &str) -> EvalResult<Option<Value>> {
+        if let Some(value) = self.scopes.get(name) {
+            return Ok(Some(value.clone()));
+        }
+        if self.poisoned.contains(name) {
+            return Err(Stop::Reported);
+        }
+        Ok(None)
     }
 
     fn lookup(&mut self, ident: ast::Ident<'_>) -> EvalResult<Value> {
@@ -1902,7 +1910,7 @@ fn display(value: Value, span: Span) -> Content {
 impl Vm<'_> {
     /// Builds a built-in element that markup produces, checked against its
     /// schema like a call.
-    fn builtin<'f>(
+    pub(super) fn builtin<'f>(
         &mut self,
         name: &str,
         fields: impl IntoIterator<Item = (&'f str, Value)>,
@@ -2027,7 +2035,7 @@ fn memory_exceeded(span: Span, limits: Limits) -> EvalError {
     .with_hint("check for a string, array or content that keeps growing")
 }
 
-fn nesting_exceeded(span: Span, what: &str) -> EvalError {
+pub(super) fn nesting_exceeded(span: Span, what: &str) -> EvalError {
     EvalError::new(
         span,
         eco_format!("{what} nested more than {MAX_NESTING} deep"),

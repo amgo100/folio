@@ -52,6 +52,9 @@ pub enum Value {
     Date(Date),
     /// Markup content.
     Content(Content),
+    /// A formula of the math tree (SPEC §8): the `tree` field of a `math`
+    /// element.
+    Math(folio_math::Formula),
     /// An array.
     Array(Array),
     /// A dictionary.
@@ -89,6 +92,7 @@ impl Value {
             Self::Func(_) => "function",
             Self::Args(_) => "arguments",
             Self::Module(_) => "module",
+            Self::Math(_) => "formula",
         }
     }
 
@@ -171,6 +175,7 @@ impl Value {
                 out.push(')');
             }
             Self::Module(m) => write!(out, "<module {}>", m.name()).unwrap(),
+            Self::Math(formula) => write!(out, "formula({})", formula.repr()).unwrap(),
         }
     }
 
@@ -178,8 +183,9 @@ impl Value {
     /// no other values, and one more than its deepest part for an array, a
     /// dictionary, arguments, a closure, a function with arguments applied,
     /// and an element or slot in content. Content is as deep as its deepest
-    /// node, and a module as its deepest binding or its content. Every
-    /// value caches its depth, so this takes constant time.
+    /// node, a module as its deepest binding or its content, and a formula
+    /// as its deepest row of the math tree. Every value caches its depth,
+    /// so this takes constant time.
     pub fn depth(&self) -> u32 {
         match self {
             Self::Content(c) => c.depth(),
@@ -188,6 +194,7 @@ impl Value {
             Self::Func(f) => f.depth(),
             Self::Args(a) => a.depth(),
             Self::Module(m) => m.depth(),
+            Self::Math(formula) => formula.depth(),
             _ => 0,
         }
     }

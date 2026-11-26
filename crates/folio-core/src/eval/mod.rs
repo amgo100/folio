@@ -103,6 +103,7 @@ mod content;
 mod element;
 mod error;
 mod library;
+mod math;
 pub(crate) mod ops;
 mod value;
 mod vm;
