@@ -175,14 +175,15 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
         }
         Err(panic) => {
             let last = kept.get(&build);
-            // Compiling now would answer with the kept output.
-            let writes = last.output.is_some() || last.writes == Some(true);
+            // Compiling now would panic alike, and answer with the kept
+            // output.
+            let writes = last.output.is_some();
             let (sources, files) = watched(world, last.sources, last.files);
             Ok(Checked {
                 sources,
                 files,
                 writes,
-                diagnostics: EcoVec::from([internal_error(&panic, false)]),
+                diagnostics: EcoVec::from([internal_error(&panic, writes)]),
             })
         }
     }

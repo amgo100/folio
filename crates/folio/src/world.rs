@@ -100,16 +100,28 @@ impl Kept {
         f: impl FnOnce(&mut Last),
     ) {
         let mut kept = self.lock();
-        kept.retain(|(variant, _), _| {
-            variant.is_none() || builds.iter().any(|(declared, _)| declared == variant)
-        });
+        retain(&mut kept, builds);
         f(kept.entry(build).or_default());
+    }
+
+    /// Forgets the builds of variants that the manifest no longer
+    /// declares, given the builds it declares now.
+    pub(crate) fn forget(&self, builds: &[(Option<Name>, Target)]) {
+        retain(&mut self.lock(), builds);
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<(Option<Name>, Target), Last>> {
         // Each update is one call that does not panic.
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
+
+/// Keeps the builds without a variant and those of the variants among
+/// `builds`.
+fn retain(kept: &mut HashMap<(Option<Name>, Target), Last>, builds: &[(Option<Name>, Target)]) {
+    kept.retain(|(variant, _), _| {
+        variant.is_none() || builds.iter().any(|(declared, _)| declared == variant)
+    });
 }
 
 /// What a world reports to the hook set with [`WorldBuilder::on_event`], for
@@ -332,6 +344,9 @@ impl World {
                 .set_manifest(&mut self.db)
                 .with_durability(Durability::MEDIUM)
                 .to(manifest);
+            if let Some(kept) = &self.kept {
+                kept.forget(&self.builds());
+            }
         }
         Ok(())
     }

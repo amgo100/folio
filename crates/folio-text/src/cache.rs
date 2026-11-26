@@ -252,12 +252,24 @@ impl Cache {
                             return;
                         }
                         let start = c * size;
-                        let out: Vec<(usize, O)> = chunk
-                            .iter()
-                            .enumerate()
-                            .take_while(|_| !stop.load(Ordering::Relaxed))
-                            .map(|(j, item)| (start + j, f(item)))
-                            .collect();
+                        let mut out = Vec::with_capacity(chunk.len());
+                        for (j, item) in chunk.iter().enumerate() {
+                            if stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(item)));
+                            match result {
+                                Ok(result) => out.push((start + j, result)),
+                                // The caller gets the panic at once, and
+                                // the other threads stop.
+                                Err(panic) => {
+                                    stop.store(true, Ordering::Relaxed);
+                                    let _ = tx.send(Err(panic));
+                                    return;
+                                }
+                            }
+                        }
                         // The caller may have stopped listening.
                         let _ = tx.send(Ok(out));
                     });
