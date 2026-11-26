@@ -74,6 +74,8 @@ Most diagnostics have no code yet. These have one:
 | `unbreakable` | warning | A page break falls inside a block despite `breakable: false`. At the block. |
 | `page-overflow` | warning | Something is taller than the space a page has for it. At what does not fit. |
 
+`folio build` and `folio check` leave out `underfull-line`, `widow`, `orphan`, `keep-with-next`, `keep-together` and `unbreakable`; `folio check --layout` includes them (SPEC §7.9).
+
 ### A location
 
 | Field | Type | Meaning |

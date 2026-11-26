@@ -20,7 +20,9 @@
 //!   (SPEC §2.3). It is shared by every handle of the database, so an edit
 //!   re-breaks only the paragraphs it changed.
 //! - **Diagnostics**: overfull and underfull lines, at the source of the
-//!   text they end with (§7.9).
+//!   text they end with (§7.9). Each layout diagnostic has a code; those
+//!   in [`DETAIL_CODES`] are shown only on request (`folio check
+//!   --layout`), the others always.
 //!
 //! The [`lines()`] query breaks each of a build's paragraphs, in parallel,
 //! at the content width of its block: the default page master's body less
@@ -262,6 +264,20 @@ fn paragraph_style(style: &ComputedStyle, props: &Properties) -> ParagraphStyle 
 }
 
 use self::master::length;
+
+/// The codes of the layout diagnostics that a front end shows only when
+/// asked to (SPEC §7.9): underfull lines, and widow, orphan, keep and
+/// unbreakable constraints that a page break relaxed. Content that runs
+/// off its line or page (`overfull-line`, `page-overflow`) is not among
+/// them: it is always shown.
+pub const DETAIL_CODES: [&str; 6] = [
+    "underfull-line",
+    "widow",
+    "orphan",
+    "keep-with-next",
+    "keep-together",
+    "unbreakable",
+];
 
 /// Reports a paragraph's overfull and underfull lines (SPEC §7.9).
 fn report_lines(

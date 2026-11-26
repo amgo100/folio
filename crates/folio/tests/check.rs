@@ -273,3 +273,82 @@ fn layout_diagnostics_have_codes_and_spans() {
     let compiled = folio::compile(&project(&dir), Target::Pdf, None).unwrap();
     assert_eq!(checked.diagnostics, compiled.diagnostics);
 }
+
+/// The codes of the fixture's layout diagnostics that `layout` shows, in
+/// order.
+fn layout_codes(diagnostics: &[folio::Diagnostic]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .filter_map(|d| d.code.as_deref())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Content that runs off its line or page is always shown; underfull
+/// lines and relaxed widows, orphans, keeps and unbreakable blocks only
+/// with every layout diagnostic (SPEC §7.9).
+#[test]
+fn only_serious_layout_diagnostics_are_shown_by_default() {
+    use folio::LayoutDiagnostics;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/check/layout");
+    let world = project(&dir);
+    let all = folio::check_with(&world, Target::Pdf, None, LayoutDiagnostics::All).unwrap();
+    assert_eq!(all, folio::check(&world, Target::Pdf, None).unwrap());
+    let serious =
+        folio::check_with(&world, Target::Pdf, None, LayoutDiagnostics::default()).unwrap();
+    assert_eq!(
+        layout_codes(&serious.diagnostics),
+        ["page-overflow", "overfull-line"]
+    );
+    let mut codes = layout_codes(&all.diagnostics);
+    codes.sort();
+    let mut expected: Vec<&str> = folio::layout::DETAIL_CODES.to_vec();
+    expected.extend(["overfull-line", "page-overflow"]);
+    expected.sort();
+    assert_eq!(codes, expected);
+    // Every other diagnostic is kept, in its order.
+    let others = |d: &[folio::Diagnostic]| -> Vec<folio::Diagnostic> {
+        d.iter().filter(|d| d.code.is_none()).cloned().collect()
+    };
+    assert!(!others(&serious.diagnostics).is_empty());
+    assert_eq!(others(&serious.diagnostics), others(&all.diagnostics));
+}
+
+/// `folio check` shows the serious layout diagnostics, `folio check
+/// --layout` all of them; `folio build` shows what plain `folio check`
+/// does.
+#[test]
+fn folio_check_layout_shows_every_layout_diagnostic() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/check/layout");
+    let dir = tempfile::tempdir().unwrap();
+    for file in ["folio.toml", "main.fol", "styles/main.fsty"] {
+        let to = dir.path().join(file);
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        fs::copy(fixture.join(file), to).unwrap();
+    }
+    let codes = |args: &[&str]| -> Vec<String> {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_folio"))
+            .args(args)
+            .args(["--diagnostics", "json"])
+            .current_dir(dir.path())
+            .env_remove("FOLIO_CACHE_DIR")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        json["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|d| d["code"].as_str().map(str::to_string))
+            .collect()
+    };
+    let plain = codes(&["check"]);
+    assert_eq!(plain, ["page-overflow", "overfull-line"]);
+    let all = codes(&["check", "--layout"]);
+    for code in folio::layout::DETAIL_CODES {
+        assert!(all.iter().any(|c| c == code), "{code}: {all:?}");
+    }
+    assert_eq!(all.len(), plain.len() + folio::layout::DETAIL_CODES.len());
+    assert_eq!(codes(&["build"]), plain);
+}
