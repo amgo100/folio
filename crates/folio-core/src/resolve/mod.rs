@@ -669,8 +669,9 @@ impl Walk<'_> {
                 };
                 if figure {
                     let lang = self.lang(style);
+                    // A caption starts a sentence: `Rys. 1: ..`.
                     match self.word(&element.name, counted, &lang) {
-                        Some(word) => eco_format!("{word}{NBSP}{number}: "),
+                        Some((word, _)) => eco_format!("{}{NBSP}{number}: ", capitalise(&word)),
                         None => eco_format!("{number}: "),
                     }
                 } else {
@@ -755,7 +756,8 @@ impl Walk<'_> {
         }
         let counted = self.counted(&labelled.element);
         match self.word(&labelled.element, &counted, &r.lang) {
-            Some(word) => eco_format!("{word}{NBSP}{shown}"),
+            Some((word, true)) => eco_format!("{word}{NBSP}({shown})"),
+            Some((word, false)) => eco_format!("{word}{NBSP}{shown}"),
             None => shown,
         }
     }
@@ -778,20 +780,26 @@ impl Walk<'_> {
         diag::report(self.db, diagnostic);
     }
 
-    /// The reference word of an element in a language, or `None` if it has
+    /// The reference word of an element in a language, and whether its
+    /// number is set in brackets, or `None` if it has
     /// no reference key.
-    fn word(&mut self, name: &QualifiedName, counted: &Counted, lang: &Lang) -> Option<EcoString> {
+    fn word(
+        &mut self,
+        name: &QualifiedName,
+        counted: &Counted,
+        lang: &Lang,
+    ) -> Option<(EcoString, bool)> {
         let key = if is_builtin(name, "math") {
             "equation"
         } else {
             counted.ref_key.as_ref()?.as_str()
         };
         if name.namespace.is_none() {
-            return locale::word(lang, key).map(EcoString::from);
+            return locale::word(lang, key).map(|w| (w.text.into(), w.brackets));
         }
         let host = component_host(self.db, self.build.project(self.db)).as_ref()?;
         let component = host.element(name).ok()?.component;
-        locale::component_word(component, lang, key).map(EcoString::from)
+        locale::component_word(component, lang, key).map(|w| (w.text.into(), w.brackets))
     }
 
     /// The pattern of a style's `numbering`, if it is not `none`.
@@ -834,6 +842,15 @@ impl Walk<'_> {
         if self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
+    }
+}
+
+/// A word with its first letter in upper case, to start a sentence.
+fn capitalise(word: &str) -> EcoString {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => EcoString::new(),
     }
 }
 

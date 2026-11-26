@@ -196,8 +196,9 @@ fn references_in_polish() {
         [
             "1~Ruch",
             "Piłka",
-            "Rysunek~1: Tor piłki.",
-            "Zob. Rysunek~1, Rozdział~1 i Równanie~1.",
+            // A caption starts a sentence; references do not inflect.
+            "Rys.~1: Tor piłki.",
+            "Zob. rys.~1, rozdz.~1 i wzór~(1).",
         ]
     );
 }
@@ -214,7 +215,7 @@ fn the_language_of_the_reference_chooses_the_word() {
     );
     let texts = paragraphs(&world);
     assert_eq!(texts[2], "See Figure~1.");
-    assert_eq!(texts[3], "Zob. Rysunek~1.");
+    assert_eq!(texts[3], "Zob. rys.~1.");
 }
 
 #[test]
