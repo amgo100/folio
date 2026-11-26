@@ -136,7 +136,7 @@ pub struct Lines {
 /// The paragraphs of a build broken into lines of the body's width, or
 /// `None` when the document could not be styled. Reports overfull and
 /// underfull lines.
-#[salsa::tracked(returns(ref))]
+#[salsa::tracked(returns(ref), cycle_initial = lines_initial)]
 pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let text = text(db, build).as_ref()?;
     let styled = step_styled(db, build)?;
@@ -210,6 +210,18 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         slots,
         maths,
     })
+}
+
+/// What the cycle of page-number references starts from when salsa enters
+/// it at the paragraph builder: nothing to lay out, so the pass that
+/// follows knows no page ([`crate::pipeline::resolve`]).
+fn lines_initial(
+    _db: &dyn Db,
+    _id: salsa::Id,
+    _last: Option<&Option<Lines>>,
+    _build: Build<'_>,
+) -> Option<Lines> {
+    None
 }
 
 /// What the paragraph builder reads of a paragraph of the text stage: its

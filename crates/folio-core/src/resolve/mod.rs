@@ -33,6 +33,12 @@
 //!   `1.1` would. A reference to a label that no shown element has, or to
 //!   an element without a counter, is a warning, and shows [`UNRESOLVED`].
 //!
+//! - **Page-number references**: a reference with the page form shows the
+//!   page its target is on (`page 4`), which only layout knows. Resolve
+//!   gives each the page numbers of the pass before
+//!   ([`Resolution::set_pages`]), in the bounded fixpoint of
+//!   [`page_refs`].
+//!
 //! Counters are resolved per build, on the variant's own tree. Shared
 //! counters of a numbering group (SPEC §6.1) will be resolved on the
 //! group's common tree: the walk takes the tree to count as an argument,
@@ -40,6 +46,7 @@
 //! shares.
 
 mod numbering;
+pub mod page_refs;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -52,6 +59,7 @@ use folio_syntax::Span;
 use folio_text::Lang;
 
 pub use self::numbering::Pattern;
+pub use self::page_refs::PageNumbers;
 
 use crate::db::{Build, Db, component_host};
 use crate::diag::{self, Diagnostic};
@@ -143,8 +151,15 @@ pub struct Reference {
     /// What the label names, or `None` when no element the build shows has
     /// it.
     pub target: Option<Target>,
-    /// The text it shows: `Figure 3`, or [`UNRESOLVED`].
+    /// The text it shows: `Figure 3`, `page 4`, or [`UNRESOLVED`].
     pub text: EcoString,
+    /// For a page-number reference, the word before its page number: the
+    /// reference word for a page in the reference's language, or its
+    /// supplement; empty for the number alone. `None` for a reference to
+    /// a number.
+    pub page: Option<EcoString>,
+    /// Where the reference was made.
+    pub span: Span,
 }
 
 /// What the Resolve stage found in a build: numbers, markers, labels and
@@ -164,6 +179,11 @@ pub struct Resolution {
     pub labels: EcoVec<Labelled>,
     /// The references.
     pub references: EcoVec<Reference>,
+    /// The page numbers the page-number references show
+    /// ([`Resolution::set_pages`]): of the pass before, for the targets of
+    /// the references in the order they are first referred to. Empty when
+    /// the build has no page-number references.
+    pub pages: PageNumbers,
     index: Index,
 }
 
@@ -185,6 +205,7 @@ impl PartialEq for Resolution {
             && self.markers == other.markers
             && self.labels == other.labels
             && self.references == other.references
+            && self.pages == other.pages
     }
 }
 
@@ -196,6 +217,7 @@ impl Hash for Resolution {
         self.markers.hash(state);
         self.labels.hash(state);
         self.references.hash(state);
+        self.pages.hash(state);
     }
 }
 
@@ -225,6 +247,46 @@ impl Resolution {
     /// The reference that a `ref` element instance is.
     pub fn reference(&self, location: Location) -> Option<&Reference> {
         Some(&self.references[*self.index.references.get(&location)?])
+    }
+
+    /// Whether the build has page-number references.
+    pub fn has_page_refs(&self) -> bool {
+        self.references.iter().any(|r| r.page.is_some())
+    }
+
+    /// The targets of the page-number references, each once, in the order
+    /// they are first referred to.
+    pub fn page_targets(&self) -> Vec<Location> {
+        let mut seen = HashSet::new();
+        self.references
+            .iter()
+            .filter(|r| r.page.is_some())
+            .filter_map(|r| r.target)
+            .map(|t| t.location)
+            .filter(|l| seen.insert(*l))
+            .collect()
+    }
+
+    /// Sets the page-number references with the page numbers of a pass
+    /// ([`page_refs`]): each shows its word and its target's page, or
+    /// [`UNRESOLVED`] where the pass did not find its target on a page.
+    pub fn set_pages(&mut self, numbers: &PageNumbers) {
+        let numbers = numbers.for_targets(self.page_targets());
+        for r in self.references.make_mut() {
+            let (Some(word), Some(target)) = (&r.page, r.target) else {
+                continue;
+            };
+            let page = match numbers.page(target.location) {
+                Some(page) => eco_format!("{page}"),
+                None => UNRESOLVED.into(),
+            };
+            r.text = if word.is_empty() {
+                page
+            } else {
+                eco_format!("{word}{NBSP}{page}")
+            };
+        }
+        self.pages = numbers;
     }
 
     fn reindex(&mut self) {
@@ -335,6 +397,8 @@ struct PendingRef {
     span: Span,
     supplement: Option<EcoString>,
     lang: Lang,
+    /// Whether it refers to its target's page.
+    page: bool,
 }
 
 struct Walk<'a> {
@@ -484,6 +548,7 @@ impl Walk<'_> {
                 span: element.span,
                 supplement,
                 lang: self.lang(style),
+                page: is_page_form(element),
             });
         }
     }
@@ -695,11 +760,14 @@ impl Walk<'_> {
         let mut resolved = Vec::with_capacity(refs.len());
         for r in refs {
             let labelled = self.out.label(&r.label).cloned();
+            let page = r.page.then(|| self.page_word(&r));
             let (target, text) = match labelled {
                 None => {
                     self.missing(&r);
                     (None, EcoString::from(UNRESOLVED))
                 }
+                // The page is set once a pass has measured it.
+                Some(labelled) if page.is_some() => (Some(labelled.target), UNRESOLVED.into()),
                 Some(labelled) => (Some(labelled.target), self.reference_text(&r, &labelled)),
             };
             resolved.push(Reference {
@@ -707,6 +775,8 @@ impl Walk<'_> {
                 label: r.label,
                 target,
                 text,
+                page,
+                span: r.span,
             });
         }
         self.out.references = resolved.into_iter().collect();
@@ -760,6 +830,17 @@ impl Walk<'_> {
             Some((word, false)) => eco_format!("{word}{NBSP}{shown}"),
             None => shown,
         }
+    }
+
+    /// The word before the page number of a page-number reference: its
+    /// supplement, or the reference word for a page in its language.
+    fn page_word(&self, r: &PendingRef) -> EcoString {
+        if let Some(supplement) = &r.supplement {
+            return supplement.clone();
+        }
+        locale::word(&r.lang, "page")
+            .map(|w| w.text.into())
+            .unwrap_or_default()
     }
 
     /// Reports a reference to a label that no element of the build has.
@@ -888,6 +969,12 @@ fn a_element(name: &QualifiedName) -> EcoString {
 /// Whether an element is the built-in element of a name.
 fn is_builtin(name: &QualifiedName, builtin: &str) -> bool {
     name.namespace.is_none() && name.name.as_str() == builtin
+}
+
+/// Whether a `ref` element refers to its target's page rather than its
+/// number.
+fn is_page_form(element: &Element) -> bool {
+    matches!(element.field("form"), Some(Value::Str(form)) if form.as_str() == "page")
 }
 
 /// Whether an element is a list, whose `numbering` its items take.

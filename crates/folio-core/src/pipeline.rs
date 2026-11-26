@@ -32,8 +32,14 @@
 //! them read the tree from the stage before, and an edit that leaves the
 //! styled tree equal stops at Style (early cutoff, SPEC §2.3).
 
+use ecow::eco_format;
+use folio_component::Target;
+
 use crate::db::{Build, Db};
-use crate::resolve::{Resolution, resolve_tree};
+use crate::diag::{self, Diagnostic};
+use crate::layout::pages;
+use crate::resolve::page_refs::{self, EXTRA_PASSES};
+use crate::resolve::{PageNumbers, Resolution, resolve_tree};
 use crate::style::{Styled, styles};
 
 /// The styled tree after Select (SPEC §2.1, §6.3): the nodes whose computed
@@ -101,13 +107,117 @@ pub fn sequence(db: &dyn Db, build: Build<'_>) -> Option<Sequenced> {
 /// Resolves the counters, references, citations and queries of a build
 /// (stage 6), or `None` when the document could not be styled: counters,
 /// markers and references so far ([`resolve_tree`]).
-#[salsa::tracked(returns(ref))]
+///
+/// Page-number references take the page numbers of the pass before
+/// ([`page_numbers`]), which makes Resolve part of the cycle that runs
+/// through layout ([`crate::resolve::page_refs`]). A fixed-layout build
+/// reads its own pages; the Office targets read those of the PDF build of
+/// their variant, whose page numbers are the cached results of their page
+/// fields (SPEC §11.2). A build without page-number references reads no
+/// pages, so it is in no cycle.
+#[salsa::tracked(returns(ref), cycle_initial = resolve_initial)]
 pub fn resolve(db: &dyn Db, build: Build<'_>) -> Option<Resolved> {
     let sequenced = sequence(db, build).as_ref()?;
+    let mut resolution = resolve_tree(db, build, &sequenced.styled);
+    if resolution.has_page_refs() {
+        let numbers = page_numbers(db, paged(db, build));
+        resolution.set_pages(numbers);
+        if numbers.frozen {
+            report_unsettled(db, &resolution);
+        }
+    }
     Some(Resolved {
         styled: sequenced.styled.clone(),
-        resolution: resolve_tree(db, build, &sequenced.styled),
+        resolution,
     })
+}
+
+/// What the cycle through layout starts from when salsa enters it at
+/// Resolve: nothing resolved yet, as for a document that could not be
+/// styled. The stages after it have nothing to lay out, so the pass that
+/// follows knows no page, as when the cycle is entered anywhere else.
+fn resolve_initial(
+    _db: &dyn Db,
+    _id: salsa::Id,
+    _last: Option<&Option<Resolved>>,
+    _build: Build<'_>,
+) -> Option<Resolved> {
+    None
+}
+
+/// The build whose pages the page-number references of a build show: the
+/// build itself where it is laid out, else the PDF build of its variant.
+fn paged<'db>(db: &'db dyn Db, build: Build<'db>) -> Build<'db> {
+    match build.target(db) {
+        Target::Pdf | Target::Live => build,
+        Target::Docx | Target::Pptx => Build::new(
+            db,
+            build.project(db),
+            Target::Pdf,
+            build.variant(db).clone(),
+        ),
+    }
+}
+
+/// The page numbers that a build's page-number references show: one step
+/// of the bounded fixpoint ([`page_refs`]). It reads the pages laid out
+/// with the numbers of the pass before and gives the numbers they measure,
+/// or those numbers again where the pages measure them, or once the passes
+/// are used up. Before any pass, and where the document could not be
+/// laid out, every page is unknown.
+#[salsa::tracked(returns(ref), cycle_initial = page_numbers_initial)]
+pub fn page_numbers(db: &dyn Db, build: Build<'_>) -> PageNumbers {
+    let Some(pages) = pages(db, build).as_ref() else {
+        return PageNumbers::default();
+    };
+    let used = &pages.page_refs;
+    let targets: Vec<_> = used.pages.iter().map(|(target, _)| *target).collect();
+    let measured: Vec<Option<u32>> = pages
+        .pages_of(&targets)
+        .into_iter()
+        .map(|page| page.and_then(|i| u32::try_from(i + 1).ok()))
+        .collect();
+    page_refs::next(used, &measured)
+}
+
+/// What the cycle through layout starts from when salsa enters it at
+/// [`page_numbers`]: no page known.
+fn page_numbers_initial(
+    _db: &dyn Db,
+    _id: salsa::Id,
+    _last: Option<&PageNumbers>,
+    _build: Build<'_>,
+) -> PageNumbers {
+    PageNumbers::default()
+}
+
+/// Warns at each page-number reference whose target's page did not
+/// settle, so its number was frozen.
+fn report_unsettled(db: &dyn Db, resolution: &Resolution) {
+    let numbers = &resolution.pages;
+    for r in &resolution.references {
+        let Some(target) = r.target.filter(|_| r.page.is_some()) else {
+            continue;
+        };
+        if !numbers.unsettled.contains(&target.location) {
+            continue;
+        }
+        diag::report(
+            db,
+            Diagnostic::warning(
+                r.span,
+                eco_format!(
+                    "the page of `<{}>` did not settle after {EXTRA_PASSES} more layout passes, \
+                     so this reference shows the last pass's page, which may be wrong",
+                    r.label
+                ),
+            )
+            .with_hint(
+                "the reference's own number moves its target between pages; rewording the \
+                 text before the target, or a break before it, settles it",
+            ),
+        );
+    }
 }
 
 /// What the Resolve stage resolved in a build, or `None` when the document
@@ -119,12 +229,23 @@ pub fn resolution<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<&'db Resolu
 /// Applies the `:step` rules of a build per step (stage 7), or `None` when
 /// the document could not be styled. Until steps (M4) it passes the tree
 /// on.
-#[salsa::tracked(returns(ref))]
+#[salsa::tracked(returns(ref), cycle_initial = step_style_initial)]
 pub fn step_style(db: &dyn Db, build: Build<'_>) -> Option<StepStyled> {
     let resolved = resolve(db, build).as_ref()?;
     Some(StepStyled {
         styled: resolved.styled.clone(),
     })
+}
+
+/// What the cycle of page-number references starts from when salsa enters
+/// it at Step styling: nothing to lay out ([`resolve`]).
+fn step_style_initial(
+    _db: &dyn Db,
+    _id: salsa::Id,
+    _last: Option<&Option<StepStyled>>,
+    _build: Build<'_>,
+) -> Option<StepStyled> {
+    None
 }
 
 /// The tree a build lays out or maps: the styled tree after every stage up

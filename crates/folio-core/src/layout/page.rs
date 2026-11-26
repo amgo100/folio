@@ -69,7 +69,8 @@ use super::{Lines, lines, report_lines};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
-use crate::pipeline::step_styled;
+use crate::pipeline::{resolution, step_styled};
+use crate::resolve::PageNumbers;
 use crate::span_map::source_ref;
 use crate::style::{DeclValue, NodeName, NodeView, Position, Properties, Styled, Subject};
 use crate::text::{Text, TextBlock, TextObject, text};
@@ -100,9 +101,36 @@ pub struct Pages {
     /// names leaves the hashes as they were, so a watcher draws every page
     /// again when a font file changes.
     pub hashes: EcoVec<u64>,
+    /// The page numbers the build's page-number references were set with
+    /// (SPEC §2.3): of the layout pass before this one. Empty when the
+    /// build has none.
+    pub page_refs: PageNumbers,
 }
 
 impl Pages {
+    /// The page each element instance of `targets` starts on, by index,
+    /// in the order given: the first page with a box of it, or `None`
+    /// where no page has one. This is the map from locations to pages
+    /// that page-number references read.
+    pub fn pages_of(&self, targets: &[Location]) -> Vec<Option<usize>> {
+        let mut found: Vec<Option<usize>> = vec![None; targets.len()];
+        let mut left = targets.len();
+        for (index, page) in self.pages.iter().enumerate() {
+            if left == 0 {
+                break;
+            }
+            visit(&page.fragment, &mut |location| {
+                for (target, page) in targets.iter().zip(&mut found) {
+                    if page.is_none() && *target == location {
+                        *page = Some(index);
+                        left -= 1;
+                    }
+                }
+            });
+        }
+        found
+    }
+
     /// The indices of the pages that differ from those of `before` by
     /// their content hash: pages whose hash changed, and pages that
     /// `before` did not have. These are the pages a watcher draws again.
@@ -132,6 +160,22 @@ impl Pages {
             })
             .map(|(i, _)| i)
             .collect()
+    }
+}
+
+/// Calls `f` with the location of a fragment and of every fragment and
+/// object box inside it, in painting order.
+fn visit(fragment: &Fragment, f: &mut dyn FnMut(Location)) {
+    let location = fragment.location();
+    if location != Location::DETACHED {
+        f(location);
+    }
+    for (_, item) in &fragment.items {
+        match item {
+            FragmentItem::Group(group) => visit(group, f),
+            FragmentItem::Object(object) => f(object.location),
+            FragmentItem::Text(_) | FragmentItem::Shape { .. } => {}
+        }
     }
 }
 
@@ -274,7 +318,12 @@ impl Debug for Regions<'_> {
 /// the page builder reports the lines of paragraphs that a region breaks
 /// at another width, which only the test hooks of [`paginate`] make, and
 /// [`lines`] is to leave them to it once masters vary.
-#[salsa::tracked(returns(ref))]
+///
+/// Page-number references make the pages part of a cycle with Resolve
+/// ([`crate::resolve::page_refs`]): the pages carry the page numbers
+/// they were laid out with, which the next pass compares with where the
+/// pages put each target.
+#[salsa::tracked(returns(ref), cycle_initial = pages_initial)]
 pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     // The lines at the master's widths, broken in parallel: what the page
     // builder reads wherever a region has those widths.
@@ -295,7 +344,10 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         fonts,
         master,
     };
-    Some(build_pages(
+    let page_refs = resolution(db, build)
+        .map(|r| r.pages.clone())
+        .unwrap_or_default();
+    let pages = build_pages(
         &input,
         db.layout_cache(),
         db.page_cache(),
@@ -308,7 +360,20 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
                 report_lines(db, project, &text.paragraphs[*paragraph], layout);
             }
         },
-    ))
+    );
+    Some(Pages { page_refs, ..pages })
+}
+
+/// What the cycle of page-number references starts from when salsa enters
+/// it at the page builder: no pages, so the pass that follows knows no
+/// page ([`crate::pipeline::resolve`]).
+fn pages_initial(
+    _db: &dyn Db,
+    _id: salsa::Id,
+    _last: Option<&Option<Pages>>,
+    _build: Build<'_>,
+) -> Option<Pages> {
+    None
 }
 
 /// The pages of a build as [`pages()`] makes them, from the stages before
@@ -473,6 +538,7 @@ fn build_pages(
         master,
         pages,
         hashes,
+        page_refs: PageNumbers::default(),
     }
 }
 
