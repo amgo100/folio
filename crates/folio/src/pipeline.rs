@@ -174,7 +174,7 @@ pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let project = build.project(db);
     let doc = document(db, project, build.variant(db).clone()).as_ref()?;
     let files = build_files(db, build);
-    let alt = |span: Span| formula_source(db, &files, span);
+    let alt = |span: Span| formula_source(db, files, span);
     let structure = structure(&text.root, text, &alt);
     let plain = |field: &str| match doc.root.field(field) {
         Some(Value::Content(content)) => Some(content.plain_text()),

@@ -765,10 +765,13 @@ impl<'a> Run<'a> {
         };
         match &item.leaf {
             Leaf::Empty => self.leaves.push(empty(&item.before)),
-            Leaf::Box(object) => self.leaves.push(Placed {
-                object: Some(object.clone()),
-                ..empty(&item.before)
-            }),
+            Leaf::Box(object) => {
+                let body = page.master.body.size.width;
+                self.leaves.push(Placed {
+                    object: Some(BlockObject::at_width(object, body, width)),
+                    ..empty(&item.before)
+                });
+            }
             Leaf::Paragraph(info) => {
                 let body = page.master.body.size.width;
                 let (paragraph, rebroken) = info.at_width(body, width, page.caches);

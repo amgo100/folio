@@ -31,8 +31,9 @@ use crate::span_map::source_ref;
 use crate::style::{ComputedStyle, Properties};
 use crate::text::{MathSettings, TextMath, TextObject, collect_text};
 
-/// The family formulas are set in, until a stylesheet property chooses it
-/// (SPEC §8.2). It is bundled, so every build has it.
+/// The family formulas are set in when no family of `math-font` is
+/// available, and the property's initial value (SPEC §8.2). It is bundled,
+/// so every build has it.
 pub const MATH_FONT: &str = "New Computer Modern Math";
 
 /// How far apart an equation and its number are at least, in ems.
@@ -141,6 +142,7 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
     // The faces of the `math-font` chains, each chosen and checked once.
     let mut chosen: HashMap<EcoVec<EcoString>, Option<(MathFont, EcoString)>> = HashMap::new();
     let mut reported: HashSet<(Span, EcoString)> = HashSet::new();
+    let mut unset_numbers: HashSet<EcoString> = HashSet::new();
     let formulas = collected
         .maths
         .iter()
@@ -159,7 +161,8 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
                 number: m.settings.number,
             };
             let (laid, unset) = lay_out(db.layout_cache(), m, &options, resolution);
-            for text in unset {
+            // Each number once a build, however many formulas it numbers.
+            for text in unset.into_iter().filter(|t| unset_numbers.insert(t.clone())) {
                 diag::report(
                     db,
                     Diagnostic::warning(
@@ -201,9 +204,10 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
 
 /// The face of a `math-font` chain (SPEC §8.2): the first family the
 /// build has, or New Computer Modern Math, which is bundled, when it has
-/// none; with its family's name. Warns when no family of the chain is
-/// available, and when the face has no MATH table. `None`, with a warning,
-/// when not even the fallback can be read: the formulas are left out.
+/// none or the face cannot be read; with its family's name. Warns when no
+/// family of the chain is available, when its face cannot be read, and
+/// when the face has no MATH table. `None`, with a warning, when not even
+/// the fallback can be read: the formulas are left out.
 fn choose_font(
     db: &dyn Db,
     fonts: &Fonts,
@@ -238,9 +242,30 @@ fn choose_font(
             }
         }
     };
-    let Some(font) = math_font(db, fonts, face) else {
-        report_unreadable(db, span);
-        return None;
+    let (font, name) = match math_font(db, fonts, face) {
+        Some(font) => (font, name),
+        // A family that cannot be read falls back to the bundled font.
+        None if name != MATH_FONT => {
+            let fallback = fonts
+                .select(MATH_FONT, variant)
+                .and_then(|face| math_font(db, fonts, face));
+            let Some(font) = fallback else {
+                report_unreadable(db, span);
+                return None;
+            };
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    span,
+                    eco_format!("{name} cannot be read as a math font, so maths is set in {MATH_FONT}"),
+                ),
+            );
+            (font, EcoString::from(MATH_FONT))
+        }
+        None => {
+            report_unreadable(db, span);
+            return None;
+        }
     };
     if !font.has_math() {
         diag::report(

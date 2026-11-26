@@ -348,3 +348,51 @@ fn quantities_are_written_with_the_decimal_marker() {
     let comma = text("math { decimal-marker: comma; }\n");
     assert!(comma.contains("9,81"), "{comma}");
 }
+
+/// Where the first glyph run with text `text` starts across, on a page.
+fn run_x(fragment: &folio::Fragment, at: Abs, text: &str) -> Option<Abs> {
+    fragment.items.iter().find_map(|(pos, item)| match item {
+        FragmentItem::Group(group) => run_x(group, at + pos.x, text),
+        FragmentItem::Text(run) if run.text == text => Some(at + pos.x),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_display_is_centred_and_numbered_in_the_width_of_its_region() {
+    let world = world("math { numbering: \"(1)\"; }\n", "Text.\n\n$ E = m c^2 $\n");
+    let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
+    let lines = lines(&world);
+    let fonts = folio::fonts(&world).unwrap();
+    let text = text(&world);
+    let paginate = |width: Option<&dyn Fn(usize) -> Abs>| {
+        let regions = folio::layout::Regions {
+            width,
+            ..folio::layout::Regions::default()
+        };
+        let pages = folio::layout::paginate(
+            &text,
+            &lines,
+            &styled,
+            &fonts,
+            &folio::layout::Cache::new(),
+            &folio::layout::PageCache::new(),
+            regions,
+        );
+        let page = &pages.pages[0].fragment;
+        let x = |text| run_x(page, Abs::zero(), text).expect(text);
+        (x("(1)"), x("𝐸"), pages.master.body.size.width)
+    };
+    let (number, formula, body) = paginate(None);
+    let narrower = move |_: usize| body - Abs::pt(40.0);
+    let (narrow_number, narrow_formula, _) = paginate(Some(&narrower));
+    let close = |a: Abs, b: Abs| (a - b).to_pt().abs() < 0.01;
+    assert!(
+        close(narrow_number, number - Abs::pt(40.0)),
+        "{narrow_number:?} {number:?}"
+    );
+    assert!(
+        close(narrow_formula, formula - Abs::pt(20.0)),
+        "{narrow_formula:?} {formula:?}"
+    );
+}

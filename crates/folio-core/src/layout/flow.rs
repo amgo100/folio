@@ -50,7 +50,7 @@ use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
 use super::master::{BlockBox, BreakBefore, length};
-use super::math::{Maths, display_content};
+use super::math::{Display, Maths, display_content};
 use super::page::{SizeBlock, SizeObject};
 use super::paragraph::{
     LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
@@ -204,6 +204,37 @@ pub(super) struct BlockObject {
     /// The baselines of its first and last lines, from its top; `None` for
     /// a box, whose baseline is its bottom.
     pub baselines: Option<(Abs, Abs)>,
+    /// For a display, what lays it out again in a region of another width.
+    pub display: Option<DisplayAt>,
+}
+
+/// A display as a block object: the display, its font size, and the width
+/// of the content of its block in a region of the body's width.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct DisplayAt {
+    pub display: Arc<Display>,
+    pub size: Abs,
+    pub width: Abs,
+}
+
+impl BlockObject {
+    /// The object in a region `width` wide, for one laid out for the
+    /// body's width `body`: a display is centred, and its numbers placed,
+    /// in its block's content at that width.
+    pub(super) fn at_width(object: &Arc<Self>, body: Abs, width: Abs) -> Arc<Self> {
+        match &object.display {
+            Some(at) if width != body => {
+                let content = display_content(&at.display, at.width + (width - body), at.size);
+                Arc::new(Self {
+                    size: content.size,
+                    content: Some(content.items),
+                    baselines: Some(content.baselines),
+                    ..(**object).clone()
+                })
+            }
+            _ => object.clone(),
+        }
+    }
 }
 
 /// How a segment of a paragraph is set.
@@ -834,6 +865,7 @@ impl Builder<'_> {
                     location: block.location,
                     content: None,
                     baselines: None,
+                    display: None,
                 })),
                 None => match self.display(block, &boxed) {
                     Some(object) => Leaf::Box(Arc::new(object)),
@@ -855,12 +887,18 @@ impl Builder<'_> {
         let index = *self.displays.get(&block.location)?;
         let display = self.sizes.maths.display(index)?;
         let size = length(&block.style, self.props, "font-size");
-        let content = display_content(display, boxed.content().1, size);
+        let width = boxed.content().1;
+        let content = display_content(display, width, size);
         Some(BlockObject {
             size: content.size,
             location: block.location,
             content: Some(content.items),
             baselines: Some(content.baselines),
+            display: Some(DisplayAt {
+                display: display.clone(),
+                size,
+                width,
+            }),
         })
     }
 
