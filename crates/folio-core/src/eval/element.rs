@@ -11,7 +11,7 @@
 
 use ecow::{EcoString, eco_format};
 use folio_component::{
-    BODY, Body, ContentKind, ElementKind, ElementSchema, FieldType, LAYOUT_HINTS, Name,
+    BODY, Body, ContentKind, ElementKind, ElementSchema, FieldType, LAYOUT_HINTS, Location, Name,
     QualifiedName, Target, UNIVERSAL_FIELDS, Value as Constant,
 };
 use folio_syntax::{Span, is_valid_label_literal_id};
@@ -187,6 +187,7 @@ impl Vm<'_> {
             fields,
             label,
             span,
+            location: Location::DETACHED,
         })))
     }
 

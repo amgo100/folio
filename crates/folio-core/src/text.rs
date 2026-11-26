@@ -32,7 +32,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{BODY, ElementKind, Name, QualifiedName, Target, Value};
+use folio_component::{BODY, ElementKind, Location, Name, QualifiedName, Target, Value};
 use folio_syntax::Span;
 use folio_text::{Feature, Lang, OBJECT, Paragraph, Segment, SegmentKind, Shaped, TextFont};
 
@@ -40,6 +40,7 @@ use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{self, Content, Element, Node};
 use crate::fonts::{Fonts, Request, fonts};
+use crate::locate::StyledChildren;
 use crate::model::document;
 use crate::pipeline::step_styled;
 use crate::style::{
@@ -73,6 +74,8 @@ pub struct TextBlock {
     pub style: ComputedStyle,
     /// The element, or the element whose part the block is.
     pub span: Span,
+    /// The location of that element: which instance of it the block is.
+    pub location: Location,
     /// The name of that element: what the block is, for the writers that
     /// tag output by meaning, such as PDF's structure tree (SPEC §11.1).
     pub element: QualifiedName,
@@ -104,6 +107,8 @@ pub struct TextParagraph {
     pub style: ComputedStyle,
     /// The element whose content the paragraph is.
     pub span: Span,
+    /// The location of that element.
+    pub location: Location,
     /// For each segment of the paragraph ([`Paragraph::segments`]), the
     /// style its text is set in and its face.
     pub segments: EcoVec<SegmentStyle>,
@@ -179,6 +184,7 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
             shaped,
             style: p.style.clone(),
             span: p.span,
+            location: p.location,
             segments: p.segments.clone(),
             sources: p.sources.clone(),
         })
@@ -208,6 +214,8 @@ pub struct CollectedParagraph {
     pub style: ComputedStyle,
     /// As [`TextParagraph::span`].
     pub span: Span,
+    /// As [`TextParagraph::location`].
+    pub location: Location,
     /// As [`TextParagraph::segments`].
     pub segments: EcoVec<SegmentStyle>,
     /// As [`TextParagraph::sources`].
@@ -323,6 +331,7 @@ impl Collector<'_> {
         self.blocks.push(TextBlock {
             style: style.clone(),
             span: element.span,
+            location: element.location,
             element: element.name.clone(),
             part,
             children: EcoVec::new(),
@@ -368,7 +377,7 @@ impl Collector<'_> {
         if let Some(text) = raw_text(element) {
             let mut builder = Builder::default();
             builder.raw(text, &node.style, element.span);
-            self.finish(builder, &node.style, element.span);
+            self.finish(builder, &node.style, element);
             return;
         }
         // An element with no content to set, such as a component's block
@@ -402,48 +411,44 @@ impl Collector<'_> {
             return;
         }
         // The body and the parts, in the order of the element's fields, as
-        // they are written.
+        // they are written. Each element and part finds its styled node by
+        // location or name, so a node that a later stage dropped or added
+        // shifts no other (`crate::locate`).
         let kids = styled_children(element, node);
-        let mut parts = kids.iter().filter_map(|(child, node)| match child {
-            Child::Part(_, content) => Some((*content, *node)),
-            Child::Element(_) => None,
-        });
         for (key, value) in element.fields.iter() {
             let eval::Value::Content(content) = value else {
                 continue;
             };
             if key == BODY {
-                let mut body_kids = kids.iter().filter_map(|(child, node)| match child {
-                    Child::Element(e) => Some((*e, *node)),
-                    Child::Part(..) => None,
-                });
-                self.content(content, &node.style, element.span, &mut body_kids);
+                let mut body_kids = StyledChildren::new(node);
+                self.content(content, &node.style, element, &mut body_kids);
             } else if let Some(field) = Name::new(key)
-                && let Some((part, part_node)) = parts.next()
+                && let Some(part_node) = kids.iter().find_map(|(child, node)| match child {
+                    Child::Part(name, _) if *name == key.as_str() => Some(*node),
+                    _ => None,
+                })
             {
-                let mut part_kids = content_elements(part).zip(part_node.children.iter());
+                let mut part_kids = StyledChildren::new(part_node);
                 self.open(&part_node.style, element, Some(field));
-                self.content(part, &part_node.style, element.span, &mut part_kids);
+                self.content(content, &part_node.style, element, &mut part_kids);
                 self.close();
             }
         }
     }
 
-    /// Collects the paragraphs of content: one paragraph if it is inline,
-    /// else those of its blocks. `kids` yields the styled node of each
-    /// element of the content, in order.
+    /// Collects the paragraphs of content, the content of `owner`: one
+    /// paragraph if it is inline, else those of its blocks. `kids` finds
+    /// the styled node of each element of the content.
     fn content<'a>(
         &mut self,
         content: &'a Content,
         style: &ComputedStyle,
-        span: Span,
-        kids: &mut dyn Iterator<Item = (&'a Element, &'a StyledNode)>,
+        owner: &Element,
+        kids: &mut StyledChildren<'a>,
     ) {
         if !is_inline(content) {
-            for node in content.nodes() {
-                if let Node::Element(_) = node
-                    && let Some((element, node)) = kids.next()
-                {
+            for element in content_elements(content) {
+                if let Some(node) = kids.element(element) {
                     self.element(element, node);
                 }
             }
@@ -451,8 +456,15 @@ impl Collector<'_> {
         }
         let mut builder = Builder::default();
         let mut anchored = Vec::new();
-        self.inline(content, style, span, kids, &mut builder, &mut anchored);
-        self.finish(builder, style, span);
+        self.inline(
+            content,
+            style,
+            owner.span,
+            kids,
+            &mut builder,
+            &mut anchored,
+        );
+        self.finish(builder, style, owner);
         for (element, node) in anchored {
             self.element(element, node);
         }
@@ -465,7 +477,7 @@ impl Collector<'_> {
         content: &'a Content,
         style: &ComputedStyle,
         span: Span,
-        kids: &mut dyn Iterator<Item = (&'a Element, &'a StyledNode)>,
+        kids: &mut StyledChildren<'a>,
         out: &mut Builder,
         anchored: &mut Vec<(&'a Element, &'a StyledNode)>,
     ) {
@@ -498,7 +510,9 @@ impl Collector<'_> {
                     });
                 }
                 Node::Element(element) => {
-                    let Some((_, node)) = kids.next() else {
+                    // An element a later stage dropped has no node, and
+                    // shows nothing.
+                    let Some(node) = kids.element(element) else {
                         continue;
                     };
                     self.inline_element(element, node, out, anchored);
@@ -536,11 +550,7 @@ impl Collector<'_> {
             return;
         }
         if let Some(eval::Value::Content(body)) = element.field(BODY) {
-            let kids = styled_children(element, node);
-            let mut body_kids = kids.iter().filter_map(|(child, node)| match child {
-                Child::Element(e) => Some((*e, *node)),
-                Child::Part(..) => None,
-            });
+            let mut body_kids = StyledChildren::new(node);
             let owner = self.own(element);
             self.inline(body, style, element.span, &mut body_kids, out, anchored);
             self.owner = owner;
@@ -577,8 +587,8 @@ impl Collector<'_> {
     }
 
     /// Turns a collected paragraph into segments, with fonts by fallback.
-    /// `style` and `span` are those of the element whose content it is.
-    fn finish(&mut self, mut builder: Builder, style: &ComputedStyle, span: Span) {
+    /// `style` is that of the element whose content it is, `owner`.
+    fn finish(&mut self, mut builder: Builder, style: &ComputedStyle, owner: &Element) {
         builder.flush_quote(None);
         if builder.text.is_empty() {
             return;
@@ -631,7 +641,8 @@ impl Collector<'_> {
                 segments,
             },
             style: style.clone(),
-            span,
+            span: owner.span,
+            location: owner.location,
             segments: styles,
             sources: builder.sources.into_iter().collect(),
         });

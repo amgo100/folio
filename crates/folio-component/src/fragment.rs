@@ -5,7 +5,7 @@ use ecow::EcoVec;
 
 use crate::draw::Shape;
 use crate::geom::{Abs, Point, Rect, Size};
-use crate::text::{GlyphRun, SourceRef};
+use crate::text::{GlyphRun, Location, SourceRef};
 
 /// A positioned box produced by layout. Pages and slides are fragments.
 ///
@@ -24,6 +24,10 @@ pub struct Fragment {
     /// The source node whose box this is: the element of a block, or
     /// [`SourceRef::DETACHED`] for a box that no node makes.
     pub source: SourceRef,
+    /// Which instance of the element made from `source` the box is: with
+    /// `source`, the instance's [`Location`]. `0` for a box that no node
+    /// makes.
+    pub instance: u32,
     /// The content, positioned relative to the top-left corner, in painting
     /// order.
     pub items: EcoVec<(Point, FragmentItem)>,
@@ -49,6 +53,7 @@ impl Fragment {
         Self {
             size,
             source: SourceRef::DETACHED,
+            instance: 0,
             items: EcoVec::new(),
             first_baseline: size.height,
             last_baseline: size.height,
@@ -61,6 +66,22 @@ impl Fragment {
     pub fn with_source(mut self, source: SourceRef) -> Self {
         self.source = source;
         self
+    }
+
+    /// The same fragment as the box of an element instance.
+    pub fn with_location(mut self, location: Location) -> Self {
+        self.source = location.source;
+        self.instance = location.instance;
+        self
+    }
+
+    /// The location of the element instance whose box this is, or
+    /// [`Location::DETACHED`] for a box that no node makes.
+    pub fn location(&self) -> Location {
+        Location {
+            source: self.source,
+            instance: self.instance,
+        }
     }
 
     /// Adds an item on top of the existing ones.

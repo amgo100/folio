@@ -18,6 +18,7 @@ pub mod diag;
 pub mod eval;
 pub mod fonts;
 pub mod layout;
+pub mod locate;
 pub mod model;
 pub mod pipeline;
 pub mod project;
