@@ -126,13 +126,13 @@ The instruction-count benchmarks (`cargo bench -p folio-testkit --bench compile`
 | `parse reference` | Parsing the reference document's markup. |
 
 Callgrind counts only the benchmark's own thread. The benchmarks run with
-one `rayon` thread (`RAYON_NUM_THREADS=1`), and with one thread `folio-text`
-shapes on the calling thread instead of handing paragraphs to its shaping
-pool, so every count includes all the shaping its compile does
-(`crates/folio-text/tests/shaping_thread.rs` checks this). The preview benchmarks go through one
-function, `preview`, which stops at the pages; the check benchmarks call
-`folio::check`, which also runs the PDF writer's check and gathers the
-diagnostics.
+one `rayon` thread (`RAYON_NUM_THREADS=1`), and with one thread
+`folio-text` shapes on the calling thread instead of handing paragraphs to
+its shaping pool, so every count includes all the shaping its compile does
+(`crates/folio-text/tests/shaping_thread.rs` checks this). The preview
+benchmarks go through one function, `preview`, which stops at the pages;
+the check benchmarks call `folio::check`, which also runs the PDF writer's
+check and gathers the diagnostics.
 
 `folio-wall` (`scripts/bench.sh --wall`) prints three tables, each against
 the limits of SPEC §14.1 and §15:

@@ -53,7 +53,8 @@ fn child() {
     let panicked_on: Arc<Mutex<Option<String>>> = Arc::default();
     let record = panicked_on.clone();
     std::panic::set_hook(Box::new(move |_| {
-        *record.lock().unwrap() = Some(this_thread());
+        // The first panic is the shaping assertion's; keep its thread.
+        record.lock().unwrap().get_or_insert_with(this_thread);
     }));
     let cache = Cache::new();
     let paragraphs = [paragraph("Whole.", 6), paragraph("Broken.", 3)];

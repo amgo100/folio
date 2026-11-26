@@ -31,8 +31,8 @@ static POOL: LazyLock<Option<ThreadPool>> = LazyLock::new(|| {
 /// Shaping is a pure function of a paragraph, so a paragraph that is equal
 /// to one shaped before, in any compile, gets the earlier result. A
 /// compile hands every paragraph of its document to
-/// [`shape_all`](Self::shape_all), which shapes the new ones in parallel
-/// and forgets those that no call asked for in a while; an edit therefore
+/// [`shape_all`](Self::shape_all), which shapes the new ones (in parallel
+/// when the shaping pool has several threads) and forgets those that no call asked for in a while; an edit therefore
 /// re-shapes only the paragraphs it changed.
 #[derive(Default)]
 pub struct Cache {
@@ -109,7 +109,9 @@ impl Cache {
     /// the cache's own, which share no state with the caller's thread. The
     /// caller waits for them without running other work, so it may hold
     /// thread-local state, as a thread running a database query does, and
-    /// may itself be a thread of another `rayon` pool.
+    /// may itself be a thread of another `rayon` pool. When that pool has
+    /// one thread (`RAYON_NUM_THREADS=1`), the caller shapes them itself,
+    /// in order.
     ///
     /// # Panics
     ///
