@@ -523,8 +523,7 @@ impl Walk {
                 // The start of the file: markup keeps the indentation of
                 // its first line.
                 (None, Some(_)) if gap.markup => {
-                    let start = text.rfind(crate::is_newline).map_or(0, |at| at + 1);
-                    indent = text[start..].into();
+                    indent = after_last_newline(text).unwrap_or(text).into();
                     Some(indent.clone())
                 }
                 (None, Some(_)) => Some(EcoString::new()),
@@ -595,8 +594,7 @@ impl Walk {
                 // A token over several lines, such as a string or a block
                 // comment, ends on a line with the indentation it gives.
                 let token = &self.text[next.range.0..next.range.1];
-                if let Some(at) = token.rfind(crate::is_newline) {
-                    let last = &token[at + 1..];
+                if let Some(last) = after_last_newline(token) {
                     indent = last[..last.len() - last.trim_start_matches([' ', '\t']).len()].into();
                 }
             }
@@ -625,6 +623,20 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
         }
     };
 
+    // Around comments, brackets and braces space as around other tokens.
+    if next.is_comment() && prev.kind == K::LeftParen && prev.opens() {
+        return "".into();
+    }
+    if prev.is_comment() && next.kind == K::RightParen && next.closes()
+        || next.is_comment() && prev.kind == K::LeftBrace && is_spaced_block(prev.parent)
+        || prev.is_comment() && next.kind == K::RightBrace && is_spaced_block(next.parent)
+    {
+        return if prev.is_comment() && next.kind == K::RightParen {
+            "".into()
+        } else {
+            " ".into()
+        };
+    }
     if next.is_comment() {
         // Comments keep the alignment they were given.
         return if text.is_empty() {
@@ -634,7 +646,12 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
         };
     }
     if prev.is_comment() {
-        return keep();
+        // A space separates a block comment from what follows it.
+        return if matches!(next.kind, K::Comma | K::Semicolon) {
+            "".into()
+        } else {
+            " ".into()
+        };
     }
     if next.kind == K::LeftBrace && is_rule_block(next.parent) && !text.is_empty() {
         // Rules keep the alignment they were given (`mark   { .. }`).
@@ -711,13 +728,14 @@ fn count_newlines(text: &str) -> usize {
 
 /// The whitespace after the last line break of `text`.
 fn trailing_indent(text: &str) -> &str {
-    match text.rfind(crate::is_newline) {
-        Some(at) => {
-            let c = text[at..].chars().next().expect("found above");
-            &text[at + c.len_utf8()..]
-        }
-        None => "",
-    }
+    after_last_newline(text).unwrap_or("")
+}
+
+/// The text after the last line break of `text`, if it has one.
+fn after_last_newline(text: &str) -> Option<&str> {
+    let at = text.rfind(crate::is_newline)?;
+    let c = text[at..].chars().next().expect("found above");
+    Some(&text[at + c.len_utf8()..])
 }
 
 #[cfg(test)]
@@ -838,6 +856,13 @@ mod tests {
         markup("#{x}\n", "#{ x }\n");
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
+        markup("#f(/* c */ a)\n", "#f(/* c */ a)\n");
+        markup("#f(// c\n  a)\n", "#f(// c\n  a)\n");
+        style("a{/* c */b:c}", "a { /* c */ b: c }\n");
+        style("a{b:c/* c */}", "a { b: c /* c */ }\n");
+        markup("#let s = \"a\u{2028}b\"\n", "#let s = \"a\u{2028}b\"\n");
+        markup("/* a\u{85}b */\n", "/* a\u{85}b */\n");
+        style("a { b: \"x\u{2029}y\"; }\n", "a { b: \"x\u{2029}y\"; }\n");
         for touching in [
             "#x// c\n",
             "#f(x)// c\n",

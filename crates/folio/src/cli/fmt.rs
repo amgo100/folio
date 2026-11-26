@@ -97,10 +97,11 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
         let Some(source) = world.source(&path) else {
             continue;
         };
-        if let Ok(file) = root.join(&path).canonicalize()
-            && !seen.insert(file)
-        {
-            continue;
+        if let Ok(file) = root.join(&path).canonicalize() {
+            // A link to a file of another kind, or to a file already seen.
+            if file.extension() != Path::new(&path).extension() || !seen.insert(file) {
+                continue;
+            }
         }
         let id = source.id();
         let edits = match fmt::format(source.root()) {
