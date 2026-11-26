@@ -136,9 +136,9 @@ Components take part in every stage through the extension points of §3.
 | `folio-pdf` | PDF output through krilla: tagging, PDF/UA, PDF/A, font subsetting, colour management, import of PDF figures | `krilla`, `hayro-svg` (PDF figures under PDF/A and PDF/UA, §11.1) |
 | `folio-ooxml` | OOXML package writer; DOCX and PPTX backends; OMML; animation timing | `zip`, `quick-xml` |
 | `folio-preview` | Watch server, live presentation server, websocket protocol | `notify`, `tokio` |
-| `folio-lsp` | Language server, synchronous, with cancellation through the query database (§2.3) | `lsp-server` |
+| `folio-lsp` | Language server, synchronous, with cancellation through the query database (§2.3); the binary runs it as `folio lsp` | `lsp-server`, `lsp-types` |
 | `folio-node` | Node.js native addon for Folio Studio | `napi-rs` |
-| `folio` (lib and bin) | Library: the memoised compile pipeline (folio::compile) and the live-region callback used by folio-runtime. Binary: command-line interface and toolchain dispatch (§2.4) | `salsa`, `clap` |
+| `folio` (lib) and `folio-cli` (bin `folio`) | Library: the memoised compile pipeline (folio::compile) and the live-region callback used by folio-runtime. Binary: command-line interface and toolchain dispatch (§2.4), in a package of its own so that it can host the front ends built on the library (`folio-lsp`, `folio-preview`) | `salsa`; `clap` |
 
 First-party components live in their own crates (`folio-component-exam`, `-multicol`, `-plot`, `-timer` and `-inputs`) and depend only on `folio-component`, never on core internals. They are compiled into the binary and versioned with it, so a project that pins the compiler version also pins them (§2.4). A fix that changes output is written once and reaches a document when its project moves to a newer compiler. The public library API is `folio::World` (sources, fonts, files, components) plus `folio::compile(world, target, variant)`. Folio Studio is a TypeScript/Electron project in the same repository that depends on `folio-node`.
 
@@ -1178,6 +1178,7 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 | `folio promote <file:line>` | Move a local override into a stylesheet |
 | `folio query <selector>` | Print elements as JSON, such as all questions with their marks |
 | `folio components` | List available components, versions and the targets they support |
+| `folio lsp [--root dir]` | Run the language server over standard input and output (§12.3) |
 | `folio toolchain install [version]` | Install a compiler version into the local toolchain cache; builds run the version pinned in `folio.toml` (§2.4) |
 
 - A command works on the project whose `folio.toml` is in the current directory or the nearest directory above it, or in the directory given with `--root`.
@@ -1207,6 +1208,12 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 `folio lsp` offers diagnostics, completion for elements, fields and style properties (including those added by components), hover documentation, renaming of labels, go-to-definition for elements and style rules, and a computed-style inspector that answers "which rules style this?".
 
 The language server loads the project with the library's loader (§12.2), applies unsaved editor buffers as source edits on top of it, and resolves each compilation's diagnostics against the snapshot taken with it. Its world is long-lived, so a panic in a query while it compiles or checks a build is reported as an `internal-error` diagnostic and the server keeps running (§12.2).
+
+- **Project**: the server checks one project: the one in `--root`, or the nearest directory that holds `folio.toml` from the editor's workspace folder up, or else from the first file the editor opens up. It reads files and fonts as `folio build` does, the system's fonts included, and reports the diagnostics of the builds that plain `folio check` reports, without the layout details of `--layout` (§7.9). The checks the command line makes around the builds, of output paths and of the compiler pin, are left to it; files that cannot be read are logged.
+- **Buffers**: open `.fol` and `.fsty` files are synchronised incrementally, and each change is applied as an edit of the source's text, so only the smallest enclosing block is reparsed (§2.3). An open buffer stands over the file on disk; closing it goes back to the disk. Changes on disk reach the server as file events, which it asks the editor to send for every file of the project, and as saves; the loader reads the paths they name again (§12.2).
+- **Checks**: after each batch of changes the server checks every build the manifest declares, every stage before Emit, on a thread of its own, as the preview does (§12.2). A change cancels the check still running for the revision before it (§2.3); a check that a change overtook is never published. Changes that arrive together are applied together before the next check starts.
+- **Diagnostics** are published per file from the shared diagnostic type (§12), not from the JSON document of the command line: the severity, the code, the message with its hints, and the related spans. A diagnostic that several builds report alike is shown once. A diagnostic with no source location, such as an `internal-error`, is shown at the start of `folio.toml`. While `folio.toml` or `folio.lock` has errors, the last valid project is checked, and the errors are shown in the file; when no valid one was ever read, only the errors are shown, until the file is fixed on disk. Positions count UTF-8 bytes, UTF-16 code units or characters, whichever the editor prefers among those it offers; UTF-16 when it offers none.
+- **Compiler pin**: the server checks with its own version. When the project pins another, the editor shows a notice, once per pinned version, that its diagnostics may differ from those of `folio build` (§2.4).
 
 ### 12.4 Folio Studio
 
