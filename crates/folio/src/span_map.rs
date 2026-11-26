@@ -3,7 +3,8 @@
 //!
 //! Every glyph of a page names the source node its text came from and the
 //! bytes of the node's text it shows; every shape and fragment names the
-//! node it is drawn for. [`locate_glyph`] and [`locate_fragment`] resolve
+//! node it is drawn for, and every object the element it is the box of.
+//! [`locate_glyph`], [`locate_fragment`] and [`locate_object`] resolve
 //! those to a file, a byte range and lines and columns, against the files
 //! of the same revision. A ligature resolves to all the characters it
 //! shows, a glyph of right-to-left text to its own characters wherever the
@@ -37,7 +38,7 @@
 
 use std::ops::Range;
 
-use folio_component::{Fragment, FragmentItem, Glyph, GlyphRun, Point, SourceRef};
+use folio_component::{Fragment, FragmentItem, Glyph, GlyphRun, ObjectBox, Point, SourceRef};
 use folio_syntax::DiagSpan;
 
 pub use folio_core::span_map::{source_ref, span, text_range};
@@ -65,6 +66,12 @@ pub fn locate_glyph(files: &dyn Files, glyph: &Glyph) -> Option<Location> {
 /// node, such as an element's call or markup.
 pub fn locate_fragment(files: &dyn Files, fragment: &Fragment) -> Option<Location> {
     locate(files, span(fragment.source).into())
+}
+
+/// Where the element that an object is the box of is written, as for a
+/// fragment: the whole element's call or markup.
+pub fn locate_object(files: &dyn Files, object: &ObjectBox) -> Option<Location> {
+    locate(files, span(object.location.source).into())
 }
 
 /// A glyph of a fragment, with where it is drawn.
@@ -110,7 +117,7 @@ pub fn glyphs(fragment: &Fragment) -> Vec<Placed<'_>> {
                         x += glyph.x_advance.at(run.size);
                     }
                 }
-                FragmentItem::Shape { .. } => {}
+                FragmentItem::Shape { .. } | FragmentItem::Object(_) => {}
             }
         }
     }

@@ -685,3 +685,36 @@ fn hyphens_from_whole_nodes_stay_text() {
     let written = write(&document(&pages, &structure)).unwrap();
     assert!(!text(&written.bytes).contains("/ActualText"));
 }
+
+/// An object whose content is not laid out yet is drawn as an empty frame,
+/// which is not content: the page stays PDF/UA-1, and the paragraph's text
+/// around it is tagged as before.
+#[test]
+fn objects_are_empty_frames() {
+    let object = FragmentItem::Object(folio_component::ObjectBox {
+        size: Size::new(Abs::pt(30.0), Abs::pt(32.0)),
+        baseline: Abs::pt(24.0),
+        location: Location {
+            source: SourceRef(13),
+            instance: 0,
+        },
+    });
+    let plain = [one_page()];
+    let mut pages = [one_page()];
+    let FragmentItem::Group(body) = &mut pages[0].items.make_mut()[0].1 else {
+        unreachable!()
+    };
+    body.push(Point::new(Abs::pt(10.0), Abs::pt(40.0)), object);
+    let structure = structure();
+    let written = write(&document(&pages, &structure)).unwrap();
+    assert!(written.warnings.is_empty(), "{:?}", written.warnings);
+    assert!(written.pdf_ua);
+    assert_eq!(
+        tagged(&document(&pages, &structure)),
+        tagged(&document(&plain, &structure))
+    );
+    let pdf = text(&written.bytes);
+    let artifacts = |pdf: &str| pdf.matches("/Artifact<</Type/Layout>>BDC").count();
+    let before = text(&write(&document(&plain, &structure)).unwrap().bytes);
+    assert_eq!(artifacts(&pdf), artifacts(&before) + 1);
+}

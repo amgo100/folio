@@ -200,7 +200,7 @@ fn baselines(fragment: &folio::Fragment, y: f64, out: &mut Vec<f64>) {
         match item {
             folio::FragmentItem::Group(group) => baselines(group, y, out),
             folio::FragmentItem::Text(_) => out.push(y),
-            folio::FragmentItem::Shape { .. } => {}
+            folio::FragmentItem::Shape { .. } | folio::FragmentItem::Object(_) => {}
         }
     }
 }

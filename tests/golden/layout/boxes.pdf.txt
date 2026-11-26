@@ -1,0 +1,29 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 595.28 × 841.89, 1 page(s)
+page 1 595.28 × 841.89, 8 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 23.52..337.59
+    box (0.00, 0.00) 481.89 × 340.78 main.fol:1:2 baselines 23.52..337.59
+      box (0.00, 0.00) 481.89 × 32.28 main.fol:1:2 baselines 23.52..23.52 keep penalty 10000
+        text (0.00, 23.52) NewCM10-Bold 17.60 w 51.90 5 glyph(s) "Boxes"
+      box (0.00, 50.76) 481.89 × 290.01 main.fol:3:1 baselines 21.02..286.82
+        box (0.00, 0.00) 481.89 × 29.14 main.fol:3:1 baselines 21.02..21.02 keep penalty 10000
+          text (0.00, 21.02) NewCM10-Bold 15.40 w 45.41 5 glyph(s) "Boxes"
+        box (0.00, 36.84) 481.89 × 84.62 main.fol:5:1 baselines 27.57..77.86
+          text (0.00, 27.57) NewCM10-Regular 11.00 w 107.18 23 glyph(s) "A line with a tall box "
+          object (107.18, 3.57) 30.00 × 32.00 baseline 24.00 main.fol:5:24
+          text (137.18, 27.57) NewCM10-Regular 11.00 w 133.47 30 glyph(s) " in it, and a raised one, see "
+          object (270.65, 16.57) 16.00 × 8.00 baseline 6.00 main.fol:5:57
+          text (286.65, 27.57) NewCM10-Regular 11.00 w 195.24 41 glyph(s) ", after it. The rest of the paragraph runs"
+          text (0.00, 55.12) NewCM10-Regular 11.00 w 481.89 105 glyph(s) "on so that it takes a second line and a third, which shows that only the line with the tall box is taller"
+          text (0.00, 77.86) NewCM10-Regular 11.00 w 77.10 16 glyph(s) "than the others."
+        box (0.00, 132.47) 481.89 × 60.00 main.fol:7:2
+          object (0.00, 0.00) 120.00 × 60.00 baseline 60.00 main.fol:7:2
+        box (0.00, 203.47) 481.89 × 86.55 main.fol:9:1 baselines 27.58..83.36
+          text (0.00, 27.58) NewCM10-Regular 11.00 w 76.14 15 glyph(s) "A note’s anchor"
+          text (78.14, 27.58) NewCM10-Regular 11.00 w 139.06 29 glyph(s) " has no size and a sized box "
+          object (217.20, 3.58) 30.00 × 32.00 baseline 24.00 main.fol:9:63
+          text (247.20, 27.58) NewCM10-Regular 11.00 w 234.69 51 glyph(s) " follows it; the justified line ends where its space"
+          text (0.00, 55.12) NewCM10-Regular 11.00 w 24.20 5 glyph(s) "does."
+          box (0.00, 67.39) 481.89 × 19.16 main.fol:9:17 baselines 15.97..15.97
+            box (0.00, 0.00) 481.89 × 19.16 main.fol:9:26 baselines 15.97..15.97
+              text (0.00, 15.97) NewCM10-Regular 11.00 w 49.75 7 glyph(s) "A note."

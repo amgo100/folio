@@ -118,6 +118,24 @@ pub struct TextParagraph {
     /// Where the paragraph's text came from: ranges of it that are the text
     /// of a source node, in order. Objects are in no range.
     pub sources: EcoVec<TextSource>,
+    /// The element each object character of the text stands for, in the
+    /// order of the text.
+    pub objects: EcoVec<TextObject>,
+}
+
+/// An object character of a paragraph's text (SPEC §7.2): content that is
+/// not text, which layout sizes, such as inline maths, an image, a
+/// reference, or the anchor of a note or float.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TextObject {
+    /// Where the character is in the paragraph's text.
+    pub at: usize,
+    /// The element it stands for.
+    pub element: QualifiedName,
+    /// The element's node.
+    pub span: Span,
+    /// The element instance.
+    pub location: Location,
 }
 
 /// The style and face of a segment of a paragraph.
@@ -193,6 +211,7 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
             location: p.location,
             segments: p.segments.clone(),
             sources: p.sources.clone(),
+            objects: p.objects.clone(),
         })
         .collect();
     Some(Text {
@@ -226,6 +245,8 @@ pub struct CollectedParagraph {
     pub segments: EcoVec<SegmentStyle>,
     /// As [`TextParagraph::sources`].
     pub sources: EcoVec<TextSource>,
+    /// As [`TextParagraph::objects`].
+    pub objects: EcoVec<TextObject>,
 }
 
 /// The paragraphs of a build, collected from the styled tree and set in
@@ -310,6 +331,8 @@ struct Builder {
     /// Ranges of one style and kind, in order, covering the text.
     pieces: Vec<Piece>,
     sources: Vec<TextSource>,
+    /// The elements its object characters stand for.
+    objects: Vec<TextObject>,
     /// A quotation mark whose form waits for the character after it.
     quote: Option<Quote>,
 }
@@ -548,7 +571,7 @@ impl Collector<'_> {
             ElementKind::Inline => {}
             // A note or float anchored here: its content is blocks.
             _ => {
-                out.object(style, element.span);
+                out.object(style, element, node.location);
                 anchored.push((element, node));
                 return;
             }
@@ -572,7 +595,7 @@ impl Collector<'_> {
         }
         // Inline math, an image, a reference: an object layout sizes.
         self.not_laid_out(element);
-        out.object(style, element.span);
+        out.object(style, element, node.location);
     }
 
     /// Warns, once per build and element, that layout does not draw an
@@ -659,6 +682,7 @@ impl Collector<'_> {
             location: owner.location,
             segments: styles,
             sources: builder.sources.into_iter().collect(),
+            objects: builder.objects.into_iter().collect(),
         });
     }
 
@@ -841,12 +865,19 @@ impl Builder {
         }
     }
 
-    /// Appends an object in a style.
-    fn object(&mut self, style: &ComputedStyle, span: Span) {
+    /// Appends an object in a style, standing for the instance `location`
+    /// of `element`.
+    fn object(&mut self, style: &ComputedStyle, element: &Element, location: Location) {
         self.flush_quote(Some(OBJECT));
         let start = self.text.len();
         self.text.push(OBJECT);
-        self.extend(start..self.text.len(), style, true, span);
+        self.objects.push(TextObject {
+            at: start,
+            element: element.name.clone(),
+            span: element.span,
+            location,
+        });
+        self.extend(start..self.text.len(), style, true, element.span);
     }
 
     fn extend(&mut self, range: Range<usize>, style: &ComputedStyle, object: bool, span: Span) {
