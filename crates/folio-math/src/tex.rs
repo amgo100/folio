@@ -17,7 +17,7 @@
 //!   body; one without a partner is a plain symbol. `\left( … \right)`
 //!   pairs explicitly, and `\left.` leaves a side open.
 //! - `-` is the minus sign `−` and `*` the asterisk operator `∗`, as in
-//!   native math.
+//!   native math; the tie `~` is a space, as `\ ` is.
 //! - An upright d (`\mathrm{d}`, `\operatorname{d}`, `\dd`) is the
 //!   differential, as `dif` is, and the thin space `\,` before it is part
 //!   of it.
@@ -245,10 +245,14 @@ impl<'s> Parser<'s> {
                     .char_indices()
                     .find(|(_, c)| !c.is_ascii_alphabetic())
                     .map_or(after.len(), |(i, _)| i);
-                let len = if letters > 0 {
-                    letters
-                } else {
-                    after.chars().next().map_or(0, char::len_utf8)
+                let len = match after.chars().next() {
+                    _ if letters > 0 => letters,
+                    // A backslash before any space, a line break or a tab
+                    // among them, is a control space.
+                    Some(c) if c.is_whitespace() => {
+                        return (Tok::Cmd(" "), start..start + 1 + c.len_utf8());
+                    }
+                    c => c.map_or(0, char::len_utf8),
                 };
                 return (Tok::Cmd(&after[..len]), start..start + 1 + len);
             }
@@ -305,12 +309,18 @@ impl<'s> Parser<'s> {
         while let Some((i, c)) = chars.next() {
             let at = start + i;
             match c {
-                '{' => depth += 1,
+                '{' => {
+                    depth += 1;
+                    continue;
+                }
                 '}' if depth == 0 => {
                     self.pos = at + 1;
                     return Ok((text, start..at));
                 }
-                '}' => depth -= 1,
+                '}' => {
+                    depth -= 1;
+                    continue;
+                }
                 '\\' => {
                     let Some((_, next)) = chars.next() else { break };
                     match next {
@@ -376,8 +386,20 @@ impl<'s> Parser<'s> {
             envs.last()
                 .map(|(name, begin)| (name.as_str(), begin.clone())),
         )?;
-        for (name, begin) in envs.iter().rev().skip(1) {
-            self.expect_end(name, begin.clone())?;
+        for pair in envs.windows(2).rev() {
+            let [(outer, begin), (inner, inner_begin)] = pair else {
+                unreachable!("windows of two")
+            };
+            if self.peek().0 != Tok::Cmd("end") {
+                return Err(TexError::new(
+                    inner_begin.clone(),
+                    eco_format!("`{inner}` can only hold the whole of `{outer}`"),
+                )
+                .with_hint(
+                    "Folio reads one alignment environment, or one inside another that it fills",
+                ));
+            }
+            self.expect_end(outer, begin.clone())?;
         }
         let (tok, range) = self.peek();
         match tok {
@@ -678,8 +700,8 @@ impl<'s> Parser<'s> {
             let (tok, range) = self.peek();
             match tok {
                 Tok::Eof | Tok::Close | Tok::Cmd("right" | "end") => break,
-                _ if ctx.closer && self.closer_at(self.pos).is_some() => break,
                 Tok::Char(']') if ctx.bracket => break,
+                _ if ctx.closer && self.closer_at(self.pos).is_some() => break,
                 Tok::Amp if ctx.level == Level::Cell => break,
                 Tok::Cmd("\\") if ctx.level != Level::Nested => break,
                 _ => {}
@@ -791,6 +813,8 @@ impl<'s> Parser<'s> {
             match c {
                 '-' => '−',
                 '*' => '∗',
+                // A tie is a space, as `\ ` is.
+                '~' => '\u{2004}',
                 c => c,
             },
             self.span,
@@ -813,7 +837,13 @@ impl<'s> Parser<'s> {
             ..ctx
         })?;
         self.leave();
-        let Some((close, close_end)) = self.closer_at(self.pos) else {
+        let ends_index = ctx.bracket && self.peek().0 == Tok::Char(']');
+        let closer = if ends_index {
+            None
+        } else {
+            self.closer_at(self.pos)
+        };
+        let Some((close, close_end)) = closer else {
             // Without a partner: the bracket is a symbol, and what followed
             // it stays in the row.
             items.push(Node::symbol(open, self.span));
@@ -943,7 +973,12 @@ impl<'s> Parser<'s> {
         match tok {
             Tok::Open => self.group(range),
             Tok::Char(c) if c.is_numeric() => Ok(Row::new([Node::number(c.into(), self.span)])),
-            Tok::Char(c) if !is_closer(c) && c != ']' => Ok(Row::new([self.char_node(c, range)])),
+            Tok::Char(c) if c != ']' => Ok(Row::new([self.char_node(c, range)])),
+            // A bracket as an argument is one symbol, as in TeX.
+            Tok::Cmd(name) if symbol_of(name).is_some_and(|c| is_opener(c) || is_closer(c)) => {
+                let c = symbol_of(name).expect("a symbol");
+                Ok(Row::new([Node::symbol(c, self.span)]))
+            }
             Tok::Cmd(name)
                 if !matches!(
                     name,
@@ -1033,7 +1068,7 @@ impl<'s> Parser<'s> {
             Cmd::OperatorName => {
                 let limits = self.eat_directly('*');
                 let (text, text_range) = self.raw_arg(range, "the operator's name")?;
-                let text: EcoString = text.trim().into();
+                let text: EcoString = text.chars().filter(|c| !c.is_whitespace()).collect();
                 if text.is_empty() || !text.chars().all(char::is_alphabetic) {
                     return Err(TexError::new(
                         text_range,
@@ -1712,7 +1747,9 @@ fn unknown_command(name: &str, range: Range<usize>) -> TexError {
         .chain(NAMES.iter().copied())
         .chain(crate::symbols::operator_names());
     let best = names
-        .filter(|entry| entry.len() > 1)
+        // Names differ in length by at most the distance, which keeps the
+        // comparisons short, whatever the length of the unknown name.
+        .filter(|entry| entry.len() > 1 && entry.len().abs_diff(name.len()) <= 2)
         .map(|entry| (distance(name, entry), entry))
         .filter(|&(d, entry)| d <= 2 && d < entry.len().min(name.len()))
         .min();
@@ -1857,6 +1894,13 @@ mod tests {
         );
         let e = parse("\\alpah", Span::detached(), 100).unwrap_err();
         assert_eq!(e.hints, ["did you mean `\\alpha`?"]);
+    }
+
+    #[test]
+    fn long_unknown_commands_are_cheap() {
+        let src = format!("\\{}", "a".repeat(1_000_000));
+        let e = parse(&src, Span::detached(), 100).unwrap_err();
+        assert_eq!(e.range, 0..src.len());
     }
 
     #[test]

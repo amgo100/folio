@@ -360,6 +360,22 @@ fn tex_follows_tex_where_it_differs_from_native_math() {
         tree(r"$:tex x^10 {a+b}^2$"),
         "[attach([x], sup: [num(1)]), num(0), attach([a, vary(+), b], sup: [num(2)])]"
     );
+    // An argument is one token, even a bracket; `]` ends the index of a
+    // root.
+    assert_eq!(
+        tree(r"$:tex e^\lfloor x \rfloor \sqrt[(n]{x}$"),
+        "[attach([e], sup: [open(⌊)]), x, close(⌋), root(index: [open((), n], [x])]"
+    );
+    // Braces group text without being part of it; a tie and a backslash
+    // before a line break are spaces.
+    assert_eq!(
+        tree("$:tex \\text{if {n} is odd} a~b \\\nc$"),
+        "[text(\"if n is odd\"), a, space(\u{2004}), b, space(\u{2004}), c]"
+    );
+    assert_eq!(
+        tree(r"$:tex \operatorname{arg\,max}_x$"),
+        "[attach([op(argmax)], sub: [x])]"
+    );
     // A slash is a slash, and spaces separate nothing.
     assert_eq!(tree(r"$:tex a/b$"), "[a, bin(/), b]");
     assert_eq!(tree(r"$:tex ab$"), "[a, b]");
@@ -405,7 +421,8 @@ fn errors_point_at_their_source() {
              $:tex \\nonumber$ $:tex \\frac{a \\\\ b}{c}$ $:tex x \\label{a.b}$ \
              $:tex \\begin{pmatrix} a $ $:tex x = \\begin{align} a \\end{align}$ \
              $:tex \\begin{align} a $ $:tex x \\label{a} y \\label{b}$ \
-             $:tex \\text{a \\alpha}$ $:tex a \\\\ b \\end{align}$"
+             $:tex \\text{a \\alpha}$ $:tex a \\\\ b \\end{align}$ \
+             $:tex \\begin{gather}\\begin{split} a \\end{split} \\\\ b \\end{gather}$"
         ),
         [
             error("unclosed brace", "{"),
@@ -430,6 +447,10 @@ fn errors_point_at_their_source() {
             error("a line can have only one label", "\\label{b}"),
             error("`\\alpha` cannot stand in text", "\\alpha"),
             error("`\\end` without `\\begin`", "\\end"),
+            error(
+                "`split` can only hold the whole of `gather`",
+                "\\begin{split}"
+            ),
         ]
     );
 }
