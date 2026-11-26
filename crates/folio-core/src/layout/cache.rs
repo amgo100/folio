@@ -193,11 +193,16 @@ impl Cache {
         // The paragraphs to break, each once, with where their lines go.
         let mut misses: Vec<Job> = Vec::new();
         let mut targets: Vec<Vec<usize>> = Vec::new();
+        // The keys are made and hashed before the cache is locked, which
+        // the builds compiling in parallel share.
+        let keys: Vec<Key> = paragraphs
+            .iter()
+            .map(|(input, slots)| Key::new(input, slots))
+            .collect();
         {
             let mut entries = lock(&self.entries);
             let mut missing: HashMap<Key, usize> = HashMap::new();
-            for (i, (input, slots)) in paragraphs.iter().enumerate() {
-                let key = Key::new(input, slots);
+            for (i, ((input, slots), key)) in paragraphs.iter().zip(keys).enumerate() {
                 if let Some(entry) = entries.get_mut(&key) {
                     entry.used = now;
                     self.hits.fetch_add(1, Ordering::Relaxed);

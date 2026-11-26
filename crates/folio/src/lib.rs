@@ -121,7 +121,10 @@ pub fn compile(
                 sources,
                 files,
                 output: last.output,
-                diagnostics: EcoVec::from([internal_error(&panic, kept_output)]),
+                diagnostics: EcoVec::from([internal_error(
+                    &panic,
+                    kept_output.then_some("the last output this build was compiled to is kept"),
+                )]),
             })
         }
     }
@@ -181,7 +184,12 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
                 sources,
                 files,
                 writes,
-                diagnostics: EcoVec::from([internal_error(&panic, writes)]),
+                diagnostics: EcoVec::from([internal_error(
+                    &panic,
+                    writes.then_some(
+                        "compiling this build answers with the last output it was compiled to",
+                    ),
+                )]),
             })
         }
     }
@@ -493,7 +501,7 @@ impl std::error::Error for Cancelled {}
 fn catch<T>(world: &World, f: impl FnOnce() -> T) -> Result<T, Cancelled> {
     salsa::Cancelled::catch(AssertUnwindSafe(f)).map_err(|cancelled| match cancelled {
         salsa::Cancelled::PropagatedPanic if !cancelled_by_edit(world) => {
-            panic!("a query panicked on another thread")
+            panic!("a query panicked earlier or on another thread")
         }
         _ => Cancelled,
     })
@@ -521,7 +529,7 @@ fn isolate<T>(world: &World, f: impl FnOnce() -> T) -> Result<Result<T, EcoStrin
         Err(payload) => match payload.downcast::<salsa::Cancelled>() {
             Ok(cancelled) => match *cancelled {
                 salsa::Cancelled::PropagatedPanic if !cancelled_by_edit(world) => {
-                    Ok(Err("a query panicked on another thread".into()))
+                    Ok(Err("a query panicked earlier or on another thread".into()))
                 }
                 _ => Err(Cancelled),
             },
@@ -593,7 +601,8 @@ fn extension(path: &ProjectPath) -> Option<String> {
 
 /// The error that stands for a panic in a query in a long-lived world: a
 /// bug in the compiler, not in the document, so it points at no source.
-fn internal_error(message: &str, kept_output: bool) -> Diagnostic {
+/// `kept` is a hint on the output kept, when there is one.
+fn internal_error(message: &str, kept: Option<&str>) -> Diagnostic {
     let mut error = Diagnostic::error(
         folio_syntax::DiagSpan::detached(),
         eco_format!("internal error: the compiler panicked: {message}"),
@@ -603,10 +612,6 @@ fn internal_error(message: &str, kept_output: bool) -> Diagnostic {
         "this is a bug in Folio, not in the document; editing the document may work around it"
             .into(),
     );
-    if kept_output {
-        error
-            .hints
-            .push("the last output this build was compiled to is kept".into());
-    }
+    error.hints.extend(kept.map(EcoString::from));
     error
 }
