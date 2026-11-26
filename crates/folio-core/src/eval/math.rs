@@ -702,11 +702,14 @@ impl Vm<'_> {
         if let Some(text) = literal_text(expr) {
             match Number::parse(&text) {
                 Ok(number) => return Ok(number),
-                // A literal that is out of range says so.
+                // A literal that is out of range says so: one with too
+                // many digits or too large a power of ten.
                 Err(message)
-                    if text
-                        .trim_start_matches(['-', '−', '+'])
-                        .starts_with(|c: char| c.is_ascii_digit()) =>
+                    if text.starts_with(|c: char| c.is_ascii_digit() || "-−+.".contains(c))
+                        && text
+                            .chars()
+                            .all(|c| c.is_ascii_digit() || "-−+.eE".contains(c))
+                        && text.contains(|c: char| c.is_ascii_digit()) =>
                 {
                     return Err(EvalError::new(span, message).into());
                 }

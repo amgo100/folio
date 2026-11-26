@@ -115,6 +115,11 @@ fn values_from_scripts_and_rounding() {
             "[qty(10.0)]",
         ]
     );
+    // A carry moves a power of ten along: never `10 × 10³`.
+    assert_eq!(
+        formulas("$num(9.99e3, digits: 2)$ $num(-0)$"),
+        ["[qty(1.0e4)]", "[qty(0)]"]
+    );
 }
 
 #[test]
@@ -169,6 +174,14 @@ fn quantity_errors() {
             error("an uncertainty cannot be negative", "-0.1"),
             error("0 is not a number of significant figures", "0"),
             error("`num` has no argument `place`", "place: 1"),
+        ]
+    );
+    assert_eq!(
+        errors("#let k = 3\n$qty(2k, \"m\")$ #qty(9.81, \"m\", pm: -0.02) #num(2, digits: 0.5)"),
+        [
+            error("expected a number", "2k"),
+            error("an uncertainty cannot be negative", "pm: -0.02"),
+            error("expected an integer, found a float", "digits: 0.5"),
         ]
     );
     assert_eq!(

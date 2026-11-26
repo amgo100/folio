@@ -151,11 +151,21 @@ fn quantity_func(vm: &mut Vm<'_>, args: &mut Args, value: bool, unit: bool) -> E
         None
     };
     let (pm, digits) = if value.is_some() {
+        // Errors point at the argument, or at the call.
+        let at = |args: &Args, name: &str| {
+            args.items()
+                .iter()
+                .rev()
+                .find(|arg| arg.name.as_deref() == Some(name))
+                .map_or(span, |arg| arg.span)
+        };
+        let pm_at = at(args, "pm");
         let pm = match args.named::<Value>("pm")? {
-            Some(v) => Some((number_of(&v, span)?, span)),
+            Some(v) => Some((number_of(&v, pm_at)?, pm_at)),
             None => None,
         };
-        let digits = args.named::<Value>("digits")?.map(|v| (v, span));
+        let digits_at = at(args, "digits");
+        let digits = args.named::<Value>("digits")?.map(|v| (v, digits_at));
         (pm, digits)
     } else {
         (None, None)

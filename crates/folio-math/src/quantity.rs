@@ -258,8 +258,10 @@ impl Number {
             }
         };
         let int = int.trim_start_matches('0');
+        // Zero has no sign: `-0` is `0`.
+        let zero = int.is_empty() && frac.bytes().all(|b| b == b'0');
         Ok(Self {
-            negative,
+            negative: negative && !zero,
             int: if int.is_empty() {
                 "0".into()
             } else {
@@ -303,8 +305,10 @@ impl Number {
     /// The number rounded to `figures` significant figures, half away from
     /// zero, on its decimal digits: `14.679` to 3 is `14.7`, `9.8` to 3 is
     /// `9.80`, `0.09996` to 2 is `0.10`. Digits before the marker that fall
-    /// beyond the figures become zeros (`123456` to 3 is `123000`). The
-    /// power of ten stays as it is. Zero has no significant figures, so it
+    /// beyond the figures become zeros (`123456` to 3 is `123000`). A
+    /// number with a power of ten stays in that form, and one whose
+    /// mantissa a carry made one digit longer moves the marker and the
+    /// power with it: `9.99e3` to 2 is `1.0e4`. Zero has no significant figures, so it
     /// keeps `figures - 1` decimals: `0` to 3 is `0.00`.
     pub fn round(&self, figures: u32) -> Self {
         let figures = (figures.max(1) as usize).min(MAX_DIGITS);
@@ -368,11 +372,22 @@ impl Number {
         int_len = kept.len();
         debug_assert!(int_len > 0);
         let text = |digits: Vec<u8>| EcoString::from(String::from_utf8(digits).expect("digits"));
+        let mut frac = frac;
+        let mut exponent = self.exponent;
+        if let Some(power) = exponent
+            && kept.len() > self.int.len()
+            && power < MAX_EXPONENT
+        {
+            // A carry made the mantissa longer: `10e3` is `1.0e4`.
+            let last = kept.pop().expect("a longer mantissa has digits");
+            frac.insert(0, last);
+            exponent = Some(power + 1);
+        }
         let number = Self {
             negative: self.negative,
             int: text(kept),
             frac: text(frac),
-            exponent: self.exponent,
+            exponent,
         };
         Self {
             negative: number.negative && !number.is_zero(),
@@ -519,13 +534,7 @@ impl Unit {
     /// for `°`, `degC` for `°C`, `micro` for `µ` (`microF`).
     pub fn parse(text: &str) -> Result<Self, UnitError> {
         let mut factors = EcoVec::new();
-        let mut at = 0;
-        for word in text.split(' ') {
-            let start = at;
-            at += word.len() + 1;
-            if word.is_empty() {
-                continue;
-            }
+        for (start, word) in words(text) {
             let range = start..start + word.len();
             let error = |message: &str, hint: Option<&str>| UnitError {
                 message: message.into(),
@@ -560,7 +569,7 @@ impl Unit {
                     let p = p.unwrap_or(power);
                     let (negative, digits) = match p.strip_prefix(['-', MINUS]) {
                         Some(d) => (true, d),
-                        None => (false, p),
+                        None => (false, p.strip_prefix('+').unwrap_or(p)),
                     };
                     let magnitude = (!digits.is_empty()
                         && digits.bytes().all(|b| b.is_ascii_digit()))
@@ -627,6 +636,25 @@ impl Unit {
     }
 }
 
+/// The words of a text separated by whitespace, with the byte offset each
+/// starts at.
+fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut rest = text;
+    let mut offset = 0;
+    std::iter::from_fn(move || {
+        let trimmed = rest.trim_start();
+        offset += rest.len() - trimmed.len();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+        let word = (offset, &trimmed[..end]);
+        rest = &trimmed[end..];
+        offset += end;
+        Some(word)
+    })
+}
+
 /// A symbol with a name for a hard-to-type symbol expanded: `ohm` is `Ω`,
 /// `microF` is `µF`.
 fn expand(symbol: &str) -> EcoString {
@@ -681,6 +709,7 @@ mod tests {
         assert_eq!(num("1E-3").to_string(), "1e-3");
         assert_eq!(num(".5").to_string(), "0.5");
         assert_eq!(num("−2").to_string(), "-2");
+        assert_eq!(num("-0.0").to_string(), "0.0");
         for bad in ["", "-", "e5", "1.2.3", "1e", "1,5", "1e99999", "x"] {
             assert!(Number::parse(bad).is_err(), "{bad}");
         }
@@ -711,7 +740,10 @@ mod tests {
         assert_eq!(r("-0.00004", 1), "-0.00004");
         assert_eq!(r("0", 3), "0.00");
         assert_eq!(r("6.0221e23", 3), "6.02e23");
-        assert_eq!(r("9.99e3", 2), "10e3");
+        assert_eq!(r("9.99e3", 2), "1.0e4");
+        assert_eq!(r("9.99e3", 3), "9.99e3");
+        assert_eq!(r("9.996e-3", 3), "1.00e-2");
+        assert_eq!(r("0.96e3", 1), "1e3");
         assert_eq!(r("950", 1), "1000");
     }
 
@@ -750,6 +782,11 @@ mod tests {
         let error = Unit::parse("m s^x").unwrap_err();
         assert_eq!(error.range, 2..5);
         assert!(Unit::parse("m^0").is_err());
+        assert_eq!(
+            Unit::parse("kg\tm^+2\u{a0}s").unwrap().to_string(),
+            "kg m^2 s"
+        );
+        assert_eq!(Unit::parse("m  s^x").unwrap_err().range, 3..6);
         assert!(Unit::parse("^2").is_err());
         assert!(Unit::parse("  ").is_err());
     }

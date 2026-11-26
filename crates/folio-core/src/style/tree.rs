@@ -401,9 +401,11 @@ impl<'a> Walker<'a> {
                 local.extend(rule.declarations.iter().cloned());
             }
         }
-        if let Child::Element(element) = child {
-            local.extend(self.inline(element));
-        }
+        let own = match child {
+            Child::Element(element) => self.inline(element),
+            Child::Part(..) => Vec::new(),
+        };
+        local.extend(own.iter().cloned());
 
         let style = self.compute(parent, &matched, &local);
 
@@ -430,7 +432,8 @@ impl<'a> Walker<'a> {
         if let Child::Element(element) = child
             && holds_vector(element)
         {
-            children.push(self.vector_node(siblings, i, context, &style, (span, location)));
+            let owner = (span, location);
+            children.push(self.vector_node(siblings, i, context, &style, &own, owner));
         }
 
         StyledNode {
@@ -446,13 +449,17 @@ impl<'a> Walker<'a> {
     /// of `siblings` (see [`StyledNode`]): the element seen with the class
     /// `vector` added, in the element's own context, so that it matches
     /// every rule the element matches and the `math.vector` rules, and
-    /// computed as a child of the element's `style`.
+    /// computed as a child of the element's `style`. The element's own
+    /// declarations `own` ([`inline`](Self::inline)) apply to it as they do
+    /// to the element, so a local override is not undone by a rule for
+    /// `math`.
     fn vector_node(
         &mut self,
         siblings: &[Child<'_>],
         i: usize,
         context: Option<ContextKey<'a>>,
         style: &ComputedStyle,
+        own: &[Decl],
         (span, location): (Span, Location),
     ) -> StyledNode {
         let vector = |mut view: NodeView| {
@@ -479,6 +486,7 @@ impl<'a> Walker<'a> {
                 local.extend(rule.declarations.iter().cloned());
             }
         }
+        local.extend(own.iter().cloned());
         StyledNode {
             name: NodeName::Part(Name::new(VECTOR_PART).expect("an identifier")),
             span,

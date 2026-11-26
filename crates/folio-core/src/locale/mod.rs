@@ -90,13 +90,37 @@ const COMMA_LANGUAGES: &[&str] = &[
     "sk", "sl", "sq", "sr", "sv", "tr", "uk", "vi",
 ];
 
+/// The regions where a language of [`COMMA_LANGUAGES`] writes a point,
+/// as `language-REGION`: German and Italian in Switzerland and
+/// Liechtenstein, and Spanish in Mexico, the United States, Central
+/// America and the Caribbean.
+const POINT_REGIONS: &[&str] = &[
+    "de-CH", "de-LI", "it-CH", "es-MX", "es-US", "es-PR", "es-DO", "es-GT", "es-HN", "es-NI",
+    "es-PA", "es-SV",
+];
+
+/// The region subtag of a language tag, if it has one: `CH` of `de-CH`
+/// and of `de-Latn-CH-1996`.
+fn region(tag: &str) -> Option<&str> {
+    tag.split(['-', '_']).skip(1).find(|subtag| {
+        (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic()))
+            || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
 /// The decimal marker of a language: `,` in Polish, `.` in English.
 pub fn decimal_marker(lang: &Lang) -> char {
-    let tag = lang.as_str();
-    if tag.eq_ignore_ascii_case("de-CH") || tag.eq_ignore_ascii_case("de-LI") {
+    let primary = lang.primary();
+    if let Some(region) = region(lang.as_str())
+        && POINT_REGIONS.iter().any(|tag| {
+            tag.split_once('-').is_some_and(|(language, r)| {
+                language.eq_ignore_ascii_case(primary) && r.eq_ignore_ascii_case(region)
+            })
+        })
+    {
         return '.';
     }
-    if COMMA_LANGUAGES.contains(&lang.primary()) {
+    if COMMA_LANGUAGES.contains(&primary) {
         ','
     } else {
         '.'
@@ -140,6 +164,9 @@ mod tests {
         assert_eq!(decimal_marker(&lang("pl")), ',');
         assert_eq!(decimal_marker(&lang("de")), ',');
         assert_eq!(decimal_marker(&lang("de-CH")), '.');
+        assert_eq!(decimal_marker(&lang("de-Latn-CH")), '.');
+        assert_eq!(decimal_marker(&lang("es-MX")), '.');
+        assert_eq!(decimal_marker(&lang("es-ES")), ',');
         assert_eq!(decimal_marker(&lang("ja")), '.');
         let comma = Value::Keyword(folio_component::Name::new("comma").unwrap());
         let point = Value::Keyword(folio_component::Name::new("point").unwrap());
