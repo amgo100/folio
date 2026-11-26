@@ -14,7 +14,6 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clap::Args;
@@ -79,7 +78,10 @@ pub(crate) fn watch(args: &WatchArgs) -> ExitCode {
     let Ok(pin) = check_pin(&root, current, color) else {
         return ExitCode::from(FAILURE);
     };
-    let stopped = AtomicBool::new(false);
+    // Whether writing has stopped; held while a revision's outputs are
+    // checked and written, since quiet revisions write on threads that may
+    // overlap.
+    let stopped = Mutex::new(false);
 
     let shown: Arc<Mutex<Option<Shown>>> = Arc::default();
     let mut options = Options::new(&root)
@@ -91,12 +93,14 @@ pub(crate) fn watch(args: &WatchArgs) -> ExitCode {
             move |outputs| {
                 // Once the pin changes, this version no longer writes what
                 // `folio build` would.
-                if !current && !stopped.load(Ordering::Relaxed) {
-                    if pin_changed(&root, pin.as_ref(), color) {
-                        stopped.store(true, Ordering::Relaxed);
-                    } else {
-                        write_outputs(&root, outputs, color);
-                    }
+                let mut stopped = stopped.lock().unwrap_or_else(|e| e.into_inner());
+                if *stopped {
+                    return;
+                }
+                if !current && pin_changed(&root, pin.as_ref(), color) {
+                    *stopped = true;
+                } else {
+                    write_outputs(&root, outputs, color);
                 }
             }
         });
@@ -145,6 +149,11 @@ fn check_pin(root: &Path, current: bool, color: bool) -> Result<Option<Version>,
 /// version); if so, prints an error that the outputs are no longer written.
 /// A manifest without a valid pin has not changed it: the preview keeps the
 /// last valid manifest and reports the new one's errors.
+///
+/// It reads the manifest on disk, which may be newer than the one the
+/// outputs were compiled with: what matters is that the project no longer
+/// asks for this version, and writing stops at the first revision that
+/// sees so.
 fn pin_changed(root: &Path, started: Option<&Version>, color: bool) -> bool {
     let Ok(text) = std::fs::read_to_string(root.join(project::MANIFEST)) else {
         return false;
@@ -168,7 +177,11 @@ fn pin_changed(root: &Path, started: Option<&Version>, color: bool) -> bool {
             folio::VERSION
         ),
     )
-    .with_hint("restart `folio watch` to preview and write them with the pinned version");
+    .with_hint(format!(
+        "restart `folio watch` to run Folio {} (`folio toolchain install {}` installs it), \
+         or with `--compiler current` to keep this version",
+        pin.v, pin.v
+    ));
     let mut files = TextFiles::new();
     files.insert(World::MANIFEST, project::MANIFEST, text);
     print(&files, &[error], color);

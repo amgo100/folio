@@ -272,18 +272,27 @@ fn has_watch(binary: &Path) -> Result<(), Option<std::io::Error>> {
         .map_err(Some)?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        match child.try_wait().map_err(Some)? {
-            Some(status) if status.success() => return Ok(()),
-            Some(_) => return Err(None),
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Some(std::io::Error::other(
-                    "it did not answer `folio watch --help` within ten seconds",
-                )));
+        let why = match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            // Killed by a signal: a crash, not an answer.
+            Ok(Some(status)) if status.code().is_none() => {
+                return Err(Some(std::io::Error::other(format!(
+                    "`folio watch --help` ended with {status}"
+                ))));
             }
-            None => std::thread::sleep(Duration::from_millis(10)),
-        }
+            Ok(Some(_)) => return Err(None),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            Ok(None) => {
+                std::io::Error::other("it did not answer `folio watch --help` within ten seconds")
+            }
+            Err(error) => error,
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(Some(why));
     }
 }
 
