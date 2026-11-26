@@ -75,10 +75,10 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
         V::Float(v) => Value::Number(Scalar::new(finite(v.get(), "number")?)),
         // Added as floats, so that a sum that is not a number (`inf - inf`)
         // is not first made zero, as a length makes it.
-        V::Length(length) => Value::Length(Abs::pt(finite(
+        V::Length(length) => Value::Length(Abs::pt(bounded(finite(
             length.abs.to_pt() + length.em.get() * font_size.to_pt(),
             "length",
-        )?)),
+        )?)?)),
         V::Angle(angle) => Value::Angle(Scalar::new(finite(angle.0.get(), "angle")?)),
         V::Ratio(ratio) => Value::Ratio(Ratio::new(finite(ratio.get(), "ratio")?)),
         V::Fraction(fr) => Value::Fraction(Scalar::new(finite(fr.0.get(), "fraction")?)),
@@ -113,16 +113,35 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
 }
 
 /// A number of a property value, if it is finite: an infinite length or
-/// number, such as `1e308pt * 10` or a huge `em` length at a large font
-/// size, would reach layout and the PDF writer (SPEC §14.2). A
-/// declaration whose value is not finite is an error where the stylesheet
-/// declares it; one that only overflows at an element's font size is left
-/// out there, as a value that does not fit its property is.
+/// number, such as `1e308pt * 10`, would reach layout and the PDF writer
+/// (SPEC §14.2). A declaration whose value is not finite is an error where
+/// the stylesheet declares it. Lengths are also [`bounded`], which is what
+/// leaves out a value that is too long only at an element's font size.
 fn finite(value: f64, what: &str) -> Result<f64, EcoString> {
     if value.is_finite() {
         Ok(value)
     } else {
         Err(eco_format!("this {what} is not finite"))
+    }
+}
+
+/// The longest length a property value may have, in points: 1,000,000pt,
+/// about 350 m (SPEC §5.1). It is far beyond any page, so no realistic
+/// document reaches it, and wider than PDF's page limit, so it does not
+/// tie the other targets to PDF's; within it, nothing layout computes from lengths, products of two
+/// included, can overflow.
+const MAX_LENGTH: f64 = 1_000_000.0;
+
+/// A length in points, if it is within [`MAX_LENGTH`]. Like a value that is
+/// not finite, a longer length is an error where the stylesheet declares
+/// it, and is left out where it is longer only at an element's font size.
+fn bounded(pt: f64) -> Result<f64, EcoString> {
+    if pt.abs() <= MAX_LENGTH {
+        Ok(pt)
+    } else {
+        Err(eco_format!(
+            "this length is beyond ±{MAX_LENGTH}pt (about 350 m), the limit of a length"
+        ))
     }
 }
 
@@ -688,5 +707,32 @@ mod tests {
             compute(&em, Abs::pt(11.0)).unwrap(),
             Value::Length(Abs::pt(22.0))
         );
+    }
+
+    #[test]
+    fn lengths_are_bounded() {
+        let length = |pt: f64, em: f64| {
+            let mut length = eval::Length::em(folio_component::Em::new(em));
+            length.abs = Abs::pt(pt);
+            Declared::Value(eval::Value::Length(length))
+        };
+        let size = Abs::pt(10.0);
+        for pt in [MAX_LENGTH, -MAX_LENGTH, 0.0] {
+            assert_eq!(
+                compute(&length(pt, 0.0), size).unwrap(),
+                Value::Length(Abs::pt(pt))
+            );
+        }
+        let error = "this length is beyond ±1000000pt (about 350 m), the limit of a length";
+        for pt in [MAX_LENGTH + 1.0, -MAX_LENGTH - 1.0, 1e300, -1e300] {
+            assert_eq!(compute(&length(pt, 0.0), size).unwrap_err(), error);
+        }
+        // An `em` length is bounded at the font size it is computed at.
+        let em = length(0.0, 100_000.0);
+        assert!(compute(&em, size).is_ok());
+        assert_eq!(compute(&em, Abs::pt(11.0)).unwrap_err(), error);
+        // Inside lists too.
+        let list = Declared::List(EcoVec::from([length(1.0, 0.0), length(2e6, 0.0)]));
+        assert_eq!(compute(&list, size).unwrap_err(), error);
     }
 }
