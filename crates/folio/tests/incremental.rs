@@ -141,3 +141,55 @@ fn a_reflow_confined_to_one_page_reuses_the_other_pages() {
         "the edit is in the middle of the document, on page {edited}"
     );
 }
+
+#[test]
+fn an_edit_that_forces_a_full_reparse_reuses_calls_of_unchanged_closures() {
+    // An unbalanced `]` at the top level cannot be reparsed incrementally,
+    // so the whole file is parsed again (#241). The items it leaves alone
+    // keep their spans, so the calls of `g`, defined in the edited file,
+    // and of `f`, from another file, are reused.
+    let main = "#import \"lib.fol\": f\n\n\
+                #let g(x) = x + 1\n\n\
+                #g(2) and #f(3).\n\n\
+                Some text here.\n\n\
+                More text after.\n";
+    let (mut world, counts) = counted(main);
+    world.set_source("lib.fol", "#let f(x) = x * 2\n").unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+    assert!(counts.lock().unwrap().contains_key("call_closure"));
+
+    for (needle, with) in [("Some", "]"), ("#let", "] "), ("More", "]] ")] {
+        counts.lock().unwrap().clear();
+        let at = world
+            .source("main.fol")
+            .unwrap()
+            .text()
+            .find(needle)
+            .unwrap();
+        let reparsed = world.edit_source("main.fol", at..at, with).unwrap();
+        let len = world.source("main.fol").unwrap().text().len();
+        assert_eq!(
+            reparsed,
+            0..len,
+            "{with:?} before {needle:?}: a full reparse"
+        );
+        folio::compile(&world, Target::Pdf, None).unwrap();
+        let counts = counts.lock().unwrap();
+        // The edit reached the output.
+        assert!(counts.contains_key("compile_build"), "{counts:?}");
+        assert!(!counts.contains_key("call_closure"), "{with:?}: {counts:?}");
+    }
+
+    // A change to the closure itself still runs its call again.
+    counts.lock().unwrap().clear();
+    let at = world
+        .source("main.fol")
+        .unwrap()
+        .text()
+        .find("x + 1")
+        .unwrap();
+    world.edit_source("main.fol", at..at + 5, "x + 2]").unwrap();
+    folio::compile(&world, Target::Pdf, None).unwrap();
+    assert_eq!(counts.lock().unwrap().get("call_closure"), Some(&1));
+}

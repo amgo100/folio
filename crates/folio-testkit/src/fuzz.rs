@@ -17,6 +17,7 @@
 //! | `compile` | content and declarations of the registry's properties | a whole build to pages and a PDF finishes without a panic, whatever the property values: huge, zero, negative or not finite |
 //! | `manifest` | a `folio.toml` | reading it finishes without a panic; a valid one compiles |
 //! | `lockfile` | a `folio.lock` | reading it finishes without a panic; a valid one compiles |
+//! | `wire` | a display list message | decoding finishes without a panic; what decodes encodes and decodes to the same |
 //! | `tex` | the body of a LaTeX equation | reading it into the math tree finishes without a panic, and its errors point into the equation |
 //! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs, diagnostics and span maps of a world built afresh from the same texts |
 //!
@@ -48,6 +49,7 @@ pub const TARGETS: &[(&str, Body)] = &[
     ("compile", compile),
     ("manifest", manifest),
     ("lockfile", lockfile),
+    ("wire", wire),
     ("tex", tex),
 ];
 
@@ -869,6 +871,64 @@ pub fn lockfile(data: &[u8]) {
     let _ = folio::compile(&world, Target::Pdf, None);
 }
 
+/// Decodes a display list message of `folio-render`'s wire format, which
+/// a preview client receives (SPEC §12.2), and checks that what decodes
+/// encodes to a message that decodes to the same.
+pub fn wire(data: &[u8]) {
+    use folio_render::wire::{self, Message};
+    let Ok(message) = wire::decode(data) else {
+        return;
+    };
+    let bytes = match &message {
+        Message::List(list) => wire::encode(list),
+        Message::Spans(spans) => wire::encode_spans(spans),
+    };
+    assert_eq!(
+        wire::decode(&bytes),
+        Ok(message),
+        "a decoded message encodes differently"
+    );
+}
+
+/// The seeds of [`wire`]: the page of [`crate::golden::boxes`] and its
+/// span map, and a list with a dashed path.
+fn wire_seeds() -> Vec<(&'static str, String, Vec<u8>)> {
+    use folio_component::{Abs, Color, Dash, Path, Point, Shape, Size, SourceRef, Stroke};
+    use folio_render::{DisplayList, wire};
+    let (_, pages) = crate::golden::boxes();
+    let mut out = Vec::new();
+    for (i, list) in crate::golden::display_lists(&pages).iter().enumerate() {
+        out.push(("wire", format!("boxes-{}.bin", i + 1), wire::encode(list)));
+        out.push((
+            "wire",
+            format!("boxes-{}.spans.bin", i + 1),
+            wire::encode_spans(&list.spans()),
+        ));
+    }
+    let mut stroke = Stroke::solid(Color::rgba(0, 0, 255, 128), Abs::pt(1.5));
+    stroke.dash = Some(Dash {
+        array: [Abs::pt(2.0), Abs::pt(1.0)].into_iter().collect(),
+        phase: Abs::pt(0.5),
+    });
+    let mut path = Path::rect(Abs::pt(10.0), Abs::pt(5.0));
+    path.cubic_to(
+        Point::new(Abs::pt(1.0), Abs::pt(2.0)),
+        Point::new(Abs::pt(3.0), Abs::pt(4.0)),
+        Point::new(Abs::pt(5.0), Abs::pt(6.0)),
+    );
+    let mut fragment = Fragment::new(Size::new(Abs::pt(20.0), Abs::pt(20.0)));
+    fragment.push(
+        Point::new(Abs::pt(2.0), Abs::pt(3.0)),
+        FragmentItem::Shape {
+            shape: Shape::stroked(path, stroke),
+            source: SourceRef(5),
+        },
+    );
+    let list = DisplayList::from_fragment(&fragment);
+    out.push(("wire", "path.bin".into(), wire::encode(&list)));
+    out
+}
+
 /// How many random inputs of [`compile`] the seed corpus holds per corpus
 /// project.
 pub const COMPILE_SEEDS: u64 = 4;
@@ -1067,5 +1127,6 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
             }
         }
     }
+    out.extend(wire_seeds());
     out
 }
