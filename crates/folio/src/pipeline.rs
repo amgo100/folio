@@ -29,11 +29,13 @@ use folio_core::eval::Value;
 use folio_core::fonts::{Fonts, fonts};
 use folio_core::layout::{Pages, pages};
 use folio_core::model::document;
+use folio_core::pipeline::resolution;
 use folio_core::pipeline::step_styled;
 use folio_core::project::ProjectPath;
+use folio_core::resolve::Resolution;
 use folio_core::span_map::{source_ref, span};
 use folio_core::text::{Text, TextBlock, TextFlow, text};
-use folio_pdf::{ListKind, Preflight, Role, Tag};
+use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Tag};
 use folio_syntax::{DiagSpan, Span, SubRange};
 
 /// What compiling a build produces, without its diagnostics, which
@@ -125,6 +127,7 @@ pub(crate) fn check_target(db: &dyn Db, build: Build<'_>) -> bool {
 pub(crate) struct PdfInput {
     structure: Tag,
     info: folio_pdf::Info,
+    navigation: Navigation,
     whole: DiagSpan,
 }
 
@@ -140,6 +143,7 @@ impl PdfInput {
             fonts,
             structure: &self.structure,
             info: self.info.clone(),
+            navigation: &self.navigation,
         }
     }
 
@@ -189,11 +193,13 @@ pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
         subject: plain("subject").and_then(clean),
         lang: Some(lang.into()),
     };
+    let navigation = resolution(db, build).map(navigation).unwrap_or_default();
     // Problems without a source of their own concern the document.
     let whole = document_span(db, build, doc.root.span);
     Some(PdfInput {
         structure,
         info,
+        navigation,
         whole,
     })
 }
@@ -264,6 +270,39 @@ fn document_span(db: &dyn Db, build: Build<'_>, root: Span) -> DiagSpan {
     }
     let first = source.text().chars().next().map_or(0, char::len_utf8);
     DiagSpan::from_span(root, SubRange::new(0, first))
+}
+
+/// How a reader moves through a document (SPEC §11.1): a named destination
+/// for each label the build shows, at the element it names (an equation's
+/// line goes to its equation), and a link for each reference, over the
+/// text Resolve gave it, to its label's destination. A reference that does
+/// not resolve goes nowhere.
+///
+/// Every page is labelled with its plain number, for which the writer
+/// writes no labels.
+fn navigation(resolution: &Resolution) -> Navigation {
+    let destinations = resolution
+        .labels
+        .iter()
+        .map(|labelled| Destination {
+            name: labelled.label.clone(),
+            location: labelled.target.location,
+        })
+        .collect();
+    let links = resolution
+        .references
+        .iter()
+        .map(|reference| Link {
+            source: reference.location.source,
+            destination: reference.target.map(|_| reference.label.clone()),
+            text: reference.text.clone(),
+        })
+        .collect();
+    Navigation {
+        destinations,
+        links,
+        page_labels: Vec::new(),
+    }
 }
 
 /// The structure of a document for the PDF writer: a node for every block

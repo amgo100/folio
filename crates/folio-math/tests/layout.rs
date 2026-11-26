@@ -23,6 +23,8 @@ fn options(font: MathFont) -> MathOptions {
         size: Abs::pt(10.0),
         fill: Paint::Solid(Color::BLACK),
         leading: Abs::pt(5.0),
+        vector: folio_math::layout::VectorStyle::default(),
+        number: folio_math::NumberFormat::POINT,
     }
 }
 

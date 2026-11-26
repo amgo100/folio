@@ -52,7 +52,7 @@ use unicode_math_class::MathClass;
 use self::alphabet::Alphabet;
 use self::font::{Constant, Features};
 use self::fragment::{Axis, Frame, FrameFragment, FrameItem, GlyphFragment, MathFragment, Stretch};
-use crate::{Formula, Node, Row};
+use crate::{Formula, Node, NumberFormat, Row};
 
 pub use self::font::{FontBytes, MathFont};
 
@@ -95,6 +95,25 @@ pub struct MathOptions {
     pub fill: Paint,
     /// The space between the lines of a formula of several lines.
     pub leading: Abs,
+    /// How vectors are set.
+    pub vector: VectorStyle,
+    /// How the numbers of quantities are written: their decimal marker and
+    /// digit groups.
+    pub number: NumberFormat,
+}
+
+/// How a vector is set (SPEC §8.1, the `math-style` of a `math` element's
+/// vectors). A unit vector takes its vector's style with a hat in place of
+/// the arrow.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub enum VectorStyle {
+    /// A bold upright letter: the default.
+    #[default]
+    BoldUpright,
+    /// A bold italic letter.
+    BoldItalic,
+    /// An italic letter under an arrow.
+    Arrow,
 }
 
 /// A character of a formula that the math font has no glyph for, and which
@@ -387,6 +406,8 @@ pub(crate) struct Ctx {
     pub leading: f64,
     id: FontId,
     fill: Paint,
+    vector: VectorStyle,
+    number: NumberFormat,
     missing: Vec<MissingGlyph>,
 }
 
@@ -398,6 +419,8 @@ impl Ctx {
             leading: options.leading.to_pt(),
             id: options.font.id(),
             fill: options.fill.clone(),
+            vector: options.vector,
+            number: options.number,
             missing: Vec::new(),
         }
     }
@@ -571,6 +594,12 @@ impl Ctx {
                     alphabet::style(&atom.text, |_| style.alphabet.unwrap_or(Alphabet::Upright));
                 out.extend(self.glyph(&text, atom.span, class, style).map(Into::into));
             }
+            // A space a quantity puts between its parts: a thin space, or
+            // the narrow no-break space of digit groups.
+            Node::Symbol(atom) if atom.text.chars().all(char::is_whitespace) => {
+                let em: f64 = atom.text.chars().map(space_width).sum();
+                out.push(MathFragment::Space(em * self.font_size(style)));
+            }
             Node::Symbol(atom) => {
                 let text =
                     alphabet::style(&atom.text, |_| style.alphabet.unwrap_or(Alphabet::Upright));
@@ -614,19 +643,34 @@ impl Ctx {
                 accent::layout_accent(self, &accent.base, accent.accent, accent.span, style, out)
             }
             Node::Vector(vector) => {
-                // A vector is set bold upright, and a unit vector with a
-                // hat over it too, until a stylesheet chooses (SPEC §8.1).
-                let bold = Style {
-                    alphabet: Some(Alphabet::Bold),
-                    ..style
+                // In the stylesheet's style (SPEC §8.1): a bold letter, or an
+                // italic one under an arrow; a unit vector has a hat.
+                let alphabet = match self.vector {
+                    VectorStyle::BoldUpright => Some(Alphabet::Bold),
+                    VectorStyle::BoldItalic => Some(Alphabet::BoldItalic),
+                    VectorStyle::Arrow => style.alphabet,
                 };
-                if vector.unit {
-                    accent::layout_accent(self, &vector.base, '\u{302}', vector.span, bold, out)
-                } else {
-                    let fragments = self.layout_fragments(vector.base.nodes(), bold, false);
-                    let fragment = self.group(fragments, style, class);
-                    out.push(fragment);
+                let inner = Style { alphabet, ..style };
+                let mark = match (vector.unit, self.vector) {
+                    (true, _) => Some('\u{302}'),
+                    (false, VectorStyle::Arrow) => Some('\u{20D7}'),
+                    (false, _) => None,
+                };
+                match mark {
+                    Some(mark) => {
+                        accent::layout_accent(self, &vector.base, mark, vector.span, inner, out)
+                    }
+                    None => {
+                        let fragments = self.layout_fragments(vector.base.nodes(), inner, false);
+                        let fragment = self.group(fragments, style, class);
+                        out.push(fragment);
+                    }
                 }
+            }
+            Node::Quantity(quantity) => {
+                // Written out in the format of its text's language.
+                let row = quantity.lower(&self.number);
+                out.extend(self.layout_fragments(row.nodes(), style, false));
             }
             Node::Decoration(decoration) => accent::layout_decoration(self, decoration, style, out),
             Node::Styled(styled) => {
@@ -913,6 +957,25 @@ fn spacing(l: &mut Prepared, r: &mut Prepared, script: bool) {
         // Words are spaced from what is around them.
         _ if l.spaced || r.spaced => r.lspace = WORD_SPACE,
         _ => {}
+    }
+}
+
+/// The width of a space character in ems: the em, en and other fixed
+/// spaces of Unicode at their widths, a thin or narrow no-break space as
+/// TeX's thin space, a medium mathematical space as its medium one, and
+/// other spaces as a word space.
+fn space_width(c: char) -> f64 {
+    match c {
+        '\u{2001}' | '\u{2003}' | '\u{3000}' => 1.0,
+        '\u{2000}' | '\u{2002}' => 0.5,
+        '\u{2004}' => 1.0 / 3.0,
+        '\u{2005}' => 0.25,
+        '\u{2006}' | '\u{2009}' | '\u{202F}' => THIN,
+        '\u{2007}' => 0.5,
+        '\u{2008}' => 0.25,
+        '\u{200A}' => 1.0 / 12.0,
+        '\u{205F}' => MEDIUM,
+        _ => WORD_SPACE,
     }
 }
 

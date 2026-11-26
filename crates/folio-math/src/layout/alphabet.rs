@@ -10,6 +10,7 @@ pub(crate) enum Alphabet {
     Upright,
     Italic,
     Bold,
+    BoldItalic,
     Script,
     Fraktur,
     DoubleStruck,
@@ -76,6 +77,7 @@ pub(crate) fn map(c: char, alphabet: Alphabet) -> char {
         A::Bold => latin(0x1D400, 0x1D41A)
             .or_else(|| greek(c, 0x1D6A8, 0x1D6C2))
             .or_else(|| digits(0x1D7CE)),
+        A::BoldItalic => latin(0x1D468, 0x1D482).or_else(|| greek(c, 0x1D71C, 0x1D736)),
         A::Script => match c {
             'B' => Some(0x212C),
             'E' => Some(0x2130),

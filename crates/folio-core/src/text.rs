@@ -102,6 +102,13 @@ pub struct MathSettings {
     pub fill: folio_component::Paint,
     /// The space between its lines: `leading`.
     pub leading: folio_component::Abs,
+    /// The families it may be set in, in order: `math-font`.
+    pub families: EcoVec<EcoString>,
+    /// How its vectors are set: the `math-style` of its part `vector`.
+    pub vector: folio_math::layout::VectorStyle,
+    /// How the numbers of its quantities are written: by its language and
+    /// `decimal-marker`.
+    pub number: folio_math::NumberFormat,
 }
 
 /// The part of an inline formula an object character stands for.
@@ -732,9 +739,16 @@ impl Collector<'_> {
         let Some(eval::Value::Math(formula)) = element.field("tree") else {
             return None;
         };
+        let lang = self.settings(&node.style, element.span).lang;
+        let settings = crate::layout::math_settings(
+            &node.style,
+            node.vector_style().map(|v| &v.style),
+            &lang,
+            self.props,
+        );
         self.maths.push(TextMath {
             formula: formula.clone(),
-            settings: crate::layout::math_settings(&node.style, self.props),
+            settings,
             span: element.span,
             location: node.location,
             display,

@@ -60,6 +60,8 @@ struct Client {
     events: Receiver<Event>,
     /// Notifications the server sent, in order.
     notifications: Vec<Notification>,
+    /// `window/showDocument` requests the server sent, in order.
+    shown: Vec<Value>,
     next_id: i32,
 }
 
@@ -67,6 +69,15 @@ impl Client {
     /// Starts a server on `root` and initialises it. `hook` sees every
     /// event first.
     fn start(root: &Path, hook: impl Fn(&Event) + Send + Sync + 'static) -> Self {
+        Self::start_with(root, json!({}), hook)
+    }
+
+    /// [`Self::start`] for a client with these window capabilities.
+    fn start_with(
+        root: &Path,
+        window: Value,
+        hook: impl Fn(&Event) + Send + Sync + 'static,
+    ) -> Self {
         let (events_tx, events) = crossbeam_channel::unbounded();
         let options = Options::default()
             .system_fonts(false)
@@ -86,6 +97,7 @@ impl Client {
             server: Some(server),
             events,
             notifications: Vec::new(),
+            shown: Vec::new(),
             next_id: 0,
         };
         let response = client.request(
@@ -96,6 +108,7 @@ impl Client {
                 "capabilities": {
                     "general": { "positionEncodings": ["utf-16"] },
                     "workspace": { "didChangeWatchedFiles": { "dynamicRegistration": true } },
+                    "window": window,
                 },
             }),
         );
@@ -139,6 +152,13 @@ impl Client {
             .recv_timeout(TIMEOUT)
             .expect("the server answers");
         match &message {
+            Message::Request(request) if request.method == "window/showDocument" => {
+                self.shown.push(request.params.clone());
+                self.connection
+                    .sender
+                    .send(Response::new_ok(request.id.clone(), json!({ "success": true })).into())
+                    .unwrap();
+            }
             Message::Request(request) => {
                 assert_eq!(request.method, "client/registerCapability");
                 self.connection
@@ -495,5 +515,127 @@ fn a_changed_pin_gets_a_notice() {
     let found = notices(&client);
     assert_eq!(found.len(), 2, "{found:?}");
     assert!(found[1].contains("9.9.8"), "{found:?}");
+    client.shut_down();
+}
+
+/// Reads the preview's websocket until a text message of `kind`.
+fn ws_message(
+    ws: &mut tokio_tungstenite::tungstenite::WebSocket<std::net::TcpStream>,
+    kind: &str,
+) -> Value {
+    use tokio_tungstenite::tungstenite::Message as Ws;
+    loop {
+        if let Ws::Text(text) = ws.read().unwrap() {
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if value["type"] == kind {
+                return value;
+            }
+        }
+    }
+}
+
+#[test]
+fn the_preview_follows_the_cursor_and_clicks_open_the_source() {
+    use tokio_tungstenite::tungstenite::{self, Message as Ws};
+
+    let dir = project(&manifest(folio::VERSION), VALID);
+    let main = uri(&dir.path().join("main.fol"));
+    let mut client = Client::start_with(
+        dir.path(),
+        json!({ "showDocument": { "support": true } }),
+        |_| {},
+    );
+    client.settle();
+
+    // Before the preview runs, the cursor goes nowhere.
+    client.notify(
+        "folio/reveal",
+        json!({ "textDocument": { "uri": main }, "position": { "line": 2, "character": 4 } }),
+    );
+
+    let response = client.request(
+        "workspace/executeCommand",
+        json!({ "command": "folio.preview", "arguments": [] }),
+    );
+    let url = response.response_result.unwrap()["url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+    // Asking again answers the same preview.
+    let again = client.request(
+        "workspace/executeCommand",
+        json!({ "command": "folio.preview" }),
+    );
+    assert_eq!(again.response_result.unwrap()["url"], url.as_str());
+    let unknown = client.request(
+        "workspace/executeCommand",
+        json!({ "command": "folio.nope" }),
+    );
+    assert!(unknown.response_result.is_err());
+
+    let (addr, token) = url
+        .strip_prefix("http://")
+        .unwrap()
+        .split_once("/?token=")
+        .unwrap();
+    let stream = std::net::TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+    let (mut ws, _) =
+        tungstenite::client::client(format!("ws://{addr}/ws?token={token}"), stream).unwrap();
+    let revision = loop {
+        let update = ws_message(&mut ws, "update");
+        if update["pages"].as_u64().unwrap() > 0 {
+            break update["revision"].as_u64().unwrap();
+        }
+    };
+
+    // The cursor in `ball` on the third line: one glyph, marked in the
+    // preview, once the preview has indexed its pages, which follows them.
+    let at = VALID.find("ball").unwrap() + 2;
+    let mut revealed;
+    let mut tries = 0;
+    loop {
+        client.notify(
+            "folio/reveal",
+            json!({ "textDocument": { "uri": main }, "position": { "line": 2, "character": 4 } }),
+        );
+        revealed = client.event(|e| matches!(e, Event::Revealed { .. }));
+        tries += 1;
+        if !matches!(revealed, Event::Revealed { areas: 0, .. }) || tries == 100 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        revealed,
+        Event::Revealed {
+            path: "main.fol".into(),
+            bytes: at..at,
+            areas: 1,
+        }
+    );
+    let reveal = ws_message(&mut ws, "reveal");
+    let rect: Vec<f64> = serde_json::from_value(reveal["areas"][0]["rect"].clone()).unwrap();
+
+    // A click on that glyph opens the source at its character.
+    let click = json!({
+        "type": "click", "revision": revision, "page": 0,
+        "x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0,
+    });
+    ws.send(Ws::text(click.to_string())).unwrap();
+    assert!(!ws_message(&mut ws, "source")["location"].is_null());
+    client.event(|e| matches!(e, Event::ShowSource { .. }));
+    while client.shown.is_empty() {
+        client.recv();
+    }
+    let shown = &client.shown[0];
+    assert_eq!(shown["uri"], main.as_str());
+    assert_eq!(shown["takeFocus"], true);
+    assert_eq!(
+        shown["selection"],
+        json!({ "start": { "line": 2, "character": 4 }, "end": { "line": 2, "character": 5 } })
+    );
+    drop(ws);
     client.shut_down();
 }

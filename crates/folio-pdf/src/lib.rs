@@ -16,6 +16,12 @@
 //!   and borders of boxes, are artifacts (see the `tags` module);
 //! - writes bookmarks from headings, nested as their sections are, and the
 //!   title, subject and language as metadata;
+//! - navigates ([`Navigation`]): a named destination for each label, at
+//!   the first box of the element it names; a link annotation over the
+//!   text of each reference to it, tagged as a `Link` structure element
+//!   with the reference's text as its alternative description; and page
+//!   labels, written for every page when some page's label differs from
+//!   its plain number (1, 2, 3), which viewers show without labels;
 //! - targets PDF/UA-1 on PDF 1.7. PDF/UA requires a title, so a document
 //!   without one is written tagged but without claiming PDF/UA-1; that is
 //!   no warning, as titles are optional. Where a document with a title
@@ -42,7 +48,7 @@ mod tags;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -52,12 +58,14 @@ use folio_component::{
     PathItem, Point, Shape, SourceRef,
 };
 use folio_fonts::Font;
+use krilla::annotation::{Annotation, LinkAnnotation, Target};
 use krilla::color::rgb;
 use krilla::configure::{
     Accessibility, ConfigurationBuilder, PdfVersion, ValidationError, Validator,
 };
+use krilla::destination::{NamedDestination, XyzDestination};
 use krilla::error::KrillaError;
-use krilla::geom::{PathBuilder, Size, Transform};
+use krilla::geom::{PathBuilder, Rect, Size, Transform};
 use krilla::metadata::Metadata;
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
@@ -84,6 +92,8 @@ pub struct Document<'a> {
     pub structure: &'a Tag,
     /// The document's metadata.
     pub info: Info,
+    /// Its destinations, links and page labels.
+    pub navigation: &'a Navigation,
 }
 
 impl Debug for Document<'_> {
@@ -92,6 +102,7 @@ impl Debug for Document<'_> {
             .field("pages", &self.pages)
             .field("structure", &self.structure)
             .field("info", &self.info)
+            .field("navigation", &self.navigation)
             .finish_non_exhaustive()
     }
 }
@@ -112,6 +123,203 @@ pub struct Info {
     pub subject: Option<EcoString>,
     /// The language of its text, as a BCP 47 tag.
     pub lang: Option<EcoString>,
+}
+
+/// How a reader moves through a document (SPEC §11.1): named destinations
+/// for labels, links for references, and page labels.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+pub struct Navigation {
+    /// The named destinations, each at the first box of an element
+    /// instance, in document order. A destination whose element has no box
+    /// on the pages is left out, and so are the links to it.
+    pub destinations: Vec<Destination>,
+    /// The links, in document order.
+    pub links: Vec<Link>,
+    /// The label of each page, in order; or empty, as when every page is
+    /// labelled with its plain number (1, 2, 3), for which the writer
+    /// writes no labels, as viewers show those without them.
+    pub page_labels: Vec<PageLabel>,
+}
+
+/// A named destination: the place a link goes to.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Destination {
+    /// Its name, which other documents can link to as well: a label,
+    /// without angle brackets (`fig:ball`).
+    pub name: EcoString,
+    /// The element instance at whose first box it is: the top left corner
+    /// of the first group or object of it that the pages draw, or else of
+    /// the first glyph run of its source.
+    /// [`Location::UNKNOWN_INSTANCE`] matches a box of any instance.
+    pub location: Location,
+}
+
+/// A link: text whose glyphs come from one source, which goes to a named
+/// destination when clicked.
+///
+/// The glyphs of a link name its source ([`folio_component::Glyph::source`]),
+/// as those of a reference name the `ref` element's node. A source may make
+/// several links, as a reference in a loop does: the writer gives each run
+/// of glyphs of the source, one after another in the order drawn, the next
+/// link of that source, and the last one to any after them. A run ends
+/// where a glyph of another source follows, or where its glyphs have shown
+/// as many bytes as the link's text has. A run may break across lines and
+/// pages; it is one `Link` element, with an annotation for each line.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Link {
+    /// The source of its glyphs.
+    pub source: SourceRef,
+    /// The name of the destination it goes to; `None` for text that goes
+    /// nowhere, such as a reference that does not resolve, which keeps the
+    /// order of the source's links.
+    pub destination: Option<EcoString>,
+    /// The text it shows (`Figure 3`): where a run of its source's glyphs
+    /// ends, when they have shown as many bytes, counting a cluster once
+    /// and a hyphen that line breaking adds not at all; and its alternative
+    /// description, which PDF/UA requires, with plain spaces (or its
+    /// destination's name, where it has no words).
+    pub text: EcoString,
+}
+
+/// The label of a page, as a viewer shows it in its page box: a prefix and
+/// a number (SPEC §10.1, §11.1).
+///
+/// Front matter is `i`, `ii` ([`PageNumbering::LowerRoman`]), the body
+/// `1`, `2`; the step pages of a slide are `4a`, `4b`, … `4z`, `4aa`
+/// (prefix `4`, [`PageNumbering::LowerAlpha`]), and its sample pages
+/// `4-s1`, `4-s2` (prefix `4-s`, [`PageNumbering::Arabic`]).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct PageLabel {
+    /// The text before the number.
+    pub prefix: EcoString,
+    /// How the number is written; `None` for a label that is its prefix
+    /// alone.
+    pub numbering: Option<PageNumbering>,
+    /// The number, from 1; 0 writes no number.
+    pub number: u32,
+}
+
+/// How a page label writes its number.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum PageNumbering {
+    /// 1, 2, 3.
+    Arabic,
+    /// i, ii, iii.
+    LowerRoman,
+    /// I, II, III.
+    UpperRoman,
+    /// a, b, … z, aa, ab: letters counted as Beamer and spreadsheets count
+    /// them, so that `aa` follows `z` (PDF's own letters would give `aa`,
+    /// `bb`; the writer writes such labels as prefixes).
+    LowerAlpha,
+    /// A, B, … Z, AA, AB.
+    UpperAlpha,
+}
+
+impl PageLabel {
+    /// A page's plain number: `1`, `2`.
+    pub fn arabic(number: u32) -> Self {
+        Self {
+            prefix: EcoString::new(),
+            numbering: Some(PageNumbering::Arabic),
+            number,
+        }
+    }
+
+    /// The label as a viewer shows it.
+    pub fn text(&self) -> EcoString {
+        let mut text = self.prefix.clone();
+        if let Some(numbering) = self.numbering
+            && self.number > 0
+        {
+            text.push_str(&numbering.format(self.number));
+        }
+        text
+    }
+
+    /// The label as PDF writes it: a numbering style that PDF has, with the
+    /// number as its start, or the whole label as the prefix.
+    fn to_krilla(&self) -> krilla::page::PageLabel {
+        use krilla::page::NumberingStyle as S;
+        let style = match self.numbering {
+            _ if self.number == 0 => None,
+            Some(PageNumbering::Arabic) => Some(S::Arabic),
+            Some(PageNumbering::LowerRoman) => Some(S::LowerRoman),
+            Some(PageNumbering::UpperRoman) => Some(S::UpperRoman),
+            // PDF's letters differ from Folio's after `z`.
+            Some(PageNumbering::LowerAlpha) if self.number <= 26 => Some(S::LowerAlpha),
+            Some(PageNumbering::UpperAlpha) if self.number <= 26 => Some(S::UpperAlpha),
+            Some(PageNumbering::LowerAlpha | PageNumbering::UpperAlpha) | None => None,
+        };
+        let (prefix, offset) = match style {
+            Some(style) => (
+                self.prefix.clone(),
+                NonZeroU32::new(self.number).map(|n| (style, n)),
+            ),
+            None => (self.text(), None),
+        };
+        let prefix = (!prefix.is_empty()).then(|| prefix.to_string());
+        match offset {
+            Some((style, number)) => {
+                krilla::page::PageLabel::new(Some(style), prefix, Some(number))
+            }
+            None => krilla::page::PageLabel::new(None, prefix, None),
+        }
+    }
+}
+
+impl PageNumbering {
+    /// A number, from 1, written this way.
+    pub fn format(self, number: u32) -> EcoString {
+        match self {
+            Self::Arabic => eco(number.to_string()),
+            Self::LowerRoman => roman(number).to_lowercase(),
+            Self::UpperRoman => roman(number),
+            Self::LowerAlpha => letters(number, b'a'),
+            Self::UpperAlpha => letters(number, b'A'),
+        }
+    }
+}
+
+/// A number in Roman numerals, upper case; above 3999, as many `M`s as it
+/// takes.
+fn roman(mut number: u32) -> EcoString {
+    const NUMERALS: [(u32, &str); 13] = [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut text = EcoString::new();
+    for (value, numeral) in NUMERALS {
+        while number >= value {
+            text.push_str(numeral);
+            number -= value;
+        }
+    }
+    text
+}
+
+/// A number, from 1, in letters from `first`: a … z, aa, ab, … zz, aaa.
+fn letters(number: u32, first: u8) -> EcoString {
+    let mut bytes = Vec::new();
+    let mut n = number;
+    while n > 0 {
+        n -= 1;
+        bytes.push(first + (n % 26) as u8);
+        n /= 26;
+    }
+    bytes.reverse();
+    String::from_utf8(bytes).map_or_else(|_| EcoString::new(), Into::into)
 }
 
 /// A node of the document's structure: an element, or a part of one,
@@ -474,19 +682,44 @@ fn render_checked(
     };
     let mut pdf = krilla::Document::new_with(settings);
     let mut writer = Writer::new(document, false);
+    let labels = page_labels(document);
     for (index, page) in document.pages.iter().enumerate() {
         check();
         let size = Size::from_wh(pt(page.size.width), pt(page.size.height))
             .or_else(|| Size::from_wh(1.0, 1.0))
             .expect("a page of one point is valid");
-        let mut kpage = pdf.start_page_with(PageSettings::new(size));
+        let mut settings = PageSettings::new(size);
+        if let Some(labels) = &labels {
+            settings = settings.with_page_label(labels[index].to_krilla());
+        }
+        let mut kpage = pdf.start_page_with(settings);
         let mut surface = kpage.surface();
         writer.tagger.start_page(index);
         writer.page(&mut surface, page);
         surface.finish();
+        // An annotation for each line of a link, as viewers that ignore
+        // QuadPoints would make one over several lines active over the
+        // whole rectangle around them.
+        for (occurrence, areas) in writer.links.areas.drain(..) {
+            let link = &document.navigation.links[writer.links.occurrences[occurrence]];
+            for area in areas {
+                let Some(annotation) = link_annotation(link, &writer.links.places, area) else {
+                    continue;
+                };
+                let id = kpage.add_tagged_annotation(annotation);
+                writer.tagger.annotation(occurrence, id);
+            }
+        }
         kpage.finish();
     }
     check();
+    for destination in &document.navigation.destinations {
+        if let Some(place) = writer.links.places.get(&destination.name) {
+            // The names are the labels, which are unique.
+            let named = NamedDestination::new(destination.name.to_string(), place.clone());
+            let _ = pdf.register_named_destination(named);
+        }
+    }
     // The warnings are the check's, which walked the same pages.
     let Writer { tagger, names, .. } = writer;
     let (tree, headings, untitled) = tagger.finish(document.info.lang.as_deref());
@@ -500,6 +733,60 @@ fn render_checked(
         names,
         untitled,
     }
+}
+
+/// The label of each page, or `None` when every page is labelled with its
+/// plain number, which viewers show without labels.
+fn page_labels(document: &Document<'_>) -> Option<Vec<PageLabel>> {
+    let given = &document.navigation.page_labels;
+    let labels: Vec<PageLabel> = (0..document.pages.len())
+        .map(|i| {
+            given
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| PageLabel::arabic(page_number(i)))
+        })
+        .collect();
+    let plain = labels
+        .iter()
+        .enumerate()
+        .all(|(i, label)| *label == PageLabel::arabic(page_number(i)));
+    (!plain).then_some(labels)
+}
+
+/// The plain number of the page at `index`.
+fn page_number(index: usize) -> u32 {
+    u32::try_from(index).map_or(u32::MAX, |i| i.saturating_add(1))
+}
+
+/// The annotation of a link over an area of a page, or `None` when it
+/// goes nowhere.
+fn link_annotation(
+    link: &Link,
+    places: &HashMap<EcoString, XyzDestination>,
+    area: Rect,
+) -> Option<Annotation> {
+    let name = link.destination.as_ref()?;
+    let place = places.get(name)?;
+    let target = Target::Destination(krilla::destination::Destination::Named(
+        NamedDestination::new(name.to_string(), place.clone()),
+    ));
+    // PDF/UA-1 requires a description: the text with plain spaces, for
+    // screen readers, or the label where the text has nothing to read.
+    let words: Vec<&str> = link
+        .text
+        .split(|c: char| c.is_whitespace() || c == '\u{FFFC}')
+        .filter(|w| !w.is_empty())
+        .collect();
+    let alt = if words.is_empty() {
+        name.to_string()
+    } else {
+        words.join(" ")
+    };
+    Some(Annotation::new_link(
+        LinkAnnotation::new(area, target),
+        Some(alt),
+    ))
 }
 
 /// The document information and XMP metadata: no dates and no producer
@@ -535,9 +822,216 @@ struct Writer<'a> {
     warnings: Vec<Warning>,
     /// The source of the last glyph drawn.
     last: Option<(SourceRef, Range<u32>)>,
+    /// The links of the document, as the pages draw them.
+    links: Links<'a>,
+    /// The ascender and descender of each font, in ems, for the areas of
+    /// links.
+    extents: HashMap<FontId, (f32, f32)>,
     /// For [`preflight()`], which walks the pages without drawing them:
     /// what PDF/UA-1 does not allow in the glyphs walked.
     dry: Option<Dry>,
+}
+
+/// The links of a document as the pages draw them: which link each run of
+/// glyphs of a link's source is, and the areas of the links on the page
+/// being drawn.
+struct Links<'a> {
+    /// Where each named destination is.
+    places: HashMap<EcoString, XyzDestination>,
+    /// For each source of links, its links in order, by index into
+    /// [`Navigation::links`], and how many runs of its glyphs have been
+    /// drawn.
+    sources: HashMap<SourceRef, (Vec<usize>, usize)>,
+    /// The link of each run of glyphs drawn that goes somewhere, by index
+    /// into [`Navigation::links`]; a run's index here names it.
+    occurrences: Vec<usize>,
+    /// The source of the last glyph drawn, the run it is in if it goes
+    /// somewhere, and how many bytes of its link's text the run has still
+    /// to show.
+    current: Option<(SourceRef, Option<usize>, usize)>,
+    /// The areas of the runs on the page being drawn, in the order they
+    /// start.
+    areas: Vec<(usize, Vec<Rect>)>,
+    navigation: &'a Navigation,
+}
+
+impl<'a> Links<'a> {
+    /// The links of a document, or none when `drawn` is false.
+    fn new(document: &Document<'a>, drawn: bool) -> Self {
+        let navigation = document.navigation;
+        let mut sources: HashMap<SourceRef, (Vec<usize>, usize)> = HashMap::new();
+        // Glyphs from no node are no link's.
+        for (i, link) in navigation.links.iter().enumerate() {
+            if drawn && !link.source.is_detached() {
+                sources.entry(link.source).or_default().0.push(i);
+            }
+        }
+        Self {
+            places: if drawn {
+                places(document)
+            } else {
+                HashMap::new()
+            },
+            sources,
+            occurrences: Vec::new(),
+            current: None,
+            areas: Vec::new(),
+            navigation,
+        }
+    }
+
+    /// The run of links a glyph of `source` drawn next is in. It shows
+    /// `bytes` new bytes of its link's text: none for the second glyph of
+    /// a cluster, or for a hyphen that a break inserts or a line repeats.
+    /// A glyph is in the run of the glyph before if that has the same
+    /// source and the run has not shown all its link's text, or if it
+    /// shows no new bytes; else it starts a run of the source's next link.
+    /// So two links of one source that meet, as references of a loop can
+    /// at a line break, stay two. Glyphs are taken in the order drawn, so
+    /// in right-to-left text a link of a loop hyphenated across lines can
+    /// take the next link's destination. `None` if it goes nowhere.
+    fn glyph(&mut self, source: SourceRef, bytes: usize) -> Option<usize> {
+        if let Some((last, run, left)) = &mut self.current
+            && *last == source
+            && (*left > 0 || bytes == 0)
+        {
+            *left = left.saturating_sub(bytes);
+            return *run;
+        }
+        if self.sources.is_empty() {
+            return None;
+        }
+        let Some((links, drawn)) = self.sources.get_mut(&source) else {
+            // Glyphs of a source of no link go nowhere until another
+            // source's.
+            self.current = Some((source, None, usize::MAX));
+            return None;
+        };
+        let link = links[(*drawn).min(links.len() - 1)];
+        *drawn += 1;
+        // Objects show no glyphs. A link without text runs until a glyph
+        // of another source.
+        let shows = self.navigation.links[link]
+            .text
+            .chars()
+            .filter(|&c| c != '\u{FFFC}')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let text = match shows {
+            0 => usize::MAX,
+            n => n,
+        };
+        let goes = self.navigation.links[link]
+            .destination
+            .as_ref()
+            .is_some_and(|name| self.places.contains_key(name));
+        let run = goes.then(|| {
+            self.occurrences.push(link);
+            self.occurrences.len() - 1
+        });
+        self.current = Some((source, run, text.saturating_sub(bytes)));
+        run
+    }
+
+    /// Adds an area of the page to run `run`, joined to the run's last
+    /// area where it continues it on the same line, so that a link has an
+    /// annotation for each line however many glyph runs draw it.
+    fn area(&mut self, run: usize, area: Rect) {
+        let Some((_, areas)) = self.areas.iter_mut().find(|(r, _)| *r == run) else {
+            self.areas.push((run, vec![area]));
+            return;
+        };
+        // Areas of one line touch and overlap, whatever the extents of
+        // their fonts.
+        if let Some(last) = areas.last_mut()
+            && (last.right() - area.left()).abs() < 0.5
+            && area.top() < last.bottom()
+            && last.top() < area.bottom()
+            && let Some(joined) = Rect::from_ltrb(
+                last.left(),
+                last.top().min(area.top()),
+                area.right(),
+                last.bottom().max(area.bottom()),
+            )
+        {
+            *last = joined;
+        } else {
+            areas.push(area);
+        }
+    }
+}
+
+/// Where each named destination of a document is: the top left corner of
+/// the first group or object of its element instance that the pages draw,
+/// or else of the first glyph run of its source.
+fn places(document: &Document<'_>) -> HashMap<EcoString, XyzDestination> {
+    let destinations = &document.navigation.destinations;
+    let mut places = HashMap::new();
+    if destinations.is_empty() {
+        return places;
+    }
+    let mut by_source: HashMap<SourceRef, Vec<usize>> = HashMap::new();
+    // A destination from no node would be at the first box from none.
+    for (i, destination) in destinations.iter().enumerate() {
+        if !destination.location.source.is_detached() {
+            by_source
+                .entry(destination.location.source)
+                .or_default()
+                .push(i);
+        }
+    }
+    let mut boxes: Vec<Option<(usize, Point)>> = vec![None; destinations.len()];
+    let mut runs: Vec<Option<(usize, Point)>> = vec![None; destinations.len()];
+    fn walk(fragment: &Fragment, pos: Point, find: &mut dyn FnMut(Location, bool, Point)) {
+        for (offset, item) in fragment.items.iter() {
+            let at = pos + *offset;
+            match item {
+                FragmentItem::Group(group) => {
+                    find(group.location(), true, at);
+                    walk(group, at, find);
+                }
+                FragmentItem::Object(object) => find(object.location, true, at),
+                FragmentItem::Text(run) => {
+                    if let Some(glyph) = run.glyphs.first() {
+                        let location = Location {
+                            source: glyph.source.0,
+                            instance: Location::UNKNOWN_INSTANCE,
+                        };
+                        let top = Point::new(at.x, at.y - run.size);
+                        find(location, false, top);
+                    }
+                }
+                FragmentItem::Shape { .. } => {}
+            }
+        }
+    }
+    for (index, page) in document.pages.iter().enumerate() {
+        let mut find = |location: Location, boxed: bool, at: Point| {
+            let Some(candidates) = by_source.get(&location.source) else {
+                return;
+            };
+            for &i in candidates {
+                let wanted = destinations[i].location.instance;
+                let matches = wanted == location.instance
+                    || wanted == Location::UNKNOWN_INSTANCE
+                    || location.instance == Location::UNKNOWN_INSTANCE;
+                let slot = if boxed { &mut boxes[i] } else { &mut runs[i] };
+                if matches && slot.is_none() {
+                    *slot = Some((index, at));
+                }
+            }
+        };
+        walk(page, Point::zero(), &mut find);
+    }
+    for (i, destination) in destinations.iter().enumerate() {
+        if let Some((page, at)) = boxes[i].or(runs[i]) {
+            let point = krilla::geom::Point::from_xy(pt(at.x), pt(at.y));
+            places
+                .entry(destination.name.clone())
+                .or_insert_with(|| XyzDestination::new(page, point));
+        }
+    }
+    places
 }
 
 /// What a walk without drawing finds in the glyphs that PDF/UA-1 does not
@@ -627,6 +1121,9 @@ impl<'a> Writer<'a> {
             tagger: Tagger::new(document.structure),
             warnings: Vec::new(),
             last: None,
+            // The check finds nothing in links: it leaves them out.
+            links: Links::new(document, !dry),
+            extents: HashMap::new(),
             dry: dry.then(|| Dry {
                 glyphs: document.info.title.is_some(),
                 ..Dry::default()
@@ -733,6 +1230,27 @@ impl Writer<'_> {
                     .all(|g| &g.source == last && g.source.1.len() == run.text.len())
             });
         self.last = run.glyphs.last().map(|g| g.source.clone());
+        // The run is drawn in pieces, each of glyphs of one link or of
+        // none, as the text of a link is content of its `Link` element.
+        let mut pieces: Vec<(Range<usize>, Option<usize>)> = Vec::with_capacity(1);
+        // Without links, a run is one piece.
+        let linked = !self.links.sources.is_empty();
+        if !linked && !run.glyphs.is_empty() {
+            pieces.push((0..run.glyphs.len(), None));
+        }
+        let mut cluster = None;
+        for (i, g) in run.glyphs.iter().enumerate().filter(|_| linked) {
+            // A cluster's bytes count once; an inserted or a repeated
+            // hyphen's not at all.
+            let new = cluster != Some(&g.range) && !g.source.1.is_empty() && !repeated;
+            cluster = Some(&g.range);
+            let bytes = if new { g.range.len() } else { 0 };
+            let link = self.links.glyph(g.source.0, bytes);
+            match pieces.last_mut() {
+                Some((range, last)) if *last == link => range.end = i + 1,
+                _ => pieces.push((i..i + 1, link)),
+            }
+        }
         let Some(font) = self.font(run) else {
             return;
         };
@@ -742,9 +1260,11 @@ impl Writer<'_> {
                 let last_resort = name(&font, &self.names) == "LastResort";
                 dry.run(run, &font, last_resort);
             }
-            let id = surface.start_tagged(ContentTag::Span(SpanTag::empty()));
-            surface.end_tagged();
-            self.tagger.content(node, id);
+            for (_, link) in pieces {
+                let id = surface.start_tagged(ContentTag::Span(SpanTag::empty()));
+                surface.end_tagged();
+                self.tagger.content(node, id, link);
+            }
             return;
         }
         let size = pt(run.size);
@@ -755,21 +1275,6 @@ impl Writer<'_> {
         } else {
             None
         };
-        let glyphs: Vec<KrillaGlyph> = run
-            .glyphs
-            .iter()
-            .map(|g| {
-                KrillaGlyph::new(
-                    GlyphId::new(u32::from(g.id)),
-                    g.x_advance.get() as f32,
-                    g.x_offset.get() as f32,
-                    g.y_offset.get() as f32,
-                    0.0,
-                    usize_range(&g.range),
-                    location(g.source.0),
-                )
-            })
-            .collect();
         let Paint::Solid(color) = &run.fill;
         surface.set_fill(Some(Fill {
             paint: rgb::Color::new(color.r, color.g, color.b).into(),
@@ -777,18 +1282,45 @@ impl Writer<'_> {
             rule: paint::FillRule::NonZero,
         }));
         surface.set_stroke(None);
-        let span = SpanTag::empty().with_actual_text(actual);
-        let id = surface.start_tagged(ContentTag::Span(span));
-        surface.draw_glyphs(
-            krilla::geom::Point::from_xy(pt(at.x), pt(at.y)),
-            &glyphs,
-            font,
-            &run.text,
-            size,
-            false,
-        );
-        surface.end_tagged();
-        self.tagger.content(node, id);
+        let (ascender, descender) = self.extents.get(&run.font).copied().unwrap_or((0.8, -0.2));
+        let mut x = pt(at.x);
+        for (range, link) in pieces {
+            let glyphs: Vec<KrillaGlyph> = run.glyphs[range]
+                .iter()
+                .map(|g| {
+                    KrillaGlyph::new(
+                        GlyphId::new(u32::from(g.id)),
+                        g.x_advance.get() as f32,
+                        g.x_offset.get() as f32,
+                        g.y_offset.get() as f32,
+                        0.0,
+                        usize_range(&g.range),
+                        location(g.source.0),
+                    )
+                })
+                .collect();
+            let width: f32 = glyphs.iter().map(|g| g.x_advance * size).sum();
+            let span = SpanTag::empty().with_actual_text(actual);
+            let id = surface.start_tagged(ContentTag::Span(span));
+            surface.draw_glyphs(
+                krilla::geom::Point::from_xy(x, pt(at.y)),
+                &glyphs,
+                font.clone(),
+                &run.text,
+                size,
+                false,
+            );
+            surface.end_tagged();
+            self.tagger.content(node, id, link);
+            if let Some(link) = link {
+                let top = pt(at.y) - ascender * size;
+                let height = (ascender - descender) * size;
+                if let Some(area) = Rect::from_xywh(x, top, width.max(0.0), height) {
+                    self.links.area(link, area);
+                }
+            }
+            x += width;
+        }
     }
 
     /// The font of a glyph run as krilla knows it, loaded once.
@@ -796,6 +1328,7 @@ impl Writer<'_> {
         let fonts = self.fonts;
         let warnings = &mut self.warnings;
         let names = &mut self.names;
+        let extents = &mut self.extents;
         let source = run
             .glyphs
             .first()
@@ -812,6 +1345,15 @@ impl Writer<'_> {
                     });
                     return None;
                 };
+                let metrics = font.metrics();
+                let em = f32::from(metrics.units_per_em.max(1));
+                extents.insert(
+                    run.font,
+                    (
+                        f32::from(metrics.ascender) / em,
+                        f32::from(metrics.descender) / em,
+                    ),
+                );
                 // The font stage reports fonts that forbid embedding.
                 if !font.info().embedding.allows_embedding() {
                     return None;
@@ -1108,6 +1650,7 @@ mod preflight_tests {
                 subject: None,
                 lang: Some("en".into()),
             },
+            navigation: &Navigation::default(),
         };
         let checked = preflight(&document);
         // What the validator finds, as the writer found it before the

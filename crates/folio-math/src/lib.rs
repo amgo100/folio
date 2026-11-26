@@ -20,6 +20,7 @@
 //! | [`Node::Decoration`] | `m:bar` (lines), `m:groupChr` with an `m:limLow` or `m:limUpp` (braces) |
 //! | [`Node::Styled`] | `m:sty` and `m:scr` on the runs inside |
 //! | [`Node::Operator`] | `m:func` with an upright `m:fName` |
+//! | [`Node::Quantity`] | the nodes [`Quantity::lower`] makes, in the [`NumberFormat`] of its text |
 //! | atoms and text | `m:r` runs; `m:nor` for text |
 //! | lines with alignment points | `m:eqArr` with `&` in its runs |
 //!
@@ -31,6 +32,7 @@
 #![forbid(unsafe_code)]
 
 pub mod layout;
+pub mod quantity;
 mod symbols;
 pub mod tex;
 
@@ -43,6 +45,7 @@ use std::sync::Arc;
 use ecow::{EcoString, EcoVec};
 use folio_syntax::Span;
 
+pub use self::quantity::{Number, NumberFormat, Quantity, Unit, UnitFactor};
 pub use self::symbols::{is_symbol_base, operator, symbol};
 pub use unicode_math_class::MathClass;
 
@@ -99,6 +102,12 @@ impl Formula {
     /// ([`Row::depth`]). Cached, so this takes constant time.
     pub fn depth(&self) -> u32 {
         self.depth
+    }
+
+    /// Whether any line holds a [`Node::Vector`], at any depth. Cached in
+    /// the rows, so this takes time in the number of lines only.
+    pub fn has_vector(&self) -> bool {
+        self.lines.iter().any(|line| line.row.has_vector())
     }
 
     /// A compact description of the tree, for snapshot tests and debugging.
@@ -160,6 +169,7 @@ pub struct Row {
     depth: u32,
     size: u64,
     hash: u64,
+    has_vector: bool,
 }
 
 impl Row {
@@ -175,6 +185,9 @@ impl Row {
         let size = nodes.iter().fold(nodes.len() as u64, |size, node| {
             size.saturating_add(node.size())
         });
+        let has_vector = nodes.iter().any(|node| {
+            matches!(node, Node::Vector(_)) || node.rows().into_iter().any(Row::has_vector)
+        });
         let mut hasher = DefaultHasher::new();
         nodes.hash(&mut hasher);
         Self {
@@ -182,6 +195,7 @@ impl Row {
             depth,
             size,
             hash: hasher.finish(),
+            has_vector,
         }
     }
 
@@ -206,6 +220,12 @@ impl Row {
     /// walking the whole tree costs.
     pub fn size(&self) -> u64 {
         self.size
+    }
+
+    /// Whether the row or a row inside it holds a [`Node::Vector`]. Cached,
+    /// so this takes constant time.
+    pub fn has_vector(&self) -> bool {
+        self.has_vector
     }
 
     /// The cell boundaries of a line: the row split at its top-level
@@ -363,6 +383,12 @@ pub enum Node {
     /// An alignment point: `&`. Only the top level of a line or a case
     /// holds them.
     AlignPoint(Span),
+    /// A quantity, a unit or a number: `qty(9.81, "m s^-2")`,
+    /// `unit("kg")`, `num(6.02e23)`. Semantic, and a leaf: how its number
+    /// is written depends on the language of its text, so layout sets the
+    /// nodes [`Quantity::lower`] makes in the [`NumberFormat`] of the
+    /// formula's computed style (SPEC §8.1).
+    Quantity(Arc<Quantity>),
 }
 
 impl Node {
@@ -385,6 +411,7 @@ impl Node {
             Self::Vector(vector) => vector.span,
             Self::Decoration(decoration) => decoration.span,
             Self::Styled(styled) => styled.span,
+            Self::Quantity(quantity) => quantity.span,
         }
     }
 
@@ -400,7 +427,8 @@ impl Node {
             | Self::Text(_)
             | Self::Operator(_)
             | Self::Differential(_)
-            | Self::AlignPoint(_) => vec![],
+            | Self::AlignPoint(_)
+            | Self::Quantity(_) => vec![],
             Self::Frac(frac) => vec![&frac.num, &frac.den],
             Self::Attach(attach) => std::iter::once(&attach.base)
                 .chain(opt(&attach.sub))
@@ -643,6 +671,7 @@ impl Node {
                 out.push(')');
             }
             Self::AlignPoint(_) => out.push('&'),
+            Self::Quantity(quantity) => quantity.write_repr(out),
         }
     }
 }
@@ -969,5 +998,20 @@ mod tests {
         let row = Row::new([ident("a"), Node::AlignPoint(Span::detached()), ident("b")]);
         assert_eq!(row.cells().len(), 2);
         assert_eq!(row.repr(), "[a, &, b]");
+    }
+
+    #[test]
+    fn rows_know_whether_they_hold_a_vector() {
+        let vector = Node::Vector(Arc::new(Vector {
+            base: Row::new([ident("F")]),
+            unit: false,
+            span: Span::detached(),
+        }));
+        let plain = Row::new([ident("x")]);
+        assert!(!plain.has_vector());
+        let nested = Row::new([frac(Row::new([vector]), plain.clone())]);
+        assert!(nested.has_vector());
+        assert!(Formula::row(nested, Span::detached()).has_vector());
+        assert!(!Formula::row(plain, Span::detached()).has_vector());
     }
 }

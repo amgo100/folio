@@ -8,13 +8,14 @@
 //! with (font, size, paint, leading): an edit lays out only the formulas
 //! it changed ([`super::Cache`]).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Abs, Color, FontId, FragmentItem, Paint, Point, Size, Value};
 use folio_math::layout::{
-    DisplayMath, InlineMath, MathFont, MathOptions, layout_display, layout_inline, layout_text,
+    DisplayMath, InlineMath, MathFont, MathOptions, VectorStyle, layout_display, layout_inline,
+    layout_text,
 };
 use folio_syntax::Span;
 
@@ -137,29 +138,25 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
     if collected.maths.is_empty() {
         return Some(Maths::default());
     }
-    let Some(font) = math_font(db, fonts) else {
-        diag::report(
-            db,
-            Diagnostic::warning(
-                collected.maths[0].span,
-                eco_format!("the math font {MATH_FONT} cannot be read, so maths is left out"),
-            ),
-        );
-        return Some(Maths {
-            formulas: collected.maths.iter().map(|_| None).collect(),
-        });
-    };
+    // The faces of the `math-font` chains, each chosen and checked once.
+    let mut chosen: HashMap<EcoVec<EcoString>, Option<(MathFont, EcoString)>> = HashMap::new();
     let mut reported: HashSet<(Span, EcoString)> = HashSet::new();
     let formulas = collected
         .maths
         .iter()
         .map(|m| {
             db.unwind_if_revision_cancelled();
+            let (font, name) = chosen
+                .entry(m.settings.families.clone())
+                .or_insert_with(|| choose_font(db, fonts, &m.settings.families, m.span))
+                .clone()?;
             let options = MathOptions {
-                font: font.clone(),
+                font,
                 size: m.settings.size,
                 fill: m.settings.fill.clone(),
                 leading: m.settings.leading,
+                vector: m.settings.vector,
+                number: m.settings.number,
             };
             let (laid, unset) = lay_out(db.layout_cache(), m, &options, resolution);
             for text in unset {
@@ -168,7 +165,7 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
                     Diagnostic::warning(
                         m.span,
                         eco_format!(
-                            "the math font {MATH_FONT} cannot set the equation number `{text}`, \
+                            "the math font {name} cannot set the equation number `{text}`, \
                              so it is left out"
                         ),
                     ),
@@ -185,7 +182,7 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
                         Diagnostic::warning(
                             if glyph.span.is_detached() { m.span } else { glyph.span },
                             eco_format!(
-                                "the math font {MATH_FONT} has no glyph for `{}`, so it is left out",
+                                "the math font {name} has no glyph for `{}`, so it is left out",
                                 glyph.text
                             ),
                         ),
@@ -198,24 +195,136 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
     Some(Maths { formulas })
 }
 
-/// The math font of a build's fonts, read once per world.
-fn math_font(db: &dyn Db, fonts: &Fonts) -> Option<MathFont> {
-    let face = fonts.select(MATH_FONT, folio_fonts::FontVariant::default())?;
+/// The face of a `math-font` chain (SPEC §8.2): the first family the
+/// build has, or New Computer Modern Math, which is bundled, when it has
+/// none; with its family's name. Warns when no family of the chain is
+/// available, and when the face has no MATH table. `None`, with a warning,
+/// when not even the fallback can be read: the formulas are left out.
+fn choose_font(
+    db: &dyn Db,
+    fonts: &Fonts,
+    families: &[EcoString],
+    span: Span,
+) -> Option<(MathFont, EcoString)> {
+    let variant = folio_fonts::FontVariant::default();
+    let found = chosen_family(fonts, families);
+    let (face, name) = match found {
+        Some(found) => found,
+        None => {
+            if !families.is_empty() {
+                let names: Vec<String> = families.iter().map(|f| format!("`{f}`")).collect();
+                diag::report(
+                    db,
+                    Diagnostic::warning(
+                        span,
+                        eco_format!(
+                            "no family of `math-font` ({}) is available, so maths is set in {MATH_FONT}",
+                            names.join(", ")
+                        ),
+                    )
+                    .with_hint("lock the font in `folio.lock`, or put it in the project's `fonts` directory"),
+                );
+            }
+            match fonts.select(MATH_FONT, variant) {
+                Some(face) => (face, EcoString::from(MATH_FONT)),
+                None => {
+                    report_unreadable(db, span);
+                    return None;
+                }
+            }
+        }
+    };
+    let Some(font) = math_font(db, fonts, face) else {
+        report_unreadable(db, span);
+        return None;
+    };
+    if !font.has_math() {
+        diag::report(
+            db,
+            Diagnostic::warning(
+                span,
+                eco_format!("{name} is not a math font: it has no MATH table, so maths set in it may look poor"),
+            )
+            .with_hint(eco_format!("set `math-font` to a font made for maths, such as \"{MATH_FONT}\"")),
+        );
+    }
+    Some((font, name))
+}
+
+/// The face of the first family of a `math-font` chain that the build has,
+/// with the family, as an index into [`Fonts::faces`].
+pub(crate) fn chosen_family(fonts: &Fonts, families: &[EcoString]) -> Option<(usize, EcoString)> {
+    let variant = folio_fonts::FontVariant::default();
+    families
+        .iter()
+        .find_map(|family| Some((fonts.select(family, variant)?, family.clone())))
+}
+
+/// The face formulas set with a `math-font` chain are set in: that of its
+/// first available family, else New Computer Modern Math.
+pub(crate) fn math_face(fonts: &Fonts, families: &[EcoString]) -> Option<usize> {
+    chosen_family(fonts, families)
+        .map(|(face, _)| face)
+        .or_else(|| fonts.select(MATH_FONT, folio_fonts::FontVariant::default()))
+}
+
+fn report_unreadable(db: &dyn Db, span: Span) {
+    diag::report(
+        db,
+        Diagnostic::warning(
+            span,
+            eco_format!("the math font cannot be read, so maths is left out"),
+        ),
+    );
+}
+
+/// The math font of a face of a build, read once per world.
+fn math_font(db: &dyn Db, fonts: &Fonts, face: usize) -> Option<MathFont> {
     let font = fonts.faces()[face].font()?;
     let text = db.text_cache().font(font.data(), font.index())?;
     db.layout_cache().math_font(face, &font, text)
 }
 
 /// What a formula is set with, from the computed style of its element.
-pub(crate) fn math_settings(style: &ComputedStyle, props: &Properties) -> MathSettings {
-    let fill = match style.value(props, props.builtin("color")) {
-        Some(Value::Color(color)) => Paint::Solid(*color),
+/// `vector` is the style of its part `vector`, where its formula has
+/// vectors, and `lang` the language of its text.
+pub(crate) fn math_settings(
+    style: &ComputedStyle,
+    vector: Option<&ComputedStyle>,
+    lang: &folio_text::Lang,
+    props: &Properties,
+) -> MathSettings {
+    fn value<'a>(style: &'a ComputedStyle, props: &'a Properties, name: &str) -> Option<&'a Value> {
+        style.value(props, props.builtin(name))
+    }
+    let value = |style: &'_ ComputedStyle, name: &str| value(style, props, name).cloned();
+    let fill = match value(style, "color") {
+        Some(Value::Color(color)) => Paint::Solid(color),
         _ => Paint::Solid(Color::BLACK),
+    };
+    let families = match value(style, "math-font") {
+        Some(Value::Array(list)) => list
+            .iter()
+            .filter_map(|v| match v {
+                Value::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        Some(Value::Str(s)) => EcoVec::from([s]),
+        _ => EcoVec::new(),
+    };
+    let vector = match vector.and_then(|v| value(v, "math-style")) {
+        Some(Value::Keyword(k)) if k.as_str() == "bold-italic" => VectorStyle::BoldItalic,
+        Some(Value::Keyword(k)) if k.as_str() == "arrow" => VectorStyle::Arrow,
+        _ => VectorStyle::BoldUpright,
     };
     MathSettings {
         size: length(style, props, "font-size"),
         fill,
         leading: length(style, props, "leading"),
+        families,
+        vector,
+        number: crate::locale::number_format(lang, value(style, "decimal-marker").as_ref()),
     }
 }
 

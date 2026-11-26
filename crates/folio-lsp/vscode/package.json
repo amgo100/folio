@@ -1,0 +1,39 @@
+{
+  "name": "folio-lsp-dev",
+  "displayName": "Folio (development)",
+  "description": "Runs `folio lsp` for diagnostics, and the browser preview with source sync",
+  "publisher": "local",
+  "version": "0.0.2",
+  "private": true,
+  "engines": { "vscode": "^1.82.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:folio", "workspaceContains:folio.toml"],
+  "contributes": {
+    "languages": [{ "id": "folio", "extensions": [".fol", ".fsty"] }],
+    "commands": [
+      { "command": "folio.openPreview", "title": "Open Preview", "category": "Folio" }
+    ],
+    "configuration": {
+      "title": "Folio",
+      "properties": {
+        "folio.path": {
+          "type": "string",
+          "default": "",
+          "description": "The `folio` binary. Empty: $FOLIO_LSP_PATH, else `folio` on the PATH."
+        },
+        "folio.preview.openIn": {
+          "type": "string",
+          "enum": ["browser", "editor"],
+          "default": "browser",
+          "description": "Where Folio: Open Preview opens the preview: the default browser, or VS Code's Simple Browser beside the editor."
+        },
+        "folio.preview.followCursor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scroll the preview to where the cursor is."
+        }
+      }
+    }
+  },
+  "dependencies": { "vscode-languageclient": "^9.0.1" }
+}

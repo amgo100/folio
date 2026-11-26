@@ -16,6 +16,26 @@
 //! starts. The world is long-lived, so a panic in a query is published as
 //! an `internal-error` diagnostic and the server keeps running (SPEC §12.2).
 //!
+//! The server also runs the browser preview of SPEC §12.2, in its own
+//! process, and keeps it in step with the editor (source sync):
+//!
+//! - the command `folio.preview` (`workspace/executeCommand`, with an
+//!   optional argument `{"variant": v}`) starts the preview of the project
+//!   on `127.0.0.1`, unless it runs already, and answers `{"url": u}`, the
+//!   viewer's address with its session token, for the editor to open. The
+//!   preview shows the files on disk, as `folio watch` does, and writes no
+//!   output files;
+//! - the notification `folio/reveal`, with the parameters of a
+//!   `textDocument/definition` request (`textDocument` and `position`),
+//!   which an editor sends when its cursor moves, scrolls the preview to
+//!   that place and marks it;
+//! - a click on a page of the preview asks the editor to show the source
+//!   it comes from with `window/showDocument`, selecting it, when the
+//!   client supports that request.
+//!
+//! Positions in the preview are those of the files on disk: in a buffer
+//! with unsaved changes the same place may be elsewhere.
+//!
 //! When the project pins a compiler version other than this one
 //! ([`folio::VERSION`]), the server says so with a notice, and checks with
 //! its own version all the same (SPEC §2.4).
@@ -111,6 +131,24 @@ pub enum Event {
         revision: u64,
         /// What became of it.
         outcome: Outcome,
+    },
+    /// The preview was asked to show a place in a source, the editor's
+    /// cursor (`folio/reveal`).
+    Revealed {
+        /// The source's project path.
+        path: String,
+        /// The bytes, in the file on disk.
+        bytes: std::ops::Range<usize>,
+        /// How many areas of the pages show them.
+        areas: usize,
+    },
+    /// A click in the preview asked the editor to show a place in a source
+    /// (`window/showDocument`).
+    ShowSource {
+        /// The document's URI.
+        uri: String,
+        /// The place.
+        range: lsp_types::Range,
     },
 }
 

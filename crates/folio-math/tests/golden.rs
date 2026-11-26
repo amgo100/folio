@@ -98,6 +98,8 @@ fn every_font_sets_the_corpus() {
             size: Abs::pt(12.0),
             fill: Paint::Solid(Color::BLACK),
             leading: Abs::pt(6.0),
+            vector: folio_math::layout::VectorStyle::default(),
+            number: folio_math::NumberFormat::POINT,
         };
         let (dump, page) = lay_out(&options);
         let dir = manifest().join("tests/golden");

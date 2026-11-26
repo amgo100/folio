@@ -46,9 +46,11 @@ impl GroupId {
     pub const SLIDES: Self = Self(10);
     /// `export-name`, `export-as`, `docx-*`, `pptx-*`.
     pub const EXPORT: Self = Self(11);
+    /// `math-font`, `math-style`, `decimal-marker`.
+    pub const MATH: Self = Self(12);
 
     /// The number of built-in groups.
-    const BUILTIN: u16 = 12;
+    const BUILTIN: u16 = 13;
 
     /// The index of the group in a computed style.
     pub fn index(self) -> usize {
@@ -310,6 +312,7 @@ const GROUP_NAMES: [&str; GroupId::BUILTIN as usize] = [
     "animation",
     "slides",
     "export",
+    "math",
 ];
 
 fn n(text: &str) -> Name {
@@ -638,6 +641,37 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
         Paint,
     );
     prop("export-as", Any, Value::Auto, Paint);
+
+    // Math (SPEC §8.1): inherited, like text properties, so that a
+    // section or the whole document can set them.
+    group = GroupId::MATH;
+    let mut prop = |name: &str, ty, initial, effect| add(name, ty, initial, effect, group, true);
+    // The families formulas are set in (SPEC §8.2), the first available
+    // first; New Computer Modern Math, which is bundled, by default.
+    prop(
+        "math-font",
+        list(Str),
+        Value::Array(EcoVec::from([Value::Str("New Computer Modern Math".into())])),
+        Layout,
+    );
+    // How a vector is set: `math.vector { math-style: bold-upright; }`.
+    // `auto` is bold upright; `arrow` an italic letter under an arrow. A
+    // unit vector takes its vector's style with a hat in place of the
+    // arrow.
+    prop(
+        "math-style",
+        any_of([Auto, kw(&["bold-upright", "bold-italic", "arrow"])]),
+        Value::Auto,
+        Layout,
+    );
+    // The decimal marker of quantities and numbers: `auto` follows the
+    // language of the text (a point in English, a comma in Polish).
+    prop(
+        "decimal-marker",
+        any_of([Auto, kw(&["point", "comma"])]),
+        Value::Auto,
+        Layout,
+    );
 
     for p in &out {
         debug_assert!(p.ty.accepts(&p.initial), "initial value of `{}`", p.name);
