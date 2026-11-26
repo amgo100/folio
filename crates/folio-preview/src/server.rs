@@ -9,15 +9,15 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 
-use crate::engine::Published;
+use crate::engine::{Overlay, Published};
 use crate::http::{self, MAX_HEAD, Request};
-use crate::{Error, PROTOCOL};
+use crate::{Error, Event, Hook, PROTOCOL, Source};
 
 /// How long a client may take to send its request head.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
@@ -46,6 +46,9 @@ struct Shared {
     port: u16,
     published: watch::Receiver<Arc<Published>>,
     stop: watch::Receiver<bool>,
+    /// Messages for every client, such as `reveal`.
+    broadcast: broadcast::Sender<Arc<str>>,
+    on_event: Option<Hook>,
 }
 
 /// Binds the port on `127.0.0.1` and serves on a thread of its own.
@@ -53,6 +56,8 @@ pub(crate) fn start(
     port: u16,
     token: Arc<str>,
     published: watch::Receiver<Arc<Published>>,
+    broadcast: broadcast::Sender<Arc<str>>,
+    on_event: Option<Hook>,
 ) -> Result<(Handle, SocketAddr, JoinHandle<()>), Error> {
     let listener = StdListener::bind((Ipv4Addr::LOCALHOST, port))
         .map_err(|e| Error(format!("cannot listen on 127.0.0.1:{port}: {e}")))?;
@@ -73,6 +78,8 @@ pub(crate) fn start(
         port: addr.port(),
         published,
         stop,
+        broadcast,
+        on_event,
     });
     let thread = thread::Builder::new()
         .name("folio-preview-server".into())
@@ -145,6 +152,8 @@ async fn connection(mut stream: TcpStream, shared: Arc<Shared>) {
                 png(&shared, n).await
             } else if let Some(n) = path.strip_prefix("/font/") {
                 font(&shared, n)
+            } else if let Some(n) = path.strip_prefix("/glyphs/") {
+                glyphs(&shared, n, &request).await
             } else {
                 http::error("404 Not Found")
             }
@@ -234,6 +243,84 @@ fn font(shared: &Shared, n: &str) -> Vec<u8> {
     )
 }
 
+/// The largest size in pixels that `/glyphs/` rasterises glyphs at.
+const MAX_GLYPH_SIZE: f32 = 2048.0;
+
+/// The most glyphs one `/glyphs/` request may ask for.
+const MAX_GLYPHS: usize = 4096;
+
+/// Glyphs of a font rasterised at a size, for clients that draw display
+/// lists themselves (SPEC §12.4): `/glyphs/<font>?size=<px>&g=<id>.<sub>,..`,
+/// where `sub` (0 to 3) places the glyph's origin that many quarters of a
+/// pixel right of a pixel's edge.
+async fn glyphs(shared: &Shared, n: &str, request: &Request) -> Vec<u8> {
+    let published = shared.published.borrow().clone();
+    let font = n.parse::<u32>().ok();
+    let size = request
+        .param("size")
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|s| s.is_finite() && *s > 0.0 && *s <= MAX_GLYPH_SIZE);
+    let wanted: Option<Vec<(u16, u8)>> = request.param("g").and_then(|list| {
+        list.split(',')
+            .filter(|g| !g.is_empty())
+            .map(|g| {
+                let (id, sub) = g.split_once('.').unwrap_or((g, "0"));
+                let sub = sub.parse::<u8>().ok().filter(|s| *s < 4)?;
+                Some((id.parse::<u16>().ok()?, sub))
+            })
+            .collect()
+    });
+    let (Some(font), Some(size), Some(wanted)) = (font, size, wanted) else {
+        return http::error("400 Bad Request");
+    };
+    if wanted.len() > MAX_GLYPHS || published.fonts.get(font as usize).is_none() {
+        return http::error(match wanted.len() > MAX_GLYPHS {
+            true => "400 Bad Request",
+            false => "404 Not Found",
+        });
+    }
+    let fonts = published.fonts.clone();
+    let rendered = tokio::task::spawn_blocking(move || {
+        let mut outlines = folio_render::Outlines::new();
+        let mut out = Vec::new();
+        out.extend_from_slice(&(wanted.len() as u32).to_le_bytes());
+        for (id, sub) in wanted {
+            let bitmap = folio_render::rasterize_glyph(
+                &*fonts,
+                &mut outlines,
+                folio_component::FontId(font),
+                id,
+                size,
+                f32::from(sub) / 4.0,
+            );
+            out.extend_from_slice(&id.to_le_bytes());
+            out.push(sub);
+            out.push(0);
+            match bitmap {
+                Some(b) => {
+                    out.extend_from_slice(&b.left.to_le_bytes());
+                    out.extend_from_slice(&b.top.to_le_bytes());
+                    out.extend_from_slice(&b.width.to_le_bytes());
+                    out.extend_from_slice(&b.height.to_le_bytes());
+                    out.extend_from_slice(&b.coverage);
+                }
+                None => out.extend_from_slice(&[0; 16]),
+            }
+        }
+        out
+    })
+    .await;
+    match rendered {
+        Ok(bytes) => http::response(
+            "200 OK",
+            "application/octet-stream",
+            &[("Cache-Control", "no-store")],
+            &bytes,
+        ),
+        Err(_) => http::error("500 Internal Server Error"),
+    }
+}
+
 /// Takes a websocket request: checks its origin, completes the handshake
 /// and serves the client.
 async fn websocket(mut stream: TcpStream, request: &Request, shared: Arc<Shared>) {
@@ -275,6 +362,7 @@ type Known = Vec<(u64, u64)>;
 async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
     let mut published = shared.published.clone();
     let mut stop = shared.stop.clone();
+    let mut broadcast = shared.broadcast.subscribe();
     let mut known = Known::new();
     let mut visible: Vec<usize> = Vec::new();
     let current = published.borrow_and_update().clone();
@@ -293,18 +381,95 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
                 }
             }
             message = ws.next() => match message {
-                Some(Ok(Message::Text(text))) => {
-                    if let Ok(ClientMessage::Visible { pages }) = serde_json::from_str(&text) {
-                        visible = pages;
+                Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
+                    Ok(ClientMessage::Visible { pages }) => visible = pages,
+                    Ok(ClientMessage::Click { revision, page, x, y }) => {
+                        let current = published.borrow().clone();
+                        let reply = click(&shared, &current, revision, page, x, y);
+                        if ws.send(Message::text(reply)).await.is_err() {
+                            break;
+                        }
                     }
-                }
+                    // Messages of later versions.
+                    Err(_) => {}
+                },
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                 Some(Ok(_)) => {}
+            },
+            message = broadcast.recv() => match message {
+                Ok(text) => {
+                    if ws.send(Message::text(text.to_string())).await.is_err() {
+                        break;
+                    }
+                }
+                // A client that fell behind misses a reveal, which a newer
+                // one replaces anyway.
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
             },
             _ = stop.changed() => break,
         }
     }
     let _ = ws.close(None).await;
+}
+
+/// Answers a click on a page with the source it shows, and tells the hook
+/// (SPEC §12.2): the topmost glyph or item at the point whose source is
+/// known, a glyph as the characters it shows, any other item as its whole
+/// node.
+fn click(
+    shared: &Shared,
+    published: &Published,
+    revision: u64,
+    page: usize,
+    x: f32,
+    y: f32,
+) -> String {
+    let location = (revision == published.revision)
+        .then(|| locate(published, page, x, y))
+        .flatten();
+    if let (Some(location), Some(hook)) = (&location, &shared.on_event) {
+        hook(&Event::Clicked(Source {
+            revision,
+            location: location.clone(),
+        }));
+    }
+    let message = SourceMessage {
+        kind: "source",
+        revision,
+        location: location.as_ref(),
+    };
+    serde_json::to_string(&message).expect("the message serialises")
+}
+
+/// The source of what a point on a page shows.
+fn locate(published: &Published, page: usize, x: f32, y: f32) -> Option<folio::diag::Location> {
+    let layout = published.layout.as_ref()?;
+    let entry = published.pages.get(page)?;
+    let list = &entry.list;
+    if !(x.is_finite() && y.is_finite()) {
+        return None;
+    }
+    list.hit(x, y).into_iter().find_map(|hit| {
+        let item = list.items.get(hit.item)?;
+        let files = &*layout.files;
+        match (&item.command, hit.glyph) {
+            (folio_render::Command::Glyphs(run), Some(g)) => {
+                let (source, within) = run.glyphs.get(g)?.source.clone();
+                folio::span_map::locate_source(files, source, within)
+            }
+            _ => folio::span_map::locate_node(files, item.span.source),
+        }
+    })
+}
+
+/// The answer to a click.
+#[derive(Serialize)]
+struct SourceMessage<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    revision: u64,
+    location: Option<&'a folio::diag::Location>,
 }
 
 /// A message from a client.
@@ -313,6 +478,14 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
 enum ClientMessage {
     /// The pages the client shows now.
     Visible { pages: Vec<usize> },
+    /// A click at a point of a page, in points from its top-left corner,
+    /// as the client shows the revision.
+    Click {
+        revision: u64,
+        page: usize,
+        x: f32,
+        y: f32,
+    },
 }
 
 /// The `update` message.
@@ -329,6 +502,7 @@ struct UpdateMessage<'a> {
     spans: &'a [usize],
     banner: Option<&'a str>,
     diagnostics: &'a [folio::diag::Resolved],
+    overlays: &'a [Overlay],
 }
 
 /// Sends a client what it does not have of a revision: the `update`
@@ -372,6 +546,7 @@ async fn send(
         spans: &spans,
         banner: published.banner.as_deref(),
         diagnostics: &published.diagnostics,
+        overlays: &published.overlays,
     };
     let text = serde_json::to_string(&update).expect("the update serialises");
     ws.feed(Message::text(text)).await?;

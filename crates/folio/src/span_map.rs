@@ -42,6 +42,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+use ecow::EcoString;
 use folio_component::{Fragment, FragmentItem, Glyph, GlyphRun, ObjectBox, Point, Size, SourceRef};
 use folio_syntax::{DiagSpan, FileId, Source};
 
@@ -115,6 +116,8 @@ pub struct Found {
 /// fragments and objects whose nodes hold them, and hold the fewest bytes,
 /// are found instead.
 ///
+/// To look up many places in the same pages, build an [`Index`] once.
+///
 /// ```
 /// use folio::{Target, World, span_map};
 ///
@@ -131,118 +134,191 @@ pub struct Found {
 /// assert!(found[0].glyphs && found[0].page == 0);
 /// ```
 pub fn find(files: &dyn Files, pages: &[&Fragment], path: &str, bytes: Range<usize>) -> Vec<Found> {
-    let mut sources: HashMap<FileId, Option<Source>> = HashMap::new();
-    let mut source_of = |source: SourceRef| -> Option<(Source, folio_syntax::Span)> {
-        let span = span(source);
-        let id = span.id()?;
-        let file = sources
-            .entry(id)
-            .or_insert_with(|| {
-                (files.path(id).as_deref() == Some(path))
-                    .then(|| files.source(id))
-                    .flatten()
-            })
-            .clone()?;
-        Some((file, span))
-    };
+    Index::new(files, pages).find(path, bytes)
+}
 
-    // Each glyph's bytes in the file, when it is of the file.
-    let mut glyphs = Vec::new();
-    for (page, fragment) in pages.iter().enumerate() {
-        for (index, placed) in self::glyphs(fragment).into_iter().enumerate() {
-            let (node, within) = &placed.glyph.source;
-            let Some((file, span)) = source_of(*node) else {
-                continue;
-            };
-            let within = within.start as usize..within.end as usize;
-            if let Some(range) = text_range(&file, span, within) {
-                glyphs.push((page, index, placed, range));
+/// The places in files that pages show, resolved once, for [`find`]ing
+/// many of them. It holds no reference to the pages or the files.
+#[derive(Debug, Clone, Default)]
+pub struct Index {
+    /// The project path of each file the pages show.
+    paths: HashMap<EcoString, FileId>,
+    /// Every glyph that shows text of a file, in painting order.
+    glyphs: Vec<GlyphEntry>,
+    /// Every box of a fragment or object whose node is in a file.
+    boxes: Vec<BoxEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct GlyphEntry {
+    page: usize,
+    /// The glyph's run, numbered in painting order across the pages.
+    run: usize,
+    file: FileId,
+    bytes: Range<usize>,
+    pos: Point,
+    size: Size,
+}
+
+#[derive(Debug, Clone)]
+struct BoxEntry {
+    page: usize,
+    file: FileId,
+    bytes: Range<usize>,
+    pos: Point,
+    size: Size,
+}
+
+impl Index {
+    /// Resolves what the pages show against the files they were made from.
+    pub fn new(files: &dyn Files, pages: &[&Fragment]) -> Self {
+        let mut index = Self::default();
+        let mut sources: HashMap<FileId, Option<Source>> = HashMap::new();
+        let mut source_of = |source: SourceRef| -> Option<(Source, folio_syntax::Span)> {
+            let span = span(source);
+            let id = span.id()?;
+            let file = sources
+                .entry(id)
+                .or_insert_with(|| files.source(id))
+                .clone()?;
+            Some((file, span))
+        };
+        let mut run = 0;
+        for (page, fragment) in pages.iter().enumerate() {
+            let mut last: Option<*const GlyphRun> = None;
+            for placed in glyphs(fragment) {
+                let this = std::ptr::from_ref(placed.run);
+                if last != Some(this) {
+                    run += 1;
+                    last = Some(this);
+                }
+                let (node, within) = &placed.glyph.source;
+                let Some((file, span)) = source_of(*node) else {
+                    continue;
+                };
+                let within = within.start as usize..within.end as usize;
+                let Some(bytes) = text_range(&file, span, within) else {
+                    continue;
+                };
+                let size = placed.run.size;
+                let advance = placed.glyph.x_advance.at(size);
+                index.glyphs.push(GlyphEntry {
+                    page,
+                    run,
+                    file: file.id(),
+                    bytes,
+                    pos: Point::new(
+                        placed.pos.x.min(placed.pos.x + advance),
+                        placed.pos.y - size,
+                    ),
+                    size: Size::new(advance.max(-advance), size * 1.25),
+                });
+            }
+            let mut found = Vec::new();
+            boxes_in(fragment, Point::zero(), &mut found);
+            for (source, pos, size) in found {
+                let Some((file, span)) = source_of(source) else {
+                    continue;
+                };
+                let Some(node) = file.find(span) else {
+                    continue;
+                };
+                index.boxes.push(BoxEntry {
+                    page,
+                    file: file.id(),
+                    bytes: node.range(),
+                    pos,
+                    size,
+                });
             }
         }
-    }
-    let overlaps = |r: &Range<usize>| {
-        if bytes.is_empty() {
-            (r.start <= bytes.start && bytes.start < r.end) || r.start == bytes.start
-        } else if r.is_empty() {
-            bytes.start <= r.start && r.start < bytes.end
-        } else {
-            r.start < bytes.end && bytes.start < r.end
+        for id in sources.into_iter().filter_map(|(id, s)| s.map(|_| id)) {
+            if let Some(path) = files.path(id) {
+                index.paths.insert(path, id);
+            }
         }
-    };
-    let mut hits: Vec<_> = glyphs.iter().filter(|g| overlaps(&g.3)).collect();
-    if hits.is_empty() && bytes.is_empty() {
-        hits = glyphs
+        index
+    }
+
+    /// The parts of the pages that show the bytes `bytes` of the file at
+    /// `path`, as [`find`] finds them.
+    pub fn find(&self, path: &str, bytes: Range<usize>) -> Vec<Found> {
+        let Some(&file) = self.paths.get(path) else {
+            return Vec::new();
+        };
+        let overlaps = |r: &Range<usize>| {
+            if bytes.is_empty() {
+                (r.start <= bytes.start && bytes.start < r.end) || r.start == bytes.start
+            } else if r.is_empty() {
+                bytes.start <= r.start && r.start < bytes.end
+            } else {
+                r.start < bytes.end && bytes.start < r.end
+            }
+        };
+        let mut hits: Vec<(usize, &GlyphEntry)> = self
+            .glyphs
             .iter()
-            .filter(|g| !g.3.is_empty() && g.3.end == bytes.start)
+            .enumerate()
+            .filter(|(_, g)| g.file == file && overlaps(&g.bytes))
             .collect();
-    }
-    if !hits.is_empty() {
-        return merge(&hits);
-    }
-
-    // The innermost boxes whose nodes hold the bytes.
-    let mut boxes: Vec<(usize, usize, Point, Size)> = Vec::new();
-    for (page, fragment) in pages.iter().enumerate() {
-        let mut found = Vec::new();
-        boxes_in(fragment, Point::zero(), &mut found);
-        for (source, pos, size) in found {
-            let Some((file, span)) = source_of(source) else {
-                continue;
-            };
-            let Some(node) = file.find(span) else {
-                continue;
-            };
-            let range = node.range();
-            let holds = range.start <= bytes.start
-                && bytes.end <= range.end
-                && (range.start < range.end || bytes.is_empty());
-            if holds {
-                boxes.push((range.len(), page, pos, size));
-            }
+        if hits.is_empty() && bytes.is_empty() {
+            hits = self
+                .glyphs
+                .iter()
+                .enumerate()
+                .filter(|(_, g)| {
+                    g.file == file && !g.bytes.is_empty() && g.bytes.end == bytes.start
+                })
+                .collect();
         }
+        if !hits.is_empty() {
+            return merge(&hits);
+        }
+        let holding = || {
+            self.boxes.iter().filter(|b| {
+                b.file == file
+                    && b.bytes.start <= bytes.start
+                    && bytes.end <= b.bytes.end
+                    && (!b.bytes.is_empty() || bytes.is_empty())
+            })
+        };
+        let Some(fewest) = holding().map(|b| b.bytes.len()).min() else {
+            return Vec::new();
+        };
+        holding()
+            .filter(|b| b.bytes.len() == fewest)
+            .map(|b| Found {
+                page: b.page,
+                pos: b.pos,
+                size: b.size,
+                glyphs: false,
+            })
+            .collect()
     }
-    let Some(fewest) = boxes.iter().map(|b| b.0).min() else {
-        return Vec::new();
-    };
-    boxes
-        .into_iter()
-        .filter(|b| b.0 == fewest)
-        .map(|(_, page, pos, size)| Found {
-            page,
-            pos,
-            size,
-            glyphs: false,
-        })
-        .collect()
 }
 
 /// The areas of glyphs, one for each run of glyphs that follow each other
 /// in a run of text.
-fn merge(hits: &[&(usize, usize, Placed<'_>, Range<usize>)]) -> Vec<Found> {
+fn merge(hits: &[(usize, &GlyphEntry)]) -> Vec<Found> {
     let mut out: Vec<Found> = Vec::new();
-    let mut last: Option<(usize, usize, *const GlyphRun)> = None;
-    for &&(page, index, placed, _) in hits {
-        let size = placed.run.size;
-        let advance = placed.glyph.x_advance.at(size);
-        let x0 = placed.pos.x.min(placed.pos.x + advance);
-        let area = Found {
-            page,
-            pos: Point::new(x0, placed.pos.y - size),
-            size: Size::new(advance.max(-advance), size * 1.25),
-            glyphs: true,
-        };
-        let run = std::ptr::from_ref(placed.run);
-        let follows = last.is_some_and(|(p, i, r)| p == page && i + 1 == index && r == run);
+    let mut last: Option<(usize, usize)> = None;
+    for &(index, glyph) in hits {
+        let follows = last.is_some_and(|(i, run)| i + 1 == index && run == glyph.run);
         match out.last_mut() {
             Some(prev) if follows => {
-                let left = prev.pos.x.min(area.pos.x);
-                let right = (prev.pos.x + prev.size.width).max(area.pos.x + area.size.width);
+                let left = prev.pos.x.min(glyph.pos.x);
+                let right = (prev.pos.x + prev.size.width).max(glyph.pos.x + glyph.size.width);
                 prev.pos.x = left;
                 prev.size.width = right - left;
             }
-            _ => out.push(area),
+            _ => out.push(Found {
+                page: glyph.page,
+                pos: glyph.pos,
+                size: glyph.size,
+                glyphs: true,
+            }),
         }
-        last = Some((page, index, run));
+        last = Some((index, glyph.run));
     }
     out
 }

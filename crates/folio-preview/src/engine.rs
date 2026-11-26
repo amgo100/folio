@@ -16,6 +16,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use ecow::EcoString;
 use folio::diag::{Files, TextFiles};
 use folio::loader::{self, LoadError, Loader, ProjectErrors};
+use folio::span_map;
 use folio::{
     BuildMode, Diagnostic, FileId, FontCache, Name, PROJECT_FONT_DIR, Pages, Source, Target, World,
 };
@@ -78,6 +79,65 @@ pub(crate) struct Published {
     pub(crate) diagnostics: Arc<Vec<folio::diag::Resolved>>,
     /// The fonts that the pages' glyph runs name, by id.
     pub(crate) fonts: Arc<FontTable>,
+    /// Where the pages' sources are, for source sync: `None` until a
+    /// revision is laid out.
+    pub(crate) layout: Option<Arc<Layout>>,
+    /// The areas of the pages that the diagnostics point at, when the
+    /// pages are those of this revision.
+    pub(crate) overlays: Arc<Vec<Overlay>>,
+}
+
+/// The sources of the pages a client is shown: the files they were made
+/// from and where on the pages each place in them is.
+pub(crate) struct Layout {
+    /// The revision the pages were laid out in.
+    pub(crate) revision: u64,
+    /// The files their spans resolve against.
+    pub(crate) files: Arc<dyn Files + Send + Sync>,
+    /// Where on the pages each place in the files is.
+    pub(crate) index: span_map::Index,
+}
+
+impl std::fmt::Debug for Layout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layout")
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The areas on one page that a diagnostic points at.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct Overlay {
+    /// The diagnostic's index in the update's `diagnostics`.
+    pub(crate) diagnostic: usize,
+    /// The page.
+    pub(crate) page: usize,
+    /// The areas, as `[x, y, width, height]` in points from the page's
+    /// top-left corner.
+    pub(crate) rects: Vec<[f32; 4]>,
+}
+
+/// The most diagnostics that overlays are drawn for, in their order.
+const MAX_OVERLAYS: usize = 100;
+
+/// The areas a diagnostic's location covers, by page.
+pub(crate) fn rects(found: &[span_map::Found]) -> Vec<(usize, [f32; 4])> {
+    found
+        .iter()
+        .map(|f| {
+            let pt = |abs: folio_component::Abs| abs.to_pt() as f32;
+            (
+                f.page,
+                [
+                    pt(f.pos.x),
+                    pt(f.pos.y),
+                    pt(f.size.width),
+                    pt(f.size.height),
+                ],
+            )
+        })
+        .collect()
 }
 
 /// A page as the clients are sent it.
@@ -157,6 +217,10 @@ struct Frame {
     diagnostics: Vec<Diagnostic>,
     files: Arc<dyn Files + Send + Sync>,
     fonts: Arc<FontTable>,
+    /// Where the pages' sources are, when there are pages.
+    index: Option<span_map::Index>,
+    /// The areas the diagnostics point at, when there are pages.
+    overlays: Vec<Overlay>,
 }
 
 /// The builds to preview, and how.
@@ -488,6 +552,8 @@ impl Engine {
                 diagnostics,
                 files,
                 fonts: self.publish.borrow().fonts.clone(),
+                index: None,
+                overlays: Vec::new(),
             };
             let _ = tx.send(Input::Done(Box::new(Done {
                 revision,
@@ -568,6 +634,17 @@ impl Engine {
             .map(|d| folio::diag::resolve(&*frame.files, d))
             .collect();
         let count = pages.len();
+        let (layout, overlays) = match frame.index {
+            Some(index) => (
+                Some(Arc::new(Layout {
+                    revision,
+                    files: frame.files.clone(),
+                    index,
+                })),
+                frame.overlays,
+            ),
+            None => (old.layout.clone(), Vec::new()),
+        };
         self.publish.send_replace(Arc::new(Published {
             revision,
             variant: frame.variant,
@@ -580,6 +657,8 @@ impl Engine {
             } else {
                 old.fonts.clone()
             },
+            layout,
+            overlays: Arc::new(overlays),
         }));
         self.settings.emit(Event::Updated(Arc::new(Update {
             revision,
@@ -683,6 +762,8 @@ fn check(
                 diagnostics,
                 files,
                 fonts: published.fonts.clone(),
+                index: None,
+                overlays: Vec::new(),
             });
         }
     };
@@ -712,6 +793,8 @@ fn check(
             diagnostics,
             files,
             fonts: published.fonts.clone(),
+            index: None,
+            overlays: Vec::new(),
         });
     };
     let fonts = Arc::new(FontTable::new(&folio::fonts(world).ok()?));
@@ -726,6 +809,9 @@ fn check(
     for index in remapped {
         lists.push((index, entry(&pages, index), true));
     }
+    let fragments: Vec<_> = pages.pages.iter().map(|page| &page.fragment).collect();
+    let index = span_map::Index::new(&*files, &fragments);
+    let overlays = overlays(&index, &*files, &diagnostics);
     Some(Frame {
         variant: name,
         target: target.as_str(),
@@ -737,7 +823,36 @@ fn check(
         diagnostics,
         files,
         fonts,
+        index: Some(index),
+        overlays,
     })
+}
+
+/// The areas of the pages that diagnostics point at.
+fn overlays(
+    index: &span_map::Index,
+    files: &dyn Files,
+    diagnostics: &[Diagnostic],
+) -> Vec<Overlay> {
+    let mut out = Vec::new();
+    for (i, diagnostic) in diagnostics.iter().enumerate().take(MAX_OVERLAYS) {
+        let Some(location) = folio::diag::locate(files, diagnostic.span) else {
+            continue;
+        };
+        let mut by_page: Vec<Overlay> = Vec::new();
+        for (page, rect) in rects(&index.find(&location.path, location.bytes)) {
+            match by_page.last_mut() {
+                Some(last) if last.page == page => last.rects.push(rect),
+                _ => by_page.push(Overlay {
+                    diagnostic: i,
+                    page,
+                    rects: vec![rect],
+                }),
+            }
+        }
+        out.extend(by_page);
+    }
+    out
 }
 
 /// A page's display list, encoded, without its numbers, which the engine
