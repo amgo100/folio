@@ -388,3 +388,36 @@ fn an_ordinary_paragraph_breaks_quickly() {
     eprintln!("an ordinary paragraph breaks in {best:?}");
     assert!(best < limit, "{best:?}");
 }
+
+/// Paragraphs are broken in parallel, and each gets the lines that
+/// breaking it alone gives, in its place (SPEC §2.4); equal paragraphs
+/// are broken once and share their lines.
+#[test]
+fn paragraphs_broken_in_parallel_keep_their_order() {
+    let mut source = String::new();
+    for i in 0..40 {
+        // Every fifth paragraph is the same.
+        if i % 5 == 0 {
+            source.push_str(&format!("{PROSE}\n\n"));
+        } else {
+            source.push_str(&format!("Paragraph {i}: {}\n\n", &PROSE[..8 * i]));
+        }
+    }
+    let world = world("en", "paragraph { hyphenate: true; }\n", &source);
+    let text = text(&world);
+    let lines = lines(&world);
+    let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
+    let fonts = folio::fonts(&world).unwrap();
+    assert_eq!(lines.paragraphs.len(), 40);
+    for (i, (paragraph, layout)) in text.paragraphs.iter().zip(&lines.paragraphs).enumerate() {
+        let input = folio::layout::input(paragraph, &styled.properties, &fonts);
+        let slots = [LineSlot {
+            offset: Abs::zero(),
+            width: lines.slots[i].width,
+        }];
+        assert_eq!(**layout, layout_paragraph(&input, &slots, None), "{i}");
+    }
+    for i in (5..40).step_by(5) {
+        assert!(Arc::ptr_eq(&lines.paragraphs[0], &lines.paragraphs[i]));
+    }
+}

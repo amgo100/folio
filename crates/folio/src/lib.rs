@@ -36,11 +36,12 @@ pub mod span_map;
 pub mod toolchain;
 mod world;
 
+use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
-use std::panic::AssertUnwindSafe;
+use std::panic::{self, AssertUnwindSafe};
 
-use ecow::EcoVec;
+use ecow::{EcoString, EcoVec, eco_format};
 use folio_core::db::Read;
 use folio_core::diag::Reported;
 use rayon::prelude::*;
@@ -85,12 +86,47 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// output unless nothing could be produced, as when the entry file is
 /// missing ([`Compiled::output`] says which targets write none yet). Fails
 /// only when an edit to the world cancels the compilation.
+///
+/// A panic in a query, a bug in the compiler, unwinds out of it; in a
+/// long-lived world ([`WorldBuilder::long_lived`]) it is instead an error
+/// with the code `internal-error`, with the sources, files and last output
+/// of the build's last compilation that did not panic.
 pub fn compile(
     world: &World,
     target: Target,
     variant: Option<&Name>,
 ) -> Result<Compiled, Cancelled> {
-    catch(|| {
+    let Some(kept) = world.kept() else {
+        return catch(|| compile_now(world, target, variant));
+    };
+    let build = (variant.cloned(), target);
+    match isolate(|| compile_now(world, target, variant))? {
+        Ok(compiled) => {
+            kept.update(build, |last| {
+                last.sources = compiled.sources.clone();
+                last.files = compiled.files.clone();
+                if compiled.output.is_some() {
+                    last.output = compiled.output.clone();
+                }
+            });
+            Ok(compiled)
+        }
+        Err(panic) => {
+            let last = kept.get(&build);
+            let kept_output = last.output.is_some();
+            Ok(Compiled {
+                sources: last.sources,
+                files: last.files,
+                output: last.output,
+                diagnostics: EcoVec::from([internal_error(&panic, kept_output)]),
+            })
+        }
+    }
+}
+
+/// Compiles a build, letting panics unwind.
+fn compile_now(world: &World, target: Target, variant: Option<&Name>) -> Compiled {
+    {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         let built = pipeline::compile_build(db, build);
@@ -102,7 +138,7 @@ pub fn compile(
             output: built.output.clone(),
             diagnostics,
         }
-    })
+    }
 }
 
 /// Checks a variant of the world's document for a target without
@@ -118,19 +154,49 @@ pub fn compile(
 /// checking again re-runs only what the edit affects; compiling the same
 /// build afterwards reuses the check and only emits. Fails only when an
 /// edit to the world cancels the check.
+///
+/// A panic in a query unwinds out of it, or in a long-lived world is an
+/// error with the code `internal-error`, as [`compile`] says, with the
+/// sources and files of the build's last check or compilation that did not
+/// panic.
 pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Checked, Cancelled> {
-    catch(|| {
-        let db = world.db();
-        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
-        let checked = pipeline::check_build(db, build);
-        let diagnostics = collect(pipeline::check_build::accumulated::<Reported>(db, build));
-        Checked {
-            sources: checked.sources.clone(),
-            files: files(pipeline::check_build::accumulated::<Read>(db, build)),
-            writes: checked.writes,
-            diagnostics,
+    let Some(kept) = world.kept() else {
+        return catch(|| check_now(world, target, variant));
+    };
+    let build = (variant.cloned(), target);
+    match isolate(|| check_now(world, target, variant))? {
+        Ok(checked) => {
+            kept.update(build, |last| {
+                last.sources = checked.sources.clone();
+                last.files = checked.files.clone();
+                last.writes = checked.writes;
+            });
+            Ok(checked)
         }
-    })
+        Err(panic) => {
+            let last = kept.get(&build);
+            Ok(Checked {
+                sources: last.sources,
+                files: last.files,
+                writes: last.writes,
+                diagnostics: EcoVec::from([internal_error(&panic, false)]),
+            })
+        }
+    }
+}
+
+/// Checks a build, letting panics unwind.
+fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
+    let db = world.db();
+    let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+    let checked = pipeline::check_build(db, build);
+    let diagnostics = collect(pipeline::check_build::accumulated::<Reported>(db, build));
+    Checked {
+        sources: checked.sources.clone(),
+        files: files(pipeline::check_build::accumulated::<Read>(db, build)),
+        writes: checked.writes,
+        diagnostics,
+    }
 }
 
 /// The diagnostics a query and the queries it depends on reported, each
@@ -415,6 +481,7 @@ impl Display for Cancelled {
 impl std::error::Error for Cancelled {}
 
 /// Runs queries, turning salsa's cancellation unwind into [`Cancelled`].
+/// A panic in a query unwinds on.
 fn catch<T>(f: impl FnOnce() -> T) -> Result<T, Cancelled> {
     salsa::Cancelled::catch(AssertUnwindSafe(f)).map_err(|cancelled| match cancelled {
         salsa::Cancelled::PropagatedPanic => {
@@ -422,4 +489,53 @@ fn catch<T>(f: impl FnOnce() -> T) -> Result<T, Cancelled> {
         }
         _ => Cancelled,
     })
+}
+
+/// Runs queries for a long-lived world, turning salsa's cancellation
+/// unwind into [`Cancelled`] and a panic in a query, on this thread or
+/// another, into what it said.
+fn isolate<T>(f: impl FnOnce() -> T) -> Result<Result<T, EcoString>, Cancelled> {
+    match panic::catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => Ok(Ok(value)),
+        Err(payload) => match payload.downcast::<salsa::Cancelled>() {
+            Ok(cancelled) => match *cancelled {
+                salsa::Cancelled::PropagatedPanic => {
+                    Ok(Err("a query panicked on another thread".into()))
+                }
+                _ => Err(Cancelled),
+            },
+            Err(payload) => Ok(Err(panic_message(&*payload))),
+        },
+    }
+}
+
+/// What a panic said, when it said it with a string.
+fn panic_message(payload: &(dyn Any + Send)) -> EcoString {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).into()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str().into()
+    } else {
+        "a query panicked".into()
+    }
+}
+
+/// The error that stands for a panic in a query in a long-lived world: a
+/// bug in the compiler, not in the document, so it points at no source.
+fn internal_error(message: &str, kept_output: bool) -> Diagnostic {
+    let mut error = Diagnostic::error(
+        folio_syntax::DiagSpan::detached(),
+        eco_format!("internal error: the compiler panicked: {message}"),
+    );
+    error.code = Some("internal-error".into());
+    error.hints.push(
+        "this is a bug in Folio, not in the document; editing the document may work around it"
+            .into(),
+    );
+    if kept_output {
+        error
+            .hints
+            .push("the output of the last compilation that did not fail this way is kept".into());
+    }
+    error
 }

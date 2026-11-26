@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use ecow::EcoVec;
 use folio_component::Abs;
-use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind};
+use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind, Shaped};
 
 use super::paragraph::{
     LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics, hyphen_glyphs,
@@ -64,6 +64,37 @@ struct Key {
     widths: EcoVec<Abs>,
 }
 
+impl Key {
+    fn new(input: &ParagraphInput<'_>, slots: &[LineSlot]) -> Self {
+        Self {
+            paragraph: input.shaped.paragraph.clone(),
+            style: input.style,
+            segments: input.segments.clone(),
+            objects: input.objects.clone(),
+            widths: slots.iter().map(|s| s.width).collect(),
+        }
+    }
+}
+
+/// A paragraph to break on another thread: what its input borrows, owned.
+struct Job {
+    key: Key,
+    shaped: Shaped,
+    slots: Vec<LineSlot>,
+}
+
+impl Job {
+    fn run(&self) -> ParagraphLayout {
+        let input = ParagraphInput {
+            shaped: &self.shaped,
+            style: self.key.style,
+            segments: self.key.segments.clone(),
+            objects: self.key.objects.clone(),
+        };
+        layout_paragraph(&input, &self.slots, None)
+    }
+}
+
 struct Entry {
     layout: Arc<ParagraphLayout>,
     /// The clock when it was last asked for.
@@ -101,13 +132,7 @@ impl Cache {
         deadline: Option<Instant>,
     ) -> Arc<ParagraphLayout> {
         let now = self.clock.load(Ordering::Relaxed);
-        let key = Key {
-            paragraph: input.shaped.paragraph.clone(),
-            style: input.style,
-            segments: input.segments.clone(),
-            objects: input.objects.clone(),
-            widths: slots.iter().map(|s| s.width).collect(),
-        };
+        let key = Key::new(input, slots);
         if let Some(entry) = lock(&self.entries).get_mut(&key) {
             entry.used = now;
             self.hits.fetch_add(1, Ordering::Relaxed);
@@ -137,16 +162,86 @@ impl Cache {
         &self,
         paragraphs: &[(ParagraphInput<'_>, &[LineSlot])],
     ) -> Vec<Arc<ParagraphLayout>> {
+        self.layout_all_checked(paragraphs, &mut || {})
+    }
+
+    /// The lines of paragraphs as [`layout_all`](Self::layout_all) gives
+    /// them, calling `check` on the caller's thread after each paragraph
+    /// it breaks.
+    ///
+    /// The paragraphs not in the cache are broken in parallel, on the
+    /// threads that shape paragraphs ([`folio_text::Cache::parallel`]),
+    /// and each result is put in its paragraph's place, so the lines do
+    /// not depend on how the work was scheduled (SPEC §2.4). `check` may
+    /// unwind, as a database query that its revision has cancelled does
+    /// (SPEC §2.3): the paragraphs not yet broken are then dropped, and
+    /// those broken are kept in the cache for the next call.
+    ///
+    /// # Panics
+    ///
+    /// When a paragraph's slots are empty, an input has fewer segment
+    /// metrics than its paragraph has segments, or `check` panics.
+    pub fn layout_all_checked(
+        &self,
+        paragraphs: &[(ParagraphInput<'_>, &[LineSlot])],
+        check: &mut dyn FnMut(),
+    ) -> Vec<Arc<ParagraphLayout>> {
         let now = self.clock.fetch_add(1, Ordering::Relaxed) + 1;
-        let out = paragraphs
-            .iter()
-            .map(|(input, slots)| self.layout(input, slots, None))
-            .collect();
+        let mut out: Vec<Option<Arc<ParagraphLayout>>> = vec![None; paragraphs.len()];
+        // The paragraphs to break, each once, with where their lines go.
+        let mut misses: Vec<Job> = Vec::new();
+        let mut targets: Vec<Vec<usize>> = Vec::new();
+        {
+            let mut entries = lock(&self.entries);
+            let mut missing: HashMap<Key, usize> = HashMap::new();
+            for (i, (input, slots)) in paragraphs.iter().enumerate() {
+                let key = Key::new(input, slots);
+                if let Some(entry) = entries.get_mut(&key) {
+                    entry.used = now;
+                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    out[i] = Some(entry.layout.clone());
+                } else if let Some(&m) = missing.get(&key) {
+                    // Broken once, and then found like a paragraph in the
+                    // cache.
+                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    targets[m].push(i);
+                } else {
+                    self.misses.fetch_add(1, Ordering::Relaxed);
+                    missing.insert(key.clone(), misses.len());
+                    misses.push(Job {
+                        key,
+                        shaped: input.shaped.clone(),
+                        slots: slots.to_vec(),
+                    });
+                    targets.push(vec![i]);
+                }
+            }
+        }
+
+        folio_text::Cache::parallel(misses, Job::run, &mut |m, job, layout| {
+            let layout = Arc::new(layout);
+            let layout = if layout.optimal {
+                lock(&self.entries)
+                    .entry(job.key.clone())
+                    .or_insert(Entry { layout, used: now })
+                    .layout
+                    .clone()
+            } else {
+                layout
+            };
+            for &i in &targets[m] {
+                out[i] = Some(layout.clone());
+            }
+            check();
+        });
+
         if now.is_multiple_of(8) {
             lock(&self.entries).retain(|_, entry| entry.used + MAX_AGE >= now);
             lock(&self.hyphens).retain(|_, (_, used)| *used + MAX_AGE >= now);
         }
-        out
+        out.into_iter()
+            .map(|layout| layout.expect("every paragraph is broken"))
+            .collect()
     }
 
     /// The glyphs of a hyphen `c` in a segment's font, features and

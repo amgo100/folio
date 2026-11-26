@@ -220,6 +220,8 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let mut hashes = EcoVec::new();
     let mut start = 0;
     while start < flow.items.len() {
+        // An edit stops the query between pages (SPEC §2.3).
+        db.unwind_if_revision_cancelled();
         // `break-before: odd-page` and `even-page` pad with a blank page.
         if start > 0
             && let Some(odd) = flow.boundary(start).parity

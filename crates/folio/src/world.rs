@@ -1,16 +1,17 @@
 //! The world: everything a compilation reads, held in the query database.
 
+use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io;
 use std::num::NonZeroU16;
 use std::ops::Range;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{Name, Registry, Target};
-use folio_core::db::{BuildMode, Bytes, DataFile, Durability, Project, SourceFile};
+use folio_core::db::{BuildMode, Bytes, DataFile, Durability, FileRead, Project, SourceFile};
 use folio_core::eval::Limits;
 use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 use folio_fonts::{FontCache, FontFile, FontHash, SystemFont};
@@ -54,6 +55,47 @@ pub struct World {
     /// point into.
     manifest_text: Lines<String>,
     lockfile_text: Option<Lines<String>>,
+    /// In a long-lived world, what the last compilation of each build that
+    /// did not panic gave, shared by every handle.
+    kept: Option<Arc<Kept>>,
+}
+
+/// What a long-lived world keeps of each build ([`WorldBuilder::long_lived`]),
+/// to answer with when compiling it panics.
+#[derive(Debug, Default)]
+pub(crate) struct Kept(Mutex<HashMap<(Option<Name>, Target), Last>>);
+
+/// What the last compilation or check of a build that did not panic gave.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Last {
+    /// Its sources, as [`Compiled::sources`](crate::Compiled::sources).
+    pub sources: EcoVec<ProjectPath>,
+    /// Its files, as [`Compiled::files`](crate::Compiled::files).
+    pub files: EcoVec<FileRead>,
+    /// The last output it compiled to: kept across compilations without
+    /// output.
+    pub output: Option<Bytes>,
+    /// Whether its last check said that compiling it writes a file, as
+    /// [`Checked::writes`](crate::Checked::writes).
+    pub writes: bool,
+}
+
+impl Kept {
+    /// What the last compilation or check of a build that did not panic
+    /// gave.
+    pub(crate) fn get(&self, build: &(Option<Name>, Target)) -> Last {
+        self.lock().get(build).cloned().unwrap_or_default()
+    }
+
+    /// Updates what is kept of a build.
+    pub(crate) fn update(&self, build: (Option<Name>, Target), f: impl FnOnce(&mut Last)) {
+        f(self.lock().entry(build).or_default());
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashMap<(Option<Name>, Target), Last>> {
+        // Each update is one call that does not panic.
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 /// What a world reports to the hook set with [`WorldBuilder::on_event`], for
@@ -82,6 +124,7 @@ pub struct WorldBuilder {
     mode: BuildMode,
     limits: Limits,
     hook: Option<Hook>,
+    long_lived: bool,
 }
 
 /// No components, the bundled fonts ([`folio_fonts::bundled`]), a build
@@ -94,6 +137,7 @@ impl Default for WorldBuilder {
             mode: BuildMode::default(),
             limits: Limits::default(),
             hook: None,
+            long_lived: false,
         }
     }
 }
@@ -125,6 +169,24 @@ impl WorldBuilder {
     /// trust as far, or a test, can lower them.
     pub fn limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// Whether the world serves a long-lived process, such as `folio
+    /// watch` or the language server (SPEC §12.2, §12.3); by default it
+    /// serves one build and exits.
+    ///
+    /// A panic in a query is a bug in the compiler. In a long-lived world,
+    /// [`compile`](crate::compile) and [`check`](crate::check), and so
+    /// [`compile_builds`](crate::compile_builds) and
+    /// [`check_builds`](crate::check_builds), turn it into an error with
+    /// the code `internal-error` and answer with what the last compilation
+    /// of the build that did not panic gave: its sources and files, and its
+    /// last output. The process lives on, and the next edit compiles
+    /// again. Otherwise the panic unwinds out of them, as it does out of
+    /// the other functions in either kind of world.
+    pub fn long_lived(mut self, long_lived: bool) -> Self {
+        self.long_lived = long_lived;
         self
     }
 
@@ -192,6 +254,7 @@ impl WorldBuilder {
             nodes: Arc::default(),
             manifest_text: Lines::new(manifest_text.to_owned()),
             lockfile_text: lockfile_text.map(|text| Lines::new(text.to_owned())),
+            kept: self.long_lived.then(Arc::default),
         })
     }
 }
@@ -204,6 +267,7 @@ impl Debug for WorldBuilder {
             .field("mode", &self.mode)
             .field("limits", &self.limits)
             .field("hook", &self.hook.is_some())
+            .field("long_lived", &self.long_lived)
             .finish()
     }
 }
@@ -585,6 +649,17 @@ impl World {
             .iter()
             .flat_map(|v| v.targets.iter().map(|t| (Some(v.name.v.clone()), t.v)))
             .collect()
+    }
+
+    /// Whether the world serves a long-lived process
+    /// ([`WorldBuilder::long_lived`]).
+    pub fn is_long_lived(&self) -> bool {
+        self.kept.is_some()
+    }
+
+    /// In a long-lived world, what it keeps of each build.
+    pub(crate) fn kept(&self) -> Option<&Kept> {
+        self.kept.as_deref()
     }
 
     pub(crate) fn db(&self) -> &Database {

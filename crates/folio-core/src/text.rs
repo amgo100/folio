@@ -170,7 +170,10 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
         .iter()
         .map(|p| p.paragraph.clone())
         .collect();
-    let shaped = db.text_cache().shape_all(&inputs);
+    // An edit stops the query between paragraphs (SPEC §2.3).
+    let shaped = db
+        .text_cache()
+        .shape_all_checked(&inputs, &mut || db.unwind_if_revision_cancelled());
     let paragraphs = collected
         .paragraphs
         .iter()

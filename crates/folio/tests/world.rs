@@ -358,6 +358,123 @@ fn an_edit_cancels_a_running_compilation() {
     assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
 }
 
+/// A world with the project of [`Logged`] whose `query` panics, a bug
+/// injected through the event hook, while the flag is set.
+fn panicking(long_lived: bool, query: &'static str) -> (World, Arc<AtomicBool>) {
+    let armed = Arc::new(AtomicBool::new(false));
+    let hook_armed = armed.clone();
+    let mut world = World::builder()
+        .long_lived(long_lived)
+        .on_event(move |event| {
+            if let Event::Execute { query: q } = event
+                && q == query
+                && hook_armed.load(Ordering::SeqCst)
+            {
+                panic!("injected into `{query}`");
+            }
+        })
+        .build(MANIFEST, None)
+        .unwrap();
+    world.set_source("main.fol", MAIN).unwrap();
+    world
+        .set_source("questions/q1.fol", "A question.\n")
+        .unwrap();
+    for path in ["styles/exam.fsty", "styles/markscheme.fsty"] {
+        world.set_source(path, "").unwrap();
+    }
+    (world, armed)
+}
+
+#[test]
+fn a_panic_in_a_query_is_a_diagnostic_in_a_long_lived_world() {
+    let (mut world, armed) = panicking(true, "lines");
+    assert!(world.is_long_lived());
+    let exam = Name::new("exam").unwrap();
+    let good = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert!(!good.has_errors(), "{:?}", good.diagnostics);
+    assert!(good.output.is_some());
+
+    // An edit whose compilation panics: an internal error, which keeps the
+    // last good output and what the build read.
+    world.set_source("main.fol", "= Energy\n").unwrap();
+    armed.store(true, Ordering::SeqCst);
+    let failed = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(failed.diagnostics.len(), 1, "{:?}", failed.diagnostics);
+    let error = &failed.diagnostics[0];
+    assert!(error.is_error());
+    assert_eq!(error.code.as_deref(), Some("internal-error"));
+    assert_eq!(
+        error.message,
+        "internal error: the compiler panicked: injected into `lines`"
+    );
+    assert!(matches!(error.span.get(), DiagSpanKind::Detached));
+    assert_eq!(error.hints.len(), 2, "{:?}", error.hints);
+    assert_eq!(failed.output, good.output);
+    assert_eq!(failed.sources, good.sources);
+    assert_eq!(failed.files, good.files);
+
+    // A check panics alike.
+    let checked = folio::check(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(checked.diagnostics.len(), 1, "{:?}", checked.diagnostics);
+    assert_eq!(
+        checked.diagnostics[0].code.as_deref(),
+        Some("internal-error")
+    );
+    assert_eq!(checked.sources, good.sources);
+
+    // Once the bug is gone, the next compilation succeeds, in the same
+    // process and on the same database.
+    armed.store(false, Ordering::SeqCst);
+    let fixed = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert!(!fixed.has_errors(), "{:?}", fixed.diagnostics);
+    assert!(fixed.output.is_some());
+    assert_ne!(fixed.output, good.output);
+}
+
+#[test]
+fn a_panic_in_a_shared_query_is_a_diagnostic_in_every_parallel_build() {
+    // Every build reads the files' dependencies, whichever thread runs
+    // them first: the others wait for it, and see its panic.
+    let (world, armed) = panicking(true, "dependencies");
+    armed.store(true, Ordering::SeqCst);
+    let outputs = folio::compile_all(&world);
+    assert_eq!(outputs.len(), 3);
+    for output in outputs {
+        let compiled = output.result.unwrap();
+        assert_eq!(compiled.diagnostics.len(), 1, "{:?}", compiled.diagnostics);
+        assert_eq!(
+            compiled.diagnostics[0].code.as_deref(),
+            Some("internal-error")
+        );
+        // Nothing compiled before, so there is nothing to keep.
+        assert_eq!(compiled.output, None);
+        assert_eq!(compiled.diagnostics[0].hints.len(), 1);
+    }
+
+    armed.store(false, Ordering::SeqCst);
+    for output in folio::compile_all(&world) {
+        let compiled = output.result.unwrap();
+        assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+    }
+}
+
+#[test]
+fn a_panic_in_a_query_unwinds_in_an_ordinary_world() {
+    let (world, armed) = panicking(false, "lines");
+    assert!(!world.is_long_lived());
+    armed.store(true, Ordering::SeqCst);
+    let exam = Name::new("exam").unwrap();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        folio::compile(&world, Target::Pdf, Some(&exam))
+    }));
+    let payload = panicked.unwrap_err();
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .unwrap_or_default();
+    assert_eq!(message, "injected into `lines`");
+}
+
 #[test]
 fn compiles_all_builds_in_parallel() {
     let logged = Logged::new();

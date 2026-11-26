@@ -225,7 +225,10 @@ pub(crate) fn emit(db: &dyn Db, build: Build<'_>) -> Option<Bytes> {
             let pages = pages(db, build).as_ref()?;
             let input = pdf_input(db, build).as_ref()?;
             let fonts = FontTable(fonts(db, build.project(db)));
-            match folio_pdf::write_checked(&input.document(pages, &fonts), checked) {
+            let document = input.document(pages, &fonts);
+            // An edit stops the query between pages (SPEC §2.3).
+            let check = &mut || db.unwind_if_revision_cancelled();
+            match folio_pdf::write_checked_with(&document, checked, check) {
                 Ok(written) => {
                     // Those the check foresaw come first.
                     for warning in written.warnings.iter().skip(checked.warnings.len()) {

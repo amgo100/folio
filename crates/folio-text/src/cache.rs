@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, mpsc};
 
 use rayon::prelude::*;
@@ -15,9 +15,10 @@ use crate::shape::TextFont;
 /// without being asked for.
 const MAX_AGE: u64 = 32;
 
-/// The threads that shape paragraphs, shared by every cache of the
-/// process. They run nothing but shaping, so a caller waiting for them never
-/// runs other work of its own thread pool meanwhile.
+/// The threads that shape paragraphs and run the other work handed to
+/// [`Cache::parallel`], shared by every cache of the process. They run
+/// nothing else, so a caller waiting for them never runs other work of its
+/// own thread pool meanwhile.
 static POOL: LazyLock<Option<ThreadPool>> = LazyLock::new(|| {
     ThreadPoolBuilder::new()
         .thread_name(|i| format!("folio-shape-{i}"))
@@ -116,10 +117,30 @@ impl Cache {
     /// When a paragraph's segments do not cover its text at character
     /// boundaries.
     pub fn shape_all(&self, paragraphs: &[Paragraph]) -> Vec<Arc<Shaped>> {
+        self.shape_all_checked(paragraphs, &mut || {})
+    }
+
+    /// Shapes paragraphs as [`shape_all`](Self::shape_all) does, calling
+    /// `check` on the caller's thread after each paragraph it shapes.
+    ///
+    /// `check` may unwind, as a database query that its revision has
+    /// cancelled does (SPEC §2.3): the paragraphs not yet shaped are then
+    /// dropped, and those shaped are kept in the cache for the next call.
+    ///
+    /// # Panics
+    ///
+    /// When a paragraph's segments do not cover its text at character
+    /// boundaries, or `check` panics.
+    pub fn shape_all_checked(
+        &self,
+        paragraphs: &[Paragraph],
+        check: &mut dyn FnMut(),
+    ) -> Vec<Arc<Shaped>> {
         let now = self.clock.fetch_add(1, Ordering::Relaxed) + 1;
         let mut out: Vec<Option<Arc<Shaped>>> = vec![None; paragraphs.len()];
         // The paragraphs to shape, each once, with where their results go.
-        let mut misses: Vec<(Paragraph, Vec<usize>)> = Vec::new();
+        let mut misses: Vec<Paragraph> = Vec::new();
+        let mut targets: Vec<Vec<usize>> = Vec::new();
         {
             let mut cached = lock(&self.paragraphs);
             let mut missing: HashMap<&Paragraph, usize> = HashMap::new();
@@ -128,30 +149,29 @@ impl Cache {
                     entry.used = now;
                     out[i] = Some(entry.shaped.clone());
                 } else if let Some(&m) = missing.get(paragraph) {
-                    misses[m].1.push(i);
+                    targets[m].push(i);
                 } else {
                     missing.insert(paragraph, misses.len());
-                    misses.push((paragraph.clone(), vec![i]));
+                    misses.push(paragraph.clone());
+                    targets.push(vec![i]);
                 }
             }
         }
 
-        let shaped = shape_many(misses.iter().map(|(p, _)| p.clone()).collect());
-        let mut cached = lock(&self.paragraphs);
-        for ((paragraph, targets), shaped) in misses.into_iter().zip(shaped) {
-            let shaped = cached
-                .entry(paragraph)
+        Self::parallel(misses, shape, &mut |m, paragraph, shaped| {
+            let shaped = lock(&self.paragraphs)
+                .entry(paragraph.clone())
                 .or_insert(Entry {
                     shaped: Arc::new(shaped),
                     used: now,
                 })
                 .shaped
                 .clone();
-            for i in targets {
+            for &i in &targets[m] {
                 out[i] = Some(shaped.clone());
             }
-        }
-        drop(cached);
+            check();
+        });
 
         if now.is_multiple_of(8) {
             self.evict(now);
@@ -159,6 +179,72 @@ impl Cache {
         out.into_iter()
             .map(|s| s.expect("every paragraph is shaped"))
             .collect()
+    }
+
+    /// Runs `f` on each item, in parallel on the threads that shape
+    /// paragraphs when there are several items, and hands each result to
+    /// `each` on the caller's thread with the item's index and the item,
+    /// as the results come in.
+    ///
+    /// The order in which `each` sees the results depends on scheduling;
+    /// the index says where each belongs. The caller blocks on a channel,
+    /// which runs no other work, rather than in a `rayon` join, which may,
+    /// so it may hold thread-local state, as a thread running a database
+    /// query does, and may itself be a thread of another `rayon` pool.
+    ///
+    /// `each` may unwind, as a database query that its revision has
+    /// cancelled does (SPEC §2.3): the items not yet started are then
+    /// skipped, and the threads drop what they finish afterwards.
+    ///
+    /// # Panics
+    ///
+    /// When `f` panics on an item (with its panic, on the caller's thread),
+    /// or `each` panics.
+    pub fn parallel<I, O, F>(items: Vec<I>, f: F, each: &mut dyn FnMut(usize, &I, O))
+    where
+        I: Send + Sync + 'static,
+        O: Send + 'static,
+        F: Fn(&I) -> O + Send + Sync + 'static,
+    {
+        let pool = POOL.as_ref().filter(|_| items.len() > 1);
+        let Some(pool) = pool else {
+            for (i, item) in items.iter().enumerate() {
+                each(i, item, f(item));
+            }
+            return;
+        };
+        let items = Arc::new(items);
+        let stop = Arc::new(AtomicBool::new(false));
+        // Tells the job to start no more items when the caller is done
+        // with it, by unwinding too.
+        let _stop = Stop(stop.clone());
+        let (tx, rx) = mpsc::channel();
+        let job = items.clone();
+        pool.spawn(move || {
+            // The job shares its items and drops them after a panic; the
+            // shared state that shaping touches, the plans of its fonts,
+            // tolerates a panic while their lock is held.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                job.par_iter()
+                    .enumerate()
+                    .for_each_with(tx.clone(), |tx, (i, item)| {
+                        if !stop.load(Ordering::Relaxed) {
+                            // The caller may have stopped listening.
+                            let _ = tx.send(Ok((i, f(item))));
+                        }
+                    });
+            }));
+            if let Err(panic) = result {
+                let _ = tx.send(Err(panic));
+            }
+        });
+        for _ in 0..items.len() {
+            match rx.recv() {
+                Ok(Ok((i, out))) => each(i, &items[i], out),
+                Ok(Err(panic)) => std::panic::resume_unwind(panic),
+                Err(_) => unreachable!("the job sends every result or its panic"),
+            }
+        }
     }
 
     /// Forgets paragraphs not asked for in the last [`MAX_AGE`] calls, and
@@ -188,29 +274,12 @@ impl Debug for Cache {
     }
 }
 
-/// Shapes paragraphs, in parallel on the shaping threads when there are
-/// several. The caller blocks on a channel, which runs no other work, rather
-/// than in a `rayon` join, which may.
-fn shape_many(paragraphs: Vec<Paragraph>) -> Vec<Shaped> {
-    let pool = POOL.as_ref().filter(|_| paragraphs.len() > 1);
-    let Some(pool) = pool else {
-        return paragraphs.iter().map(shape).collect();
-    };
-    let (tx, rx) = mpsc::channel();
-    pool.spawn(move || {
-        // The job owns its paragraphs and drops them after a panic; the
-        // shared state it touches, the plans of its fonts, tolerates a
-        // panic while their lock is held.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            paragraphs.par_iter().map(shape).collect::<Vec<Shaped>>()
-        }));
-        // The caller is waiting for this.
-        let _ = tx.send(result);
-    });
-    match rx.recv() {
-        Ok(Ok(shaped)) => shaped,
-        Ok(Err(panic)) => std::panic::resume_unwind(panic),
-        Err(_) => unreachable!("the shaping job always sends its result"),
+/// Sets its flag when dropped, even by unwinding.
+struct Stop(Arc<AtomicBool>);
+
+impl Drop for Stop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
     }
 }
 
