@@ -6,9 +6,10 @@
 //! changes, through a temporary file that takes the file's permissions and
 //! keeps its byte order mark; a read-only file is an error. Like `folio
 //! build`, it runs the compiler version that `folio.toml` pins (SPEC §2.4).
-//! A file with syntax errors is left as it is and its errors are reported. With `--check`, no file changes:
-//! each file that is not formatted is reported as an error with the code
-//! `unformatted` and a fix whose edits format it. The exit status is 1 when
+//! A file with syntax errors is left as it is and its errors are reported.
+//! With `--check`, no file changes: each file that is not formatted is
+//! reported as an error with the code `unformatted` and a fix whose edits
+//! format it. The exit status is 1 when
 //! there are errors, and with `--check` when a file is not formatted.
 
 use std::collections::HashSet;
@@ -90,16 +91,22 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
         .collect();
     paths.sort();
     let mut formatted = Vec::new();
-    // A file that links inside the project lead to is a source under each
-    // path; it is formatted, or reported, once.
+    // A file that several links inside the project lead to is a source
+    // under each of their paths; it is formatted, or reported, once.
     let mut seen = HashSet::new();
     for path in paths {
         let Some(source) = world.source(&path) else {
             continue;
         };
         if let Ok(file) = root.join(&path).canonicalize() {
-            // A link to a file of another kind, or to a file already seen.
-            if file.extension() != Path::new(&path).extension() || !seen.insert(file) {
+            if file.extension() != Path::new(&path).extension() {
+                diagnostics.push(Diagnostic::warning(
+                    DiagSpan::from_range(source.id(), 0..0),
+                    format!("{path} is a link to a file of another kind, which is not formatted"),
+                ));
+                continue;
+            }
+            if !seen.insert(file) {
                 continue;
             }
         }

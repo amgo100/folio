@@ -9,9 +9,12 @@
 //!
 //! - Line ends are `\n`, lines carry no trailing whitespace (line comments
 //!   included; block comments, strings, raw text and equations keep their
-//!   bytes), there is at most one blank line in a row, and a file that is
-//!   not empty starts with its first token, or in markup with its
-//!   indentation, and ends with one newline.
+//!   bytes), and there is at most one blank line in a row. A stylesheet
+//!   starts with its first token and ends with one newline. Content keeps
+//!   the kind of whitespace it starts and ends with (none, a space, a
+//!   paragraph break), since an included file puts it into the text around
+//!   the include; a line break stands for a space, a blank line for a
+//!   paragraph break.
 //! - Lines of code and stylesheets are indented by two spaces more than the
 //!   line that opened the innermost bracket (`{`, `(`, `[`) still open, so
 //!   several brackets opened on one line count once. A line that starts by
@@ -209,13 +212,14 @@ pub fn format(root: &SyntaxNode) -> Result<Edits, FormatError> {
 /// Whether two syntax trees of files are the same apart from whitespace that
 /// carries no meaning: whitespace in code and stylesheets, the amount of
 /// whitespace in markup (a space is a space, a paragraph break a paragraph
-/// break), whitespace at the end of a line comment, and whitespace at the
-/// start and end of a file.
+/// break) and whitespace at the end of a line comment. Whitespace at the
+/// start and end of content counts as in markup elsewhere: an included file
+/// puts it into the text around the include.
 pub fn equivalent(a: &SyntaxNode, b: &SyntaxNode) -> bool {
     let mut left = Vec::new();
     let mut right = Vec::new();
-    shape(a, None, true, &mut left);
-    shape(b, None, true, &mut right);
+    shape(a, None, &mut left);
+    shape(b, None, &mut right);
     left == right
 }
 
@@ -228,7 +232,7 @@ enum Step {
 }
 
 /// Walks `node` into `out`, leaving out whitespace that carries no meaning.
-fn shape(node: &SyntaxNode, parent: Option<SyntaxKind>, root: bool, out: &mut Vec<Step>) {
+fn shape(node: &SyntaxNode, parent: Option<SyntaxKind>, out: &mut Vec<Step>) {
     let kind = node.kind();
     if is_space(kind) {
         if parent.is_some_and(is_markup) {
@@ -254,21 +258,11 @@ fn shape(node: &SyntaxNode, parent: Option<SyntaxKind>, root: bool, out: &mut Ve
         return;
     }
     out.push(Step::Enter(kind));
-    let children = node.children().as_slice();
-    let (mut start, mut end) = (0, children.len());
-    if root {
-        while start < end && is_space(children[start].kind()) {
-            start += 1;
-        }
-        while end > start && is_space(children[end - 1].kind()) {
-            end -= 1;
-        }
-    }
     // In markup, text and the spaces between words are one run: the lexer
     // joins words with a single space into one text, and more spaces into
     // texts with spaces between.
     let mut run: Option<EcoString> = None;
-    for child in &children[start..end] {
+    for child in node.children() {
         match child.kind() {
             SyntaxKind::Text | SyntaxKind::Space if is_markup(kind) => {
                 let run = run.get_or_insert_default();
@@ -282,7 +276,7 @@ fn shape(node: &SyntaxNode, parent: Option<SyntaxKind>, root: bool, out: &mut Ve
                 if let Some(run) = run.take() {
                     out.push(Step::Leaf(SyntaxKind::Text, run));
                 }
-                shape(child, Some(kind), false, out);
+                shape(child, Some(kind), out);
             }
         }
     }
@@ -416,6 +410,8 @@ struct Gap {
 /// gap after the last.
 struct Walk {
     text: EcoString,
+    /// Whether the file is content, not a stylesheet.
+    markup: bool,
     tokens: Vec<Token>,
     gaps: Vec<Gap>,
     /// The number of brackets open after the tokens so far.
@@ -429,6 +425,7 @@ impl Walk {
     fn new(root: &SyntaxNode) -> Self {
         let mut this = Self {
             text: root.full_text(),
+            markup: root.kind() == SyntaxKind::Markup,
             tokens: Vec::new(),
             gaps: vec![Gap::default()],
             depth: 0,
@@ -556,14 +553,24 @@ impl Walk {
                 {
                     None
                 }
+                // Content keeps the kind of whitespace it ends with (none,
+                // a space, a paragraph break), which an include puts into
+                // the text around it; a stylesheet ends with a line break.
+                (Some(_), None) if self.markup => Some(edge(text, newlines)),
                 (Some(_), None) => Some("\n".into()),
                 // The start of the file: markup keeps the indentation of
                 // its first line.
                 (None, Some(_)) if gap.markup => {
                     indent = after_last_newline(text).unwrap_or(text).into();
-                    Some(indent.clone())
+                    let mut new = match newlines {
+                        0 => EcoString::new(),
+                        _ => edge(text, newlines),
+                    };
+                    new.push_str(&indent);
+                    Some(new)
                 }
                 (None, Some(_)) => Some(EcoString::new()),
+                (None, None) if self.markup => Some(edge(text, newlines)),
                 (None, None) => Some(EcoString::new()),
                 (Some(_), Some(next)) if newlines > 0 => {
                     let new_indent: EcoString = if frozen || gap.markup && !next.closes() {
@@ -754,6 +761,17 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
     keep()
 }
 
+/// Whitespace at the start or end of content, of the same kind as `text`
+/// with `newlines` line breaks: none, a space (a line break, or the spaces
+/// written), or a paragraph break (a blank line).
+fn edge(text: &str, newlines: usize) -> EcoString {
+    match newlines {
+        0 => text.into(),
+        1 => "\n".into(),
+        _ => "\n\n".into(),
+    }
+}
+
 /// The number of line breaks in whitespace, a `\r\n` counting once.
 fn count_newlines(text: &str) -> usize {
     let mut count = 0;
@@ -871,11 +889,15 @@ mod tests {
         markup("Text  // note\n", "Text  // note\n");
         markup("Text // note  \t\n// more \n", "Text // note\n// more\n");
         markup("`a   b`  $x   y$\n", "`a   b` $x   y$\n");
-        markup("Done", "Done\n");
+        markup("Done", "Done");
+        markup("Done  ", "Done  ");
+        markup("Done\n\n\n", "Done\n\n");
         markup("  - a\n  - b\n", "  - a\n  - b\n");
-        markup("\n\n  - a\n", "  - a\n");
+        markup("\n\n  - a\n", "\n\n  - a\n");
+        markup("\n  \nText\n", "\n\nText\n");
+        markup("\n  Text\n", "\n  Text\n");
         markup("", "");
-        markup("  \n", "");
+        markup("  \n", "\n");
         style("", "");
         style("\n", "");
     }
@@ -965,9 +987,13 @@ mod tests {
 
     #[test]
     fn equivalence() {
-        let a = parse("Hello  world\n");
-        let b = parse("Hello world");
-        assert!(equivalent(&a, &b));
+        assert!(equivalent(
+            &parse("Hello  world\n"),
+            &parse("Hello world\n")
+        ));
+        // An included file puts the whitespace at its ends into the text.
+        assert!(!equivalent(&parse("Hello world\n"), &parse("Hello world")));
+        assert!(!equivalent(&parse("x\n"), &parse("x\n\n")));
         assert!(!equivalent(&parse("Hello world"), &parse("Helloworld")));
         assert!(!equivalent(&parse("a\n\nb"), &parse("a\nb")));
         let a = parse_stylesheet("a { margin: 0 -1mm; }");

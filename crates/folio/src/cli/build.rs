@@ -439,11 +439,14 @@ pub(super) fn replace(
     let (temporary, mut out) = loop {
         let n = TEMPORARY.fetch_add(1, Ordering::Relaxed);
         let temporary = file.with_file_name(format!(".{name}.{pid}-{n}.folio-tmp"));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // A file that takes permissions is private until it has them.
+        #[cfg(unix)]
+        if permissions.is_some() {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        }
+        match options.open(&temporary) {
             Ok(out) => break (temporary, out),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
