@@ -313,8 +313,9 @@ fn navigation(resolution: &Resolution) -> Navigation {
 /// The structure of a document for the PDF writer: a node for every block
 /// of the text stage, whose boxes the page builder's fragments are, with
 /// the role of its element or part (SPEC §11.1), and a node for every
-/// inline formula, whose chunks are boxes too. A formula's text is its
-/// alternate description: `alt` gives the source of the formula at a span.
+/// inline formula, whose chunks are boxes too, and every image. A formula's
+/// text is its alternate description: `alt` gives the source of the
+/// formula at a span. An image's is its `alt` text.
 pub(crate) fn structure(
     block: &TextBlock,
     text: &Text,
@@ -332,16 +333,20 @@ pub(crate) fn structure(
         match child {
             TextFlow::Block(block) => tag.children.push(structure(block, text, alt)),
             TextFlow::Paragraph(index) => {
-                // A formula's first chunk; the others continue it.
-                let formulas = text.paragraphs[*index]
-                    .objects
-                    .iter()
-                    .filter(|object| object.math.is_some_and(|m| m.chunk == 0));
-                for object in formulas {
-                    let mut formula = Tag::new(Role::Formula, source_ref(object.span));
-                    formula.instance = object.location.instance;
-                    formula.text = formula_alt(text, object.span, alt);
-                    tag.children.push(formula);
+                // A formula's first chunk, as the others continue it, and
+                // each image, with its alt text as its description.
+                for object in &text.paragraphs[*index].objects {
+                    let (role, description) = if object.math.is_some_and(|m| m.chunk == 0) {
+                        (Role::Formula, formula_alt(text, object.span, alt))
+                    } else if let Some(image) = &object.image {
+                        (Role::Figure, image.alt.clone().and_then(clean))
+                    } else {
+                        continue;
+                    };
+                    let mut child = Tag::new(role, source_ref(object.span));
+                    child.instance = object.location.instance;
+                    child.text = description;
+                    tag.children.push(child);
                 }
             }
         }

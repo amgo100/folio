@@ -9,10 +9,13 @@
 //! it changed ([`super::Cache`]).
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{Abs, Color, FontId, FragmentItem, Paint, Point, Size, Value};
+use folio_component::{
+    Abs, Color, FontId, FragmentItem, ImageBox, Location, Paint, Point, Size, Value,
+};
 use folio_math::layout::{
     DisplayMath, InlineMath, MathFont, MathOptions, VectorStyle, layout_display, layout_inline,
     layout_text,
@@ -25,11 +28,11 @@ use super::{Cache, length};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
-use crate::pipeline::resolution;
+use crate::pipeline::{resolution, step_styled};
 use crate::resolve::{Resolution, Target};
 use crate::span_map::source_ref;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{MathSettings, TextMath, TextObject, collect_text};
+use crate::text::{MathSettings, TextImage, TextMath, TextObject, collect_text};
 
 /// The family formulas are set in when no family of `math-font` is
 /// available, and the property's initial value (SPEC §8.2). It is bundled,
@@ -39,12 +42,44 @@ pub const MATH_FONT: &str = "New Computer Modern Math";
 /// How far apart an equation and its number are at least, in ems.
 const NUMBER_GUTTER: f64 = 0.5;
 
-/// The formulas of a build laid out, by their index in
-/// [`Text::maths`](crate::text::Text::maths).
+/// The objects of a build that are not text, sized (SPEC §7.2, §8.2): the
+/// formulas laid out, by their index in
+/// [`Text::maths`](crate::text::Text::maths), and the images, by their
+/// element instance.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Maths {
     /// Each formula, or `None` where no math font could set it.
     pub formulas: EcoVec<Option<LaidMath>>,
+    /// Each image of the build's paragraphs, sized.
+    pub images: Images,
+}
+
+/// The images of a build sized, by the location of their elements.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct Images(HashMap<Location, LaidImage>);
+
+impl Hash for Images {
+    /// Independent of the map's order: the sum of a hash of each entry.
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut sum: u64 = 0;
+        for entry in &self.0 {
+            let mut hasher = super::flow::Fx::default();
+            entry.hash(&mut hasher);
+            sum = sum.wrapping_add(hasher.finish());
+        }
+        state.write_usize(self.0.len());
+        state.write_u64(sum);
+    }
+}
+
+/// An image sized as an object of its line: its size, and what it draws
+/// from the start of its baseline, which is its bottom edge.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct LaidImage {
+    /// Its size in its line.
+    pub metrics: ObjectMetrics,
+    /// The image, drawn above the baseline.
+    pub items: EcoVec<(Point, FragmentItem)>,
 }
 
 /// A formula laid out.
@@ -88,6 +123,10 @@ impl Maths {
         &self,
         object: &TextObject,
     ) -> Option<(ObjectMetrics, &EcoVec<(Point, FragmentItem)>)> {
+        if object.image.is_some() {
+            let laid = self.images.0.get(&object.location)?;
+            return Some((laid.metrics, &laid.items));
+        }
         let chunk = object.math?;
         let Some(Some(LaidMath::Inline(math))) = self.formulas.get(chunk.formula) else {
             return None;
@@ -108,9 +147,9 @@ impl Maths {
     }
 
     /// The sizes of a paragraph's objects as the paragraph builder reads
-    /// them, or none when no object of it is a formula.
+    /// them, or none when no object of it is a formula or an image.
     pub fn metrics(&self, objects: &[TextObject]) -> EcoVec<ObjectMetrics> {
-        if !objects.iter().any(|o| o.math.is_some()) {
+        if !objects.iter().any(sized) {
             return EcoVec::new();
         }
         objects
@@ -136,8 +175,12 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
     let collected = collect_text(db, build).as_ref()?;
     let resolution = resolution(db, build)?;
     let fonts = fonts(db, build.project(db));
+    let images = images(db, build, collected)?;
     if collected.maths.is_empty() {
-        return Some(Maths::default());
+        return Some(Maths {
+            formulas: EcoVec::new(),
+            images,
+        });
     }
     // The faces of the `math-font` chains, each chosen and checked once.
     let mut chosen: HashMap<EcoVec<EcoString>, Option<(MathFont, EcoString)>> = HashMap::new();
@@ -202,7 +245,82 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
             Some(laid)
         })
         .collect();
-    Some(Maths { formulas })
+    Some(Maths { formulas, images })
+}
+
+/// Whether layout sizes an object: a chunk of a formula, or an image.
+pub(super) fn sized(object: &TextObject) -> bool {
+    object.math.is_some() || object.image.is_some()
+}
+
+/// The images of a build's paragraphs sized in the lines of their
+/// paragraphs, which are as wide as the content of their blocks in the
+/// default master's body (SPEC §7.2): as wide as `width` asks, a length or
+/// a part of the lines' width, with the height that keeps the image's
+/// shape; with `width: auto`, at its natural size, narrowed to the lines'
+/// width where it is wider. `None` when the document could not be styled.
+fn images(db: &dyn Db, build: Build<'_>, collected: &crate::text::Collected) -> Option<Images> {
+    let mut images = HashMap::new();
+    if !collected
+        .paragraphs
+        .iter()
+        .any(|p| p.objects.iter().any(|o| o.image.is_some()))
+    {
+        return Some(Images(images));
+    }
+    let styled = step_styled(db, build)?;
+    let props = &styled.properties;
+    let body = super::PageMaster::of(&styled.page, props).body.size.width;
+    let (slots, _) = super::flow::slots(
+        &collected.root,
+        props,
+        body,
+        collected.paragraphs.len(),
+        &collected.maths,
+    );
+    for (paragraph, slot) in collected.paragraphs.iter().zip(&slots) {
+        for object in &paragraph.objects {
+            let Some(image) = &object.image else {
+                continue;
+            };
+            let size = image_size(image, slot.width);
+            let metrics = ObjectMetrics {
+                width: size.width,
+                ascent: size.height,
+                descent: Abs::zero(),
+                shift: Abs::zero(),
+                binds: false,
+                after: None,
+            };
+            let item = FragmentItem::Image(ImageBox {
+                size,
+                image: image.loaded.image.clone(),
+                location: object.location,
+            });
+            let items = EcoVec::from([(Point::new(Abs::zero(), -size.height), item)]);
+            images.insert(object.location, LaidImage { metrics, items });
+        }
+    }
+    Some(Images(images))
+}
+
+/// The size of an image in lines `line` wide, as [`images`] gives it.
+pub(super) fn image_size(image: &TextImage, line: Abs) -> Size {
+    let natural = image.loaded.size;
+    let line = line.max(Abs::zero());
+    let width = match &image.width {
+        Value::Length(length) => *length,
+        Value::Ratio(ratio) => line * ratio.get(),
+        Value::Number(number) => line * number.get(),
+        _ => natural.width.min(line),
+    }
+    .max(Abs::zero());
+    let height = if natural.width > Abs::zero() {
+        natural.height * (width.to_pt() / natural.width.to_pt())
+    } else {
+        natural.height
+    };
+    Size::new(width, height)
 }
 
 /// The face of a `math-font` chain (SPEC §8.2): the first family the

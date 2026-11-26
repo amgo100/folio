@@ -71,6 +71,20 @@ pub fn svg(list: &DisplayList, fonts: &dyn Fonts, outlines: &mut Outlines) -> St
                     num(FRAME_THICKNESS)
                 );
             }
+            Command::Image(item) => {
+                if let Some(uri) = crate::image::data_uri(&item.image) {
+                    let r = item.rect;
+                    let _ = write!(
+                        body,
+                        "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" \
+                         preserveAspectRatio=\"none\" href=\"{uri}\"/>",
+                        num(r.x),
+                        num(r.y),
+                        num(r.width),
+                        num(r.height),
+                    );
+                }
+            }
             Command::Box(_) | Command::Unknown(_) => {}
         }
     }

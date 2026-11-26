@@ -736,7 +736,7 @@ fn intern<T: Eq>(map: &Interned<T>, key: u64, value: T, now: u64) -> Arc<T> {
 /// hash differently; bytes are mixed in with their length, so byte strings
 /// of different lengths do not run together.
 #[derive(Debug, Copy, Clone)]
-pub(super) struct Fx(u64);
+pub(crate) struct Fx(u64);
 
 impl Default for Fx {
     fn default() -> Self {
@@ -917,7 +917,7 @@ impl Builder<'_> {
             .sizes
             .inline
             .is_some_and(|size| paragraph.objects.iter().any(|o| size(o).is_some()));
-        if hooked || paragraph.objects.iter().any(|o| o.math.is_some()) {
+        if hooked || paragraph.objects.iter().any(super::math::sized) {
             objects = paragraph
                 .objects
                 .iter()

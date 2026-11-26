@@ -28,7 +28,9 @@
 //! its span and nothing to draw, so that the items keep the indices a span
 //! map names them by; and it skips the bytes at the end of an item's body
 //! that it does not read. A later version of the format may therefore add
-//! commands, and fields at the end of an item, without a new version.
+//! commands, and fields at the end of an item, without a new version: the
+//! image command (tag 4: its box, a format byte and the file's bytes) came
+//! that way.
 //! Every other change raises [`VERSION`], and a decoder rejects a version
 //! it does not know.
 //!
@@ -36,13 +38,26 @@
 
 use std::fmt::{self, Display, Formatter};
 use std::ops::Range;
+use std::sync::Arc;
 
-use folio_component::{Color, FillRule, FontId, LineCap, LineJoin, SourceRef};
+use folio_component::{Color, FillRule, FontId, Image, ImageFormat, LineCap, LineJoin, SourceRef};
 
 use crate::list::{
-    Command, DisplayList, GlyphItem, Glyphs, Item, PathShape, Point, Rect, Segment, Span, SpanMap,
-    Stroke, Unknown,
+    Command, DisplayList, GlyphItem, Glyphs, ImageItem, Item, PathShape, Point, Rect, Segment,
+    Span, SpanMap, Stroke, Unknown,
 };
+
+/// The byte that names an image's format.
+fn format_byte(format: ImageFormat) -> u8 {
+    match format {
+        ImageFormat::Jpeg => 0,
+        ImageFormat::Png => 1,
+        ImageFormat::Webp => 2,
+        ImageFormat::Gif => 3,
+        ImageFormat::Svg => 4,
+        ImageFormat::Pdf => 5,
+    }
+}
 
 /// The magic bytes every message starts with.
 pub const MAGIC: [u8; 3] = *b"FDL";
@@ -57,6 +72,7 @@ const TAG_GLYPHS: u64 = 0;
 const TAG_PATH: u64 = 1;
 const TAG_FRAME: u64 = 2;
 const TAG_BOX: u64 = 3;
+const TAG_IMAGE: u64 = 4;
 
 const SEG_MOVE: u8 = 0;
 const SEG_LINE: u8 = 1;
@@ -111,6 +127,14 @@ pub fn encode(list: &DisplayList) -> Vec<u8> {
             Command::Box(rect) => {
                 body.rect(*rect);
                 TAG_BOX
+            }
+            Command::Image(image) => {
+                body.rect(image.rect);
+                body.buf.push(format_byte(image.image.format()));
+                let bytes: &[u8] = image.image.bytes();
+                body.uint(bytes.len() as u64);
+                body.buf.extend_from_slice(bytes);
+                TAG_IMAGE
             }
             Command::Unknown(unknown) => unknown.tag,
         };
@@ -479,6 +503,25 @@ impl<'a> Reader<'a> {
         }
     }
 
+    fn image(&mut self) -> Result<ImageItem, DecodeError> {
+        let rect = self.rect()?;
+        let format = match self.u8()? {
+            0 => ImageFormat::Jpeg,
+            1 => ImageFormat::Png,
+            2 => ImageFormat::Webp,
+            3 => ImageFormat::Gif,
+            4 => ImageFormat::Svg,
+            5 => ImageFormat::Pdf,
+            _ => return Err(DecodeError::Invalid),
+        };
+        let len = self.count(1)?;
+        let bytes = self.take(len)?;
+        Ok(ImageItem {
+            rect,
+            image: Image::new(Arc::from(bytes), format),
+        })
+    }
+
     fn flag(&mut self) -> Result<bool, DecodeError> {
         match self.u8()? {
             0 => Ok(false),
@@ -541,6 +584,7 @@ impl<'a> Reader<'a> {
                 TAG_PATH => Command::Path(body.path()?),
                 TAG_FRAME => Command::Frame(body.rect()?),
                 TAG_BOX => Command::Box(body.rect()?),
+                TAG_IMAGE => Command::Image(body.image()?),
                 // A command of a later version of the format: its span is
                 // kept, the rest of its body skipped.
                 tag => Command::Unknown(Unknown { tag }),

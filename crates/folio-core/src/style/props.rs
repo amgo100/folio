@@ -237,7 +237,8 @@ impl Properties {
 /// declaration sets it to `value` (`None` for a render template): the
 /// feature, for a warning that the declaration has no effect (SPEC §7.9).
 /// Its initial value, and `placement: here`, which is where layout puts
-/// every float, ask for nothing, nor does `marker-position: inside`, which
+/// every float, ask for nothing, and `width` is not listed, as images read
+/// it (the text stage warns of it on other elements), nor does `marker-position: inside`, which
 /// is where the text stage sets every marker. Each entry goes with the work
 /// that reads the property: hanging markers with layout, `display`
 /// with variants and visibility (SPEC §6.3), `template` with render
@@ -263,7 +264,6 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
         "display" | "show-only" => "showing and hiding content",
         // Markers are set inside the first line until layout hangs them.
         "marker-position" => "hanging markers",
-        "width" => "block widths",
         "trailer" => "block trailers",
         "column-tracks" => "tables",
         "grid-snap" | "baseline-grid" => "the baseline grid",

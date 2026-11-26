@@ -41,10 +41,11 @@ use folio_component::{BODY, ElementKind, Location, Name, QualifiedName, Target, 
 use folio_syntax::Span;
 use folio_text::{Feature, Lang, OBJECT, Paragraph, Segment, SegmentKind, Shaped, TextFont};
 
-use crate::db::{Build, Db};
+use crate::db::{Build, Db, Project, data_file};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{self, Content, Element, Node};
 use crate::fonts::{Fonts, Request, fonts};
+use crate::image::{LoadedImage, load_image};
 use crate::locate::StyledChildren;
 use crate::model::document;
 use crate::pipeline::{resolution, step_styled};
@@ -196,6 +197,21 @@ pub struct TextObject {
     pub location: Location,
     /// For a chunk of an inline formula, which.
     pub math: Option<MathChunk>,
+    /// For an image, the image, which layout sizes.
+    pub image: Option<TextImage>,
+}
+
+/// An image as an object of a paragraph: the image read, and what its
+/// element asks of its size and description.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TextImage {
+    /// The image and its natural size.
+    pub loaded: LoadedImage,
+    /// The computed `width` of its element: `auto`, a length, or a ratio
+    /// or number of the width of its paragraph's lines (SPEC §7.2).
+    pub width: Value,
+    /// Its `alt` text, the description PDF/UA-1 asks for (SPEC §11.1).
+    pub alt: Option<EcoString>,
 }
 
 /// The style and face of a segment of a paragraph.
@@ -333,6 +349,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
 
     let mut collector = Collector {
         db,
+        project,
         props: &styled.properties,
         fonts,
         cache: db.text_cache(),
@@ -369,6 +386,7 @@ struct Settings {
 
 struct Collector<'a> {
     db: &'a dyn Db,
+    project: Project,
     props: &'a Properties,
     fonts: &'a Fonts,
     cache: &'a Cache,
@@ -460,6 +478,7 @@ impl Collector<'_> {
     /// Collects the paragraphs of an element and its descendants, in a
     /// block of the element's.
     fn element(&mut self, element: &Element, node: &StyledNode) {
+        self.check_width(element, &node.style);
         self.open(&node.style, element, None);
         let owner = self.own(element);
         // A marker that no paragraph of the element takes is dropped with
@@ -517,10 +536,15 @@ impl Collector<'_> {
             if self.formula(element, node, true).is_some() {
                 return;
             }
-            if ["math", "image"]
-                .iter()
-                .any(|name| is_builtin(&element.name, name))
-            {
+            // An image where blocks stand is a paragraph of its own.
+            if is_builtin(&element.name, "image") {
+                let mut builder = self.builder();
+                let image = self.image(element, node);
+                builder.object_with(&node.style, element, node.location, None, image);
+                self.finish(builder, &node.style, element);
+                return;
+            }
+            if is_builtin(&element.name, "math") {
                 self.not_laid_out(element);
                 return;
             }
@@ -676,6 +700,9 @@ impl Collector<'_> {
         anchored: &mut Vec<(&'a Element, &'a StyledNode)>,
     ) {
         let style = &node.style;
+        if !is_builtin(&element.name, "image") {
+            self.check_width(element, style);
+        }
         match element.kind {
             ElementKind::Inline => {}
             // A note or float anchored here: its content is blocks.
@@ -716,18 +743,73 @@ impl Collector<'_> {
         if let Some(formula) = self.formula(element, node, false) {
             let chunks = folio_math::layout::inline_chunks(&self.maths[formula].formula);
             for chunk in 0..chunks {
-                out.object_of(
+                out.object_with(
                     style,
                     element,
                     node.location,
                     Some(MathChunk { formula, chunk }),
+                    None,
                 );
             }
             return;
         }
         // An image: an object layout will size.
+        if is_builtin(&element.name, "image") {
+            let image = self.image(element, node);
+            out.object_with(style, element, node.location, None, image);
+            return;
+        }
         self.not_laid_out(element);
         out.object(style, element, node.location);
+    }
+
+    /// The image of an `image` element, read, with the `width` and `alt`
+    /// it asks for; `None`, with an error at the element, for a file that
+    /// is not an image Folio reads. Evaluation checked that the file
+    /// exists.
+    fn image(&mut self, element: &Element, node: &StyledNode) -> Option<TextImage> {
+        let Some(eval::Value::Str(path)) = element.field("path") else {
+            return None;
+        };
+        let path = crate::project::ProjectPath::new(path.as_str())?;
+        let file = data_file(self.db, self.project, path)?;
+        match load_image(self.db, file) {
+            Ok(loaded) if loaded.text && self.laid_out => {
+                diag::report(
+                    self.db,
+                    Diagnostic::warning(
+                        element.span,
+                        "the text of this SVG image is not drawn: Folio does not set text in SVG images yet",
+                    )
+                    .with_hint("convert the text to paths (outlines) in the program that made the image"),
+                );
+                Some(self.text_image(loaded, element, node))
+            }
+            Ok(loaded) => Some(self.text_image(loaded, element, node)),
+            Err(message) => {
+                if self.laid_out {
+                    diag::report(self.db, Diagnostic::error(element.span, message.clone()));
+                }
+                None
+            }
+        }
+    }
+
+    /// An image read, as an object of its paragraph: with its element's
+    /// `width` and `alt`.
+    fn text_image(&self, loaded: &LoadedImage, element: &Element, node: &StyledNode) -> TextImage {
+        TextImage {
+            loaded: loaded.clone(),
+            width: node
+                .style
+                .value(self.props, self.props.builtin("width"))
+                .cloned()
+                .unwrap_or(Value::Auto),
+            alt: match element.field("alt") {
+                Some(eval::Value::Str(alt)) => Some(alt.clone()),
+                _ => None,
+            },
+        }
     }
 
     /// Records the formula of a `math` element, and returns its index in
@@ -757,21 +839,34 @@ impl Collector<'_> {
     }
 
     /// Warns, once per build and element, that layout does not draw an
-    /// element yet, so the output leaves it out (SPEC §7.9). Each warning
-    /// goes with the work that lays its element out: images with figures
-    /// and images (#47), and the boxes of other content with #214.
+    /// element yet, so the output leaves it out (SPEC §7.9): the boxes of
+    /// content that no stage lays out (#214).
     fn not_laid_out(&mut self, element: &Element) {
         let name = &element.name;
-        let builtin = |text: &str| is_builtin(name, text);
-        let message = if builtin("image") {
-            EcoString::from("images are not laid out yet, so the output leaves them out")
-        } else {
-            eco_format!("`{name}` is not laid out yet, so the output leaves it out")
-        };
+        let message = eco_format!("`{name}` is not laid out yet, so the output leaves it out");
         self.report_once(
             eco_format!("not-laid-out:{name}"),
             Diagnostic::warning(element.span, message)
                 .with_hint("this version of Folio checks it but does not draw it"),
+        );
+    }
+
+    /// Warns, once per build and element, that an element other than an
+    /// image has a `width`, which only images read so far (SPEC §7.2,
+    /// §7.9): the widths of blocks come with the work on page layout.
+    fn check_width(&mut self, element: &Element, style: &ComputedStyle) {
+        let width = style.value(self.props, self.props.builtin("width"));
+        if width.is_none_or(|w| *w == Value::Auto) {
+            return;
+        }
+        let name = &element.name;
+        self.report_once(
+            eco_format!("width:{name}"),
+            Diagnostic::warning(
+                element.span,
+                eco_format!("`width` is not implemented yet for `{name}`, so it has no effect"),
+            )
+            .with_hint("only images are sized by `width` so far"),
         );
     }
 
@@ -1035,16 +1130,18 @@ impl Builder {
     /// Appends an object in a style, standing for the instance `location`
     /// of `element`.
     fn object(&mut self, style: &ComputedStyle, element: &Element, location: Location) {
-        self.object_of(style, element, location, None);
+        self.object_with(style, element, location, None, None);
     }
 
-    /// An object character for an element, or for a chunk of its formula.
-    fn object_of(
+    /// An object character for an element, for a chunk of its formula, or
+    /// for its image.
+    fn object_with(
         &mut self,
         style: &ComputedStyle,
         element: &Element,
         location: Location,
         math: Option<MathChunk>,
+        image: Option<TextImage>,
     ) {
         self.flush_quote(Some(OBJECT));
         let start = self.text.len();
@@ -1055,6 +1152,7 @@ impl Builder {
             span: element.span,
             location,
             math,
+            image,
         });
         self.extend(start..self.text.len(), style, true, element.span);
     }
