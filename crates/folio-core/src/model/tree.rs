@@ -4,13 +4,16 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use ecow::{EcoString, eco_format};
-use folio_component::{BODY, Body, ContentKind, ElementKind, FieldType, Name, QualifiedName};
+use folio_component::{
+    BODY, Body, ContentKind, ElementKind, FieldType, Location, Name, QualifiedName,
+};
 use folio_syntax::Span;
 
 use super::{is_block, schema};
 use crate::db::{Db, Project, source_file};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Content, Dict, Element, Node, Value, canonical_fields, evaluate};
+use crate::locate::{Locator, Made};
 
 /// The typed document tree of one variant (SPEC §2.1): what every stage
 /// after evaluation reads.
@@ -23,7 +26,8 @@ use crate::eval::{Content, Dict, Element, Node, Value, canonical_fields, evaluat
 /// in it as an anchor), consecutive list items into a `list`,
 /// `enum` or `terms`, and each heading with the blocks after it, up to the
 /// next heading of the same or a higher level, into a `section`. Inline
-/// content has no spaces at its ends and no two spaces in a row.
+/// content has no spaces at its ends and no two spaces in a row. Every
+/// element has its location ([`crate::locate`]), unique in the tree.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Document {
     /// The `doc` element.
@@ -54,7 +58,8 @@ pub fn document(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<
     let span = source_file(db, project, entry)
         .map_or(Span::detached(), |file| file.source(db).root().span());
     let mut model = Model { db, project };
-    let root = model.root(content, span);
+    let mut root = model.root(content, span);
+    locate(&mut Locator::default(), &mut root);
     check_labels(db, &root);
     Some(Document { root })
 }
@@ -97,6 +102,7 @@ impl Model<'_> {
             fields: Dict::new(),
             label: None,
             span,
+            location: Location::DETACHED,
         });
         root.fields.remove(BODY);
         let body = self.blocks(&rest);
@@ -384,6 +390,48 @@ fn made<'f>(name: &str, fields: impl IntoIterator<Item = (&'f str, Value)>, span
         fields: fields.into_iter().map(|(k, v)| (k.into(), v)).collect(),
         label: None,
         span,
+        location: Location::DETACHED,
+    }
+}
+
+/// Gives an element and every element in its content fields their
+/// locations, in document order: an element before the elements of its
+/// fields, and those in the order of the fields.
+fn locate(locator: &mut Locator, element: &mut Element) {
+    element.location = locator.locate(element.span, made_by(&element.name));
+    let keys: Vec<EcoString> = element
+        .fields
+        .iter()
+        .filter(|(_, value)| matches!(value, Value::Content(_)))
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in keys {
+        element.fields.update(&key, false, |value| {
+            if let Value::Content(content) = value
+                && content
+                    .nodes()
+                    .iter()
+                    .any(|n| matches!(n, Node::Element(_)))
+            {
+                for child in content.elements_mut() {
+                    locate(locator, child);
+                }
+            }
+        });
+    }
+}
+
+/// What makes the elements of a name: the document model for its
+/// paragraphs, lists and sections, else evaluation.
+fn made_by(name: &QualifiedName) -> Made {
+    if name.namespace.is_some() {
+        return Made::Evaluated;
+    }
+    match name.name.as_str() {
+        "paragraph" => Made::Paragraph,
+        "list" | "enum" | "terms" => Made::List,
+        "section" => Made::Section,
+        _ => Made::Evaluated,
     }
 }
 

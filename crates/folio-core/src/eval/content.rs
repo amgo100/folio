@@ -14,7 +14,7 @@ use std::fmt::{self, Debug, Formatter, Write};
 use std::hash::{Hash, Hasher};
 
 use ecow::{EcoString, EcoVec};
-use folio_component::{ElementKind, Name, QualifiedName};
+use folio_component::{ElementKind, Location, Name, QualifiedName};
 use folio_syntax::{Span, SyntaxNode};
 
 use super::value::{Dict, Equality, LazyHash, Value, compare_once};
@@ -118,6 +118,19 @@ impl Content {
             Node::Element(element) => Some(element),
             _ => None,
         }
+    }
+
+    /// Its elements at the top level, to change. Only their locations may
+    /// be changed, since the content caches its depth.
+    pub(crate) fn elements_mut(&mut self) -> impl Iterator<Item = &mut Element> {
+        self.changed();
+        self.nodes
+            .make_mut()
+            .iter_mut()
+            .filter_map(|node| match node {
+                Node::Element(element) => Some(element),
+                _ => None,
+            })
     }
 
     /// The text of the content without markup, as a test or a lint reads
@@ -317,6 +330,11 @@ pub struct Element {
     pub label: Option<EcoString>,
     /// Where it was made: the markup or the call.
     pub span: Span,
+    /// Which instance of the document tree it is (SPEC §1.5): the document
+    /// model gives every element of the tree its location
+    /// ([`crate::locate`]); evaluated content, which one call may place
+    /// several times, has none yet ([`Location::DETACHED`]).
+    pub location: Location,
 }
 
 impl Element {
@@ -341,6 +359,7 @@ mod tests {
                 fields,
                 label: None,
                 span: Span::detached(),
+                location: Location::DETACHED,
             })
         };
         [strong(inner), strong(inner)].into_iter().collect()
