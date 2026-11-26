@@ -1,8 +1,8 @@
 //! The commands of SPEC §12.1 and their arguments. `folio build`, `folio
 //! check`, `folio fmt`, `folio lsp` and `folio toolchain install` are
-//! implemented; the other
-//! commands, and the flags of `folio build` and `folio check` for later
-//! features, are parsed and rejected as not yet supported.
+//! implemented; the other commands, and the flags of `folio build` and
+//! `folio check` for later features, are parsed and rejected as not yet
+//! supported.
 
 mod build;
 mod check;

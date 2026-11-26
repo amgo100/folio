@@ -9,8 +9,8 @@
 //! A file with syntax errors is left as it is and its errors are reported.
 //! With `--check`, no file changes: each file that is not formatted is
 //! reported as an error with the code `unformatted` and a fix whose edits
-//! format it. The exit status is 1 when
-//! there are errors, and with `--check` when a file is not formatted.
+//! format it. The exit status is 1 when there are errors, and with
+//! `--check` when a file is not formatted.
 
 use std::collections::HashSet;
 use std::fs;

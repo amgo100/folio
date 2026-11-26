@@ -30,9 +30,8 @@
 //!   were given. In code and stylesheets a space follows `,` (in the step
 //!   lists of selectors, `:step(1,3-4)`, it stays as written), `;` and the
 //!   `:` of a named argument, declaration, field or import, surrounds `=` in
-//!   a binding, `=>`, and
-//!   the combinators `>` and `+` of selectors, and separates the braces of
-//!   a declaration block from what they hold; none goes before `,`, `;` or
+//!   a binding, `=>`, and the combinators `>` and `+` of selectors, and
+//!   separates the braces of a declaration block from what they hold; none goes before `,`, `;` or
 //!   the `:` of a named argument, after `(` or before `)`; a space or a
 //!   line break separates rules. Runs of whitespace that hold other
 //!   characters than spaces, tabs and line breaks (a form feed, U+2028) are
@@ -765,11 +764,12 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
 }
 
 /// Whitespace at the start or end of content, of the same kind as `text`
-/// with `newlines` line breaks: none, a space (a line break, or the spaces
-/// written), or a paragraph break (a blank line).
+/// with `newlines` line breaks: none, a space (a line break, or one space
+/// on the same line), or a paragraph break (a blank line).
 fn edge(text: &str, newlines: usize) -> EcoString {
     match newlines {
-        0 => text.into(),
+        0 if text.is_empty() => EcoString::new(),
+        0 => " ".into(),
         1 => "\n".into(),
         _ => "\n\n".into(),
     }
@@ -914,7 +914,7 @@ mod tests {
         markup("Text // note  \t\n// more \n", "Text // note\n// more\n");
         markup("`a   b`  $x   y$\n", "`a   b` $x   y$\n");
         markup("Done", "Done");
-        markup("Done  ", "Done  ");
+        markup("Done \t  ", "Done ");
         markup("Done\n\n\n", "Done\n\n");
         markup("  - a\n  - b\n", "  - a\n  - b\n");
         markup("\n\n  - a\n", "\n\n  - a\n");
