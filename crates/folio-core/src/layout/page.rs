@@ -46,19 +46,22 @@ use ecow::{EcoVec, eco_format};
 use folio_component::{Abs, Fragment, FragmentItem, Location, Path, Point, Shape, Size, Stroke};
 use folio_syntax::Span;
 
+use super::cache::Cache;
 use super::flow::{
-    Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, Part, Shared, Walk,
+    Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, ParagraphInfo, Part,
+    Shared, Walk,
 };
-use super::lines;
+use super::paragraph::ParagraphLayout;
+use super::{Lines, lines, report_lines};
 use super::master::{BlockBox, PageMaster};
 use super::set::set_line;
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
-use crate::fonts::fonts;
+use crate::fonts::{Fonts, fonts};
 use crate::pipeline::step_styled;
 use crate::span_map::source_ref;
-use crate::style::{DeclValue, NodeName, NodeView, Position, Subject};
-use crate::text::text;
+use crate::style::{DeclValue, NodeName, NodeView, Position, Properties, Styled, Subject};
+use crate::text::{Text, text};
 
 /// How much a page's emptiness costs: an empty page would cost this much.
 pub const FILL: f64 = 1_000.0;
@@ -158,6 +161,31 @@ pub struct LineRef {
     pub line: usize,
 }
 
+/// Where a page starts in the flow: the first slice of the layout part of
+/// the flow state (SPEC §2.3). It is small, `Eq` and hashes stably, so that
+/// it can key the page cache.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+struct State {
+    /// The leaf of the flow the page starts in.
+    item: usize,
+    /// The line of that leaf's paragraph the page starts at: zero at the
+    /// start of a leaf.
+    line: usize,
+    /// The width of the region the paragraph was broken in when the page
+    /// starts inside it, else zero: a paragraph keeps the breaks of the
+    /// region it starts in.
+    width: Abs,
+}
+
+impl State {
+    /// The start of the flow.
+    const START: Self = Self {
+        item: 0,
+        line: 0,
+        width: Abs::zero(),
+    };
+}
+
 /// A page as its builder made it: it does not depend on where in the flow
 /// the page is.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -165,19 +193,56 @@ struct PageOut {
     fragment: Fragment,
     /// The content hash of the fragment ([`content_hash`]).
     hash: u64,
-    /// How many leaves the page holds.
-    leaves: usize,
+    /// Where the next page starts: its leaf counted from the page's first,
+    /// and its line and width as in [`State`].
+    next: State,
+    /// The lines on the page: each a leaf counted from the page's first,
+    /// and the line of its paragraph.
+    lines: EcoVec<(usize, usize)>,
+    /// The paragraphs that start on the page and were broken at a width
+    /// other than the one the flow was built for, each a leaf counted from
+    /// the page's first: their lines' diagnostics are the page's to report.
+    rebroken: EcoVec<(usize, Arc<ParagraphLayout>)>,
     /// The constraints the break after the page goes against.
     relaxed: EcoVec<Constraint>,
     /// The source of the leaf that overflows the page, and by how much.
     overflow: Option<(Span, Abs)>,
 }
 
+/// Test hooks for the regions the page builder fills, standing in for
+/// what will make them vary: masters per page, floats and footnotes
+/// (SPEC §7.1, §7.8). Without hooks, every page's body is the master's.
+#[derive(Copy, Clone, Default)]
+pub struct Regions<'a> {
+    /// The width of the body of each page, by the page's index, where it
+    /// is not the master's. Blocks are as much narrower or wider as the
+    /// body is, and a paragraph that starts on the page is broken at its
+    /// width.
+    pub width: Option<&'a dyn Fn(usize) -> Abs>,
+    /// The space a line reserves at the foot of the page it is placed on,
+    /// as a footnote will: the body's height left for the flow shrinks by
+    /// it as the page is filled, and a line that does not fit with what it
+    /// reserves moves to the next page.
+    pub reserve: Option<&'a dyn Fn(LineRef) -> Abs>,
+}
+
+impl Debug for Regions<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Regions")
+            .field("width", &self.width.is_some())
+            .field("reserve", &self.reserve.is_some())
+            .finish()
+    }
+}
+
 /// The pages of a build, or `None` when the document could not be styled.
-/// Reports constraints that a page break had to relax, and content that
-/// does not fit on a page.
+/// Reports constraints that a page break had to relax, content that does
+/// not fit on a page, and the overfull and underfull lines of paragraphs
+/// that a region broke at another width than [`lines`] did.
 #[salsa::tracked(returns(ref))]
 pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
+    // The lines at the master's widths, broken in parallel: what the page
+    // builder reads wherever a region has those widths.
     let lines = lines(db, build).as_ref()?;
     let text = text(db, build).as_ref()?;
     let styled = step_styled(db, build)?;
@@ -187,13 +252,88 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     if let Some(requested) = requested {
         report_page_size(db, build, master, requested, text.root.span);
     }
-    let cache = db.page_cache();
+    let project = build.project(db);
+    let input = Input {
+        text,
+        lines,
+        props,
+        fonts,
+        master,
+    };
+    Some(build_pages(
+        &input,
+        db.layout_cache(),
+        db.page_cache(),
+        Regions::default(),
+        // An edit stops the query between pages (SPEC §2.3).
+        &mut || db.unwind_if_revision_cancelled(),
+        &mut |out, rebroken| {
+            report(db, out);
+            for (paragraph, layout) in rebroken {
+                report_lines(db, project, &text.paragraphs[*paragraph], layout);
+            }
+        },
+    ))
+}
+
+/// The pages of a build as [`pages()`] makes them, from the stages before
+/// it, in regions that the test hooks `regions` change; with `cache` and
+/// `pages` for the line-break and page caches. Reports nothing.
+pub fn paginate(
+    text: &Text,
+    lines: &Lines,
+    styled: &Styled,
+    fonts: &Fonts,
+    cache: &Cache,
+    pages: &PageCache,
+    regions: Regions<'_>,
+) -> Pages {
+    let props = &styled.properties;
+    let (master, _) = PageMaster::checked(&styled.page, props);
+    let input = Input {
+        text,
+        lines,
+        props,
+        fonts,
+        master,
+    };
+    build_pages(&input, cache, pages, regions, &mut || {}, &mut |_, _| {})
+}
+
+/// What the page builder reads of the stages before it.
+struct Input<'a> {
+    text: &'a Text,
+    lines: &'a Lines,
+    props: &'a Properties,
+    fonts: &'a Fonts,
+    master: PageMaster,
+}
+
+/// Builds the pages, calling `check` before each, which may unwind, and
+/// `notes` with each page and the paragraphs, by index, whose lines it
+/// reports.
+fn build_pages(
+    input: &Input<'_>,
+    layout_cache: &Cache,
+    cache: &PageCache,
+    regions: Regions<'_>,
+    check: &mut dyn FnMut(),
+    notes: &mut dyn FnMut(&PageOut, &[(usize, &ParagraphLayout)]),
+) -> Pages {
+    let Input {
+        text,
+        lines,
+        props,
+        fonts,
+        master,
+    } = *input;
     let now = cache.tick();
     let caches = Caches {
-        cache: db.layout_cache(),
+        cache: layout_cache,
         shared: &cache.shared,
         now,
     };
+    let body = master.body.size.width;
     let flow = Flow::new(
         text,
         caches,
@@ -201,8 +341,21 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         &lines.slots,
         props,
         fonts,
-        master.body.size.width,
+        body,
     );
+    let paragraph = |item: usize| match flow.origins[item] {
+        Origin::Paragraph(p) => p,
+        Origin::Empty => usize::MAX,
+    };
+    let reserve = regions.reserve.map(|f| {
+        move |item: usize, line: usize| {
+            f(LineRef {
+                paragraph: paragraph(item),
+                line,
+            })
+        }
+    });
+    let reserve = reserve.as_ref().map(|f| f as &dyn Fn(usize, usize) -> Abs);
 
     // The page and its body are boxes of the document.
     let root = text.root.location;
@@ -219,20 +372,18 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     };
     let mut pages = EcoVec::new();
     let mut hashes = EcoVec::new();
-    let mut start = 0;
-    while start < flow.items.len() {
-        // An edit stops the query between pages (SPEC §2.3); the cache
-        // still forgets what it would have.
-        let check = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            db.unwind_if_revision_cancelled()
-        }));
-        if let Err(cancelled) = check {
+    let mut state = State::START;
+    while state.item < flow.items.len() {
+        // The cache still forgets what it would have when `check` unwinds.
+        let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut *check));
+        if let Err(cancelled) = checked {
             cache.sweep(now);
             std::panic::resume_unwind(cancelled);
         }
         // `break-before: odd-page` and `even-page` pad with a blank page.
-        if start > 0
-            && let Some(odd) = flow.boundary(start).parity
+        if state != State::START
+            && state.line == 0
+            && let Some(odd) = flow.boundary(state.item).parity
             && (pages.len() % 2 == 0) != odd
         {
             let fragment = blank(&master);
@@ -242,25 +393,43 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
                 lines: EcoVec::new(),
             });
         }
-        let (out, fragment) = cache.page(&flow, master, start, start == 0, now, root);
-        report(db, &out);
-        hashes.push(keyed(out.hash));
-        let lines = flow.origins[start..start + out.leaves]
+        let width = regions.width.map_or(body, |f| f(pages.len()));
+        let page = PageRequest {
+            flow: &flow,
+            caches,
+            master,
+            state,
+            width,
+            reserve,
+        };
+        let (out, fragment) = cache.page(&page, root);
+        let rebroken: Vec<(usize, &ParagraphLayout)> = out
+            .rebroken
             .iter()
-            .filter_map(|origin| match *origin {
-                Origin::Line { paragraph, line } => Some(LineRef { paragraph, line }),
-                Origin::Empty => None,
+            .map(|(k, layout)| (paragraph(state.item + k), &**layout))
+            .collect();
+        notes(&out, &rebroken);
+        hashes.push(keyed(out.hash));
+        let lines = out
+            .lines
+            .iter()
+            .map(|&(k, line)| LineRef {
+                paragraph: paragraph(state.item + k),
+                line,
             })
             .collect();
         pages.push(Page { fragment, lines });
-        start += out.leaves;
+        state = State {
+            item: state.item + out.next.item,
+            ..out.next
+        };
     }
     cache.sweep(now);
-    Some(Pages {
+    Pages {
         master,
         pages,
         hashes,
-    })
+    }
 }
 
 /// A hash of what a page shows: its fragments' sizes, positions,
@@ -437,36 +606,170 @@ fn report(db: &dyn Db, out: &PageOut) {
     }
 }
 
+/// A page to build: where it starts in a flow, and its region.
+struct PageRequest<'a> {
+    flow: &'a Flow,
+    caches: Caches<'a>,
+    master: PageMaster,
+    /// Where the page starts.
+    state: State,
+    /// The width of its body.
+    width: Abs,
+    /// The space a line reserves at the page's foot, by its leaf and line.
+    reserve: Option<&'a dyn Fn(usize, usize) -> Abs>,
+}
+
+/// A leaf of a page: a line of a paragraph, or an empty block.
+struct Placed {
+    /// What lies before it.
+    before: Boundary,
+    /// The leaf of the flow it is or is a line of.
+    item: usize,
+    /// The paragraph broken into lines, and the line.
+    line: Option<(Arc<ParagraphInfo>, usize)>,
+    /// Whether the paragraph was broken at a width other than the flow's.
+    rebroken: bool,
+}
+
+impl Placed {
+    /// How tall it is: a line from its ascent to its descent.
+    fn height(&self) -> Abs {
+        match &self.line {
+            Some((paragraph, line)) => {
+                let line = &paragraph.layout.lines[*line];
+                line.ascent + line.descent
+            }
+            None => Abs::zero(),
+        }
+    }
+}
+
+/// The leaves of a page and those after it, from where it starts in the
+/// flow: each paragraph broken into lines at the width of the page's
+/// region, or, for the one the page starts inside, at the width it was
+/// broken at before. Leaves are made as the page builder reads them.
+struct Run<'a> {
+    page: &'a PageRequest<'a>,
+    leaves: Vec<Placed>,
+    /// The next leaf of the flow to read.
+    next: usize,
+}
+
+impl<'a> Run<'a> {
+    fn new(page: &'a PageRequest<'a>) -> Self {
+        let state = page.state;
+        let mut run = Self {
+            page,
+            leaves: Vec::new(),
+            next: state.item,
+        };
+        if state.line > 0 {
+            run.read(state.item, state.width, state.line);
+            run.next += 1;
+        }
+        run
+    }
+
+    /// Leaf `i`, if the flow has it.
+    fn get(&mut self, i: usize) -> Option<&Placed> {
+        let flow = self.page.flow;
+        while self.leaves.len() <= i && self.next < flow.items.len() {
+            self.read(self.next, self.page.width, 0);
+            self.next += 1;
+        }
+        self.leaves.get(i)
+    }
+
+    /// The boundary before leaf `i`, or after the last for the leaf past
+    /// it, once [`Run::get`] has read it.
+    fn boundary(&self, i: usize) -> &Boundary {
+        self.leaves
+            .get(i)
+            .map_or(&self.page.flow.end, |leaf| &leaf.before)
+    }
+
+    /// Adds the leaves of leaf `k` of the flow, from line `from` of its
+    /// paragraph broken in a region `width` wide.
+    fn read(&mut self, k: usize, width: Abs, from: usize) {
+        let page = self.page;
+        let item = &page.flow.items[k];
+        let empty = |before: &Boundary| Placed {
+            before: before.clone(),
+            item: k,
+            line: None,
+            rebroken: false,
+        };
+        match &item.leaf {
+            Leaf::Empty => self.leaves.push(empty(&item.before)),
+            Leaf::Paragraph(info) => {
+                let body = page.master.body.size.width;
+                let (paragraph, rebroken) = info.at_width(body, width, page.caches);
+                if paragraph.layout.lines.is_empty() {
+                    self.leaves.push(empty(&item.before));
+                    return;
+                }
+                for line in from..paragraph.layout.lines.len() {
+                    let before = if line == 0 {
+                        item.before.clone()
+                    } else {
+                        item.between(&paragraph, line)
+                    };
+                    self.leaves.push(Placed {
+                        before,
+                        item: k,
+                        line: Some((paragraph.clone(), line)),
+                        rebroken,
+                    });
+                }
+            }
+        }
+    }
+
+    /// The space leaf `i` reserves at the foot of the page.
+    fn reserve(&self, i: usize) -> Abs {
+        let leaf = &self.leaves[i];
+        match (self.page.reserve, &leaf.line) {
+            (Some(f), Some((_, line))) => f(leaf.item, *line),
+            _ => Abs::zero(),
+        }
+    }
+}
+
 /// Where a page ends.
 struct Break {
-    /// The leaf after the page's last.
+    /// The leaf of the run after the page's last.
     end: usize,
     /// The leaf after the last whose boundary after it the builder read.
     read: usize,
     /// Whether the break is a forced one or the end of the flow.
     forced: bool,
-    /// How far the page's content is taller than the body.
+    /// How far the page's content is taller than the space left for it.
     overflow: Abs,
 }
 
-/// Finds where the page that starts at leaf `start` ends.
-fn break_page(flow: &Flow, master: &PageMaster, start: usize, first: bool) -> Break {
-    let height = master.body.size.height;
-    let n = flow.items.len();
-    let before = &flow.items[start].before;
+/// Finds where the page that starts at the first leaf of `run` ends: the
+/// body's height less what the lines on it reserve at its foot is the
+/// space its content may fill.
+fn break_page(run: &mut Run<'_>, height: Abs, first: bool) -> Break {
+    run.get(0).expect("a page starts at a leaf");
+    let before = &run.leaves[0].before;
     let mut y = if first {
         before.gap()
     } else {
         before.walk(Walk::Top, |_, _| {})
     };
+    let mut reserved = Abs::zero();
     let mut best: Option<(usize, f64)> = None;
-    let mut k = start;
+    let mut k = 0;
     loop {
-        y += flow.items[k].leaf.height();
-        let boundary = flow.boundary(k + 1);
+        y += run.leaves[k].height();
+        reserved += run.reserve(k);
+        let space = height - reserved;
+        let last = run.get(k + 1).is_none();
+        let boundary = run.boundary(k + 1);
         let bottom = y + boundary.walk(Walk::Bottom, |_, _| {});
-        let fits = bottom.to_pt() <= height.to_pt() + EPSILON;
-        if !fits && k > start {
+        let fits = bottom.to_pt() <= space.to_pt() + EPSILON;
+        if !fits && k > 0 {
             let (end, _) = best.expect("a break before the leaf that overflows");
             return Break {
                 end,
@@ -475,8 +778,8 @@ fn break_page(flow: &Flow, master: &PageMaster, start: usize, first: bool) -> Br
                 overflow: Abs::zero(),
             };
         }
-        let overflow = if fits { Abs::zero() } else { bottom - height };
-        if k + 1 == n || boundary.forced {
+        let overflow = if fits { Abs::zero() } else { bottom - space };
+        if last || boundary.forced {
             return Break {
                 end: k + 1,
                 read: k + 1,
@@ -484,7 +787,7 @@ fn break_page(flow: &Flow, master: &PageMaster, start: usize, first: bool) -> Br
                 overflow,
             };
         }
-        let empty = ((height - bottom).to_pt() / height.to_pt()).max(0.0);
+        let empty = ((space - bottom).to_pt() / height.to_pt()).max(0.0);
         let cost = FILL * empty * empty + boundary.penalty;
         if best.is_none_or(|(_, c)| cost <= c) {
             best = Some((k + 1, cost));
@@ -503,31 +806,75 @@ fn break_page(flow: &Flow, master: &PageMaster, start: usize, first: bool) -> Br
     }
 }
 
-/// Breaks and assembles the page that starts at leaf `start`.
-fn layout_page(flow: &Flow, master: &PageMaster, start: usize, first: bool) -> (PageOut, usize) {
-    let found = break_page(flow, master, start, first);
-    let fragment = assemble(flow, master, start, found.end, first);
+/// Breaks and assembles a page; returns it with the run it read and the
+/// leaf of the run after the last whose boundary after it was read.
+fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
+    let mut run = Run::new(page);
+    let first = page.state == State::START;
+    let found = break_page(&mut run, page.master.body.size.height, first);
+    let fragment = assemble(&run, found.end, first);
     let relaxed = if found.forced {
         EcoVec::new()
     } else {
-        flow.boundary(found.end).constraints.clone()
+        run.boundary(found.end).constraints.clone()
     };
+    let start = page.state.item;
     let overflow = (found.overflow > Abs::zero()).then(|| {
-        let item = &flow.items[start];
-        let span = match &item.leaf {
-            Leaf::Line { paragraph, .. } => paragraph.span,
-            Leaf::Empty => item.stack.last().map_or(Span::detached(), |(b, _)| b.span),
+        let leaf = &run.leaves[0];
+        let span = match &leaf.line {
+            Some((paragraph, _)) => paragraph.span,
+            None => page.flow.items[leaf.item]
+                .stack
+                .last()
+                .map_or(Span::detached(), |(b, _)| b.span),
         };
         (span, found.overflow)
     });
+    let placed = &run.leaves[..found.end];
+    let lines = placed
+        .iter()
+        .filter_map(|leaf| Some((leaf.item - start, leaf.line.as_ref()?.1)))
+        .collect();
+    let rebroken = placed
+        .iter()
+        .filter_map(|leaf| match &leaf.line {
+            Some((paragraph, 0)) if leaf.rebroken => {
+                Some((leaf.item - start, paragraph.layout.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let next = match run.leaves.get(found.end) {
+        Some(leaf) => {
+            let line = leaf.line.as_ref().map_or(0, |(_, line)| *line);
+            let width = if line == 0 {
+                Abs::zero()
+            } else if leaf.item == start && page.state.line > 0 {
+                page.state.width
+            } else {
+                page.width
+            };
+            State {
+                item: leaf.item - start,
+                line,
+                width,
+            }
+        }
+        None => State {
+            item: page.flow.items.len() - start,
+            ..State::START
+        },
+    };
     let out = PageOut {
         hash: content_hash(&fragment),
         fragment,
-        leaves: found.end - start,
+        next,
+        lines,
+        rebroken,
         relaxed,
         overflow,
     };
-    (out, found.read)
+    (out, run, found.read)
 }
 
 /// A block open on the page being assembled.
@@ -551,6 +898,9 @@ struct Assembler {
     /// The body's content.
     items: Vec<(Point, FragmentItem)>,
     baselines: Option<(Abs, Abs)>,
+    /// How much wider the page's body is than the master's, and so every
+    /// block on it.
+    widen: Abs,
 }
 
 impl Assembler {
@@ -579,7 +929,7 @@ impl Assembler {
         let block = &open.block;
         let top = open.top;
         let height = (y - top).max(Abs::zero());
-        let size = Size::new(block.width, height);
+        let size = Size::new(block.width + self.widen, height);
         let mut fragment = Fragment::new(size).with_location(open.location);
         decorate(&mut fragment, block, !open.continued, !continues);
         let origin = Point::new(block.x, top);
@@ -617,20 +967,24 @@ impl Assembler {
     }
 }
 
-/// Assembles the page of leaves `start..end`.
-fn assemble(flow: &Flow, master: &PageMaster, start: usize, end: usize, first: bool) -> Fragment {
+/// Assembles the page of the first `end` leaves of `run`.
+fn assemble(run: &Run<'_>, end: usize, first: bool) -> Fragment {
+    let page = run.page;
+    let master = &page.master;
     let mut asm = Assembler {
         open: Vec::new(),
         items: Vec::new(),
         baselines: None,
+        widen: page.width - master.body.size.width,
     };
     let mut y = Abs::zero();
-    let head = &flow.items[start];
+    let head = &run.leaves[0];
     if first {
         y += head.before.walk(Walk::Through, |p, at| asm.event(p, at));
     } else {
-        let continued = head.stack.len().saturating_sub(head.before.opens());
-        for (block, location) in &head.stack[..continued] {
+        let stack = &page.flow.items[head.item].stack;
+        let continued = stack.len().saturating_sub(head.before.opens());
+        for (block, location) in &stack[..continued] {
             asm.open.push(OpenBox {
                 block: block.clone(),
                 location: *location,
@@ -642,9 +996,9 @@ fn assemble(flow: &Flow, master: &PageMaster, start: usize, end: usize, first: b
         }
         y += head.before.walk(Walk::Top, |p, at| asm.event(p, y + at));
     }
-    for k in start..end {
-        let item: &Item = &flow.items[k];
-        if let Leaf::Line { paragraph, line } = &item.leaf {
+    for k in 0..end {
+        let leaf = &run.leaves[k];
+        if let Some((paragraph, line)) = &leaf.line {
             let baseline = y + paragraph.layout.lines[*line].ascent;
             let mut runs = Vec::new();
             set_line(paragraph, *line, baseline, &mut runs);
@@ -653,16 +1007,16 @@ fn assemble(flow: &Flow, master: &PageMaster, start: usize, end: usize, first: b
             }
             asm.baseline(baseline);
         }
-        y += item.leaf.height();
+        y += leaf.height();
         if k + 1 < end {
             let base = y;
-            y += flow
+            y += run
                 .boundary(k + 1)
                 .walk(Walk::Through, |p, at| asm.event(p, base + at));
         }
     }
     let base = y;
-    y += flow
+    y += run
         .boundary(end)
         .walk(Walk::Bottom, |p, at| asm.event(p, base + at));
     while !asm.open.is_empty() {
@@ -670,7 +1024,7 @@ fn assemble(flow: &Flow, master: &PageMaster, start: usize, end: usize, first: b
     }
 
     let body = master.body;
-    let mut content = Fragment::new(body.size);
+    let mut content = Fragment::new(Size::new(page.width, body.size.height));
     for (pos, item) in asm.items {
         content.push(pos, item);
     }
@@ -678,9 +1032,9 @@ fn assemble(flow: &Flow, master: &PageMaster, start: usize, end: usize, first: b
         content.first_baseline = first;
         content.last_baseline = last;
     }
-    let mut page = Fragment::new(master.size);
-    page.push_fragment(body.origin, content);
-    page
+    let mut fragment = Fragment::new(master.size);
+    fragment.push_fragment(body.origin, content);
+    fragment
 }
 
 /// Draws a block's background and borders into its fragment: the top
@@ -735,15 +1089,18 @@ fn decorate(fragment: &mut Fragment, block: &BlockBox, starts: bool, ends: bool)
 
 /// Pages broken and assembled, memoised.
 ///
-/// The key is what decides a page: the master, whether it is the first page
-/// (whose leading spaces are kept), and the leaves and boundaries its
-/// builder read, from its first leaf to the boundary after the last leaf it
-/// considered. Pages are found by their master, their first-page flag and
-/// their first leaf, then checked against the rest of the key. Shared by
-/// every handle of the database.
+/// The key is what decides a page: the master, the width of the page's
+/// region, the state coming into the page (whether it is the first page,
+/// whose leading spaces are kept, and where in the flow it starts: at a
+/// leaf, or at a line of a paragraph broken at a width), and the leaves
+/// and boundaries its builder read, from its first leaf to the boundary
+/// after the last line it considered, with what those lines reserve at the
+/// page's foot. Pages are found by their master, region width, first-page
+/// flag, first leaf and line, then checked against the rest of the key.
+/// Shared by every handle of the database.
 #[derive(Default)]
 pub struct PageCache {
-    entries: Mutex<HashMap<(PageMaster, bool, u64), Vec<Entry>>>,
+    entries: Mutex<HashMap<(PageMaster, Abs, bool, u64), Vec<Entry>>>,
     /// The paragraphs and blocks of recent flows, shared so that the same
     /// one in the next flow is the same `Arc`.
     shared: Shared,
@@ -754,10 +1111,16 @@ pub struct PageCache {
 }
 
 struct Entry {
-    /// The items the builder read.
+    /// The line and width of the state the page started at.
+    state: (usize, Abs),
+    /// The leaves of the flow the builder read.
     items: Vec<Item>,
     /// The boundary after the last leaf, when the builder read it.
     end: Option<Boundary>,
+    /// What each line the builder read reserves at the page's foot, by its
+    /// leaf counted from the page's first and its line, when a test hook
+    /// reserved space.
+    reserves: Option<Vec<(usize, usize, Abs)>>,
     out: Arc<PageOut>,
     /// The page as last dressed, and the root it was dressed for.
     dressed: (Location, Fragment),
@@ -798,20 +1161,21 @@ impl PageCache {
         }
     }
 
-    /// The page that starts at leaf `start` of a flow: memoised, or made
-    /// now; with its fragment dressed as a box of `root`.
-    fn page(
-        &self,
-        flow: &Flow,
-        master: PageMaster,
-        start: usize,
-        first: bool,
-        now: u64,
-        root: Location,
-    ) -> (Arc<PageOut>, Fragment) {
-        let key = (master, first, flow.items[start].leaf.fingerprint());
+    /// A page: memoised, or made now; with its fragment dressed as a box
+    /// of `root`.
+    fn page(&self, page: &PageRequest<'_>, root: Location) -> (Arc<PageOut>, Fragment) {
+        let (flow, state, now) = (page.flow, page.state, page.caches.now);
+        let mut start = Fx::default();
+        start.write_u64(flow.items[state.item].leaf.fingerprint());
+        start.write_usize(state.line);
+        let key = (
+            page.master,
+            page.width,
+            state == State::START,
+            start.finish(),
+        );
         if let Some(bucket) = lock(&self.entries).get_mut(&key)
-            && let Some(entry) = bucket.iter_mut().find(|e| e.matches(flow, start))
+            && let Some(entry) = bucket.iter_mut().find(|e| e.matches(page))
         {
             entry.used = now;
             if entry.dressed.0 != root {
@@ -821,14 +1185,25 @@ impl PageCache {
             return (entry.out.clone(), entry.dressed.1.clone());
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        let (out, read) = layout_page(flow, &master, start, first);
+        let (out, run, read) = layout_page(page);
         let out = Arc::new(out);
         let dressed = dress(&out.fragment, root);
         let n = flow.items.len();
-        let stop = (read + 1).min(n);
+        let stop = run.leaves.get(read).map_or(n, |leaf| leaf.item + 1);
+        let reserves = page.reserve.map(|f| {
+            run.leaves[..read]
+                .iter()
+                .filter_map(|leaf| {
+                    let line = leaf.line.as_ref()?.1;
+                    Some((leaf.item - state.item, line, f(leaf.item, line)))
+                })
+                .collect()
+        });
         let entry = Entry {
-            items: flow.items[start..stop].to_vec(),
-            end: (read == n).then(|| flow.end.clone()),
+            state: (state.line, state.width),
+            items: flow.items[state.item..stop].to_vec(),
+            end: run.leaves.get(read).is_none().then(|| flow.end.clone()),
+            reserves,
             out: out.clone(),
             dressed: (root, dressed.clone()),
             used: now,
@@ -857,16 +1232,28 @@ impl PageCache {
 }
 
 impl Entry {
-    /// Whether the flow from leaf `start` on has what this page's builder
-    /// read.
-    fn matches(&self, flow: &Flow, start: usize) -> bool {
-        let stop = start + self.items.len();
-        if stop > flow.items.len() || flow.items[start..stop] != self.items[..] {
+    /// Whether the page asked for starts where this one did, and its flow
+    /// has, from there on, what this page's builder read.
+    fn matches(&self, page: &PageRequest<'_>) -> bool {
+        let (flow, state) = (page.flow, page.state);
+        if self.state != (state.line, state.width) {
             return false;
         }
-        match &self.end {
-            Some(end) => stop == flow.items.len() && flow.end == *end,
-            None => true,
+        let stop = state.item + self.items.len();
+        if stop > flow.items.len() || flow.items[state.item..stop] != self.items[..] {
+            return false;
+        }
+        if let Some(end) = &self.end
+            && (stop != flow.items.len() || flow.end != *end)
+        {
+            return false;
+        }
+        match (&self.reserves, page.reserve) {
+            (None, None) => true,
+            (Some(reserves), Some(f)) => reserves
+                .iter()
+                .all(|&(k, line, reserve)| f(state.item + k, line) == reserve),
+            _ => false,
         }
     }
 }
