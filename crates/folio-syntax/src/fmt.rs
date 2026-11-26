@@ -9,8 +9,9 @@
 //!
 //! - Line ends are `\n`, lines carry no trailing whitespace (line comments
 //!   included; block comments, strings, raw text and equations keep their
-//!   bytes, line ends included), and there is at most one blank line in a row. A stylesheet
-//!   starts with its first token and ends with one newline. Content keeps
+//!   bytes, line ends included), and there is at most one blank line in a
+//!   row. A stylesheet starts with its first token and ends with one
+//!   newline, unless it ends inside a block comment left open. Content keeps
 //!   the kind of whitespace it starts and ends with (none, a space, a
 //!   paragraph break), since an included file puts it into the text around
 //!   the include; a line break stands for a space, a blank line for a
