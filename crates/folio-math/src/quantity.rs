@@ -378,9 +378,13 @@ impl Number {
             && kept.len() > self.int.len()
             && power < MAX_EXPONENT
         {
-            // A carry made the mantissa longer: `10e3` is `1.0e4`.
+            // A carry made the mantissa longer: `10e3` is `1.0e4`. A zero
+            // that only holds a place is dropped, not made a decimal:
+            // `999999e3` to one figure is `100000e4`.
             let last = kept.pop().expect("a longer mantissa has digits");
-            frac.insert(0, last);
+            if !(frac.is_empty() && last == b'0' && kept.len() >= figures) {
+                frac.insert(0, last);
+            }
             exponent = Some(power + 1);
         }
         let number = Self {
@@ -744,6 +748,8 @@ mod tests {
         assert_eq!(r("9.99e3", 3), "9.99e3");
         assert_eq!(r("9.996e-3", 3), "1.00e-2");
         assert_eq!(r("0.96e3", 1), "1e3");
+        assert_eq!(r("999999e3", 1), "100000e4");
+        assert_eq!(r("99.9e3", 2), "10e4");
         assert_eq!(r("950", 1), "1000");
     }
 
