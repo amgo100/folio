@@ -39,12 +39,10 @@ fn paragraph(text: &str, end: usize) -> Paragraph {
     }
 }
 
-/// The name of the current thread.
+/// The name and id of the current thread.
 fn this_thread() -> String {
-    std::thread::current()
-        .name()
-        .unwrap_or("<unnamed>")
-        .to_owned()
+    let thread = std::thread::current();
+    format!("{} {:?}", thread.name().unwrap_or("<unnamed>"), thread.id())
 }
 
 /// The child's work: shape a whole and a broken paragraph, and print the
