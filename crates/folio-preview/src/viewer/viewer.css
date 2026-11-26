@@ -6,6 +6,9 @@
   --warning: #8a5a00;
   --banner-bg: #fbe9e7;
   --page-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+  --reveal: rgb(255 196 0 / 0.45);
+  --mark-error: rgb(179 38 30 / 0.18);
+  --mark-warning: rgb(176 120 0 / 0.16);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -27,10 +30,30 @@ body {
 header {
   position: sticky;
   top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 16px;
+  align-items: center;
   padding: 6px 16px;
   background: var(--bg);
   color: var(--muted);
   border-bottom: 1px solid rgb(127 127 127 / 0.3);
+}
+#source {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+}
+.zoom button {
+  min-width: 2.2em;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid rgb(127 127 127 / 0.5);
+  border-radius: 4px;
+  cursor: pointer;
 }
 #banner {
   margin: 12px 16px 0;
@@ -39,12 +62,15 @@ header {
   color: var(--error);
   border-radius: 4px;
 }
+#problems { margin: 8px 16px 0; }
+#problems summary { cursor: pointer; color: var(--muted); }
 #diagnostics {
-  margin: 8px 16px 0;
+  margin: 4px 0 0;
   padding: 0;
   list-style: none;
 }
-#diagnostics li { margin: 2px 0; }
+#diagnostics li { margin: 2px 0; cursor: default; }
+#diagnostics li.marked { cursor: pointer; text-decoration: underline dotted; }
 #diagnostics .error { color: var(--error); }
 #diagnostics .warning { color: var(--warning); }
 #pages {
@@ -54,9 +80,42 @@ header {
   gap: 16px;
   padding: 16px;
 }
-#pages img {
-  max-width: 100%;
-  height: auto;
+.page {
+  position: relative;
+  flex: none;
   background: #fff;
   box-shadow: var(--page-shadow);
+}
+.page canvas, .page img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+.mark {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 2px;
+}
+.mark.error {
+  background: var(--mark-error);
+  border-bottom: 2px solid var(--error);
+  pointer-events: auto;
+}
+.mark.warning {
+  background: var(--mark-warning);
+  border-bottom: 2px solid var(--warning);
+  pointer-events: auto;
+}
+.mark.reveal {
+  background: var(--reveal);
+  animation: fade 1.6s ease-in forwards;
+}
+@keyframes fade {
+  0%, 60% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mark.reveal { animation-duration: 0.01s; animation-delay: 1.6s; }
 }
