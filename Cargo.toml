@@ -18,12 +18,17 @@ folio-component = { path = "crates/folio-component" }
 folio-core = { path = "crates/folio-core" }
 folio-fonts = { path = "crates/folio-fonts" }
 folio-text = { path = "crates/folio-text" }
+folio-math = { path = "crates/folio-math" }
 folio-pdf = { path = "crates/folio-pdf" }
+folio-render = { path = "crates/folio-render" }
 folio-testkit = { path = "crates/folio-testkit" }
 folio = { path = "crates/folio" }
+folio-lsp = { path = "crates/folio-lsp" }
 # The command line (SPEC §12.1).
 clap = { version = "4.6.10", features = ["derive"] }
 codespan-reporting = "0.13.1"
+# The language server's channels, shared with `lsp-server` (SPEC §12.3).
+crossbeam-channel = "0.5.15"
 ecow = "0.2.6"
 # Verifies the signatures of compiler releases (SPEC §14.3). No default
 # features: verification needs neither key generation nor zeroising.
@@ -46,6 +51,10 @@ indexmap = "2.14.2"
 # The scripting layer's `calc` functions: a portable maths library, so that
 # they give the same bits on every platform (SPEC §2.4).
 libm = "0.2.16"
+# The language server (SPEC §12.3): the protocol's transport and types,
+# synchronous, without an async runtime.
+lsp-server = "0.10.0"
+lsp-types = "0.97.0"
 # PDF output (SPEC §11.1): tagging, PDF/UA, PDF/A and font subsetting. No
 # default features: Folio shapes text itself and has no images yet.
 krilla = { version = "0.8.2", default-features = false }
@@ -61,6 +70,12 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 # Font parsing (fontations): maintained, and shared with the shaper and PDF
 # writer of SPEC §2.2.
 skrifa = "0.50.0"
+# Rasterisation of display lists (SPEC §12.2). No default features: `simd`
+# is off so that every platform draws the same pixels from the same scalar
+# float code (SPEC §2.4), and PNG goes through `png` directly.
+tiny-skia = { version = "0.12.0", default-features = false, features = ["std"] }
+# PNG output of rendered pages and the page-image goldens (SPEC §14.2).
+png = "0.18.1"
 # Font files are locked by their SHA-256 hash (SPEC §2.4).
 sha2 = "0.11.1"
 # Grows the evaluator's stack on deep recursion (SPEC §14.3).
@@ -71,6 +86,9 @@ tempfile = "3.27.0"
 toml = { version = "1.2.2", default-features = false, features = ["std", "parse", "preserve_order"] }
 unicode-bidi = "0.3.18"
 unicode-ident = "1.0"
+# The Unicode math class of a character, which spaces and stretches it in
+# math layout (SPEC §8.2).
+unicode-math-class = "0.1"
 unicode-script = "0.5"
 
 [workspace.lints.rust]

@@ -264,7 +264,10 @@ fn math_exprs(p: &mut Parser<'_>, stop_set: SyntaxSet) -> usize {
 
     let mut count = 0;
     while !p.at_set(stop_set) {
-        if p.at_set(set::MATH_EXPR) {
+        if p.at(SyntaxKind::Label) {
+            // A label that ends a line of an equation: `<eq:suvat>`.
+            p.eat();
+        } else if p.at_set(set::MATH_EXPR) {
             math_expr(p);
         } else {
             p.unexpected();

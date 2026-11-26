@@ -61,7 +61,7 @@ const MANIFEST: &str =
 #[test]
 fn builds_the_corpus() {
     let digests = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/determinism/digests.txt"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../folio/tests/determinism/digests.txt"),
     )
     .unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -175,7 +175,6 @@ fn rejects_what_is_not_supported_yet() {
         &["build", "--strict-a11y"],
         &["watch"],
         &["check", "--leaks"],
-        &["check", "--layout"],
         &["check", "--report", "overrides"],
         &["promote"],
     ] {
@@ -588,4 +587,125 @@ fn formatting_keeps_byte_order_marks_and_permissions() {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
     }
+}
+
+/// Writes a message of the language server protocol.
+fn send(to: &mut impl std::io::Write, message: &serde_json::Value) {
+    let body = message.to_string();
+    write!(to, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    to.flush().unwrap();
+}
+
+/// Reads a message of the language server protocol.
+fn receive(from: &mut impl std::io::BufRead) -> serde_json::Value {
+    let mut length = None;
+    loop {
+        let mut line = String::new();
+        assert!(from.read_line(&mut line).unwrap() > 0, "the server hung up");
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        if let Some(n) = line.strip_prefix("Content-Length: ") {
+            length = Some(n.parse().unwrap());
+        }
+    }
+    let mut body = vec![0; length.expect("a length")];
+    from.read_exact(&mut body).unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[test]
+fn serves_the_language_server_over_standard_io() {
+    use std::io::BufReader;
+    use std::process::Stdio;
+
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "= Forces\n\n#nope\n"),
+    ]);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_folio"))
+        .args(["lsp", "--stdio", "--root"])
+        .arg(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .env_remove("FOLIO_CACHE_DIR")
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let request = |id: i32, method: &str, params: serde_json::Value| serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+    let notification = |method: &str, params: serde_json::Value| serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params });
+
+    send(
+        &mut stdin,
+        &request(1, "initialize", serde_json::json!({ "capabilities": {} })),
+    );
+    let initialized = receive(&mut stdout);
+    assert_eq!(initialized["id"], 1);
+    assert_eq!(initialized["result"]["serverInfo"]["name"], "folio");
+    send(
+        &mut stdin,
+        &notification("initialized", serde_json::json!({})),
+    );
+
+    // The file on disk is checked without being opened.
+    loop {
+        let message = receive(&mut stdout);
+        if message["method"] == "textDocument/publishDiagnostics" {
+            let uri = message["params"]["uri"].as_str().unwrap();
+            assert!(
+                uri.starts_with("file://") && uri.ends_with("/main.fol"),
+                "{uri}"
+            );
+            let message = &message["params"]["diagnostics"][0]["message"];
+            assert_eq!(message, "unknown variable: nope");
+            break;
+        }
+    }
+
+    send(&mut stdin, &request(2, "shutdown", serde_json::Value::Null));
+    while receive(&mut stdout)["id"] != 2 {}
+    send(&mut stdin, &notification("exit", serde_json::Value::Null));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+/// `folio check` shows the serious layout diagnostics, `folio check
+/// --layout` all of them; `folio build` shows what plain `folio check`
+/// does.
+#[test]
+fn folio_check_layout_shows_every_layout_diagnostic() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../folio/tests/check/layout");
+    let dir = tempfile::tempdir().unwrap();
+    for file in ["folio.toml", "main.fol", "styles/main.fsty"] {
+        let to = dir.path().join(file);
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        fs::copy(fixture.join(file), to).unwrap();
+    }
+    let codes = |args: &[&str]| -> Vec<String> {
+        let output = Command::new(env!("CARGO_BIN_EXE_folio"))
+            .args(args)
+            .args(["--diagnostics", "json"])
+            .current_dir(dir.path())
+            .env_remove("FOLIO_CACHE_DIR")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        json["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|d| d["code"].as_str().map(str::to_string))
+            .collect()
+    };
+    let plain = codes(&["check"]);
+    assert_eq!(plain, ["page-overflow", "overfull-line"]);
+    let all = codes(&["check", "--layout"]);
+    for code in folio::layout::DETAIL_CODES {
+        assert!(all.iter().any(|c| c == code), "{code}: {all:?}");
+    }
+    assert_eq!(all.len(), plain.len() + folio::layout::DETAIL_CODES.len());
+    assert_eq!(codes(&["build"]), plain);
 }

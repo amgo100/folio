@@ -24,14 +24,16 @@
 //!    after step styling and will take the step-styled tree (M4, M5).
 //!
 //! Every stage from Style on runs per variant and target. Until the
-//! milestones that fill them in, Select, Sequence, Resolve and Step styling
-//! pass the styled tree on unchanged: Select until variants (M2), Sequence
-//! until slides (M4), Resolve until counters and references (M1), and Step
-//! styling until steps (M4). They are queries already, so the stages after
+//! milestones that fill them in, Select, Sequence and Step styling pass the
+//! styled tree on unchanged: Select until variants (M2), Sequence until
+//! slides (M4), and Step styling until steps (M4). Resolve passes it on with
+//! the counters, markers, labels and references it resolved
+//! ([`crate::resolve`]). They are queries already, so the stages after
 //! them read the tree from the stage before, and an edit that leaves the
 //! styled tree equal stops at Style (early cutoff, SPEC §2.3).
 
 use crate::db::{Build, Db};
+use crate::resolve::{Resolution, resolve_tree};
 use crate::style::{Styled, styles};
 
 /// The styled tree after Select (SPEC §2.1, §6.3): the nodes whose computed
@@ -53,12 +55,16 @@ pub struct Sequenced {
 }
 
 /// The sequenced tree after Resolve (SPEC §2.1, §4.5): counters,
-/// cross-references, citations and queries resolved. Until counters and
-/// references (M1) nothing is resolved.
+/// cross-references, citations and queries resolved. Counters, markers and
+/// references are resolved ([`Resolution`]); citations and queries come
+/// later. The tree is the sequenced one: what Resolve generates is keyed by
+/// location, and the text stage sets it.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Resolved {
     /// The tree.
     pub styled: Styled,
+    /// What was resolved.
+    pub resolution: Resolution,
 }
 
 /// The resolved tree after Step styling (SPEC §2.1, §10.2): the collected
@@ -93,14 +99,21 @@ pub fn sequence(db: &dyn Db, build: Build<'_>) -> Option<Sequenced> {
 }
 
 /// Resolves the counters, references, citations and queries of a build
-/// (stage 6), or `None` when the document could not be styled. Until
-/// counters and references (M1) it passes the tree on.
+/// (stage 6), or `None` when the document could not be styled: counters,
+/// markers and references so far ([`resolve_tree`]).
 #[salsa::tracked(returns(ref))]
 pub fn resolve(db: &dyn Db, build: Build<'_>) -> Option<Resolved> {
     let sequenced = sequence(db, build).as_ref()?;
     Some(Resolved {
         styled: sequenced.styled.clone(),
+        resolution: resolve_tree(db, build, &sequenced.styled),
     })
+}
+
+/// What the Resolve stage resolved in a build, or `None` when the document
+/// could not be styled.
+pub fn resolution<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<&'db Resolution> {
+    resolve(db, build).as_ref().map(|r| &r.resolution)
 }
 
 /// Applies the `:step` rules of a build per step (stage 7), or `None` when

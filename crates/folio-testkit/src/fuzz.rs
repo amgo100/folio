@@ -17,6 +17,8 @@
 //! | `compile` | content and declarations of the registry's properties | a whole build to pages and a PDF finishes without a panic, whatever the property values: huge, zero, negative or not finite |
 //! | `manifest` | a `folio.toml` | reading it finishes without a panic; a valid one compiles |
 //! | `lockfile` | a `folio.lock` | reading it finishes without a panic; a valid one compiles |
+//! | `wire` | a display list message | decoding finishes without a panic; what decodes encodes and decodes to the same |
+//! | `tex` | the body of a LaTeX equation | reading it into the math tree finishes without a panic, and its errors point into the equation |
 //! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs, diagnostics and span maps of a world built afresh from the same texts |
 //!
 //! A target panics when a check fails; libFuzzer records the input.
@@ -47,6 +49,8 @@ pub const TARGETS: &[(&str, Body)] = &[
     ("compile", compile),
     ("manifest", manifest),
     ("lockfile", lockfile),
+    ("wire", wire),
+    ("tex", tex),
 ];
 
 /// The regression inputs of a target: `fuzz/regressions/<target>/`.
@@ -252,8 +256,8 @@ pub fn style(data: &[u8]) {
 }
 
 /// The ways [`nesting`] wraps a value `v` once: in content, in an array or
-/// a dictionary, in a closure, in a function's arguments, and by changing
-/// a place in an array or a dictionary. None repeats `v`, which would make
+/// a dictionary, in a closure, in a function's arguments, by changing a
+/// place in an array or a dictionary, and in an equation. None repeats `v`, which would make
 /// the value grow exponentially rather than nest.
 pub const WRAPPERS: &[&str] = &[
     "[*#v*]",
@@ -271,6 +275,8 @@ pub const WRAPPERS: &[&str] = &[
     "{ let a = (); a.push(v); a }",
     "{ let d = (x: none); d.x = v; d }",
     "{ let a = (none,); a.at(0) = v; a }",
+    "$(#v)/2$",
+    "$sqrt(#v)_i$",
 ];
 
 /// The script [`nesting`] compiles: for each pair of bytes, a wrapper of
@@ -318,7 +324,7 @@ compiler = \"0.0.0\"
 ";
 
 /// What [`differential`] inserts into content: markup that opens and closes
-/// blocks, scripts, references and labels, words, and breaks, so that
+/// blocks, scripts, equations, references and labels, words, and breaks, so that
 /// random edits restructure the document as well as reflow it.
 pub const CONTENT_SNIPPETS: &[&str] = &[
     "x",
@@ -351,6 +357,12 @@ pub const CONTENT_SNIPPETS: &[&str] = &[
     "#let v = 1\n",
     "#v",
     "#if true [yes] else [no]",
+    "$",
+    "$v^2 = u^2 + 2 a s$",
+    "$ x &= 1/2 a t^2 <eq:l> \\ y $",
+    "(m v - m u) / t",
+    "sum_(i=1)^n ",
+    "&",
     "żółć ",
     "biało-czerwony ",
     "A sentence long enough to move a line break or two further down the page. ",
@@ -641,6 +653,44 @@ pub fn document(data: &[u8]) {
     let _ = folio::document(&world, None);
 }
 
+/// Reads the body of a LaTeX equation (SPEC §8.1) in `$:tex …$`, and
+/// checks that every error of the build points into the file.
+pub fn tex(data: &[u8]) {
+    let Ok(body) = std::str::from_utf8(data) else {
+        return;
+    };
+    if body.contains('$') {
+        return;
+    }
+    let mut world = fuzz_world(BUILD_MANIFEST, None).expect("the fuzz manifest is valid");
+    world
+        .set_source("main.fol", &format!("$:tex {body}$"))
+        .expect("a valid path");
+    world.set_source("style.fsty", "").expect("a valid path");
+    let Ok(checked) = folio::check(&world, Target::Pdf, None) else {
+        return;
+    };
+    for diagnostic in checked.diagnostics.iter() {
+        if diagnostic.severity == folio::Severity::Error {
+            assert!(
+                folio::diag::locate(&world, diagnostic.span).is_some(),
+                "{diagnostic:?} points nowhere"
+            );
+        }
+    }
+}
+
+/// LaTeX formulas for the seed corpus of [`tex`].
+const TEX_SEEDS: &[&str] = &[
+    r"\frac{1}{2} m v^2",
+    r"\int_0^T P(t)\,\mathrm{d}t = \sum_{i=1}^{n} x_i^2",
+    r"\left( \frac{a}{b} \right)^2 \sqrt[3]{x} \vec{F} \hat{x}",
+    r"\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}",
+    r"|x| = \begin{cases} x & \text{if } x \geq 0 \\ -x & \text{otherwise} \end{cases}",
+    r"\begin{align} v^2 &= u^2 + 2as \label{eq:a} \\ s &= ut \end{align}",
+    r"\underbrace{a+b}_{n} \bigl( x \bigr] \{a\} \langle x \rangle \not= \fracc",
+];
+
 /// What [`compile`] puts declarations on: the elements of the core, and the
 /// page.
 pub const SELECTORS: &[&str] = &[
@@ -821,6 +871,64 @@ pub fn lockfile(data: &[u8]) {
     let _ = folio::compile(&world, Target::Pdf, None);
 }
 
+/// Decodes a display list message of `folio-render`'s wire format, which
+/// a preview client receives (SPEC §12.2), and checks that what decodes
+/// encodes to a message that decodes to the same.
+pub fn wire(data: &[u8]) {
+    use folio_render::wire::{self, Message};
+    let Ok(message) = wire::decode(data) else {
+        return;
+    };
+    let bytes = match &message {
+        Message::List(list) => wire::encode(list),
+        Message::Spans(spans) => wire::encode_spans(spans),
+    };
+    assert_eq!(
+        wire::decode(&bytes),
+        Ok(message),
+        "a decoded message encodes differently"
+    );
+}
+
+/// The seeds of [`wire`]: the page of [`crate::golden::boxes`] and its
+/// span map, and a list with a dashed path.
+fn wire_seeds() -> Vec<(&'static str, String, Vec<u8>)> {
+    use folio_component::{Abs, Color, Dash, Path, Point, Shape, Size, SourceRef, Stroke};
+    use folio_render::{DisplayList, wire};
+    let (_, pages) = crate::golden::boxes();
+    let mut out = Vec::new();
+    for (i, list) in crate::golden::display_lists(&pages).iter().enumerate() {
+        out.push(("wire", format!("boxes-{}.bin", i + 1), wire::encode(list)));
+        out.push((
+            "wire",
+            format!("boxes-{}.spans.bin", i + 1),
+            wire::encode_spans(&list.spans()),
+        ));
+    }
+    let mut stroke = Stroke::solid(Color::rgba(0, 0, 255, 128), Abs::pt(1.5));
+    stroke.dash = Some(Dash {
+        array: [Abs::pt(2.0), Abs::pt(1.0)].into_iter().collect(),
+        phase: Abs::pt(0.5),
+    });
+    let mut path = Path::rect(Abs::pt(10.0), Abs::pt(5.0));
+    path.cubic_to(
+        Point::new(Abs::pt(1.0), Abs::pt(2.0)),
+        Point::new(Abs::pt(3.0), Abs::pt(4.0)),
+        Point::new(Abs::pt(5.0), Abs::pt(6.0)),
+    );
+    let mut fragment = Fragment::new(Size::new(Abs::pt(20.0), Abs::pt(20.0)));
+    fragment.push(
+        Point::new(Abs::pt(2.0), Abs::pt(3.0)),
+        FragmentItem::Shape {
+            shape: Shape::stroked(path, stroke),
+            source: SourceRef(5),
+        },
+    );
+    let list = DisplayList::from_fragment(&fragment);
+    out.push(("wire", "path.bin".into(), wire::encode(&list)));
+    out
+}
+
 /// How many random inputs of [`compile`] the seed corpus holds per corpus
 /// project.
 pub const COMPILE_SEEDS: u64 = 4;
@@ -959,6 +1067,13 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
         ));
     }
     out.push(("manifest", "minimal.toml".into(), NESTING_MANIFEST.into()));
+    for (i, formula) in TEX_SEEDS.iter().enumerate() {
+        out.push((
+            "tex",
+            format!("formula-{i}.tex"),
+            formula.as_bytes().to_vec(),
+        ));
+    }
     out.push(("lockfile", "empty.lock".into(), b"version = 1\n".to_vec()));
     out.push((
         "lockfile",
@@ -1012,5 +1127,6 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
             }
         }
     }
+    out.extend(wire_seeds());
     out
 }

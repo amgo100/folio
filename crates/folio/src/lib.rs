@@ -59,6 +59,9 @@ pub use folio_core::layout::{Line, LineRef, Lines, Page, PageMaster, Pages, Para
 pub use folio_core::locate;
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, OutputPattern, ProjectError, ProjectPath};
+pub use folio_core::resolve::{
+    Labelled, Marker, Number, Reference, Resolution, Target as ResolveTarget,
+};
 pub use folio_core::style;
 pub use folio_core::text::{SegmentStyle, Text, TextBlock, TextFlow, TextParagraph, TextSource};
 pub use folio_fonts::{
@@ -193,6 +196,58 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
                 )]),
             })
         }
+    }
+}
+
+/// Checks a variant of the world's document for a target, as [`check`]
+/// does, and keeps the diagnostics that `layout` shows.
+pub fn check_with(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    layout: LayoutDiagnostics,
+) -> Result<Checked, Cancelled> {
+    let mut checked = check(world, target, variant)?;
+    checked.diagnostics = layout.filter(checked.diagnostics);
+    Ok(checked)
+}
+
+/// Which layout diagnostics a front end shows (SPEC §7.9).
+///
+/// [`compile`] and [`check`] report every diagnostic. Content that runs
+/// off its line or page (`overfull-line`, `page-overflow`) is always
+/// shown; underfull lines and relaxed widow, orphan, keep and unbreakable
+/// constraints ([`layout::DETAIL_CODES`]) only when asked for, as `folio
+/// check --layout` asks. `folio build` and plain `folio check` show
+/// [`LayoutDiagnostics::Serious`]; the language server and the preview
+/// apply the same rule through [`check_with`] or
+/// [`LayoutDiagnostics::filter`].
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub enum LayoutDiagnostics {
+    /// Only the layout diagnostics of content that runs off its line or
+    /// page; every other diagnostic is kept.
+    #[default]
+    Serious,
+    /// Every diagnostic.
+    All,
+}
+
+impl LayoutDiagnostics {
+    /// Whether a diagnostic is shown.
+    pub fn shows(self, diagnostic: &Diagnostic) -> bool {
+        self == Self::All
+            || !diagnostic
+                .code
+                .as_deref()
+                .is_some_and(|code| layout::DETAIL_CODES.contains(&code))
+    }
+
+    /// The diagnostics that are shown, in their order.
+    pub fn filter(self, diagnostics: EcoVec<Diagnostic>) -> EcoVec<Diagnostic> {
+        if diagnostics.iter().all(|d| self.shows(d)) {
+            return diagnostics;
+        }
+        diagnostics.into_iter().filter(|d| self.shows(d)).collect()
     }
 }
 
@@ -334,6 +389,28 @@ pub fn styles(
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         style::styles(db, build).clone()
+    })
+}
+
+/// Resolves the counters, markers, labels and cross-references of a variant
+/// of the world's document for a target (SPEC §2.1, §4.5): each numbered
+/// element's values and number, the marker set before its content, what
+/// each label names, and the text each `@label` shows; or `None` when the
+/// document could not be styled. Everything is keyed by location. The
+/// variant is `None` only for a project that declares no variants.
+///
+/// The problems found (references that do not resolve, counters that do
+/// not exist) are diagnostics that [`compile`] reports for the build. Fails
+/// only when an edit to the world cancels it.
+pub fn resolve(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+) -> Result<Option<Resolution>, Cancelled> {
+    catch(world, || {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        folio_core::pipeline::resolution(db, build).cloned()
     })
 }
 

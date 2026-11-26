@@ -1,11 +1,13 @@
 //! The commands of SPEC §12.1 and their arguments. `folio build`, `folio
-//! check`, `folio fmt` and `folio toolchain install` are implemented; the other
+//! check`, `folio fmt`, `folio lsp` and `folio toolchain install` are
+//! implemented; the other
 //! commands, and the flags of `folio build` and `folio check` for later
 //! features, are parsed and rejected as not yet supported.
 
 mod build;
 mod check;
 mod fmt;
+mod lsp;
 mod project;
 mod toolchain;
 
@@ -55,6 +57,8 @@ enum Command {
     Query(Later),
     /// List the available components (not yet supported)
     Components(Later),
+    /// Run the language server over standard input and output
+    Lsp(lsp::LspArgs),
     /// Manage the compiler versions that projects pin
     Toolchain(toolchain::ToolchainArgs),
 }
@@ -63,7 +67,11 @@ impl Command {
     /// The command's name, for a command that is not supported yet.
     fn later(&self) -> Option<&'static str> {
         Some(match self {
-            Self::Build(_) | Self::Check(_) | Self::Fmt(_) | Self::Toolchain(_) => return None,
+            Self::Build(_)
+            | Self::Check(_)
+            | Self::Fmt(_)
+            | Self::Lsp(_)
+            | Self::Toolchain(_) => return None,
             Self::New(_) => "new",
             Self::Watch(_) => "watch",
             Self::Present(_) => "present",
@@ -165,8 +173,10 @@ pub(crate) struct CheckArgs {
     #[command(flatten)]
     pub(crate) project: ProjectArgs,
 
-    /// Also report layout problems: overfull lines, widows and orphans,
-    /// keeps that were broken (not yet supported)
+    /// Also report the softer layout problems: underfull lines, widows
+    /// and orphans, keeps and unbreakable blocks that a page break split
+    /// (overfull lines and content too tall for a page are always
+    /// reported)
     #[arg(long)]
     pub(crate) layout: bool,
 
@@ -183,9 +193,7 @@ pub(crate) struct CheckArgs {
 impl CheckArgs {
     /// The first flag given that is not supported yet.
     fn later(&self) -> Option<&'static str> {
-        if self.layout {
-            Some("--layout")
-        } else if self.leaks {
+        if self.leaks {
             Some("--leaks")
         } else if self.report.is_some() {
             Some("--report")
@@ -296,8 +304,9 @@ pub(crate) fn run() -> ExitCode {
     }
     match cli.command {
         Command::Build(args) => build::build(&args.project),
-        Command::Check(args) => check::check(&args.project),
+        Command::Check(args) => check::check(&args.project, args.layout),
         Command::Fmt(args) => fmt::fmt(&args),
+        Command::Lsp(args) => lsp::lsp(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         _ => unreachable!("every other command is rejected above"),
     }
@@ -382,7 +391,7 @@ mod tests {
         assert_eq!(args.project.targets, [Target::Pdf]);
         assert_eq!(args.project.diagnostics, DiagnosticsFormat::Json);
         assert_eq!(args.later(), None);
-        assert_eq!(parse(&["--layout"]).unwrap().later(), Some("--layout"));
+        assert_eq!(parse(&["--layout"]).unwrap().later(), None);
         assert_eq!(parse(&["--leaks"]).unwrap().later(), Some("--leaks"));
         assert_eq!(
             parse(&["--report", "overrides"]).unwrap().later(),

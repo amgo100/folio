@@ -1,0 +1,26 @@
+[package]
+name = "folio-render"
+description = "Display lists, their binary wire format, rasterisation and SVG output"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No tokio, no threads and no file system access, so that the crate also
+# compiles to WebAssembly (SPEC §2.2, §16.1): `scripts/check.sh` builds it
+# for `wasm32-unknown-unknown`. Fonts arrive as bytes, so it does not
+# depend on `folio-fonts`, which maps files.
+[dependencies]
+folio-component.workspace = true
+ecow.workspace = true
+png.workspace = true
+skrifa.workspace = true
+tiny-skia.workspace = true
+
+[dev-dependencies]
+folio-fonts.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ecow::EcoVec;
 use folio::diag::{self, Files, Resolved, TextFiles};
 use folio::{
-    Cancelled, Compiled, Diagnostic, FontCache, Manifest, Name, ProjectPath, Target, World,
-    check_builds, compile_builds,
+    Cancelled, Compiled, Diagnostic, FontCache, LayoutDiagnostics, Manifest, Name, ProjectPath,
+    Target, World, check_builds, compile_builds,
 };
 use folio_syntax::DiagSpan;
 use serde::Serialize;
@@ -33,13 +33,14 @@ pub(super) enum Mode {
 
 /// Runs `folio build`.
 pub(crate) fn build(args: &ProjectArgs) -> ExitCode {
-    run_command(args, Mode::Build)
+    run_command(args, Mode::Build, LayoutDiagnostics::Serious)
 }
 
-/// Runs `folio build` or `folio check`.
-pub(super) fn run_command(args: &ProjectArgs, mode: Mode) -> ExitCode {
+/// Runs `folio build` or `folio check`, showing the layout diagnostics
+/// that `layout` shows.
+pub(super) fn run_command(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics) -> ExitCode {
     let mut report = Report::new(args);
-    let status = run(args, mode, &mut report);
+    let status = run(args, mode, layout, &mut report);
     report.finish();
     status
 }
@@ -58,7 +59,7 @@ enum Done {
 }
 
 /// Builds or checks, reporting what it finds to `report`.
-fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
+fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut Report) -> ExitCode {
     let mut fail = |message: String| {
         report.diagnostics(&TextFiles::new(), &[error(message)]);
         ExitCode::from(FAILURE)
@@ -125,7 +126,9 @@ fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
                 Mode::Build => compile_builds(&world, builds)
                     .into_iter()
                     .map(|o| {
-                        let result = o.result.map(|c| (c.diagnostics.clone(), Done::Compiled(c)));
+                        let result = o
+                            .result
+                            .map(|c| (layout.filter(c.diagnostics.clone()), Done::Compiled(c)));
                         (o.variant, o.target, result)
                     })
                     .collect(),
@@ -135,7 +138,10 @@ fn run(args: &ProjectArgs, mode: Mode, report: &mut Report) -> ExitCode {
                         let result = o.result.map(|c| {
                             let errors = c.has_errors();
                             let writes = c.writes;
-                            (c.diagnostics, Done::Checked { errors, writes })
+                            (
+                                layout.filter(c.diagnostics),
+                                Done::Checked { errors, writes },
+                            )
                         });
                         (o.variant, o.target, result)
                     })

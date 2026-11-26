@@ -101,13 +101,19 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
             ])
             .positional(["text"])
             .build(),
-        // A placeholder until the math tree exists (M1): the source text.
+        // An equation (SPEC §8.1). Evaluation adds its formula of the math
+        // tree as the field `tree`, a value no field type describes, so the
+        // schema leaves it out; until LaTeX input is read into the same
+        // tree (#41), `tex` holds a LaTeX equation's source instead.
+        // Display equations step the counter `equation`, not one named
+        // after the element (SPEC §4.5).
         element("math", ElementKind::Inline, false)
             .fields([
-                FieldDecl::required(name("text"), FieldType::Str),
                 FieldDecl::with_default(name("block"), FieldType::Bool, Value::Bool(false)),
                 optional("tex", FieldType::Str),
             ])
+            .counter()
+            .ref_key("equation")
             .build(),
         element("figure", Float, true)
             .fields([optional("caption", FieldType::Content)])
