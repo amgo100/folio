@@ -370,7 +370,7 @@ fn pages_with_notes_come_from_the_cache() {
     };
     // An edit to the last paragraph leaves the pages before it alone.
     let last = prose(15, 40);
-    let tail = last.split(' ').last().unwrap();
+    let tail = last.split(' ').next_back().unwrap();
     let edited = source.replacen(tail, "changed.", 1);
     let edited = if edited == source {
         format!("{source}More.\n")
