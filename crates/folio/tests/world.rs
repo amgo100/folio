@@ -410,8 +410,22 @@ fn a_panic_in_a_query_is_a_diagnostic_in_a_long_lived_world() {
     assert!(matches!(error.span.get(), DiagSpanKind::Detached));
     assert_eq!(error.hints.len(), 2, "{:?}", error.hints);
     assert_eq!(failed.output, good.output);
-    assert_eq!(failed.sources, good.sources);
-    assert_eq!(failed.files, good.files);
+    // What the build last read, then the world's other files: the build
+    // that panicked may have read more.
+    assert!(failed.sources.starts_with(&good.sources));
+    assert!(failed.files.starts_with(&good.files));
+    assert!(
+        failed
+            .sources
+            .iter()
+            .any(|p| p.as_str() == "styles/markscheme.fsty")
+    );
+    assert!(
+        !good
+            .sources
+            .iter()
+            .any(|p| p.as_str() == "styles/markscheme.fsty")
+    );
 
     // A check panics alike.
     let checked = folio::check(&world, Target::Pdf, Some(&exam)).unwrap();
@@ -420,7 +434,8 @@ fn a_panic_in_a_query_is_a_diagnostic_in_a_long_lived_world() {
         checked.diagnostics[0].code.as_deref(),
         Some("internal-error")
     );
-    assert_eq!(checked.sources, good.sources);
+    assert_eq!(checked.sources, failed.sources);
+    assert!(checked.writes);
 
     // Once the bug is gone, the next compilation succeeds, in the same
     // process and on the same database.
@@ -447,7 +462,6 @@ fn a_panic_in_a_query_is_a_diagnostic_in_a_long_lived_world() {
         Some("internal-error")
     );
     assert_eq!(failed.output, None);
-    assert!(failed.sources.is_empty());
 }
 
 #[test]
@@ -465,9 +479,27 @@ fn a_panic_in_a_shared_query_is_a_diagnostic_in_every_parallel_build() {
             compiled.diagnostics[0].code.as_deref(),
             Some("internal-error")
         );
-        // Nothing compiled before, so there is nothing to keep.
+        // Nothing compiled before, so there is no output to keep; a watcher
+        // watches every file of the world, so the edit that works around
+        // the bug compiles again.
         assert_eq!(compiled.output, None);
         assert_eq!(compiled.diagnostics[0].hints.len(), 1);
+        let sources: Vec<_> = compiled.sources.iter().map(|p| p.as_str()).collect();
+        assert_eq!(
+            sources,
+            [
+                "main.fol",
+                "questions/q1.fol",
+                "styles/exam.fsty",
+                "styles/markscheme.fsty"
+            ]
+        );
+        assert!(
+            compiled
+                .files
+                .iter()
+                .any(|f| f.path.as_str() == "styles/exam.fsty" && f.kind == FileKind::Stylesheet)
+        );
     }
 
     armed.store(false, Ordering::SeqCst);

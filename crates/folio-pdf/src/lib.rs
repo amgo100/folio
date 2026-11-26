@@ -324,7 +324,8 @@ pub fn write_checked(document: &Document<'_>, checked: &Preflight) -> Result<Wri
 }
 
 /// Writes a document that [`preflight()`] has checked, as
-/// [`write_checked`] does, calling `check` before each page it writes.
+/// [`write_checked`] does, calling `check` before each page it writes and
+/// before it finishes the file.
 ///
 /// `check` may unwind, as a database query that its revision has
 /// cancelled does (SPEC §2.3), to stop writing a document that an edit has
@@ -408,9 +409,8 @@ struct Rendered {
     untitled: Vec<SourceRef>,
 }
 
-/// Writes the document, under the PDF/UA-1 validator or none.
 /// Writes the document, under the PDF/UA-1 validator or none, calling
-/// `check` before each page.
+/// `check` before each page and before finishing the file.
 fn render(document: &Document<'_>, ua: bool, check: &mut dyn FnMut()) -> Rendered {
     render_checked(document, ua, &mut |_, _| {}, check)
 }
@@ -431,7 +431,7 @@ fn render_with(
 }
 
 /// Writes the document as [`render_with`] does, calling `check` before
-/// each page.
+/// each page and before finishing the file.
 fn render_checked(
     document: &Document<'_>,
     ua: bool,
@@ -468,6 +468,7 @@ fn render_checked(
         surface.finish();
         kpage.finish();
     }
+    check();
     // The warnings are the check's, which walked the same pages.
     let Writer { tagger, names, .. } = writer;
     let (tree, headings, untitled) = tagger.finish(document.info.lang.as_deref());

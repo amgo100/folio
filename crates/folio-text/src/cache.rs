@@ -46,6 +46,8 @@ pub struct Cache {
     fonts: Mutex<HashMap<(usize, usize, u32), TextFont>>,
     /// Counts the calls of `shape_all`.
     clock: AtomicU64,
+    /// The clock when the cache last forgot paragraphs.
+    evicted: AtomicU64,
 }
 
 struct Entry {
@@ -178,7 +180,10 @@ impl Cache {
             check();
         });
 
-        if now.is_multiple_of(8) {
+        // Every eighth call, counted from the last that forgot: a call that
+        // a cancelled query left unfinished does not skip it.
+        if now >= self.evicted.load(Ordering::Relaxed) + 8 {
+            self.evicted.store(now, Ordering::Relaxed);
             self.evict(now);
         }
         out.into_iter()

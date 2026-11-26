@@ -89,8 +89,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// A panic in a query, a bug in the compiler, unwinds out of it; in a
 /// long-lived world ([`WorldBuilder::long_lived`]) it is instead an error
-/// with the code `internal-error`, with the sources, files and last output
-/// of the build's last compilation that did not panic.
+/// with the code `internal-error`, with the last output of the build's
+/// last compilation that did not panic. Its sources and files are then
+/// what a watcher should watch: those the build last read, and every other
+/// source and file of the world.
 pub fn compile(
     world: &World,
     target: Target,
@@ -114,9 +116,10 @@ pub fn compile(
         Err(panic) => {
             let last = kept.get(&build);
             let kept_output = last.output.is_some();
+            let (sources, files) = watched(world, last.sources, last.files);
             Ok(Compiled {
-                sources: last.sources,
-                files: last.files,
+                sources,
+                files,
                 output: last.output,
                 diagnostics: EcoVec::from([internal_error(&panic, kept_output)]),
             })
@@ -156,9 +159,7 @@ fn compile_now(world: &World, target: Target, variant: Option<&Name>) -> Compile
 /// edit to the world cancels the check.
 ///
 /// A panic in a query unwinds out of it, or in a long-lived world is an
-/// error with the code `internal-error`, as [`compile`] says, with the
-/// sources and files of the build's last check or compilation that did not
-/// panic.
+/// error with the code `internal-error`, as [`compile`] says.
 pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Checked, Cancelled> {
     let Some(kept) = world.kept() else {
         return catch(|| check_now(world, target, variant));
@@ -169,16 +170,18 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
             kept.update(build, &world.builds(), |last| {
                 last.sources = checked.sources.clone();
                 last.files = checked.files.clone();
-                last.writes = checked.writes;
+                last.writes = Some(checked.writes);
             });
             Ok(checked)
         }
         Err(panic) => {
             let last = kept.get(&build);
+            let writes = last.writes.unwrap_or(last.output.is_some());
+            let (sources, files) = watched(world, last.sources, last.files);
             Ok(Checked {
-                sources: last.sources,
-                files: last.files,
-                writes: last.writes,
+                sources,
+                files,
+                writes,
                 diagnostics: EcoVec::from([internal_error(&panic, false)]),
             })
         }
@@ -518,6 +521,44 @@ fn panic_message(payload: &(dyn Any + Send)) -> EcoString {
     } else {
         "a query panicked".into()
     }
+}
+
+/// What a watcher watches after a build panicked: the sources and files
+/// that its last compilation or check that did not panic read, and then
+/// every other source and file of the world, since the build that panicked
+/// may have read more (SPEC §12.2). The world's files that the build is not
+/// known to have read are listed as sources or as data.
+fn watched(
+    world: &World,
+    mut sources: EcoVec<ProjectPath>,
+    mut files: EcoVec<FileRead>,
+) -> (EcoVec<ProjectPath>, EcoVec<FileRead>) {
+    let mut seen: HashSet<ProjectPath> = files.iter().map(|f| f.path.clone()).collect();
+    let listed: HashSet<ProjectPath> = sources.iter().cloned().collect();
+    for path in world.source_paths() {
+        if !listed.contains(path) {
+            sources.push(path.clone());
+        }
+        if seen.insert(path.clone()) {
+            let kind = match path.as_str().rsplit_once('.') {
+                Some((_, "fsty")) => FileKind::Stylesheet,
+                _ => FileKind::Content,
+            };
+            files.push(FileRead {
+                path: path.clone(),
+                kind,
+            });
+        }
+    }
+    for path in world.file_paths() {
+        if seen.insert(path.clone()) {
+            files.push(FileRead {
+                path: path.clone(),
+                kind: FileKind::Data,
+            });
+        }
+    }
+    (sources, files)
 }
 
 /// The error that stands for a panic in a query in a long-lived world: a

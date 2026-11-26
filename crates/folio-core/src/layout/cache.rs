@@ -40,6 +40,8 @@ pub struct Cache {
     entries: Mutex<HashMap<Key, Entry>>,
     /// Counts the calls of `layout_all`.
     clock: AtomicU64,
+    /// The clock when the cache last forgot paragraphs.
+    evicted: AtomicU64,
     hits: AtomicU64,
     misses: AtomicU64,
     /// The glyphs of hyphens, by the font, features and language they are
@@ -242,7 +244,10 @@ impl Cache {
             check();
         });
 
-        if now.is_multiple_of(8) {
+        // Every eighth call, counted from the last that forgot: a call that
+        // a cancelled query left unfinished does not skip it.
+        if now >= self.evicted.load(Ordering::Relaxed) + 8 {
+            self.evicted.store(now, Ordering::Relaxed);
             lock(&self.entries).retain(|_, entry| entry.used + MAX_AGE >= now);
             lock(&self.hyphens).retain(|_, (_, used)| *used + MAX_AGE >= now);
         }

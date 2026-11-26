@@ -76,8 +76,8 @@ pub(crate) struct Last {
     /// output.
     pub output: Option<Bytes>,
     /// Whether its last check said that compiling it writes a file, as
-    /// [`Checked::writes`](crate::Checked::writes).
-    pub writes: bool,
+    /// [`Checked::writes`](crate::Checked::writes); `None` before a check.
+    pub writes: Option<bool>,
 }
 
 impl Kept {
@@ -188,9 +188,9 @@ impl WorldBuilder {
     /// [`compile`](crate::compile) and [`check`](crate::check), and so
     /// [`compile_builds`](crate::compile_builds) and
     /// [`check_builds`](crate::check_builds), turn it into an error with
-    /// the code `internal-error` and answer with what the last compilation
-    /// of the build that did not panic gave: its sources and files, and its
-    /// last output. The process lives on, and the next edit compiles
+    /// the code `internal-error` and answer with the last output of the
+    /// build's last compilation that did not panic, and with every source
+    /// and file to watch. The process lives on, and the next edit compiles
     /// again. Otherwise the panic unwinds out of them, as it does out of
     /// the other functions in either kind of world.
     pub fn long_lived(mut self, long_lived: bool) -> Self {
