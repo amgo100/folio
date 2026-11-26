@@ -69,10 +69,21 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
         noticed: BTreeSet::new(),
         request_id: 0,
         watch: Watch::No,
+        folders: Vec::new(),
         shut_down: false,
         retry: false,
     };
     server.watch = watch_support(&params);
+    #[allow(deprecated)]
+    let folders = params
+        .workspace_folders
+        .iter()
+        .flatten()
+        .map(|f| &f.uri)
+        .chain(&params.root_uri)
+        .filter_map(convert::uri_to_path)
+        .collect();
+    server.folders = folders;
     if let Some(root) = server.initial_root(&params) {
         server.open_project(root);
     }
@@ -154,6 +165,9 @@ struct Server<'a> {
     request_id: i32,
     /// Whether the client can be asked to report changes on disk, and how.
     watch: Watch,
+    /// The client's workspace folders, which file events with a pattern of
+    /// [`Watch::Workspace`] are relative to.
+    folders: Vec<PathBuf>,
     /// Whether the client asked the server to shut down.
     shut_down: bool,
     /// Whether a check could not be started, to be tried again at the
@@ -208,6 +222,7 @@ impl Server<'_> {
                                 // Nothing more is done until `exit`.
                                 self.shut_down = true;
                                 self.dirty = false;
+                                self.retry = false;
                                 self.send(Response::new_ok(request.id, ()));
                             } else if self.shut_down {
                                 self.send(Response::new_err(
@@ -281,7 +296,20 @@ impl Server<'_> {
     fn watch_files(&mut self, root: &Path) {
         let glob_pattern = match self.watch {
             Watch::No => return,
-            Watch::Workspace => lsp::GlobPattern::String("**/*".into()),
+            Watch::Workspace => {
+                if !self.folders.iter().any(|folder| root.starts_with(folder)) {
+                    self.log(
+                        lsp::MessageType::WARNING,
+                        format!(
+                            "Folio: the project in {} is outside the workspace, so changes \
+                             made to its files outside the editor are not seen; open the \
+                             project's folder as the workspace",
+                            root.display()
+                        ),
+                    );
+                }
+                lsp::GlobPattern::String("**/*".into())
+            }
             Watch::Relative => match convert::path_to_uri(root) {
                 Some(base) => lsp::GlobPattern::Relative(lsp::RelativePattern {
                     base_uri: lsp::OneOf::Right(base),
@@ -623,10 +651,13 @@ impl Server<'_> {
         let Some(project) = &mut self.project else {
             return;
         };
+        // The project directory stands for every file in it.
         let names_project_file = paths.iter().any(|path| {
-            project
-                .project_path(path)
-                .is_some_and(|rel| rel == loader::MANIFEST || rel == loader::LOCKFILE)
+            path == &project.root
+                || path == &project.canonical
+                || project
+                    .project_path(path)
+                    .is_some_and(|rel| rel == loader::MANIFEST || rel == loader::LOCKFILE)
         });
         let Some(world) = &mut project.world else {
             // The project could not be loaded: try again when a file it
@@ -768,6 +799,10 @@ impl Server<'_> {
 
     /// Publishes what a check found, unless an edit has overtaken it.
     fn done(&mut self, done: Done) {
+        // After `shutdown`, the server sends nothing but answers.
+        if self.shut_down {
+            return;
+        }
         let revision = done.revision;
         let outcome = match done.files {
             None => Outcome::Cancelled,

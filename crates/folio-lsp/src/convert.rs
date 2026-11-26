@@ -94,6 +94,9 @@ impl<'a> LineIndex<'a> {
         }
         let line = self.starts.partition_point(|&start| start <= byte) - 1;
         let start = self.starts[line];
+        // Inside a line break is the end of the line before it.
+        let rest = &self.text[start..];
+        let byte = byte.min(start + rest.find(['\r', '\n']).unwrap_or(rest.len()));
         let column = self.text[start..byte]
             .chars()
             .map(|c| encoding.width(c))
@@ -324,6 +327,8 @@ mod tests {
             // Past the end of the line is its end, before `\r\n`.
             assert_eq!(index.offset(lsp::Position::new(0, 99), encoding), 8);
         }
+        // Between `\r` and `\n`: the end of the line.
+        assert_eq!(index.position(9, Encoding::Utf16), lsp::Position::new(0, 5));
         assert_eq!(
             index.position(10, Encoding::Utf16),
             lsp::Position::new(1, 0)
