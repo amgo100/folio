@@ -67,7 +67,7 @@ fn ordinary_converges_in_one_extra_pass() {
 }
 
 #[test]
-fn docx_reads_pdf_pages() {
+fn docx_measures_its_own_layout() {
     let world = world(BREAKS, DOC);
     assert_eq!(
         paragraphs(&world, Target::Docx)[1],
@@ -227,4 +227,21 @@ fn oscillating_output_is_deterministic() {
     let d = folio::compile(&edited, Target::Pdf, None).unwrap();
     assert_eq!(a.output, d.output);
     assert_eq!(a.diagnostics, d.diagnostics);
+}
+
+#[test]
+fn a_target_on_no_page_shows_unresolved_with_a_warning() {
+    let doc = "= One\n\nA #emph[word] <word> here.\n\n= Two\n\nSee #ref(<word>, form: \"page\").\n";
+    let world = world(BREAKS, doc);
+    assert_eq!(paragraphs(&world, Target::Pdf)[3], "See page~??.");
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    let messages: Vec<String> = compiled
+        .diagnostics
+        .iter()
+        .map(|d| d.message.to_string())
+        .collect();
+    assert_eq!(
+        messages,
+        ["`<word>` is on no page, so the reference has no page number to show"]
+    );
 }

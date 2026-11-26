@@ -33,7 +33,6 @@
 //! styled tree equal stops at Style (early cutoff, SPEC §2.3).
 
 use ecow::eco_format;
-use folio_component::Target;
 
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
@@ -116,15 +115,13 @@ pub fn sequence(db: &dyn Db, build: Build<'_>) -> Option<Sequenced> {
 pub fn resolve(db: &dyn Db, build: Build<'_>) -> Option<Resolved> {
     let counted = resolve_counters(db, build.base(db)).as_ref()?;
     let mut resolution = counted.resolution.clone();
-    if resolution.has_page_refs() {
+    if !resolution.page_targets().is_empty() {
         match build.pass(db) {
             Some(numbers) => resolution.set_pages(numbers),
             None => {
                 let numbers = settle(db, build);
                 resolution.set_pages(numbers);
-                if numbers.frozen {
-                    report_unsettled(db, &resolution);
-                }
+                report_unsettled(db, &resolution);
             }
         }
     }
@@ -162,17 +159,14 @@ pub fn resolve_counters(db: &dyn Db, build: Build<'_>) -> Option<Resolved> {
 /// which stage a host asks for first or on what an earlier revision
 /// found (SPEC §2.4).
 ///
-/// A fixed-layout build measures its own pages; the Office targets take
-/// the numbers of the PDF build of their variant, whose page numbers are
-/// the cached results of their page fields (SPEC §11.2).
+/// A DOCX or PPTX build measures its tree with Folio's layout too, which
+/// gives the cached results of its page fields (SPEC §11.2); the text
+/// stage reports no layout warnings for it.
 #[salsa::tracked(returns(ref))]
 pub fn settle(db: &dyn Db, build: Build<'_>) -> PageNumbers {
     let build = build.base(db);
     let project = build.project(db);
     let variant = build.variant(db).clone();
-    if let Target::Docx | Target::Pptx = build.target(db) {
-        return settle(db, Build::new(db, project, Target::Pdf, variant)).clone();
-    }
     let Some(counted) = resolve_counters(db, build).as_ref() else {
         return PageNumbers::default();
     };
@@ -203,31 +197,48 @@ pub fn settle(db: &dyn Db, build: Build<'_>) -> PageNumbers {
 }
 
 /// Warns at each page-number reference whose target's page did not
-/// settle, so its number was frozen.
+/// settle, so its number was frozen, and at each whose target the build's
+/// layout puts on no page, so it shows [`UNRESOLVED`].
+///
+/// [`UNRESOLVED`]: crate::resolve::UNRESOLVED
 fn report_unsettled(db: &dyn Db, resolution: &Resolution) {
     let numbers = &resolution.pages;
     for r in &resolution.references {
         let Some(target) = r.target.filter(|_| r.page.is_some()) else {
             continue;
         };
-        if !numbers.unsettled.contains(&target.location) {
-            continue;
-        }
-        diag::report(
-            db,
-            Diagnostic::warning(
-                r.span,
-                eco_format!(
-                    "the page of `<{}>` did not settle after {EXTRA_PASSES} more layout passes, \
-                     so this reference shows the last pass's page, which may be wrong",
-                    r.label
+        if numbers.unsettled.contains(&target.location) {
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    r.span,
+                    eco_format!(
+                        "the page of `<{}>` did not settle after {EXTRA_PASSES} more layout \
+                         passes, so this reference shows the last pass's page, which may be wrong",
+                        r.label
+                    ),
+                )
+                .with_hint(
+                    "the reference's own number moves its target between pages; rewording \
+                     the text before the target, or a break before it, settles it",
                 ),
-            )
-            .with_hint(
-                "the reference's own number moves its target between pages; rewording the \
-                 text before the target, or a break before it, settles it",
-            ),
-        );
+            );
+        } else if numbers.page(target.location).is_none() {
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    r.span,
+                    eco_format!(
+                        "`<{}>` is on no page, so the reference has no page number to show",
+                        r.label
+                    ),
+                )
+                .with_hint(
+                    "an inline element has no box of its own to find; refer to a block \
+                     element, such as a heading, a figure or a display equation",
+                ),
+            );
+        }
     }
 }
 

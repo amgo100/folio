@@ -110,20 +110,19 @@ pub struct Pages {
 impl Pages {
     /// The page each element instance of `targets` starts on, by index,
     /// in the order given: the first page with a box of it, or `None`
-    /// where no page has one. This is the map from locations to pages
-    /// that page-number references read.
+    /// where no page has one, as for an inline element, whose text is set
+    /// in its paragraph's lines without a box of its own. This is the map
+    /// from locations to pages that page-number references read.
     pub fn pages_of(&self, targets: &[Location]) -> Vec<Option<usize>> {
         let mut found: Vec<Option<usize>> = vec![None; targets.len()];
-        let mut left = targets.len();
         for (index, page) in self.pages.iter().enumerate() {
-            if left == 0 {
+            if found.iter().all(Option::is_some) {
                 break;
             }
             visit(&page.fragment, &mut |location| {
                 for (target, page) in targets.iter().zip(&mut found) {
                     if page.is_none() && *target == location {
                         *page = Some(index);
-                        left -= 1;
                     }
                 }
             });
@@ -174,7 +173,7 @@ fn visit(fragment: &Fragment, f: &mut dyn FnMut(Location)) {
         match item {
             FragmentItem::Group(group) => visit(group, f),
             FragmentItem::Object(object) => f(object.location),
-            FragmentItem::Text(_) | FragmentItem::Shape { .. } => {}
+            _ => {}
         }
     }
 }

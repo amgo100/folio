@@ -139,10 +139,10 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
             .fields([
                 FieldDecl::required(name("target"), FieldType::Ref),
                 optional("supplement", FieldType::Content),
-                FieldDecl::with_default(
-                    name("form"),
+                // `number` where it is not given.
+                optional(
+                    "form",
                     FieldType::Choice(["number".into(), "page".into()].into_iter().collect()),
-                    Value::Str("number".into()),
                 ),
             ])
             .positional(["target", "supplement"])
