@@ -80,6 +80,7 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | `compile` | A whole build of content with a stylesheet generated from the property registry (each three bytes a selector, a property and a value of its type, among them huge, zero, negative and non-finite lengths and numbers, and page sizes past PDF's limits) goes through pages and the PDF writer without a panic. |
 | `manifest` | Reading a `folio.toml` finishes without a panic, and every build of a valid one compiles a small document. |
 | `lockfile` | Reading a `folio.lock` beside a fixed manifest finishes without a panic, and a valid one compiles. |
+| `tex` | Reading the body of a LaTeX equation (`$:tex …$`) into the math tree finishes without a panic, within the nesting limit, and every error of the build points into the file. |
 
 The `differential` harness also runs as a property test on stable:
 `cargo test -p folio-testkit --test differential` checks 12 random
