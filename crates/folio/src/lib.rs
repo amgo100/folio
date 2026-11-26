@@ -196,6 +196,58 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
     }
 }
 
+/// Checks a variant of the world's document for a target, as [`check`]
+/// does, and keeps the diagnostics that `layout` shows.
+pub fn check_with(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    layout: LayoutDiagnostics,
+) -> Result<Checked, Cancelled> {
+    let mut checked = check(world, target, variant)?;
+    checked.diagnostics = layout.filter(checked.diagnostics);
+    Ok(checked)
+}
+
+/// Which layout diagnostics a front end shows (SPEC §7.9).
+///
+/// [`compile`] and [`check`] report every diagnostic. Content that runs
+/// off its line or page (`overfull-line`, `page-overflow`) is always
+/// shown; underfull lines and relaxed widow, orphan, keep and unbreakable
+/// constraints ([`layout::DETAIL_CODES`]) only when asked for, as `folio
+/// check --layout` asks. `folio build` and plain `folio check` show
+/// [`LayoutDiagnostics::Serious`]; the language server and the preview
+/// apply the same rule through [`check_with`] or
+/// [`LayoutDiagnostics::filter`].
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub enum LayoutDiagnostics {
+    /// Only the layout diagnostics of content that runs off its line or
+    /// page; every other diagnostic is kept.
+    #[default]
+    Serious,
+    /// Every diagnostic.
+    All,
+}
+
+impl LayoutDiagnostics {
+    /// Whether a diagnostic is shown.
+    pub fn shows(self, diagnostic: &Diagnostic) -> bool {
+        self == Self::All
+            || !diagnostic
+                .code
+                .as_deref()
+                .is_some_and(|code| layout::DETAIL_CODES.contains(&code))
+    }
+
+    /// The diagnostics that are shown, in their order.
+    pub fn filter(self, diagnostics: EcoVec<Diagnostic>) -> EcoVec<Diagnostic> {
+        if diagnostics.iter().all(|d| self.shows(d)) {
+            return diagnostics;
+        }
+        diagnostics.into_iter().filter(|d| self.shows(d)).collect()
+    }
+}
+
 /// Checks a build, letting panics unwind.
 fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
     let db = world.db();

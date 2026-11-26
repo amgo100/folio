@@ -11,13 +11,25 @@
 //! a directory that cannot be written to, is not checked. With
 //! `--diagnostics json`, each build of the document has the status
 //! `checked` and no path.
+//!
+//! Like `folio build`, it leaves out the softer layout diagnostics
+//! ([`folio::layout::DETAIL_CODES`]: underfull lines, relaxed widows,
+//! orphans, keeps and unbreakable blocks) unless `--layout` asks for them
+//! (SPEC §7.9).
 
 use std::process::ExitCode;
+
+use folio::LayoutDiagnostics;
 
 use super::ProjectArgs;
 use super::build::{Mode, run_command};
 
-/// Runs `folio check`.
-pub(crate) fn check(args: &ProjectArgs) -> ExitCode {
-    run_command(args, Mode::Check)
+/// Runs `folio check`, with every layout diagnostic when `layout` is set.
+pub(crate) fn check(args: &ProjectArgs, layout: bool) -> ExitCode {
+    let layout = if layout {
+        LayoutDiagnostics::All
+    } else {
+        LayoutDiagnostics::Serious
+    };
+    run_command(args, Mode::Check, layout)
 }
