@@ -424,6 +424,8 @@ struct Walk {
     /// For each item being walked, the number of brackets open where it
     /// starts.
     items: Vec<usize>,
+    /// For each token, [`Self::opens_markup`].
+    opens_markup: Vec<bool>,
 }
 
 impl Walk {
@@ -435,8 +437,10 @@ impl Walk {
             gaps: vec![Gap::default()],
             depth: 0,
             items: Vec::new(),
+            opens_markup: Vec::new(),
         };
         this.walk(root, root.kind(), 0);
+        this.find_markup_lines();
         this
     }
 
@@ -595,21 +599,38 @@ impl Walk {
     /// markup lines below, whose indentation stays, so the line stays as
     /// written.
     fn opens_markup(&self, i: usize) -> bool {
-        let mut blocks: Vec<bool> = Vec::new();
-        for (j, token) in self.tokens.iter().enumerate().skip(i) {
-            if j > i && count_newlines(&self.text[self.gaps[j].range.0..self.gaps[j].range.1]) > 0 {
-                break;
+        self.opens_markup.get(i).copied().unwrap_or(false)
+    }
+
+    /// [`Self::opens_markup`] for every token, in one pass from the end of
+    /// each line: whether a content block whose markup starts on its line
+    /// is opened at or after the token and still open where the line ends.
+    fn find_markup_lines(&mut self) {
+        let breaks = |gap: &Gap| count_newlines(&self.text[gap.range.0..gap.range.1]) > 0;
+        let mut out = vec![false; self.tokens.len()];
+        // Closes after the token on its line, not yet matched.
+        let mut pending = 0usize;
+        let mut found = false;
+        for j in (0..self.tokens.len()).rev() {
+            if breaks(&self.gaps[j + 1]) {
+                pending = 0;
+                found = false;
             }
+            let token = self.tokens[j];
             if token.opens() {
-                let after = &self.gaps[j + 1];
-                let inline = count_newlines(&self.text[after.range.0..after.range.1]) == 0
-                    && self.tokens.get(j + 1).is_some_and(|t| !t.closes());
-                blocks.push(token.parent == SyntaxKind::ContentBlock && inline);
+                if pending > 0 {
+                    pending -= 1;
+                } else {
+                    let inline = !breaks(&self.gaps[j + 1])
+                        && self.tokens.get(j + 1).is_some_and(|t| !t.closes());
+                    found |= token.parent == SyntaxKind::ContentBlock && inline;
+                }
             } else if token.closes() {
-                blocks.pop();
+                pending += 1;
             }
+            out[j] = found;
         }
-        blocks.contains(&true)
+        self.opens_markup = out;
     }
 
     /// Decides every gap.
