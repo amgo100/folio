@@ -60,7 +60,7 @@ const MANIFEST: &str =
 #[test]
 fn builds_the_corpus() {
     let digests = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/determinism/digests.txt"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../folio/tests/determinism/digests.txt"),
     )
     .unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -380,4 +380,86 @@ fn checks_report_outputs_that_cannot_be_written() {
     let check = folio(dir.path(), &["check"]);
     assert!(check.status.success(), "{}", stderr(&check));
     assert!(!dir.path().join("a").exists());
+}
+
+/// Writes a message of the language server protocol.
+fn send(to: &mut impl std::io::Write, message: &serde_json::Value) {
+    let body = message.to_string();
+    write!(to, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    to.flush().unwrap();
+}
+
+/// Reads a message of the language server protocol.
+fn receive(from: &mut impl std::io::BufRead) -> serde_json::Value {
+    let mut length = None;
+    loop {
+        let mut line = String::new();
+        assert!(from.read_line(&mut line).unwrap() > 0, "the server hung up");
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        if let Some(n) = line.strip_prefix("Content-Length: ") {
+            length = Some(n.parse().unwrap());
+        }
+    }
+    let mut body = vec![0; length.expect("a length")];
+    from.read_exact(&mut body).unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[test]
+fn serves_the_language_server_over_standard_io() {
+    use std::io::BufReader;
+    use std::process::Stdio;
+
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "= Forces\n\n#nope\n"),
+    ]);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_folio"))
+        .args(["lsp", "--stdio", "--root"])
+        .arg(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .env_remove("FOLIO_CACHE_DIR")
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let request = |id: i32, method: &str, params: serde_json::Value| serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+    let notification = |method: &str, params: serde_json::Value| serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params });
+
+    send(
+        &mut stdin,
+        &request(1, "initialize", serde_json::json!({ "capabilities": {} })),
+    );
+    let initialized = receive(&mut stdout);
+    assert_eq!(initialized["id"], 1);
+    assert_eq!(initialized["result"]["serverInfo"]["name"], "folio");
+    send(
+        &mut stdin,
+        &notification("initialized", serde_json::json!({})),
+    );
+
+    // The file on disk is checked without being opened.
+    loop {
+        let message = receive(&mut stdout);
+        if message["method"] == "textDocument/publishDiagnostics" {
+            let uri = message["params"]["uri"].as_str().unwrap();
+            assert!(
+                uri.starts_with("file://") && uri.ends_with("/main.fol"),
+                "{uri}"
+            );
+            let message = &message["params"]["diagnostics"][0]["message"];
+            assert_eq!(message, "unknown variable: nope");
+            break;
+        }
+    }
+
+    send(&mut stdin, &request(2, "shutdown", serde_json::Value::Null));
+    while receive(&mut stdout)["id"] != 2 {}
+    send(&mut stdin, &notification("exit", serde_json::Value::Null));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
 }
