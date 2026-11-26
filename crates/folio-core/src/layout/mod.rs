@@ -20,7 +20,9 @@
 //!   (SPEC §2.3). It is shared by every handle of the database, so an edit
 //!   re-breaks only the paragraphs it changed.
 //! - **Diagnostics**: overfull and underfull lines, at the source of the
-//!   text they end with (§7.9).
+//!   text they end with (§7.9). Each layout diagnostic has a code; those
+//!   in [`DETAIL_CODES`] are shown only on request (`folio check
+//!   --layout`), the others always.
 //!
 //! The [`lines()`] query breaks each of a build's paragraphs, in parallel,
 //! at the content width of its block: the default page master's body less
@@ -263,6 +265,42 @@ fn paragraph_style(style: &ComputedStyle, props: &Properties) -> ParagraphStyle 
 
 use self::master::length;
 
+/// The codes of the layout diagnostics (SPEC §7.9,
+/// `docs/diagnostics-json.md`).
+pub mod codes {
+    /// A line wider than its space.
+    pub const OVERFULL_LINE: &str = "overfull-line";
+    /// A justified line stretched too far, or with nothing to stretch.
+    pub const UNDERFULL_LINE: &str = "underfull-line";
+    /// A page break that leaves fewer lines at a page's top than `widows`.
+    pub const WIDOW: &str = "widow";
+    /// A page break that leaves fewer lines at a page's foot than
+    /// `orphans`.
+    pub const ORPHAN: &str = "orphan";
+    /// A page break between a block with `keep-with-next` and the next.
+    pub const BROKEN_KEEP_WITH_NEXT: &str = "broken-keep-with-next";
+    /// A page break inside a block with `keep-together`.
+    pub const BROKEN_KEEP_TOGETHER: &str = "broken-keep-together";
+    /// A page break inside a block with `breakable: false`.
+    pub const BROKEN_UNBREAKABLE: &str = "broken-unbreakable";
+    /// Content taller than the space a page has for it.
+    pub const PAGE_OVERFLOW: &str = "page-overflow";
+}
+
+/// The codes of the layout diagnostics that a front end shows only when
+/// asked to (SPEC §7.9): underfull lines, and widow, orphan, keep and
+/// unbreakable constraints that a page break relaxed. Content that runs
+/// off its line or page ([`codes::OVERFULL_LINE`],
+/// [`codes::PAGE_OVERFLOW`]) is not among them: it is always shown.
+pub const DETAIL_CODES: [&str; 6] = [
+    codes::UNDERFULL_LINE,
+    codes::WIDOW,
+    codes::ORPHAN,
+    codes::BROKEN_KEEP_WITH_NEXT,
+    codes::BROKEN_KEEP_TOGETHER,
+    codes::BROKEN_UNBREAKABLE,
+];
+
 /// Reports a paragraph's overfull and underfull lines (SPEC §7.9).
 fn report_lines(
     db: &dyn Db,
@@ -281,6 +319,7 @@ fn report_lines(
                         line.overflow.to_pt()
                     ),
                 )
+                .with_code(codes::OVERFULL_LINE)
                 .with_hint(
                     "there is no break that fits; allow hyphenation with \
                      `hyphenate: true`, or reword the text",
@@ -298,10 +337,12 @@ fn report_lines(
             };
             diag::report(
                 db,
-                Diagnostic::warning(line_span(db, project, paragraph, line), message).with_hint(
-                    "allow hyphenation with `hyphenate: true`, set `justify: false`, \
-                     or reword the text",
-                ),
+                Diagnostic::warning(line_span(db, project, paragraph, line), message)
+                    .with_code(codes::UNDERFULL_LINE)
+                    .with_hint(
+                        "allow hyphenation with `hyphenate: true`, set `justify: false`, \
+                         or reword the text",
+                    ),
             );
         }
     }

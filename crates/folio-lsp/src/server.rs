@@ -732,7 +732,9 @@ impl Server<'_> {
                 let mut diagnostics = Vec::new();
                 for output in outputs {
                     match output.result {
-                        Ok(checked) => diagnostics.extend(checked.diagnostics),
+                        // What plain `folio check` shows (SPEC §7.9).
+                        Ok(checked) => diagnostics
+                            .extend(folio::LayoutDiagnostics::Serious.filter(checked.diagnostics)),
                         Err(folio::Cancelled) => {
                             let _ = tx.send(Done {
                                 revision,
