@@ -114,7 +114,8 @@ pub struct Found {
 /// a quarter of it below, as a click finds it. Where no glyph shows the
 /// bytes, as in the markup of an element's call, the boxes of the
 /// fragments and objects whose nodes hold them, and hold the fewest bytes,
-/// are found instead.
+/// are found instead; pages themselves, and nodes that hold the whole file,
+/// are not.
 ///
 /// To look up many places in the same pages, build an [`Index`] once.
 ///
@@ -416,9 +417,13 @@ impl Index {
         if !hits.is_empty() {
             return merge(&hits);
         }
+        // A node that holds the whole file, such as the document's, holds
+        // every place and shows none.
+        let all = source.text().len();
         let holding = || {
             self.boxes.iter().filter_map(|b| {
                 let holds = b.file == file
+                    && b.whole != (0..all)
                     && b.whole.start <= bytes.start
                     && bytes.end <= b.whole.end
                     && (!b.whole.is_empty() || bytes.is_empty());
@@ -466,14 +471,16 @@ fn merge(hits: &[(usize, &GlyphEntry)]) -> Vec<Found> {
     out
 }
 
-/// The boxes of the fragments nested in a fragment, itself included, and
-/// of its objects, with the nodes they name.
+/// The boxes of the fragments nested in a fragment, not itself, and of its
+/// objects, with the nodes they name.
 fn boxes_in(fragment: &Fragment, at: Point, out: &mut Vec<(SourceRef, Point, Size)>) {
-    out.push((fragment.source, at, fragment.size));
     for (pos, item) in &fragment.items {
         let origin = Point::new(at.x + pos.x, at.y + pos.y);
         match item {
-            FragmentItem::Group(group) => boxes_in(group, origin, out),
+            FragmentItem::Group(group) => {
+                out.push((group.source, origin, group.size));
+                boxes_in(group, origin, out);
+            }
             FragmentItem::Object(object) => {
                 out.push((object.location.source, origin, object.size));
             }
@@ -600,6 +607,19 @@ mod tests {
         // A whole page is not the innermost box.
         let pages = crate::pages(&world, Target::Pdf, None).unwrap().unwrap();
         assert!(found[0].size.height < pages.pages[0].fragment.size.height);
+    }
+
+    #[test]
+    fn a_blank_line_finds_no_page() {
+        let world = world("First paragraph.\n\nSecond paragraph.\n");
+        // The blank line between the paragraphs.
+        let found = find_in(&world, 17..17);
+        let pages = crate::pages(&world, Target::Pdf, None).unwrap().unwrap();
+        let page = pages.pages[0].fragment.size;
+        assert!(
+            found.iter().all(|f| f.size != page),
+            "a page is no place: {found:?}"
+        );
     }
 
     #[test]

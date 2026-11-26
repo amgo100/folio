@@ -591,13 +591,22 @@ fn the_preview_follows_the_cursor_and_clicks_open_the_source() {
     };
 
     // The cursor in `ball` on the third line: one glyph, marked in the
-    // preview.
-    client.notify(
-        "folio/reveal",
-        json!({ "textDocument": { "uri": main }, "position": { "line": 2, "character": 4 } }),
-    );
+    // preview, once the preview has indexed its pages, which follows them.
     let at = VALID.find("ball").unwrap() + 2;
-    let revealed = client.event(|e| matches!(e, Event::Revealed { .. }));
+    let mut revealed;
+    let mut tries = 0;
+    loop {
+        client.notify(
+            "folio/reveal",
+            json!({ "textDocument": { "uri": main }, "position": { "line": 2, "character": 4 } }),
+        );
+        revealed = client.event(|e| matches!(e, Event::Revealed { .. }));
+        tries += 1;
+        if !matches!(revealed, Event::Revealed { areas: 0, .. }) || tries == 100 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
     assert_eq!(
         revealed,
         Event::Revealed {

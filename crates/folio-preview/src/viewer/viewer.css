@@ -76,13 +76,16 @@ header {
 #pages {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  /* Auto margins centre a page, and one wider than the window starts at
+     its left edge, where it can be scrolled to. */
+  align-items: flex-start;
   gap: 16px;
   padding: 16px;
 }
 .page {
   position: relative;
   flex: none;
+  margin-inline: auto;
   background: #fff;
   box-shadow: var(--page-shadow);
 }

@@ -62,6 +62,18 @@ fn updated(events: &Receiver<Event>, accept: impl Fn(&Update) -> bool) -> Arc<Up
     }
 }
 
+/// Waits until the pages of a revision are indexed for source sync.
+fn indexed(events: &Receiver<Event>, revision: u64) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match events.recv_deadline(deadline) {
+            Ok(Event::Indexed { revision: r }) if r >= revision => return,
+            Ok(_) => {}
+            Err(_) => panic!("revision {revision} not indexed in time"),
+        }
+    }
+}
+
 /// Opens the websocket with a token and, if given, an `Origin` header.
 fn connect(
     preview: &Preview,
@@ -457,7 +469,7 @@ fn a_font_change_sends_every_page_again() {
     let (preview, events) = start(dir.path(), |o| o.watch(false));
     let first = updated(&events, |u| u.pages > 0);
     let mut ws = connect(&preview, preview.token(), None).unwrap();
-    receive_from(&mut ws, first.revision);
+    let before = receive_from(&mut ws, first.revision);
     // A font file in the project's font directory, of a family the exam
     // does not use: the pages' hashes stay, but every page is drawn again.
     let font =
@@ -473,6 +485,10 @@ fn a_font_change_sends_every_page_again() {
         received.frames.len(),
         next.pages,
         "the client gets every page"
+    );
+    assert_ne!(
+        received.update["fonts"], before.update["fonts"],
+        "the client drops the glyphs it has"
     );
     assert!(
         received
@@ -506,6 +522,7 @@ fn the_cursor_reveals_pages_and_a_click_finds_the_source() {
     let mut ws = connect(&preview, preview.token(), None).unwrap();
     let first = receive_from(&mut ws, laid_out.revision);
     let revision = first.update["revision"].as_u64().unwrap();
+    indexed(&events, revision);
     let text = std::fs::read_to_string(dir.path().join("main.fol")).unwrap();
     let at = text.find("Answer *all*").unwrap();
 
@@ -581,8 +598,13 @@ fn diagnostics_are_marked_on_the_pages() {
         "= Section A #nonexistent",
     );
     preview.changed([file]);
-    updated(&events, |u| u.revision > revision);
-    let next = receive_from(&mut ws, revision + 1);
+    let edited = updated(&events, |u| u.revision > revision);
+    // The overlays follow the pages, in an update of the same revision.
+    let mut next = receive_from(&mut ws, edited.revision);
+    while next.update["overlays"].as_array().unwrap().is_empty() {
+        next = receive(&mut ws);
+    }
+    assert_eq!(next.update["revision"], edited.revision);
     let diagnostics = next.update["diagnostics"].as_array().unwrap();
     let error = diagnostics
         .iter()
@@ -653,4 +675,30 @@ fn glyphs_are_rasterised_for_clients_that_draw() {
     assert!(missing.contains("404"));
     let (refused, _) = get(&preview, &format!("/glyphs/{font}?size=24&g=1"), &[]);
     assert!(refused.contains("403"));
+}
+
+#[test]
+fn pages_kept_from_an_earlier_revision_find_no_source() {
+    let dir = project("exam");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    indexed(&events, first.revision);
+    let text = std::fs::read_to_string(dir.path().join("main.fol")).unwrap();
+    let at = text.find("Answer").unwrap();
+    assert_eq!(preview.reveal("main.fol", at..at), 1);
+
+    // The entry file is gone: the last pages stay, under a banner.
+    let entry = dir.path().join("main.fol");
+    std::fs::remove_file(&entry).unwrap();
+    preview.changed([&entry]);
+    let broken = updated(&events, |u| u.revision > first.revision);
+    assert!(broken.banner.is_some());
+    assert_eq!(preview.reveal("main.fol", at..at), 0);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    receive_from(&mut ws, broken.revision);
+    let click = serde_json::json!({
+        "type": "click", "revision": broken.revision, "page": 0, "x": 100.0, "y": 100.0,
+    });
+    ws.send(Message::text(click.to_string())).unwrap();
+    assert!(message_of(&mut ws, "source")["location"].is_null());
 }

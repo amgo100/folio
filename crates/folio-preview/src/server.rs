@@ -249,6 +249,10 @@ const MAX_GLYPH_SIZE: f32 = 2048.0;
 /// The most glyphs one `/glyphs/` request may ask for.
 const MAX_GLYPHS: usize = 4096;
 
+/// The most bytes of coverage one `/glyphs/` answer holds: the glyphs past
+/// it are left out, and the client asks for them again.
+const MAX_GLYPH_BYTES: usize = 32 << 20;
+
 /// Glyphs of a font rasterised at a size, for clients that draw display
 /// lists themselves (SPEC §12.4): `/glyphs/<font>?size=<px>&g=<id>.<sub>,..`,
 /// where `sub` (0 to 3) places the glyph's origin that many quarters of a
@@ -282,9 +286,13 @@ async fn glyphs(shared: &Shared, n: &str, request: &Request) -> Vec<u8> {
     let fonts = published.fonts.clone();
     let rendered = tokio::task::spawn_blocking(move || {
         let mut outlines = folio_render::Outlines::new();
-        let mut out = Vec::new();
-        out.extend_from_slice(&(wanted.len() as u32).to_le_bytes());
+        let mut out = vec![0; 4];
+        let mut count = 0u32;
         for (id, sub) in wanted {
+            if out.len() > MAX_GLYPH_BYTES {
+                break;
+            }
+            count += 1;
             let bitmap = folio_render::rasterize_glyph(
                 &*fonts,
                 &mut outlines,
@@ -307,6 +315,7 @@ async fn glyphs(shared: &Shared, n: &str, request: &Request) -> Vec<u8> {
                 None => out.extend_from_slice(&[0; 16]),
             }
         }
+        out[..4].copy_from_slice(&count.to_le_bytes());
         out
     })
     .await;
@@ -444,7 +453,11 @@ fn click(
 
 /// The source of what a point on a page shows.
 fn locate(published: &Published, page: usize, x: f32, y: f32) -> Option<folio::diag::Location> {
-    let layout = published.layout.as_ref()?;
+    // Pages kept from an earlier revision show source that has changed.
+    let layout = published
+        .layout
+        .as_ref()
+        .filter(|layout| layout.revision == published.revision)?;
     let entry = published.pages.get(page)?;
     let list = &entry.list;
     if !(x.is_finite() && y.is_finite()) {
@@ -503,6 +516,7 @@ struct UpdateMessage<'a> {
     banner: Option<&'a str>,
     diagnostics: &'a [folio::diag::Resolved],
     overlays: &'a [Overlay],
+    fonts: u64,
 }
 
 /// Sends a client what it does not have of a revision: the `update`
@@ -547,6 +561,7 @@ async fn send(
         banner: published.banner.as_deref(),
         diagnostics: &published.diagnostics,
         overlays: &published.overlays,
+        fonts: published.font_generation,
     };
     let text = serde_json::to_string(&update).expect("the update serialises");
     ws.feed(Message::text(text)).await?;

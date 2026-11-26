@@ -21,6 +21,15 @@ const list = q("diagnostics");
 const FRAME_THICKNESS = 0.5;
 // The most glyphs one `/glyphs/` request asks for.
 const GLYPHS_PER_REQUEST = 800;
+// The largest size in pixels the server rasterises glyphs at; larger ones
+// are scaled up from it.
+const MAX_GLYPH_SIZE = 2048;
+// The most pixels a page's canvas holds; past it, a page is drawn at a
+// lower resolution and stretched.
+const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
+// How long a glyph that could not be fetched waits before it is asked for
+// again, in milliseconds.
+const RETRY_AFTER = 2000;
 
 // ---------------------------------------------------------------------
 // The wire format (`folio_render::wire`, version 1).
@@ -175,13 +184,38 @@ function command(tag, r) {
 // Glyphs, rasterised by the server.
 
 // `font|size|id|sub` → { left, top, width, height, mask } or null (no
-// outline); missing while a request is out.
-const glyphCache = new Map();
+// outline); undefined while a request is out.
+let glyphCache = new Map();
 // `font|size` → Set of `id.sub` wanted.
-const glyphWants = new Map();
+let glyphWants = new Map();
 let glyphTimer = 0;
 // Tinted copies of masks: mask → Map(colour → canvas).
-const tinted = new WeakMap();
+let tinted = new WeakMap();
+// `font|size|id|sub` → when a glyph that could not be fetched is asked for
+// again.
+let failed = new Map();
+let retryTimer = 0;
+// The server's font generation: when it changes, font ids may name other
+// fonts, and every glyph is fetched again.
+let fontGeneration = null;
+
+function dropGlyphs() {
+  glyphCache = new Map();
+  glyphWants = new Map();
+  tinted = new WeakMap();
+  failed = new Map();
+}
+
+function glyphFailed(key) {
+  glyphCache.delete(key);
+  failed.set(key, Date.now() + RETRY_AFTER);
+  if (!retryTimer) {
+    retryTimer = setTimeout(() => {
+      retryTimer = 0;
+      redrawVisible();
+    }, RETRY_AFTER);
+  }
+}
 
 function wantGlyph(font, size, id, sub) {
   const key = `${font}|${size}`;
@@ -195,25 +229,33 @@ async function fetchGlyphs() {
   glyphTimer = 0;
   const wants = [...glyphWants];
   glyphWants.clear();
+  const cache = glyphCache;
   const requests = [];
   for (const [key, set] of wants) {
     const [font, size] = key.split("|");
-    const all = [...set].filter((g) => !glyphCache.has(`${key}|${g.replace(".", "|")}`));
-    for (const g of all) glyphCache.set(`${key}|${g.replace(".", "|")}`, undefined);
+    const keyOf = (g) => `${key}|${g.replace(".", "|")}`;
+    const all = [...set].filter((g) => !cache.has(keyOf(g)));
+    for (const g of all) cache.set(keyOf(g), undefined);
     for (let i = 0; i < all.length; i += GLYPHS_PER_REQUEST) {
       const part = all.slice(i, i + GLYPHS_PER_REQUEST);
       const url = `/glyphs/${font}?token=${encodeURIComponent(token)}&size=${size}&g=${part.join(",")}`;
       requests.push(fetch(url).then(async (response) => {
         if (!response.ok) throw new Error(`${response.status}`);
-        readGlyphs(font, size, new Uint8Array(await response.arrayBuffer()));
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        // Glyphs of fonts the server has replaced since are dropped.
+        if (cache !== glyphCache) return false;
+        readGlyphs(font, size, bytes);
+        // Glyphs an answer left out are asked for again later.
+        for (const g of part) if (glyphCache.get(keyOf(g)) === undefined) glyphFailed(keyOf(g));
+        return true;
       }).catch(() => {
-        // Not drawn; asked for again when the page is drawn again.
-        for (const g of part) glyphCache.delete(`${key}|${g.replace(".", "|")}`);
+        if (cache === glyphCache) for (const g of part) glyphFailed(keyOf(g));
+        return false;
       }));
     }
   }
-  await Promise.all(requests);
-  if (requests.length) redrawVisible();
+  const done = await Promise.all(requests);
+  if (done.some(Boolean)) redrawVisible();
 }
 
 function readGlyphs(font, size, bytes) {
@@ -281,7 +323,8 @@ function draw(page) {
   const { list, canvas } = page;
   if (!list || !canvas) return true;
   const dpr = window.devicePixelRatio || 1;
-  const scale = zoom * dpr;
+  const area = list.width * list.height;
+  const scale = Math.min(zoom * dpr, Math.sqrt(MAX_CANVAS_PIXELS / Math.max(1, area)));
   const width = Math.max(1, Math.round(list.width * scale));
   const height = Math.max(1, Math.round(list.height * scale));
   if (canvas.width !== width) canvas.width = width;
@@ -312,20 +355,32 @@ function draw(page) {
 }
 
 function drawGlyphs(ctx, run, scale) {
-  const size = Math.round(run.size * scale * 4) / 4;
-  if (!(size > 0) || size > 2048) return true;
+  const want = Math.round(run.size * scale * 4) / 4;
+  if (!(want > 0)) return true;
+  // Glyphs larger than the server rasterises are scaled up.
+  const size = Math.min(want, MAX_GLYPH_SIZE);
+  const stretch = want / size;
   let complete = true;
   let pen = run.origin.x;
+  const now = Date.now();
   for (const g of run.glyphs) {
     const x = (pen + g.dx) * scale;
     const y = Math.round((run.origin.y + g.dy) * scale);
     pen += g.advance;
     const ix = Math.floor(x);
-    const sub = Math.min(3, Math.floor((x - ix) * 4));
-    const glyph = glyphCache.get(`${run.font}|${size}|${g.id}|${sub}`);
+    const sub = stretch > 1 ? 0 : Math.min(3, Math.floor((x - ix) * 4));
+    const key = `${run.font}|${size}|${g.id}|${sub}`;
+    const glyph = glyphCache.get(key);
     if (glyph === undefined) {
-      if (!glyphCache.has(`${run.font}|${size}|${g.id}|${sub}`)) wantGlyph(run.font, size, g.id, sub);
+      const waiting = glyphCache.has(key) || (failed.get(key) || 0) > now;
+      if (!waiting) {
+        failed.delete(key);
+        wantGlyph(run.font, size, g.id, sub);
+      }
       complete = false;
+    } else if (glyph && stretch > 1) {
+      ctx.drawImage(inColour(glyph, run.fill), x + glyph.left * stretch, y + glyph.top * stretch,
+        glyph.width * stretch, glyph.height * stretch);
     } else if (glyph) {
       ctx.drawImage(inColour(glyph, run.fill), ix + glyph.left, y + glyph.top);
     }
@@ -400,24 +455,26 @@ function pageElement(i) {
   el.dataset.index = String(i);
   el.setAttribute("aria-label", `Page ${i + 1}`);
   const canvas = document.createElement("canvas");
-  canvas.addEventListener("click", (event) => click(i, event));
   el.appendChild(canvas);
+  // On the page, so that clicks on marks count too.
+  el.addEventListener("click", (event) => click(i, event));
   pagesEl.appendChild(el);
   observer.observe(el);
-  page = { list: null, el, canvas, img: null, marks: [], drawn: 0 };
+  page = { list: null, el, canvas, img: null, size: null, marks: [], drawn: 0 };
   pages[i] = page;
   return page;
 }
 
 function layoutPage(page) {
-  const w = page.list ? page.list.width : 595;
-  const h = page.list ? page.list.height : 842;
+  const size = page.list || page.size || { width: 595, height: 842 };
+  const w = size.width;
+  const h = size.height;
   page.el.style.width = `${w * zoom}px`;
   page.el.style.height = `${h * zoom}px`;
 }
 
 function fitZoom() {
-  const widest = Math.max(1, ...pages.map((p) => (p && p.list ? p.list.width : 0)));
+  const widest = Math.max(1, ...pages.map((p) => (p && (p.list || p.size) ? (p.list || p.size).width : 0)));
   const room = Math.max(200, pagesEl.clientWidth - 32);
   return Math.min(4, Math.max(0.25, room / widest));
 }
@@ -432,12 +489,18 @@ function setZoom(value) {
 // A page whose display list cannot be decoded is shown as the server
 // renders it.
 function showImage(page, i, revision) {
+  if (page.list) page.size = { width: page.list.width, height: page.list.height };
   page.list = null;
   if (!page.img) {
     page.img = document.createElement("img");
     page.img.alt = `Page ${i + 1}`;
-    page.img.addEventListener("click", (event) => click(i, event));
-    page.el.appendChild(page.img);
+    // The PNG is at 96 dpi: its size in points is three quarters of it.
+    page.img.addEventListener("load", () => {
+      page.size = { width: page.img.naturalWidth * 0.75, height: page.img.naturalHeight * 0.75 };
+      layoutPage(page);
+      placeMarks();
+    });
+    page.el.insertBefore(page.img, page.canvas.nextSibling);
   }
   page.img.src = `/page/${i}.png?token=${encodeURIComponent(token)}&r=${revision}`;
 }
@@ -602,6 +665,10 @@ function connect() {
   ws.onclose = () => {
     socket = null;
     incoming = null;
+    // The server may come back as another process, with other fonts.
+    fontGeneration = null;
+    dropGlyphs();
+    for (const page of pages) if (page) page.drawn = 0;
     statusLine.textContent = "Disconnected: is `folio watch` still running?";
     setTimeout(connect, 1000);
   };
@@ -610,6 +677,13 @@ function connect() {
 function apply({ update, frames }) {
   incoming = null;
   revision = update.revision;
+  if (update.fonts !== undefined && update.fonts !== fontGeneration) {
+    if (fontGeneration !== null) {
+      dropGlyphs();
+      for (const page of pages) if (page) page.drawn = 0;
+    }
+    fontGeneration = update.fonts;
+  }
   while (pages.length > update.pages) {
     const page = pages.pop();
     if (page) {

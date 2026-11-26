@@ -54,7 +54,7 @@
 //! 1. a text message, a JSON object `{"type": "update", "protocol": 1,
 //!    "revision": r, "variant": v | null, "target": "pdf", "pages": n,
 //!    "lists": [..], "spans": [..], "banner": text | null, "diagnostics":
-//!    [..]}`: `pages` is how many pages the document has now (pages the
+//!    [..], "overlays": [..], "fonts": g}`: `pages` is how many pages the document has now (pages the
 //!    client had beyond it are gone), `lists` the indices of the pages
 //!    whose display lists follow, `spans` those whose span maps follow,
 //!    `banner` why the pages shown are not of this revision, if they are
@@ -63,8 +63,12 @@
 //!    (`docs/diagnostics-json.md`), and `overlays` where on the pages the
 //!    diagnostics point, as `{"diagnostic": i, "page": n, "rects": [[x, y,
 //!    w, h], ..]}` with `i` an index into `diagnostics` and the rectangles
-//!    in points from the page's top-left corner (empty while the pages are
-//!    of an earlier revision; for the first hundred diagnostics);
+//!    in points from the page's top-left corner, for the first hundred
+//!    diagnostics, and `fonts` a number that changes whenever the font ids
+//!    of glyph runs may name other fonts, when a client drops the glyphs it
+//!    has. The pages are sent before they are indexed for source sync: the
+//!    overlays follow in a second `update` of the same revision, which
+//!    sends no pages, and until then clicks and reveals find nothing;
 //! 2. one binary message per page in `lists` and `spans`, in that order:
 //!    the page's index as four bytes, little-endian, then a message of
 //!    `folio-render`'s wire format ([`folio_render::wire`]), a whole
@@ -85,7 +89,8 @@
 //! the whole node of the topmost other item, such as an element's box.
 //! The click is also an [`Event::Clicked`], which the language server
 //! turns into a jump in the editor. `null` answers a point that shows no
-//! source, or a revision that is not the current one. The other way,
+//! source, a revision that is not the current one, and pages kept from an
+//! earlier revision under a banner, whose source has changed since. The other way,
 //! [`Preview::reveal`] sends every client `{"type": "reveal", "revision":
 //! r, "areas": [{"page": n, "rect": [x, y, w, h]}, ..]}`, the areas of the
 //! pages that show a place in a file, for the client to scroll to and
@@ -104,7 +109,8 @@
 //! the glyph's origin in pixels (four bytes each, signed, `y` down), its
 //! width and height (four bytes each), and its coverage, a byte per pixel
 //! row by row; all little-endian. A glyph with no outline has a width and
-//! height of zero.
+//! height of zero. An answer holds at most 32 MiB of coverage: the glyphs
+//! past it are left out, and the count says how many it holds.
 
 #![forbid(unsafe_code)]
 
@@ -303,6 +309,13 @@ pub enum Event {
         /// Its revision.
         revision: u64,
     },
+    /// The pages of a revision were indexed after they were sent: from now
+    /// on clicks and [`Preview::reveal`] find their sources, and the
+    /// diagnostics are marked on them.
+    Indexed {
+        /// The revision.
+        revision: u64,
+    },
     /// A client clicked on a page, which shows this source: what an editor
     /// jumps to (SPEC §12.2). Called on the server's thread.
     Clicked(Source),
@@ -453,17 +466,24 @@ impl Preview {
     /// `path` (a project path, such as `main.fol`): they scroll to the
     /// first area and mark them all, as when an editor's cursor moves
     /// (SPEC §12.2). An empty range is a cursor. Returns how many areas
-    /// were found; with none, clients are not told.
+    /// were found; with none, clients are not told. Nothing is found while
+    /// the pages shown are of an earlier revision, or until the current
+    /// one is indexed ([`Event::Indexed`]).
     ///
     /// The places are those of the files the pages were laid out from,
     /// which are the files on disk: in an editor buffer with unsaved
     /// changes, the same bytes may be elsewhere.
     pub fn reveal(&self, path: &str, bytes: std::ops::Range<usize>) -> usize {
         let published = self.published.borrow().clone();
-        let Some(layout) = &published.layout else {
+        let Some(index) = published
+            .layout
+            .as_ref()
+            .filter(|layout| layout.revision == published.revision)
+            .and_then(|layout| layout.index.as_ref())
+        else {
             return 0;
         };
-        let found = engine::rects(&layout.index.find(path, bytes));
+        let found = engine::rects(&index.find(path, bytes));
         if found.is_empty() {
             return 0;
         }
