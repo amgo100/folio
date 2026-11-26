@@ -636,8 +636,10 @@ impl Walk {
     /// Decides every gap.
     fn run(self) -> Edits {
         let mut edits = Edits::new();
-        // The indentation of the current line.
+        // The indentation of the current line, and of the line where its
+        // item starts, which a declaration block's `{` indents from.
         let mut indent = EcoString::new();
+        let mut item_indent = EcoString::new();
         // The open brackets, each with the indentation of the line that
         // opened it.
         let mut open: Vec<EcoString> = Vec::new();
@@ -696,6 +698,7 @@ impl Walk {
                 _ if !ascii => {
                     if newlines > 0 {
                         indent = trailing_indent(text).into();
+                        item_indent = indent.clone();
                     }
                     None
                 }
@@ -716,6 +719,7 @@ impl Walk {
                 // its first line.
                 (None, Some(_)) if gap.markup => {
                     indent = after_last_newline(text).unwrap_or(text).into();
+                    item_indent = indent.clone();
                     let mut new = match newlines {
                         0 => EcoString::new(),
                         _ => edge(text, newlines),
@@ -727,6 +731,7 @@ impl Walk {
                 (None, None) if self.markup => Some(edge(text, newlines)),
                 (None, None) => Some(EcoString::new()),
                 (Some(_), Some(next)) if newlines > 0 => {
+                    let mut continued = false;
                     let new_indent: EcoString = if frozen || gap.markup && !next.closes() {
                         trailing_indent(text).into()
                     } else if next.closes() && !open.is_empty() {
@@ -748,12 +753,16 @@ impl Walk {
                                 && next.kind != SyntaxKind::Else
                                 && !brace(Some(next), SyntaxKind::LeftBrace)
                             {
+                                continued = true;
                                 base.push_str("  ");
                             }
                         }
                         base
                     };
                     indent = new_indent.clone();
+                    if !continued {
+                        item_indent = new_indent.clone();
+                    }
                     let mut new = EcoString::from(if newlines > 1 { "\n\n" } else { "\n" });
                     new.push_str(&new_indent);
                     Some(new)
@@ -795,7 +804,12 @@ impl Walk {
                 // Each bracket remembers the indentation of the line that
                 // opened it, so several opened on one line count once.
                 if next.opens() {
-                    open.push(indent.clone());
+                    let rule = next.kind == SyntaxKind::LeftBrace && is_rule_block(next.parent);
+                    open.push(if rule {
+                        item_indent.clone()
+                    } else {
+                        indent.clone()
+                    });
                 } else if next.closes() {
                     open.pop();
                 }
@@ -1024,7 +1038,7 @@ mod tests {
         style("a {\n}\nb {\n\n}", "a {}\n\nb {}\n");
         style("a {\n\n  b: c;\n\n\n}", "a {\n  b: c;\n}\n");
         style("a\n{ b: c; }", "a\n{\n  b: c;\n}\n");
-        style("a,\nb { c: d; }", "a,\n  b {\n    c: d;\n  }\n");
+        style("a,\nb { c: d; }", "a,\n  b {\n  c: d;\n}\n");
         // A line that opens markup going on below stays as written.
         style(
             "a { b: c; d: [- x\n  - y]; }",
@@ -1085,7 +1099,7 @@ mod tests {
         );
         style(
             "question\nanswer {\nx: 1;\n}\n",
-            "question\n  answer {\n    x: 1;\n  }\n",
+            "question\n  answer {\n  x: 1;\n}\n",
         );
         style("a{b:c}b{c:d}", "a {\n  b: c\n}\n\nb {\n  c: d\n}\n");
         style(
