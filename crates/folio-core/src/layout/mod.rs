@@ -141,8 +141,12 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         .zip(&widths)
         .map(|(input, slot)| (input, &slot[..]))
         .collect();
-    let paragraphs: EcoVec<Arc<ParagraphLayout>> =
-        db.layout_cache().layout_all(&jobs).into_iter().collect();
+    // An edit stops the query between paragraphs (SPEC §2.3).
+    let paragraphs: EcoVec<Arc<ParagraphLayout>> = db
+        .layout_cache()
+        .layout_all_checked(&jobs, &mut || db.unwind_if_revision_cancelled())
+        .into_iter()
+        .collect();
 
     for (paragraph, layout) in text.paragraphs.iter().zip(&paragraphs) {
         report_lines(db, build.project(db), paragraph, layout);

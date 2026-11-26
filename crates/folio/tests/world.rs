@@ -358,6 +358,234 @@ fn an_edit_cancels_a_running_compilation() {
     assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
 }
 
+/// A world with the project of [`Logged`] whose `query` panics, a bug
+/// injected through the event hook, while the flag is set.
+fn panicking(long_lived: bool, query: &'static str) -> (World, Arc<AtomicBool>) {
+    let armed = Arc::new(AtomicBool::new(false));
+    let hook_armed = armed.clone();
+    let mut world = World::builder()
+        .long_lived(long_lived)
+        .on_event(move |event| {
+            if let Event::Execute { query: q } = event
+                && q == query
+                && hook_armed.load(Ordering::SeqCst)
+            {
+                panic!("injected into `{query}`");
+            }
+        })
+        .build(MANIFEST, None)
+        .unwrap();
+    world.set_source("main.fol", MAIN).unwrap();
+    world
+        .set_source("questions/q1.fol", "A question.\n")
+        .unwrap();
+    for path in ["styles/exam.fsty", "styles/markscheme.fsty"] {
+        world.set_source(path, "").unwrap();
+    }
+    (world, armed)
+}
+
+#[test]
+fn a_panic_in_a_query_is_a_diagnostic_in_a_long_lived_world() {
+    let (mut world, armed) = panicking(true, "lines");
+    assert!(world.is_long_lived());
+    let exam = Name::new("exam").unwrap();
+    let good = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert!(!good.has_errors(), "{:?}", good.diagnostics);
+    assert!(good.output.is_some());
+
+    // An edit whose compilation panics: an internal error, which keeps the
+    // last good output and what the build read.
+    world.set_source("main.fol", "= Energy\n").unwrap();
+    armed.store(true, Ordering::SeqCst);
+    let failed = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(failed.diagnostics.len(), 1, "{:?}", failed.diagnostics);
+    let error = &failed.diagnostics[0];
+    assert!(error.is_error());
+    assert_eq!(error.code.as_deref(), Some("internal-error"));
+    assert_eq!(
+        error.message,
+        "internal error: the compiler panicked: injected into `lines`"
+    );
+    assert!(matches!(error.span.get(), DiagSpanKind::Detached));
+    assert_eq!(error.hints.len(), 2, "{:?}", error.hints);
+    assert_eq!(failed.output, good.output);
+    // What the build last read, then the world's other files: the build
+    // that panicked may have read more.
+    assert!(failed.sources.starts_with(&good.sources));
+    assert!(failed.files.starts_with(&good.files));
+    assert!(
+        failed
+            .sources
+            .iter()
+            .any(|p| p.as_str() == "styles/markscheme.fsty")
+    );
+    assert!(
+        !good
+            .sources
+            .iter()
+            .any(|p| p.as_str() == "styles/markscheme.fsty")
+    );
+
+    // A check panics alike.
+    let checked = folio::check(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(checked.diagnostics.len(), 1, "{:?}", checked.diagnostics);
+    assert_eq!(
+        checked.diagnostics[0].code.as_deref(),
+        Some("internal-error")
+    );
+    assert_eq!(checked.sources, failed.sources);
+    assert!(checked.writes);
+
+    // Once the bug is gone, the next compilation succeeds, in the same
+    // process and on the same database.
+    armed.store(false, Ordering::SeqCst);
+    let fixed = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert!(!fixed.has_errors(), "{:?}", fixed.diagnostics);
+    assert!(fixed.output.is_some());
+    assert_ne!(fixed.output, good.output);
+
+    // A build the manifest no longer declares is forgotten once another
+    // compiles, so it keeps no output if it comes back.
+    let markscheme = Name::new("markscheme").unwrap();
+    let without_exam = MANIFEST.replace("[variants.exam]\ntargets = [\"pdf\", \"docx\"]\n", "");
+    assert_ne!(without_exam, MANIFEST);
+    world.set_manifest(&without_exam).unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, Some(&markscheme)).unwrap();
+    assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+    world.set_manifest(MANIFEST).unwrap();
+    world.set_source("main.fol", "= Momentum\n").unwrap();
+    armed.store(true, Ordering::SeqCst);
+    let failed = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(
+        failed.diagnostics[0].code.as_deref(),
+        Some("internal-error")
+    );
+    assert_eq!(failed.output, None);
+}
+
+#[test]
+fn a_panic_in_a_shared_query_is_a_diagnostic_in_every_parallel_build() {
+    // Every build reads the files' dependencies, whichever thread runs
+    // them first: the others wait for it, and see its panic.
+    let (world, armed) = panicking(true, "dependencies");
+    armed.store(true, Ordering::SeqCst);
+    let outputs = folio::compile_all(&world);
+    assert_eq!(outputs.len(), 3);
+    for output in outputs {
+        let compiled = output.result.unwrap();
+        assert_eq!(compiled.diagnostics.len(), 1, "{:?}", compiled.diagnostics);
+        assert_eq!(
+            compiled.diagnostics[0].code.as_deref(),
+            Some("internal-error")
+        );
+        // Nothing compiled before, so there is no output to keep; a watcher
+        // watches every file of the world, so the edit that works around
+        // the bug compiles again.
+        assert_eq!(compiled.output, None);
+        assert_eq!(compiled.diagnostics[0].hints.len(), 1);
+        let sources: Vec<_> = compiled.sources.iter().map(|p| p.as_str()).collect();
+        assert_eq!(
+            sources,
+            [
+                "main.fol",
+                "questions/q1.fol",
+                "styles/exam.fsty",
+                "styles/markscheme.fsty"
+            ]
+        );
+        assert!(
+            compiled
+                .files
+                .iter()
+                .any(|f| f.path.as_str() == "styles/exam.fsty" && f.kind == FileKind::Stylesheet)
+        );
+    }
+
+    armed.store(false, Ordering::SeqCst);
+    for output in folio::compile_all(&world) {
+        let compiled = output.result.unwrap();
+        assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+    }
+}
+
+#[test]
+fn a_panic_in_a_query_unwinds_in_an_ordinary_world() {
+    let (world, armed) = panicking(false, "lines");
+    assert!(!world.is_long_lived());
+    armed.store(true, Ordering::SeqCst);
+    let exam = Name::new("exam").unwrap();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        folio::compile(&world, Target::Pdf, Some(&exam))
+    }));
+    let payload = panicked.unwrap_err();
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .unwrap_or_default();
+    assert_eq!(message, "injected into `lines`");
+}
+
+/// A query that an edit stops gives up its claim as if it had panicked,
+/// so a handle waiting for it on another thread sees a panic there: an
+/// edit, not a bug, in either kind of world.
+#[test]
+fn an_edit_is_not_a_panic_for_a_handle_that_waits() {
+    for long_lived in [false, true] {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel::<()>();
+        let resume_tx = Mutex::new(resume_tx);
+        let resume_rx = Mutex::new(resume_rx);
+        let started_tx = Mutex::new(started_tx);
+        let armed = Arc::new(AtomicBool::new(false));
+        let hook_armed = armed.clone();
+        let waiting = AtomicBool::new(false);
+        let mut world = World::builder()
+            .long_lived(long_lived)
+            .on_event(move |event| match event {
+                // The first handle reaches `lines`: wait for the edit,
+                // then go on, to stop at the next query it calls.
+                Event::Execute { query }
+                    if query == "lines" && hook_armed.swap(false, Ordering::SeqCst) =>
+                {
+                    waiting.store(true, Ordering::SeqCst);
+                    started_tx.lock().unwrap().send(()).unwrap();
+                    resume_rx.lock().unwrap().recv().unwrap();
+                }
+                Event::Cancel if waiting.swap(false, Ordering::SeqCst) => {
+                    resume_tx.lock().unwrap().send(()).unwrap();
+                }
+                _ => {}
+            })
+            .build(MANIFEST, None)
+            .unwrap();
+        world.set_source("main.fol", MAIN).unwrap();
+        world
+            .set_source("questions/q1.fol", "A question.\n")
+            .unwrap();
+        for path in ["styles/exam.fsty", "styles/markscheme.fsty"] {
+            world.set_source(path, "").unwrap();
+        }
+
+        armed.store(true, Ordering::SeqCst);
+        let compile = |world: World| {
+            thread::spawn(move || {
+                let exam = Name::new("exam").unwrap();
+                folio::compile(&world, Target::Pdf, Some(&exam))
+            })
+        };
+        let first = compile(world.clone());
+        started_rx.recv().unwrap();
+        // The second handle waits for the first's queries.
+        let second = compile(world.clone());
+        thread::sleep(std::time::Duration::from_millis(200));
+
+        world.set_source("main.fol", "= Energy\n").unwrap();
+        assert_eq!(first.join().unwrap(), Err(Cancelled), "{long_lived}");
+        assert_eq!(second.join().unwrap(), Err(Cancelled), "{long_lived}");
+    }
+}
+
 #[test]
 fn compiles_all_builds_in_parallel() {
     let logged = Logged::new();

@@ -221,6 +221,15 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let mut hashes = EcoVec::new();
     let mut start = 0;
     while start < flow.items.len() {
+        // An edit stops the query between pages (SPEC §2.3); the cache
+        // still forgets what it would have.
+        let check = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            db.unwind_if_revision_cancelled()
+        }));
+        if let Err(cancelled) = check {
+            cache.sweep(now);
+            std::panic::resume_unwind(cancelled);
+        }
         // `break-before: odd-page` and `even-page` pad with a blank page.
         if start > 0
             && let Some(odd) = flow.boundary(start).parity

@@ -266,6 +266,16 @@ pub struct Preflight {
 /// a document it expects to pass is still found, by writing it under the
 /// validator, and costs a second writing.
 pub fn preflight(document: &Document<'_>) -> Preflight {
+    preflight_with(document, &mut || {})
+}
+
+/// Checks a document as [`preflight()`] does, calling `check` before each
+/// page it walks.
+///
+/// `check` may unwind, as a database query that its revision has
+/// cancelled does (SPEC §2.3), to stop checking a document that an edit
+/// has made stale.
+pub fn preflight_with(document: &Document<'_>, check: &mut dyn FnMut()) -> Preflight {
     // The tagger needs the ids of marked content, which only a surface
     // gives: they come from one page of a document that is never written.
     let settings = SerializeSettings {
@@ -280,6 +290,7 @@ pub fn preflight(document: &Document<'_>) -> Preflight {
         let mut kpage = scratch.start_page_with(PageSettings::new(size));
         let mut surface = kpage.surface();
         for (index, page) in document.pages.iter().enumerate() {
+            check();
             writer.tagger.start_page(index);
             writer.page(&mut surface, page);
         }
@@ -327,11 +338,26 @@ pub fn write(document: &Document<'_>) -> Result<Written, Error> {
 /// followed by any that only writing found: the reasons not to claim
 /// PDF/UA-1 that the check did not foresee, each once.
 pub fn write_checked(document: &Document<'_>, checked: &Preflight) -> Result<Written, Error> {
+    write_checked_with(document, checked, &mut || {})
+}
+
+/// Writes a document that [`preflight()`] has checked, as
+/// [`write_checked`] does, calling `check` before each page it writes and
+/// before it finishes the file.
+///
+/// `check` may unwind, as a database query that its revision has
+/// cancelled does (SPEC §2.3), to stop writing a document that an edit has
+/// made stale.
+pub fn write_checked_with(
+    document: &Document<'_>,
+    checked: &Preflight,
+    check: &mut dyn FnMut(),
+) -> Result<Written, Error> {
     let mut warnings = checked.warnings.clone();
     // PDF/UA requires a title, which documents need not have: one without
     // is written tagged, without the claim and without a warning.
     if !checked.pdf_ua || document.info.title.is_none() {
-        let rendered = render(document, false);
+        let rendered = render(document, false, check);
         let bytes = rendered.result.map_err(|e| failure(e, &rendered.names))?;
         return Ok(Written {
             bytes,
@@ -339,7 +365,7 @@ pub fn write_checked(document: &Document<'_>, checked: &Preflight) -> Result<Wri
             warnings,
         });
     }
-    let first = render(document, true);
+    let first = render(document, true, check);
     let (bytes, pdf_ua) = match first.result {
         Ok(bytes) => (bytes, true),
         Err(KrillaError::Validation(errors)) => {
@@ -352,7 +378,7 @@ pub fn write_checked(document: &Document<'_>, checked: &Preflight) -> Result<Wri
                     warnings.push(warning);
                 }
             }
-            let second = render(document, false);
+            let second = render(document, false, check);
             let bytes = second.result.map_err(|e| failure(e, &second.names))?;
             (bytes, false)
         }
@@ -401,9 +427,10 @@ struct Rendered {
     untitled: Vec<SourceRef>,
 }
 
-/// Writes the document, under the PDF/UA-1 validator or none.
-fn render(document: &Document<'_>, ua: bool) -> Rendered {
-    render_with(document, ua, &mut |_, _| {})
+/// Writes the document, under the PDF/UA-1 validator or none, calling
+/// `check` before each page and before finishing the file.
+fn render(document: &Document<'_>, ua: bool, check: &mut dyn FnMut()) -> Rendered {
+    render_checked(document, ua, &mut |_, _| {}, check)
 }
 
 /// The headings of a document, for its outline: level, text, page and
@@ -412,10 +439,22 @@ type Headings = [tags::Heading];
 
 /// Writes the document, showing `inspect` the tag tree and the headings
 /// before they are written.
+#[cfg(test)]
 fn render_with(
     document: &Document<'_>,
     ua: bool,
     inspect: &mut dyn FnMut(&krilla::tagging::TagTree, &Headings),
+) -> Rendered {
+    render_checked(document, ua, inspect, &mut || {})
+}
+
+/// Writes the document as [`render_with`] does, calling `check` before
+/// each page and before finishing the file.
+fn render_checked(
+    document: &Document<'_>,
+    ua: bool,
+    inspect: &mut dyn FnMut(&krilla::tagging::TagTree, &Headings),
+    check: &mut dyn FnMut(),
 ) -> Rendered {
     #[cfg(test)]
     RENDERS.with(|renders| renders.set(renders.get() + 1));
@@ -436,6 +475,7 @@ fn render_with(
     let mut pdf = krilla::Document::new_with(settings);
     let mut writer = Writer::new(document, false);
     for (index, page) in document.pages.iter().enumerate() {
+        check();
         let size = Size::from_wh(pt(page.size.width), pt(page.size.height))
             .or_else(|| Size::from_wh(1.0, 1.0))
             .expect("a page of one point is valid");
@@ -446,6 +486,7 @@ fn render_with(
         surface.finish();
         kpage.finish();
     }
+    check();
     // The warnings are the check's, which walked the same pages.
     let Writer { tagger, names, .. } = writer;
     let (tree, headings, untitled) = tagger.finish(document.info.lang.as_deref());

@@ -4,14 +4,16 @@
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use ecow::EcoVec;
 use folio_component::Abs;
-use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind};
+use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind, Shaped};
 
+use super::flow::Fx;
 use super::paragraph::{
     LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics, hyphen_glyphs,
     layout_paragraph,
@@ -40,6 +42,8 @@ pub struct Cache {
     entries: Mutex<HashMap<Key, Entry>>,
     /// Counts the calls of `layout_all`.
     clock: AtomicU64,
+    /// The clock when the cache last forgot paragraphs.
+    evicted: AtomicU64,
     hits: AtomicU64,
     misses: AtomicU64,
     /// The glyphs of hyphens, by the font, features and language they are
@@ -55,13 +59,72 @@ type HyphenKey = (SegmentKind, Option<Lang>, char);
 /// The glyphs of a hyphen and the units per em they are measured in.
 pub(super) type Hyphen = Option<(EcoVec<Glyph>, u16)>;
 
-#[derive(Clone, Eq, PartialEq, Hash)]
+/// What decides a paragraph's breaks, with its hash, computed once: the
+/// maps that a key is looked up in hash only that.
+#[derive(Clone)]
 struct Key {
+    hash: u64,
+    data: KeyData,
+}
+
+#[derive(Clone, Eq, PartialEq, Hash)]
+struct KeyData {
     paragraph: Paragraph,
     style: ParagraphStyle,
     segments: EcoVec<SegmentMetrics>,
     objects: EcoVec<Abs>,
     widths: EcoVec<Abs>,
+}
+
+impl Key {
+    fn new(input: &ParagraphInput<'_>, slots: &[LineSlot]) -> Self {
+        let data = KeyData {
+            paragraph: input.shaped.paragraph.clone(),
+            style: input.style,
+            segments: input.segments.clone(),
+            objects: input.objects.clone(),
+            widths: slots.iter().map(|s| s.width).collect(),
+        };
+        let mut hasher = Fx::default();
+        data.hash(&mut hasher);
+        Self {
+            hash: hasher.finish(),
+            data,
+        }
+    }
+}
+
+impl Hash for Key {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash && self.data == other.data
+    }
+}
+
+impl Eq for Key {}
+
+/// A paragraph to break on another thread: what its input borrows, owned.
+struct Job {
+    key: Key,
+    shaped: Shaped,
+    slots: Vec<LineSlot>,
+}
+
+impl Job {
+    fn run(&self) -> ParagraphLayout {
+        let input = ParagraphInput {
+            shaped: &self.shaped,
+            style: self.key.data.style,
+            segments: self.key.data.segments.clone(),
+            objects: self.key.data.objects.clone(),
+        };
+        layout_paragraph(&input, &self.slots, None)
+    }
 }
 
 struct Entry {
@@ -101,13 +164,7 @@ impl Cache {
         deadline: Option<Instant>,
     ) -> Arc<ParagraphLayout> {
         let now = self.clock.load(Ordering::Relaxed);
-        let key = Key {
-            paragraph: input.shaped.paragraph.clone(),
-            style: input.style,
-            segments: input.segments.clone(),
-            objects: input.objects.clone(),
-            widths: slots.iter().map(|s| s.width).collect(),
-        };
+        let key = Key::new(input, slots);
         if let Some(entry) = lock(&self.entries).get_mut(&key) {
             entry.used = now;
             self.hits.fetch_add(1, Ordering::Relaxed);
@@ -137,16 +194,107 @@ impl Cache {
         &self,
         paragraphs: &[(ParagraphInput<'_>, &[LineSlot])],
     ) -> Vec<Arc<ParagraphLayout>> {
+        self.layout_all_checked(paragraphs, &mut || {})
+    }
+
+    /// The lines of paragraphs as [`layout_all`](Self::layout_all) gives
+    /// them, calling `check` on the caller's thread after each paragraph
+    /// it breaks.
+    ///
+    /// The paragraphs not in the cache are broken in parallel, on the
+    /// threads that shape paragraphs ([`folio_text::Cache::parallel`]),
+    /// and each result is put in its paragraph's place, so the lines do
+    /// not depend on how the work was scheduled (SPEC §2.4). `check` may
+    /// unwind, as a database query that its revision has cancelled does
+    /// (SPEC §2.3): the paragraphs whose lines it has not yet been handed
+    /// are then dropped, and those it has are kept in the cache for the
+    /// next call.
+    ///
+    /// # Panics
+    ///
+    /// When a paragraph's slots are empty, an input has fewer segment
+    /// metrics than its paragraph has segments, or `check` panics.
+    pub fn layout_all_checked(
+        &self,
+        paragraphs: &[(ParagraphInput<'_>, &[LineSlot])],
+        check: &mut dyn FnMut(),
+    ) -> Vec<Arc<ParagraphLayout>> {
         let now = self.clock.fetch_add(1, Ordering::Relaxed) + 1;
-        let out = paragraphs
+        let mut out: Vec<Option<Arc<ParagraphLayout>>> = vec![None; paragraphs.len()];
+        // The paragraphs to break, each once, with where their lines go.
+        let mut misses: Vec<Job> = Vec::new();
+        let mut targets: Vec<Vec<usize>> = Vec::new();
+        // The keys are made before the cache is locked, which the builds
+        // compiling in parallel share.
+        let keys: Vec<Key> = paragraphs
             .iter()
-            .map(|(input, slots)| self.layout(input, slots, None))
+            .map(|(input, slots)| Key::new(input, slots))
             .collect();
-        if now.is_multiple_of(8) {
+        {
+            let mut entries = lock(&self.entries);
+            let mut missing: HashMap<Key, usize> = HashMap::new();
+            for (i, ((input, slots), key)) in paragraphs.iter().zip(keys).enumerate() {
+                if let Some(entry) = entries.get_mut(&key) {
+                    entry.used = now;
+                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    out[i] = Some(entry.layout.clone());
+                } else if let Some(&m) = missing.get(&key) {
+                    // Broken once; counted when its lines are.
+                    targets[m].push(i);
+                } else {
+                    missing.insert(key.clone(), misses.len());
+                    misses.push(Job {
+                        key,
+                        shaped: input.shaped.clone(),
+                        slots: slots.to_vec(),
+                    });
+                    targets.push(vec![i]);
+                }
+            }
+        }
+
+        folio_text::Cache::parallel(misses, Job::run, &mut |m, job, layout| {
+            // The first paragraph was broken; the others with its key are
+            // found in the cache, as they would be one after another, when
+            // its lines are kept.
+            let (found, broken) = if layout.optimal {
+                (targets[m].len() - 1, 1)
+            } else {
+                (0, targets[m].len())
+            };
+            self.hits.fetch_add(found as u64, Ordering::Relaxed);
+            self.misses.fetch_add(broken as u64, Ordering::Relaxed);
+            let layout = Arc::new(layout);
+            let layout = if layout.optimal {
+                lock(&self.entries)
+                    .entry(job.key.clone())
+                    .or_insert(Entry { layout, used: now })
+                    .layout
+                    .clone()
+            } else {
+                layout
+            };
+            for &i in &targets[m] {
+                out[i] = Some(layout.clone());
+            }
+            check();
+        });
+
+        // Every eighth call, counted from the last that forgot: a call that
+        // a cancelled query left unfinished does not skip it.
+        let last = self.evicted.load(Ordering::Relaxed);
+        if now >= last + 8
+            && self
+                .evicted
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
             lock(&self.entries).retain(|_, entry| entry.used + MAX_AGE >= now);
             lock(&self.hyphens).retain(|_, (_, used)| *used + MAX_AGE >= now);
         }
-        out
+        out.into_iter()
+            .map(|layout| layout.expect("every paragraph is broken"))
+            .collect()
     }
 
     /// The glyphs of a hyphen `c` in a segment's font, features and
