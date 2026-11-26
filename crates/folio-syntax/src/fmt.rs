@@ -494,9 +494,10 @@ impl Walk {
     }
 
     /// Whether the line that starts with token `i` opens a content block
-    /// whose markup starts on that line and goes on below it. Moving such a
-    /// line would move its list markers away from the markup lines below,
-    /// whose indentation stays, so it keeps its indentation too.
+    /// whose markup starts on that line and goes on below it. Moving
+    /// anything on such a line would move its list markers against the
+    /// markup lines below, whose indentation stays, so the line stays as
+    /// written.
     fn opens_markup(&self, i: usize) -> bool {
         let mut blocks: Vec<bool> = Vec::new();
         for (j, token) in self.tokens.iter().enumerate().skip(i) {
@@ -524,12 +525,19 @@ impl Walk {
         // opened it.
         let mut open: Vec<EcoString> = Vec::new();
 
+        // Whether the current line opens markup that goes on below it, and
+        // so stays as written.
+        let mut frozen = false;
+
         for (i, gap) in self.gaps.iter().enumerate() {
             let text = &self.text[gap.range.0..gap.range.1];
             let prev = i.checked_sub(1).map(|i| self.tokens[i]);
             let next = self.tokens.get(i).copied();
             let ascii = text.chars().all(|c| matches!(c, ' ' | '\t' | '\n' | '\r'));
             let newlines = count_newlines(text);
+            if i == 0 || newlines > 0 {
+                frozen = next.is_some() && self.opens_markup(i);
+            }
 
             let new: Option<EcoString> = match (prev, next) {
                 // Other whitespace than spaces, tabs and line feeds, such as
@@ -551,9 +559,11 @@ impl Walk {
                 (None, Some(_)) => Some(EcoString::new()),
                 (None, None) => Some(EcoString::new()),
                 (Some(_), Some(next)) if newlines > 0 => {
-                    let new_indent: EcoString = if next.closes() && !open.is_empty() {
+                    let new_indent: EcoString = if frozen || gap.markup && !next.closes() {
+                        trailing_indent(text).into()
+                    } else if next.closes() && !open.is_empty() {
                         open.last().cloned().unwrap_or_default()
-                    } else if gap.markup || self.opens_markup(i) {
+                    } else if gap.markup {
                         trailing_indent(text).into()
                     } else {
                         let mut base = open.last().cloned().unwrap_or_default();
@@ -583,6 +593,10 @@ impl Walk {
                 {
                     None
                 }
+                // A line that opens markup going on below it keeps its
+                // spacing: moving its list markers would change how the
+                // items below nest.
+                (Some(_), Some(_)) if frozen => None,
                 (Some(prev), Some(next)) => Some(if gap.markup {
                     inline_markup(text, next)
                 } else {
@@ -880,6 +894,14 @@ mod tests {
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
         markup("#{\n[- x\n  - y]\n}\n", "#{\n[- x\n  - y]\n}\n");
+        for frozen in [
+            "#let x =  [- a\n           - b]\n",
+            "#let x = ( [- a\n            - b])\n",
+            "Text    #f[- a\n           - b]\n",
+            "#{\nlet x = [- a\n    ] + [- b\n      - c]\n}\n",
+        ] {
+            markup(frozen, frozen);
+        }
         markup("#f(\n[+ x\n  + y])\n", "#f(\n[+ x\n  + y])\n");
         markup(
             "#{\nif a {b}else{c}\n}\n",

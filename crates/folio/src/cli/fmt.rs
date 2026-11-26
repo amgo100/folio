@@ -116,10 +116,13 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
                 continue;
             }
             Err(FormatError::Unsound) => {
-                diagnostics.push(error(format!(
-                    "formatting {path} would change what it means, so it is left as it is; \
-                     this is a bug in Folio"
-                )));
+                diagnostics.push(Diagnostic::error(
+                    DiagSpan::from_range(id, 0..0),
+                    format!(
+                        "formatting {path} would change what it means, so it is left as it \
+                         is; this is a bug in Folio"
+                    ),
+                ));
                 continue;
             }
         };
