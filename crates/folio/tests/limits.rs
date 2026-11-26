@@ -111,7 +111,9 @@ fn lengths_up_to_the_limit_are_kept() {
     let world = build("doc { font-size: 1000000pt; }\nparagraph { indent: -1e6pt; }\n");
     let diags = diagnostics(&world);
     assert!(
-        !diags.iter().any(|(severity, ..)| *severity == Severity::Error),
+        !diags
+            .iter()
+            .any(|(severity, ..)| *severity == Severity::Error),
         "{diags:?}"
     );
     let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
