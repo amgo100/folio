@@ -3,10 +3,10 @@
   numbered: bool = true,
   difficulty: choice("core", "extension") = "core",
 ) {
-  kind: block                         // block | inline | float | note | slide
+  kind: block // block | inline | float | note | slide
   body: slots(statement: blocks, solution: blocks)
   counter: within heading(level: 1)
-  ref-key: "example"                  // word looked up in locale files
+  ref-key: "example" // word looked up in locale files
 }
 
 #import "lib/blocks.fol": example

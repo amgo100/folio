@@ -6,17 +6,23 @@ $body-size: 11pt;
 
 page {
   page-size: A4;
-  margin-top: 20mm; margin-bottom: 20mm;
-  margin-inner: 18mm; margin-outer: 45mm;          // wide outer margin for notes
+  margin-top: 20mm;
+  margin-bottom: 20mm;
+  margin-inner: 18mm;
+  margin-outer: 45mm; // wide outer margin for notes
   margin-column: outer, width 32mm, gap 6mm;
   baseline-grid: 13pt;
 }
 
 heading[level=1] {
-  font: "Source Sans 3"; font-size: 16pt; font-weight: 700;
-  space-before: 18pt; space-after: 6pt; keep-with-next: true;
+  font: "Source Sans 3";
+  font-size: 16pt;
+  font-weight: 700;
+  space-before: 18pt;
+  space-after: 6pt;
+  keep-with-next: true;
   numbering: "1.";
-  export-name: "Heading 1";                         // Word style / PPTX title style
+  export-name: "Heading 1"; // Word style / PPTX title style
 }
 
 question {
@@ -26,27 +32,98 @@ question {
   export-name: "Question";
 }
 
-sidenote { placement: margin; font-size: 8.5pt; font-style: italic; }
-heading + paragraph { indent: 0; }
+sidenote {
+  placement: margin;
+  font-size: 8.5pt;
+  font-style: italic;
+}
+
+heading + paragraph {
+  indent: 0;
+}
 
 /* Selectors of §5.1. */
-#{fig:ball} { width: 40%; }
-figure#{fig:ball} > caption { font-style: italic; }
-question answer { space-before: 4pt; }
-list > item:first { space-before: 0pt; }
-part:last { space-after: 12pt; }
-question[marks>3] { break-before: page; }
-question[marks>=10], question[title] { keep-together: true; }
-question[difficulty="extension"] .hard { color: $accent; }
-grid.results > cell:nth-col(1) { align: start; }
-enum > item:nth(2) { color: #d62728; }
-question:has(answer) { breakable: false; }
-exam.question { numbering: "(a)"; }
-.hard { font-weight: 700; }
-:first { space-before: 0pt; }
-page.handout { margin-outer: 18mm; }
-math.vector { math-style: bold-upright; }
-list.build { reveal: true; }
-document { font: "Source Serif 4", "Noto Serif"; font-size: $body-size; lang: "en"; }
-section.two-col { columns: 2; column-gap: 6mm; column-rule: 0.4pt $rule; }
-glossary        { columns: 3; multicol.column-fill: auto; }
+#{fig:ball} {
+  width: 40%;
+}
+
+figure#{fig:ball} > caption {
+  font-style: italic;
+}
+
+question answer {
+  space-before: 4pt;
+}
+
+list > item:first {
+  space-before: 0pt;
+}
+
+part:last {
+  space-after: 12pt;
+}
+
+question[marks>3] {
+  break-before: page;
+}
+
+question[marks>=10], question[title] {
+  keep-together: true;
+}
+
+question[difficulty="extension"] .hard {
+  color: $accent;
+}
+
+grid.results > cell:nth-col(1) {
+  align: start;
+}
+
+enum > item:nth(2) {
+  color: #d62728;
+}
+
+question:has(answer) {
+  breakable: false;
+}
+
+exam.question {
+  numbering: "(a)";
+}
+
+.hard {
+  font-weight: 700;
+}
+
+:first {
+  space-before: 0pt;
+}
+
+page.handout {
+  margin-outer: 18mm;
+}
+
+math.vector {
+  math-style: bold-upright;
+}
+
+list.build {
+  reveal: true;
+}
+
+document {
+  font: "Source Serif 4", "Noto Serif";
+  font-size: $body-size;
+  lang: "en";
+}
+
+section.two-col {
+  columns: 2;
+  column-gap: 6mm;
+  column-rule: 0.4pt $rule;
+}
+
+glossary {
+  columns: 3;
+  multicol.column-fill: auto;
+}
