@@ -13,10 +13,13 @@
 # Cargo.lock:
 #   cargo install gungraun-runner --version <version> --locked
 #
-# --wall times the M0 exit check and the reference document with an
-# optimised build: full compile, edits, the preview path (edit to pages),
-# a stylesheet edit, three variants, times per stage and a typing session.
-# It fails only when the M0 exit check exceeds 200 ms (p95).
+# --wall times the M0 exit check, the M1 exit check and the reference
+# document with an optimised build: full compile, edits, the preview path
+# (edit to pages), a stylesheet edit, three variants, times per stage and a
+# typing session. The M1 exit check is an edit written to the corpus exam
+# while `folio watch`'s preview serves it, timed until a websocket client
+# has the changed pages' display lists. It fails only when the M0 exit
+# check exceeds 200 ms or the M1 exit check 80 ms (p95).
 # Its numbers mean something on the reference machine of SPEC §14.1; run it
 # there nightly.
 set -euo pipefail

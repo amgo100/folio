@@ -23,10 +23,20 @@ folio-pdf = { path = "crates/folio-pdf" }
 folio-render = { path = "crates/folio-render" }
 folio-testkit = { path = "crates/folio-testkit" }
 folio = { path = "crates/folio" }
+folio-lsp = { path = "crates/folio-lsp" }
+folio-preview = { path = "crates/folio-preview" }
 # The command line (SPEC §12.1).
 clap = { version = "4.6.10", features = ["derive"] }
 codespan-reporting = "0.13.1"
+# The language server's channels, shared with `lsp-server` (SPEC §12.3).
+crossbeam-channel = "0.5.15"
 ecow = "0.2.6"
+# The preview's websocket streams (SPEC §12.2).
+futures-util = { version = "0.3.31", default-features = false, features = ["sink", "std"] }
+# The preview's session token (SPEC §14.3).
+getrandom = "0.4.2"
+# The preview's HTTP requests, parsed before a websocket takes the stream.
+httparse = "1.10.1"
 # Verifies the signatures of compiler releases (SPEC §14.3). No default
 # features: verification needs neither key generation nor zeroising.
 ed25519-dalek = { version = "3.0.0", default-features = false }
@@ -48,11 +58,17 @@ indexmap = "2.14.2"
 # The scripting layer's `calc` functions: a portable maths library, so that
 # they give the same bits on every platform (SPEC §2.4).
 libm = "0.2.16"
+# The language server (SPEC §12.3): the protocol's transport and types,
+# synchronous, without an async runtime.
+lsp-server = "0.10.0"
+lsp-types = "0.97.0"
 # PDF output (SPEC §11.1): tagging, PDF/UA, PDF/A and font subsetting. No
 # default features: Folio shapes text itself and has no images yet.
 krilla = { version = "0.8.2", default-features = false }
 # Maps files of the immutable font cache (SPEC §2.3, §14.2).
 memmap2 = "0.9.12"
+# File-system events for `folio watch` (SPEC §12.2).
+notify = "9.0.0"
 # Property tests (SPEC §14.2), without forking test processes.
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 rayon = "1.12.0"
@@ -77,6 +93,10 @@ tempfile = "3.27.0"
 # The span-preserving parser only: the manifest and lockfile readers report
 # errors on keys and values themselves, so serde is not needed.
 toml = { version = "1.2.2", default-features = false, features = ["std", "parse", "preserve_order"] }
+# The preview server (SPEC §2.2): its runtime, and websockets over it
+# without the client side's TLS.
+tokio = { version = "1.48.0", features = ["rt", "net", "io-util", "sync", "time", "macros"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 unicode-bidi = "0.3.18"
 unicode-ident = "1.0"
 # The Unicode math class of a character, which spaces and stretches it in
