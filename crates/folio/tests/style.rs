@@ -600,6 +600,8 @@ fn errors() {
             "wrong value for `display`: expected auto | block | inline | none | hidden | answer-space | placeholder(..), found keyword `blok`",
             // Stylesheets write keywords bare.
             "wrong value for `font-style`: expected normal | italic | oblique, found string",
+            // Valid, but nothing reads it yet.
+            "`display` is not implemented yet, so this declaration has no effect",
             "`:nth-col(n)` styles table cells, and there are no tables yet; the rule matches nothing",
         ]
     );

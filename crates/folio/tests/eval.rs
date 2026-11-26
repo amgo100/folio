@@ -87,10 +87,29 @@ impl Logged {
     fn content(&self, variant: Option<&str>) -> Content {
         let variant = variant.map(|v| Name::new(v).unwrap());
         let compiled = folio::compile(&self.world, Target::Pdf, variant.as_ref()).unwrap();
+        // Warnings that a feature is not laid out or implemented yet do
+        // not concern evaluation.
+        let diagnostics: Vec<_> = compiled
+            .diagnostics
+            .iter()
+            .filter(|d| {
+                d.severity != folio::Severity::Warning
+                    || !(d
+                        .message
+                        .ends_with("is not laid out yet, so the output leaves it out")
+                        || d.message
+                            .ends_with("are not laid out yet, so the output leaves them out")
+                        || d.message
+                            .ends_with("is not laid out yet, so the output shows at most its box")
+                        || d.message
+                            .ends_with("is not implemented yet, so this declaration has no effect"))
+            })
+            .cloned()
+            .collect();
         assert!(
-            compiled.diagnostics.is_empty(),
+            diagnostics.is_empty(),
             "{}",
-            diag::render(&self.world, &compiled.diagnostics, false)
+            diag::render(&self.world, &diagnostics, false)
         );
         folio::evaluate(&self.world, variant.as_ref())
             .unwrap()

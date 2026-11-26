@@ -2,6 +2,7 @@
 //! origins, tokens, compiled selectors and evaluated declarations, in
 //! cascade order.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -10,9 +11,9 @@ use folio_component::{Body, FieldType, Name, PropertyType, QualifiedName, Target
 use folio_syntax::ast::{self, AstNode, SimpleSelector, StyleItem};
 use folio_syntax::{Span, SyntaxNode};
 
-use super::props::{PropId, Properties, confusable};
+use super::props::{PropId, Properties, Property, confusable, not_implemented};
 use super::selector::{AttrTest, Compound, Needs, NodeName, Pseudo, Selector, Specificity};
-use super::value::{Declared, TokenDef, Tokens, Values, ValuesCx, check};
+use super::value::{Declared, TokenDef, Tokens, Values, ValuesCx, check, coerce, compute};
 use crate::component::{ComponentHost, Reason};
 use crate::db::{Build, Db, Project, component_host, source_file};
 use crate::diag::{self, Diagnostic};
@@ -232,6 +233,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             project,
             tokens: &tokens,
         },
+        applies: Cell::new(true),
     };
 
     let mut rules = Vec::new();
@@ -242,7 +244,8 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             .cast::<ast::StyleRule<'_>>()
             .expect("a style rule");
         let values = Values::new(cx.values, pending.file.clone());
-        let compiled = cx.rule(
+        cx.applies.set(pending.applies);
+        let compiled = cx.compile_rule(
             &values,
             rule.selectors(),
             rule.declarations(),
@@ -251,6 +254,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             rule.span(),
         );
         if pending.applies {
+            cx.lint_rule(&compiled);
             rules.extend(compiled.rules);
             step_rules.extend(compiled.steps);
         }
@@ -380,13 +384,22 @@ impl Gather<'_> {
                     let inner_items: Vec<_> = overlay.items().collect();
                     self.items(path, &inner_items, inner, applies && matches);
                 }
+                // No stage reads render templates yet (SPEC §5.3, §7.9).
+                StyleItem::Render(render) => {
+                    if applies && matches!(self.target, Target::Pdf | Target::Live) {
+                        diag::report(
+                            self.db,
+                            Diagnostic::warning(
+                                render.to_untyped().span(),
+                                "render templates are not implemented yet, so this `render` \
+                                 block has no effect",
+                            ),
+                        );
+                    }
+                }
                 // Read by the stages they belong to: Office export
-                // (SPEC §11.2), render templates (§5.3) and slide masters
-                // (§11.3).
-                StyleItem::Export(_)
-                | StyleItem::Render(_)
-                | StyleItem::SlideMaster(_)
-                | StyleItem::SlideLayout(_) => {}
+                // (SPEC §11.2) and slide masters (§11.3).
+                StyleItem::Export(_) | StyleItem::SlideMaster(_) | StyleItem::SlideLayout(_) => {}
             }
         }
     }
@@ -490,6 +503,9 @@ pub(super) struct Compiler<'a> {
     pub(super) properties: &'a Properties,
     pub(super) parts: &'a BTreeSet<Name>,
     pub(super) values: ValuesCx<'a>,
+    /// Whether the rule being compiled applies to the build: the warnings
+    /// that a feature is not implemented yet are given only then.
+    pub(super) applies: Cell<bool>,
 }
 
 impl<'a> Compiler<'a> {
@@ -511,12 +527,28 @@ impl<'a> Compiler<'a> {
                 project,
                 tokens,
             },
+            applies: Cell::new(true),
         }
+    }
+
+    /// Compiles a rule, as [`Self::compile_rule`], without the warnings of
+    /// [`Self::lint_rule`]: for a scoped rule in content, whose caller lints
+    /// it once it applies (not yet done: #243).
+    pub(super) fn rule<'s>(
+        &self,
+        values: &Values<'_>,
+        selectors: ast::SelectorList<'s>,
+        declarations: impl Iterator<Item = ast::Declaration<'s>>,
+        origin: Origin,
+        order: u32,
+        span: Span,
+    ) -> Compiled {
+        self.compile_rule(values, selectors, declarations, origin, order, span)
     }
 
     /// Compiles a rule: one rule per selector, sharing the declarations.
     /// A selector with an error is left out, after it is reported.
-    pub(super) fn rule<'s>(
+    fn compile_rule<'s>(
         &self,
         values: &Values<'_>,
         selectors: ast::SelectorList<'s>,
@@ -550,6 +582,29 @@ impl<'a> Compiler<'a> {
             }
         }
         out
+    }
+
+    /// Warns about the declarations of a compiled rule that set a property
+    /// no stage reads yet. The cascade calls it only for a rule that applies
+    /// to the build: one that another variant or target has has no effect
+    /// here anyway. Nothing is reported for a rule whose selectors were all
+    /// ignored. Its selectors share the declarations.
+    pub(super) fn lint_rule(&self, compiled: &Compiled) {
+        let first = compiled
+            .rules
+            .first()
+            .or_else(|| compiled.steps.first().map(|s| &s.rule));
+        let Some(rule) = first else {
+            return;
+        };
+        for decl in &rule.declarations {
+            let property = self.properties.get(decl.prop);
+            let value = match &decl.value {
+                DeclValue::Value(value) => Some(value),
+                DeclValue::Template(_) => None,
+            };
+            self.lint_not_implemented(property, value, decl.span);
+        }
     }
 
     /// Compiles declarations, leaving out those with errors.
@@ -593,6 +648,42 @@ impl<'a> Compiler<'a> {
             out.push(Decl { prop, value, span });
         }
         out
+    }
+
+    /// Warns that a declaration sets a property no stage reads yet, so it
+    /// has no effect.
+    fn lint_not_implemented(&self, property: &Property, value: Option<&Declared>, span: Span) {
+        // The value as plain data, compared with the initial one. It is
+        // computed at two font sizes: a value in ems that equals the
+        // initial value at one size is not initial at the other.
+        let at = |size: f64| {
+            value.map(|v| {
+                compute(v, folio_component::Abs::pt(size))
+                    .ok()
+                    .map(|v| coerce(v, &property.ty, false))
+            })
+        };
+        let (computed, other) = (at(10.0), at(13.0));
+        let value = match (&computed, &other) {
+            (Some(Some(a)), Some(Some(b))) if a == b => Some(a),
+            // A value that cannot be computed at all is not judged.
+            (Some(None), Some(None)) => return,
+            // In ems, or computed at one size only: judged as set.
+            (Some(_), _) | (None, _) => None,
+        };
+        if let Some(feature) = not_implemented(property, value) {
+            diag::report(
+                self.db,
+                Diagnostic::warning(
+                    span,
+                    eco_format!(
+                        "`{}` is not implemented yet, so this declaration has no effect",
+                        property.name
+                    ),
+                )
+                .with_hint(eco_format!("Folio does not do {feature} yet")),
+            );
+        }
     }
 
     /// Resolves the property of a declaration, reporting an unknown one.
@@ -728,6 +819,43 @@ impl<'a> Compiler<'a> {
                             }
                         }
                     };
+                    // Masters by position come with page masters (SPEC
+                    // §7.1); until then the page's view has no position.
+                    if out.name == Some(NodeName::Page)
+                        && matches!(
+                            name.get().as_str(),
+                            "first" | "last" | "nth" | "left" | "right"
+                        )
+                    {
+                        // A malformed position is still an error.
+                        let written = if name.get().as_str() == "nth" {
+                            eco_format!("nth({})", position("nth")?)
+                        } else {
+                            name.get().clone()
+                        };
+                        self.warn_not_yet(
+                            span,
+                            eco_format!(
+                                "`page:{written}` cannot match yet: pages are not told apart by \
+                                 position, so the rule is ignored"
+                            ),
+                        );
+                        return None;
+                    }
+                    // A page has no children, and steps belong to slides.
+                    if out.name == Some(NodeName::Page)
+                        && matches!(name.get().as_str(), "has" | "step")
+                    {
+                        self.warn_not_yet(
+                            span,
+                            eco_format!(
+                                "`page:{}(..)` cannot match yet: a page has no children or steps, \
+                                 so the rule is ignored",
+                                name.get()
+                            ),
+                        );
+                        return None;
+                    }
                     match name.get().as_str() {
                         "first" => out.pseudos.push(Pseudo::First),
                         "last" => out.pseudos.push(Pseudo::Last),
@@ -783,6 +911,29 @@ impl<'a> Compiler<'a> {
                     }
                 }
             }
+        }
+        // Named masters (`page.landscape`, chosen by `break-before:
+        // page(landscape)`) come with page masters (SPEC §7.1).
+        if out.name == Some(NodeName::Page)
+            && let Some(class) = out.classes.first()
+        {
+            self.warn_not_yet(
+                compound.span(),
+                eco_format!(
+                    "`page.{class}` cannot match yet: there are no named page masters, \
+                     so the rule is ignored"
+                ),
+            );
+            return None;
+        }
+        // The page's view has no label or fields either.
+        if out.name == Some(NodeName::Page) && (out.label.is_some() || !out.attrs.is_empty()) {
+            self.warn_not_yet(
+                compound.span(),
+                "this page selector cannot match yet: a page has no label or fields, \
+                 so the rule is ignored",
+            );
+            return None;
         }
         Some((out, steps))
     }
@@ -884,6 +1035,13 @@ impl<'a> Compiler<'a> {
 
     fn error(&self, span: Span, message: impl Into<EcoString>) {
         diag::report(self.db, Diagnostic::error(span, message));
+    }
+
+    /// Warns that something cannot work yet, when the rule applies.
+    fn warn_not_yet(&self, span: Span, message: impl Into<EcoString>) {
+        if self.applies.get() {
+            self.warn(span, message);
+        }
     }
 
     fn warn(&self, span: Span, message: impl Into<EcoString>) {

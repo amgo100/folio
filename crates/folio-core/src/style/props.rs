@@ -231,6 +231,49 @@ impl Properties {
     }
 }
 
+/// What a built-in property would do that no stage does yet, when a
+/// declaration sets it to `value` (`None` for a render template): the
+/// feature, for a warning that the declaration has no effect (SPEC §7.9).
+/// Its initial value, and `placement: here`, which is where layout puts
+/// every float, ask for nothing. Each entry goes with the work that reads
+/// the property: numbering and references with counters (#44), `display`
+/// with variants and visibility (SPEC §6.3), `template` with render
+/// templates (§5.3), and the others with pages and running elements
+/// (§7.1, §7.8), the baseline grid (§7.3), tables (§7.4), floats (§7.5),
+/// margin notes (§7.6) and text wrap (§7.7). Properties of other targets (slides, animation,
+/// export) and of drawings are not listed: a static or PDF build ignores
+/// them by design.
+pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Option<&'static str> {
+    if property.name.namespace.is_some() {
+        return None;
+    }
+    if let Some(value) = value
+        && (*value == property.initial
+            || (property.name.name.as_str() == "placement"
+                && matches!(value, Value::Keyword(k) if k.as_str() == "here")))
+    {
+        return None;
+    }
+    Some(match property.name.name.as_str() {
+        "display" | "show-only" => "showing and hiding content",
+        "numbering" | "counter-reset" | "marker" | "marker-position" => {
+            "numbering, counters and list markers"
+        }
+        "ref-format" => "references",
+        "width" => "block widths",
+        "trailer" => "block trailers",
+        "column-tracks" => "tables",
+        "grid-snap" | "baseline-grid" => "the baseline grid",
+        "header" | "footer" | "content" => "page headers, footers and content",
+        "margin-column" => "margin columns",
+        "template" => "render templates",
+        "placement" | "side" | "float-order" | "wrap" | "wrap-gap" | "wrap-shape" => {
+            "placing floats and notes other than in the flow"
+        }
+        _ => return None,
+    })
+}
+
 /// A hint for a name that is not a property but is often meant as one
 /// (SPEC §5.1: one meaning per name).
 pub(super) fn confusable(name: &str) -> Option<EcoString> {

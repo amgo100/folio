@@ -222,7 +222,7 @@ pub struct CollectedParagraph {
 /// OpenType feature settings, `lang` values that are not language tags,
 /// and `hyphenate: true` for a language without hyphenation patterns:
 /// what shaping and breaking read, which DOCX and PPTX leave to Word and
-/// PowerPoint.
+/// PowerPoint; and elements that layout does not draw yet.
 #[salsa::tracked(returns(ref))]
 pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
     let project = build.project(db);
@@ -277,7 +277,7 @@ struct Collector<'a> {
     /// Values already reported, so each is reported once per build.
     reported: HashSet<EcoString>,
     /// Whether Folio lays the build out: only then are values that shaping
-    /// and breaking cannot use reported.
+    /// and breaking cannot use, and elements it does not draw, reported.
     laid_out: bool,
     pending: Vec<CollectedParagraph>,
     /// The blocks being collected, innermost last.
@@ -369,6 +369,36 @@ impl Collector<'_> {
             let mut builder = Builder::default();
             builder.raw(text, &node.style, element.span);
             self.finish(builder, &node.style, element.span);
+            return;
+        }
+        // An element with no content to set, such as a component's block
+        // without fields of content: layout draws its box, and nothing in
+        // it. A misplaced `#doc` is reported by the document model.
+        if !is_builtin(&element.name, "doc")
+            && !element
+                .fields
+                .iter()
+                .any(|(_, value)| matches!(value, eval::Value::Content(_)))
+        {
+            // Display maths and images are reported as such.
+            if ["math", "image", "ref"]
+                .iter()
+                .any(|name| is_builtin(&element.name, name))
+            {
+                self.not_laid_out(element);
+                return;
+            }
+            self.report_once(
+                eco_format!("not-laid-out:{}", element.name),
+                Diagnostic::warning(
+                    element.span,
+                    eco_format!(
+                        "`{}` is not laid out yet, so the output shows at most its box",
+                        element.name
+                    ),
+                )
+                .with_hint("this version of Folio checks it but does not draw what it holds"),
+            );
             return;
         }
         // The body and the parts, in the order of the element's fields, as
@@ -517,7 +547,33 @@ impl Collector<'_> {
             return;
         }
         // Inline math, an image, a reference: an object layout sizes.
+        self.not_laid_out(element);
         out.object(style, element.span);
+    }
+
+    /// Warns, once per build and element, that layout does not draw an
+    /// element yet, so the output leaves it out (SPEC §7.9). Each warning
+    /// goes with the work that lays its element out: maths with
+    /// `folio-math` (#43), references with the Resolve stage (#44), images
+    /// with figures and images (#47), and the boxes of other content with
+    /// #214.
+    fn not_laid_out(&mut self, element: &Element) {
+        let name = &element.name;
+        let builtin = |text: &str| is_builtin(name, text);
+        let message = if builtin("math") {
+            EcoString::from("maths is not laid out yet, so the output leaves it out")
+        } else if builtin("ref") {
+            EcoString::from("references are not laid out yet, so the output leaves them out")
+        } else if builtin("image") {
+            EcoString::from("images are not laid out yet, so the output leaves them out")
+        } else {
+            eco_format!("`{name}` is not laid out yet, so the output leaves it out")
+        };
+        self.report_once(
+            eco_format!("not-laid-out:{name}"),
+            Diagnostic::warning(element.span, message)
+                .with_hint("this version of Folio checks it but does not draw it"),
+        );
     }
 
     /// Turns a collected paragraph into segments, with fonts by fallback.
