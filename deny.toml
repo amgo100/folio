@@ -9,7 +9,14 @@ all-features = true
 # crates. Ignore one only with a reason and an issue that tracks its removal.
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+    # D-47-1 = A: krilla-svg, which draws SVG images in PDF (SPEC §11.1),
+    # turns on krilla's `simple-text` and usvg's `text` features, which pull
+    # in these two crates. Folio never runs them: it shapes its own text and
+    # gives SVG drawings no fonts. Drop both when krilla allows it: #294.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser, unused text path of krilla-svg (#294)" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz, unused text path of krilla-svg (#294)" },
+]
 
 [licenses]
 # Permissive licences only. Folio forks Apache-2.0 code from Typst, and its
