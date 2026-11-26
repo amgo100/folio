@@ -59,10 +59,13 @@ pub struct Cache {
     /// with, forgotten like paragraphs.
     maths: Mutex<HashMap<MathKey, (CachedMath, u64)>>,
     /// Equations' numbers set, by their text, options and source.
-    numbers: Mutex<HashMap<(EcoString, MathOptions, Span), (Option<SetText>, u64)>>,
+    numbers: Mutex<HashMap<NumberKey, (Option<SetText>, u64)>>,
     /// The math fonts, by their face, each read once.
     math_fonts: Mutex<HashMap<(usize, Font), (MathFont, u64)>>,
 }
+
+/// An equation's number: its text, what it is set with, and its source.
+type NumberKey = (EcoString, MathOptions, Span);
 
 /// A formula and what it is set with.
 #[derive(Clone, Eq, PartialEq, Hash)]
