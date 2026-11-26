@@ -172,7 +172,7 @@ fn rejects_what_is_not_supported_yet() {
         &["build", "--strict"][..],
         &["build", "--strict=report"],
         &["build", "--strict-a11y"],
-        &["watch"],
+        &["present"],
         &["check", "--leaks"],
         &["check", "--layout"],
         &["check", "--report", "overrides"],
