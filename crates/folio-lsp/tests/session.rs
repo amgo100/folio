@@ -455,3 +455,45 @@ fn notifications_between_shutdown_and_exit_are_ignored() {
     client.notify("exit", Value::Null);
     client.server.take().unwrap().join().unwrap().unwrap();
 }
+
+/// The notices of the pin a client was shown.
+fn notices(client: &Client) -> Vec<String> {
+    client
+        .notifications
+        .iter()
+        .filter(|n| n.method == "window/showMessage")
+        .map(|n| n.params["message"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_changed_pin_gets_a_notice() {
+    let dir = project(&manifest(folio::VERSION), VALID);
+    let toml = uri(&dir.path().join("folio.toml"));
+    let mut client = Client::start(dir.path(), |_| {});
+    client.settle();
+    assert_eq!(notices(&client), Vec::<String>::new());
+
+    // Through a file event...
+    fs::write(dir.path().join("folio.toml"), manifest("9.9.9")).unwrap();
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": [{ "uri": toml, "type": 2 }] }),
+    );
+    client.settle();
+    let found = notices(&client);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("9.9.9"), "{found:?}");
+
+    // ...and through a save, for a client that watches no files.
+    fs::write(dir.path().join("folio.toml"), manifest("9.9.8")).unwrap();
+    client.notify(
+        "textDocument/didSave",
+        json!({ "textDocument": { "uri": toml } }),
+    );
+    client.settle();
+    let found = notices(&client);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[1].contains("9.9.8"), "{found:?}");
+    client.shut_down();
+}

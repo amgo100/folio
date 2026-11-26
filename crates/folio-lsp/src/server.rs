@@ -460,14 +460,14 @@ impl Server<'_> {
         if pin == folio::VERSION || !self.noticed.insert(pin.to_owned()) {
             return;
         }
-        self.show(
-            lsp::MessageType::WARNING,
-            format!(
-                "This project pins Folio {pin}, but the language server is Folio {}: \
-                 its diagnostics may differ from those of `folio build`.",
-                folio::VERSION
-            ),
+        let message = format!(
+            "This project pins Folio {pin}, but the language server is Folio {}: \
+             its diagnostics may differ from those of `folio build`.",
+            folio::VERSION
         );
+        // Also in the log, where it stays when the editor hides notices.
+        self.log(lsp::MessageType::WARNING, message.clone());
+        self.show(lsp::MessageType::WARNING, message);
     }
 
     /// Logs what loading found that is not in any file.
