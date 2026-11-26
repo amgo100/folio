@@ -563,6 +563,20 @@ fn formatting_keeps_byte_order_marks_and_permissions() {
     assert!(stderr(&output).contains("cannot write locked.fsty: it is read-only"));
     let read = |name: &str| fs::read_to_string(path(name)).unwrap();
     assert_eq!(read("main.fol"), "\u{FEFF}= Forces\n");
+
+    // A file with a byte order mark gets no fix, whose byte ranges would
+    // not count the mark.
+    fs::write(path("main.fol"), "\u{FEFF}= Forces  \n").unwrap();
+    let output = folio(dir.path(), &["fmt", "--check", "--diagnostics", "json"]);
+    let document = json(&output);
+    let unformatted: Vec<_> = document["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "unformatted" && d["location"]["path"] == "main.fol")
+        .collect();
+    assert_eq!(unformatted.len(), 1, "{document:#}");
+    assert!(unformatted[0]["fixes"].as_array().unwrap().is_empty());
     assert_eq!(read("style.fsty"), "a { b: c }\n");
     assert_eq!(read("locked.fsty"), "a{b:c}");
     #[cfg(unix)]

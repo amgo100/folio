@@ -13,6 +13,7 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -126,22 +127,26 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
         }
         if args.check {
             let first = edits.iter().next().expect("not empty");
-            let mut fix = Fix::new("Format the file");
-            for edit in &edits {
-                fix = fix.with_edit(
-                    DiagSpan::from_range(id, edit.range.clone()),
-                    edit.text.clone(),
-                );
+            let mut unformatted = Diagnostic::error(
+                DiagSpan::from_range(id, first.range.clone()),
+                format!("{path} is not formatted"),
+            )
+            .with_code(UNFORMATTED)
+            .with_hint("run `folio fmt` to format it");
+            // Byte ranges count from after a byte order mark, which the
+            // loader leaves out, so edits made by them on the file itself
+            // would land early: a file with one gets no fix.
+            if !starts_with_bom(&root.join(&path)) {
+                let mut fix = Fix::new("Format the file");
+                for edit in &edits {
+                    fix = fix.with_edit(
+                        DiagSpan::from_range(id, edit.range.clone()),
+                        edit.text.clone(),
+                    );
+                }
+                unformatted = unformatted.with_fix(fix);
             }
-            diagnostics.push(
-                Diagnostic::error(
-                    DiagSpan::from_range(id, first.range.clone()),
-                    format!("{path} is not formatted"),
-                )
-                .with_code(UNFORMATTED)
-                .with_hint("run `folio fmt` to format it")
-                .with_fix(fix),
-            );
+            diagnostics.push(unformatted);
             continue;
         }
         let text = edits.apply(source.text());
@@ -163,6 +168,14 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
 /// The byte order mark, which the loader leaves out of a source's text.
 const BOM: &str = "\u{FEFF}";
 
+/// Whether the file at `path` starts with a byte order mark.
+fn starts_with_bom(path: &Path) -> bool {
+    let mut start = [0; BOM.len()];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut start))
+        .is_ok_and(|()| start == *BOM.as_bytes())
+}
+
 /// Replaces the file at `path`, or the file a link there leads to, with
 /// `text`, the formatted `old`, through a temporary file beside it that
 /// takes the file's permissions. Keeps a byte order mark the file starts
@@ -176,9 +189,15 @@ fn write(root: &Path, path: &Path, old: &str, text: &str) -> Result<(), String> 
     let permissions = fs::metadata(&file)
         .map_err(|e| e.to_string())?
         .permissions();
-    if permissions.readonly() || fs::OpenOptions::new().append(true).open(&file).is_err() {
+    if permissions.readonly() {
         return Err("it is read-only".into());
     }
+    // Whether this process may write it, which the permissions alone do not
+    // tell.
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .map_err(|e| e.to_string())?;
     let now = fs::read(&file).map_err(|e| e.to_string())?;
     let (bom, now) = match now.strip_prefix(BOM.as_bytes()) {
         Some(rest) => (BOM, rest),

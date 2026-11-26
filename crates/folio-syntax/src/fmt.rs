@@ -585,6 +585,13 @@ impl Walk {
                 } else if next.closes() {
                     open.pop();
                 }
+                // A token over several lines, such as a string or a block
+                // comment, ends on a line with the indentation it gives.
+                let token = &self.text[next.range.0..next.range.1];
+                if let Some(at) = token.rfind(crate::is_newline) {
+                    let last = &token[at + 1..];
+                    indent = last[..last.len() - last.trim_start_matches([' ', '\t']).len()].into();
+                }
             }
         }
         edits
@@ -827,6 +834,10 @@ mod tests {
             "#{\n  if a {\n    x\n  }\n  else {\n    y\n  }\n}\n",
         );
         markup("#f((\n1))\n", "#f((\n  1))\n");
+        markup(
+            "#{\n  let x = \"a\n        b\" + f(\n  1)\n}\n",
+            "#{\n  let x = \"a\n        b\" + f(\n          1)\n}\n",
+        );
         markup(
             "#{\nlet x = a\n.map(y => {\ny\n})\n}\n",
             "#{\n  let x = a\n    .map(y => {\n      y\n    })\n}\n",
