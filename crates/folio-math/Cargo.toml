@@ -1,0 +1,16 @@
+[package]
+name = "folio-math"
+description = "The semantic math tree of Folio, shared by math layout, OMML and MathML export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ecow.workspace = true
+folio-syntax.workspace = true
+unicode-math-class.workspace = true
+
+[lints]
+workspace = true

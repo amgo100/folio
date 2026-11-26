@@ -161,12 +161,18 @@ impl Visitor {
                     }
                 }
             }
-            // Math is not evaluated yet, and rules and element declarations
-            // are not evaluated by scripts.
-            SyntaxKind::Equation
-            | SyntaxKind::TexEquation
-            | SyntaxKind::ScopedRule
-            | SyntaxKind::ElementDecl => {}
+            // A name in an equation reads the script's bindings before the
+            // names of math. A dotted name is a symbol.
+            SyntaxKind::MathIdent => {
+                let name = node.leaf_text();
+                if !self.bound.iter().any(|scope| scope.contains(name)) {
+                    self.free.insert(name.clone());
+                }
+            }
+            SyntaxKind::MathFieldAccess => {}
+            // LaTeX math reads no bindings, and rules and element
+            // declarations are not evaluated by scripts.
+            SyntaxKind::TexEquation | SyntaxKind::ScopedRule | SyntaxKind::ElementDecl => {}
             _ => self.children(node),
         }
     }

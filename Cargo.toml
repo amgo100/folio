@@ -18,6 +18,7 @@ folio-component = { path = "crates/folio-component" }
 folio-core = { path = "crates/folio-core" }
 folio-fonts = { path = "crates/folio-fonts" }
 folio-text = { path = "crates/folio-text" }
+folio-math = { path = "crates/folio-math" }
 folio-pdf = { path = "crates/folio-pdf" }
 folio-testkit = { path = "crates/folio-testkit" }
 folio = { path = "crates/folio" }
@@ -71,6 +72,9 @@ tempfile = "3.27.0"
 toml = { version = "1.2.2", default-features = false, features = ["std", "parse", "preserve_order"] }
 unicode-bidi = "0.3.18"
 unicode-ident = "1.0"
+# The Unicode math class of a character, which spaces and stretches it in
+# math layout (SPEC §8.2).
+unicode-math-class = "0.1"
 unicode-script = "0.5"
 
 [workspace.lints.rust]

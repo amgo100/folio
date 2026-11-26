@@ -702,6 +702,7 @@ impl Lexer<'_> {
             '\\' => self.backslash(),
             '"' => self.string(),
 
+            '<' if self.at_math_label() => self.label(),
             '-' if self.s.eat_if(">>") => SyntaxKind::MathShorthand,
             '-' if self.s.eat_if('>') => SyntaxKind::MathShorthand,
             '-' if self.s.eat_if("->") => SyntaxKind::MathShorthand,
@@ -788,6 +789,37 @@ impl Lexer<'_> {
             _ => self.math_text(start, c),
         };
         (kind, None)
+    }
+
+    /// Whether the `<` just eaten starts a label that ends a line of an
+    /// equation: `<eq:suvat>` followed, after whitespace and comments, by
+    /// a line break `\`, the closing `$` or the end of the text (SPEC
+    /// §8.1). Anywhere else, `<` is less-than or starts a shorthand such as
+    /// `<=`, so `a<b>c` is a comparison.
+    fn at_math_label(&self) -> bool {
+        let mut s = self.s;
+        if !s.at(is_label_start) {
+            return false;
+        }
+        s.eat_while(is_valid_in_label_literal);
+        if !s.eat_if('>') {
+            return false;
+        }
+        loop {
+            s.eat_while(char::is_whitespace);
+            if s.eat_if("//") {
+                s.eat_until(is_newline);
+            } else if s.eat_if("/*") {
+                s.eat_until("*/");
+                s.eat_if("*/");
+            } else {
+                break;
+            }
+        }
+        if s.done() || s.at('$') {
+            return true;
+        }
+        s.eat_if('\\') && (s.done() || s.at(char::is_whitespace))
     }
 
     /// Parse a single `MathIdent` or an entire `MathFieldAccess`.
