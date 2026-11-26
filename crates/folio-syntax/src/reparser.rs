@@ -24,21 +24,37 @@ pub(crate) fn reparse(
     replacement_len: usize,
 ) -> Range<usize> {
     let style = root.kind() == SyntaxKind::Stylesheet;
-    // A failed attempt can leave the tree half changed: children put in
-    // whose numbering then failed, with their ancestors' lengths not updated.
-    // A full reparse starts from the tree as it was. The clone is cheap: it
-    // shares every subtree.
-    let old = root.clone();
-    try_reparse(text, replaced, replacement_len, None, root, 0, style).unwrap_or_else(|| {
-        let new = if style {
-            parse_stylesheet(text)
-        } else {
-            parse(text)
-        };
-        *root = old;
-        replace_root(root, new);
-        0..text.len()
-    })
+    let failure = match try_reparse(text, replaced, replacement_len, None, root, 0, style) {
+        Ok(range) => return range,
+        Err(failure) => failure,
+    };
+    let mut new = if style {
+        parse_stylesheet(text)
+    } else {
+        parse(text)
+    };
+    match (failure, root.span().id()) {
+        (Failure::NotHere, Some(_)) => replace_root(root, new),
+        // The tree may be half changed: it cannot be matched with the new one.
+        (Failure::Unnumberable, Some(id)) => {
+            new.numberize(id, Span::FULL).unwrap();
+            *root = new;
+        }
+        (_, None) => *root = new,
+    }
+    0..text.len()
+}
+
+/// Why an attempt at an incremental reparse failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Failure {
+    /// The edit cannot be reparsed at this level; the tree is unchanged.
+    NotHere,
+    /// Children were reparsed and put in, but there were no span numbers
+    /// left to give them. The tree is left half changed, its ancestors'
+    /// lengths not updated, so no level above may try again, and a full
+    /// reparse may not keep anything of it.
+    Unnumberable,
 }
 
 /// Put a freshly parsed tree in the place of `root`, keeping what it can of
@@ -51,13 +67,12 @@ pub(crate) fn reparse(
 /// edit such as an unbalanced `]`, which changes one item: without this, every
 /// span in the file would be renumbered, and every memoised result keyed on
 /// one, such as a call of a closure defined in the file, would be computed
-/// again (#241). Falls back to numbering the whole new tree when the gap is
-/// too narrow.
+/// again (#241). When the gap is too narrow, the neighbouring kept items are
+/// numbered again too, a widening number of them on each side, as after any
+/// incremental reparse; when even all of them do not fit, the whole new tree
+/// is numbered. `root` must be numbered and unchanged by a failed attempt.
 fn replace_root(root: &mut SyntaxNode, mut new: SyntaxNode) {
-    let Some(id) = root.span().id() else {
-        *root = new;
-        return;
-    };
+    let id = root.span().id().expect("a numbered root");
     if root.kind() == new.kind() && root.is_inner() && new.is_inner() {
         let old_len = root.children().len();
         let children: Vec<SyntaxNode> = new.children().cloned().collect();
@@ -109,8 +124,9 @@ fn try_reparse(
     node: &mut SyntaxNode,
     offset: usize,
     style: bool,
-) -> Option<Range<usize>> {
-    let (overlap, start_offset) = overlapping_children(node, replaced.clone(), offset)?;
+) -> Result<Range<usize>, Failure> {
+    let (overlap, start_offset) =
+        overlapping_children(node, replaced.clone(), offset).ok_or(Failure::NotHere)?;
 
     let node_kind = node.kind();
     let children = node.children_mut();
@@ -128,7 +144,7 @@ fn try_reparse(
         let new_range = start_offset..start_offset + new_len;
 
         // Recursively descend and try to reparse at a lower level.
-        if let Some(range) = try_reparse(
+        match try_reparse(
             text,
             replaced.clone(),
             replacement_len,
@@ -137,12 +153,16 @@ fn try_reparse(
             start_offset,
             style && !child.kind().is_block(),
         ) {
-            // A lower level reparse succeeded! Update this node and return the
-            // reparsed range.
-            assert_eq!(child.len(), new_len);
-            let new_desc = child.descendants();
-            node.update_parent(prev_len, new_len, prev_desc, new_desc);
-            return Some(range);
+            Ok(range) => {
+                // A lower level reparse succeeded! Update this node and return
+                // the reparsed range.
+                assert_eq!(child.len(), new_len);
+                let new_desc = child.descendants();
+                node.update_parent(prev_len, new_len, prev_desc, new_desc);
+                return Ok(range);
+            }
+            Err(Failure::Unnumberable) => return Err(Failure::Unnumberable),
+            Err(Failure::NotHere) => {}
         }
 
         // This is the innermost block which fully surrounds the text (and
@@ -159,8 +179,8 @@ fn try_reparse(
             // numbers to assign to nodes (this is rare).
             return node
                 .replace_children(overlap, vec![reparsed])
-                .is_ok()
-                .then_some(new_range);
+                .map(|()| new_range)
+                .map_err(|_| Failure::Unnumberable);
         }
     }
 
@@ -179,7 +199,7 @@ fn try_reparse(
             parent_kind.is_none(),
         )
     } else {
-        None
+        Err(Failure::NotHere)
     }
 }
 
@@ -193,7 +213,7 @@ fn expand_and_reparse_markup(
     overlap: Range<usize>,
     offset: usize,
     top_level: bool,
-) -> Option<Range<usize>> {
+) -> Result<Range<usize>, Failure> {
     let children = node.children().as_slice();
 
     // Reparse a segment. Retries until it works, taking exponentially more
@@ -282,8 +302,8 @@ fn expand_and_reparse_markup(
                 // span numbers to assign to nodes (this is rare).
                 return node
                     .replace_children(start..end, newborns)
-                    .is_ok()
-                    .then_some(new_range);
+                    .map(|()| new_range)
+                    .map_err(|_| Failure::Unnumberable);
             }
         }
 
@@ -296,7 +316,7 @@ fn expand_and_reparse_markup(
         expansion *= 2;
     }
 
-    None
+    Err(Failure::NotHere)
 }
 
 /// Reparse a range of top-level stylesheet items, expanding the range
@@ -309,7 +329,7 @@ fn expand_and_reparse_stylesheet(
     node: &mut SyntaxNode,
     overlap: Range<usize>,
     offset: usize,
-) -> Option<Range<usize>> {
+) -> Result<Range<usize>, Failure> {
     let children = node.children().as_slice();
     let mut expansion = 1;
     loop {
@@ -349,8 +369,8 @@ fn expand_and_reparse_stylesheet(
         if let Some(newborns) = reparse_stylesheet_items(text, new_range.clone()) {
             return node
                 .replace_children(start..end, newborns)
-                .is_ok()
-                .then_some(new_range);
+                .map(|()| new_range)
+                .map_err(|_| Failure::Unnumberable);
         }
 
         if start == 0 && at_end {
@@ -358,7 +378,7 @@ fn expand_and_reparse_stylesheet(
         }
         expansion *= 2;
     }
-    None
+    Err(Failure::NotHere)
 }
 
 /// The text of the last non-empty leaf of a node.
@@ -749,18 +769,41 @@ mod tests {
         }
     }
 
-    /// Spans still resolve after many forced full reparses in a row, which
-    /// narrow the gaps between kept spans until numbering falls back to the
-    /// whole tree.
+    /// Spans still resolve after many forced full reparses in a row, each of
+    /// which narrows the gap before the item after the edit until the items
+    /// kept before the edit are numbered again too.
     #[test]
     fn test_repeated_full_reparses_keep_spans_ordered() {
         let mut source = Source::detached("a\n\n#let f(x) = x\n\nb c d\n");
+        let mut renumbered = 0;
         for i in 0..200 {
             let at = source.text().find("b c").unwrap();
-            let with = if i % 2 == 0 { "]" } else { "x ]" };
-            source.edit(at..at, with);
+            // The spans of the items wholly before `at` and from `from` on:
+            // those a full reparse keeps.
+            let kept = |source: &Source, from: usize| {
+                let mut offset = 0;
+                let mut spans = vec![];
+                for child in source.root().children() {
+                    if offset + child.len() < at || offset >= from {
+                        spans.push(child.span());
+                    }
+                    offset += child.len();
+                }
+                spans
+            };
+            let before = kept(&source, at);
+            // A paragraph of its own, so the gap before `b c d` halves each
+            // time.
+            let with = if i % 2 == 0 { "]\n\n" } else { "x ]\n\n" };
+            assert_eq!(source.edit(at..at, with), 0..source.text().len());
             assert_spans_resolve(&source);
+            renumbered += usize::from(kept(&source, at + with.len()) != before);
         }
+        // The gap ran out, but only now and then.
+        assert!(
+            (1..50).contains(&renumbered),
+            "renumbered {renumbered} times"
+        );
         let mut fresh = parse(source.text());
         let mut reparsed = source.root().clone();
         fresh.synthesize(Span::detached());
