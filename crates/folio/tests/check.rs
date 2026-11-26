@@ -229,3 +229,90 @@ fn equal_paragraphs_stay_apart() {
         "{looped:?} {written:?}"
     );
 }
+
+/// Each kind of layout diagnostic (SPEC §7.9) is reported once on the
+/// fixture in `tests/check/layout`, with its code, at the source it is
+/// about: a line at the text it ends with, a paragraph at its text, a
+/// section at its heading, what does not fit at its content.
+#[test]
+fn layout_diagnostics_have_codes_and_spans() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/check/layout");
+    let world = project(&dir);
+    let checked = folio::check(&world, Target::Pdf, None).unwrap();
+    let source = world.source("main.fol").unwrap();
+    let at = |code: &str| -> String {
+        let found: Vec<_> = checked
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(code))
+            .collect();
+        assert_eq!(found.len(), 1, "{code}: {:?}", checked.diagnostics);
+        assert_eq!(found[0].severity, folio::Severity::Warning);
+        let location = folio::diag::locate(&world, found[0].span).unwrap();
+        source.text()[location.bytes].to_string()
+    };
+    assert_eq!(
+        at("overfull-line"),
+        "Pneumonoultramicroscopicsilicovolcanoconiosis"
+    );
+    assert_eq!(at("underfull-line"), "Stretched spaces");
+    assert!(at("widow").starts_with("The widow paragraph"));
+    assert!(at("orphan").starts_with("The orphan paragraph"));
+    assert_eq!(at("broken-keep-together"), "heading(class: \"kept\")[Kept]");
+    assert_eq!(at("broken-unbreakable"), "heading(class: \"whole\")[Whole]");
+    assert_eq!(
+        at("broken-keep-with-next"),
+        "heading(class: \"next\")[Next]"
+    );
+    assert_eq!(at("page-overflow"), "Tall");
+    // A reference to a label no element has is a warning at the
+    // reference, without a code yet.
+    assert!(checked.diagnostics.iter().any(|d| {
+        d.message.contains("no element has the label")
+            && folio::diag::locate(&world, d.span)
+                .is_some_and(|l| &source.text()[l.bytes] == "@nowhere")
+    }));
+    // Compiling reports the same.
+    let compiled = folio::compile(&project(&dir), Target::Pdf, None).unwrap();
+    assert_eq!(checked.diagnostics, compiled.diagnostics);
+}
+
+/// The codes of the fixture's layout diagnostics that `layout` shows, in
+/// order.
+fn layout_codes(diagnostics: &[folio::Diagnostic]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .filter_map(|d| d.code.as_deref())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Content that runs off its line or page is always shown; underfull
+/// lines and relaxed widows, orphans, keeps and unbreakable blocks only
+/// with every layout diagnostic (SPEC §7.9).
+#[test]
+fn only_serious_layout_diagnostics_are_shown_by_default() {
+    use folio::LayoutDiagnostics;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/check/layout");
+    let world = project(&dir);
+    let all = folio::check_with(&world, Target::Pdf, None, LayoutDiagnostics::All).unwrap();
+    assert_eq!(all, folio::check(&world, Target::Pdf, None).unwrap());
+    let serious =
+        folio::check_with(&world, Target::Pdf, None, LayoutDiagnostics::default()).unwrap();
+    assert_eq!(
+        layout_codes(&serious.diagnostics),
+        ["page-overflow", "overfull-line"]
+    );
+    let mut codes = layout_codes(&all.diagnostics);
+    codes.sort();
+    let mut expected: Vec<&str> = folio::layout::DETAIL_CODES.to_vec();
+    expected.extend(["overfull-line", "page-overflow"]);
+    expected.sort();
+    assert_eq!(codes, expected);
+    // Every other diagnostic is kept, in its order.
+    let others = |d: &[folio::Diagnostic]| -> Vec<folio::Diagnostic> {
+        d.iter().filter(|d| d.code.is_none()).cloned().collect()
+    };
+    assert!(!others(&serious.diagnostics).is_empty());
+    assert_eq!(others(&serious.diagnostics), others(&all.diagnostics));
+}
