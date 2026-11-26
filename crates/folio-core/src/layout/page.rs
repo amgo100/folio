@@ -57,6 +57,7 @@ use folio_component::{
 use folio_syntax::Span;
 
 use super::cache::Cache;
+use super::codes;
 use super::flow::{
     BlockObject, Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, ParagraphInfo,
     Part, Shared, Sizes, Walk,
@@ -609,33 +610,33 @@ fn report(db: &dyn Db, out: &PageOut) {
         let (span, code, message, hint) = match *constraint {
             Constraint::Widow(span) => (
                 span,
-                "widow",
+                codes::WIDOW,
                 "a page break leaves fewer lines of this paragraph at the top of a page \
                  than `widows` asks for",
                 "no better break was found; reword the text or allow fewer lines with `widows`",
             ),
             Constraint::Orphan(span) => (
                 span,
-                "orphan",
+                codes::ORPHAN,
                 "a page break leaves fewer lines of this paragraph at the foot of a page \
                  than `orphans` asks for",
                 "no better break was found; reword the text or allow fewer lines with `orphans`",
             ),
             Constraint::KeepWithNext(span) => (
                 span,
-                "keep-with-next",
+                codes::BROKEN_KEEP_WITH_NEXT,
                 "a page break separates this block from the next despite `keep-with-next`",
                 "the blocks kept together do not fit on one page",
             ),
             Constraint::KeepTogether(span) => (
                 span,
-                "keep-together",
+                codes::BROKEN_KEEP_TOGETHER,
                 "a page break falls inside this block despite `keep-together`",
                 "the block does not fit on one page",
             ),
             Constraint::Unbreakable(span) => (
                 span,
-                "unbreakable",
+                codes::BROKEN_UNBREAKABLE,
                 "a page break falls inside this block despite `breakable: false`",
                 "the block does not fit on one page",
             ),
@@ -658,7 +659,7 @@ fn report(db: &dyn Db, out: &PageOut) {
                     by.to_pt()
                 ),
             )
-            .with_code("page-overflow")
+            .with_code(codes::PAGE_OVERFLOW)
             .with_hint("make it smaller, or the page's margins"),
         );
     }

@@ -69,12 +69,12 @@ Most diagnostics have no code yet. These have one:
 | `underfull-line` | warning | A justified line's spaces stretch further than its badness allows (TeX's limit), or it has no spaces to stretch. At the text the line ends with. |
 | `widow` | warning | A page break leaves fewer lines of a paragraph at the top of a page than `widows` asks for. At the paragraph. |
 | `orphan` | warning | A page break leaves fewer lines of a paragraph at the foot of a page than `orphans` asks for. At the paragraph. |
-| `keep-with-next` | warning | A page break separates a block from the next despite `keep-with-next`. At the block. |
-| `keep-together` | warning | A page break falls inside a block despite `keep-together`. At the block. |
-| `unbreakable` | warning | A page break falls inside a block despite `breakable: false`. At the block. |
+| `broken-keep-with-next` | warning | A page break separates a block from the next despite `keep-with-next`. At the block. |
+| `broken-keep-together` | warning | A page break falls inside a block despite `keep-together`. At the block. |
+| `broken-unbreakable` | warning | A page break falls inside a block despite `breakable: false`. At the block. |
 | `page-overflow` | warning | Something is taller than the space a page has for it. At what does not fit. |
 
-`folio build` and `folio check` leave out `underfull-line`, `widow`, `orphan`, `keep-with-next`, `keep-together` and `unbreakable`; `folio check --layout` includes them (SPEC §7.9).
+`folio build` and `folio check` leave out `underfull-line`, `widow`, `orphan`, `broken-keep-with-next`, `broken-keep-together` and `broken-unbreakable`; `folio check --layout` includes them (SPEC §7.9).
 
 ### A location
 

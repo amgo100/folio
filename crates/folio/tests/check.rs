@@ -258,9 +258,12 @@ fn layout_diagnostics_have_codes_and_spans() {
     assert_eq!(at("underfull-line"), "Stretched spaces");
     assert!(at("widow").starts_with("The widow paragraph"));
     assert!(at("orphan").starts_with("The orphan paragraph"));
-    assert_eq!(at("keep-together"), "heading(class: \"kept\")[Kept]");
-    assert_eq!(at("unbreakable"), "heading(class: \"whole\")[Whole]");
-    assert_eq!(at("keep-with-next"), "heading(class: \"next\")[Next]");
+    assert_eq!(at("broken-keep-together"), "heading(class: \"kept\")[Kept]");
+    assert_eq!(at("broken-unbreakable"), "heading(class: \"whole\")[Whole]");
+    assert_eq!(
+        at("broken-keep-with-next"),
+        "heading(class: \"next\")[Next]"
+    );
     assert_eq!(at("page-overflow"), "Tall");
     // A reference to a label no element has is a warning at the
     // reference, without a code yet.
