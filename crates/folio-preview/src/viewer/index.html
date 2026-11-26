@@ -11,9 +11,18 @@
 <body>
 <header>
   <span id="status">Connecting…</span>
+  <span id="source" title="The source of the last place clicked"></span>
+  <span class="zoom">
+    <button id="zoom-out" type="button" title="Zoom out (Ctrl −)" aria-label="Zoom out">−</button>
+    <button id="zoom-fit" type="button" title="Fit the width (Ctrl 0)">Fit</button>
+    <button id="zoom-in" type="button" title="Zoom in (Ctrl +)" aria-label="Zoom in">+</button>
+  </span>
 </header>
-<div id="banner" hidden></div>
-<ul id="diagnostics"></ul>
+<div id="banner" role="alert" hidden></div>
+<details id="problems" hidden>
+  <summary id="problems-summary"></summary>
+  <ul id="diagnostics"></ul>
+</details>
 <main id="pages"></main>
 </body>
 </html>

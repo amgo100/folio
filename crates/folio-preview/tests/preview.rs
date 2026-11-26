@@ -62,6 +62,18 @@ fn updated(events: &Receiver<Event>, accept: impl Fn(&Update) -> bool) -> Arc<Up
     }
 }
 
+/// Waits until the pages of a revision are indexed for source sync.
+fn indexed(events: &Receiver<Event>, revision: u64) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match events.recv_deadline(deadline) {
+            Ok(Event::Indexed { revision: r }) if r >= revision => return,
+            Ok(_) => {}
+            Err(_) => panic!("revision {revision} not indexed in time"),
+        }
+    }
+}
+
 /// Opens the websocket with a token and, if given, an `Origin` header.
 fn connect(
     preview: &Preview,
@@ -457,7 +469,7 @@ fn a_font_change_sends_every_page_again() {
     let (preview, events) = start(dir.path(), |o| o.watch(false));
     let first = updated(&events, |u| u.pages > 0);
     let mut ws = connect(&preview, preview.token(), None).unwrap();
-    receive_from(&mut ws, first.revision);
+    let before = receive_from(&mut ws, first.revision);
     // A font file in the project's font directory, of a family the exam
     // does not use: the pages' hashes stay, but every page is drawn again.
     let font =
@@ -474,10 +486,219 @@ fn a_font_change_sends_every_page_again() {
         next.pages,
         "the client gets every page"
     );
+    assert_ne!(
+        received.update["fonts"], before.update["fonts"],
+        "the client drops the glyphs it has"
+    );
     assert!(
         received
             .frames
             .iter()
             .all(|(_, m)| matches!(m, wire::Message::List(_)))
     );
+}
+
+/// Reads text messages until one of `kind`, skipping revisions.
+fn message_of(ws: &mut WebSocket<TcpStream>, kind: &str) -> Value {
+    loop {
+        match ws.read().unwrap() {
+            Message::Text(text) => {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                if value["type"] == kind {
+                    return value;
+                }
+            }
+            Message::Binary(_) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn the_cursor_reveals_pages_and_a_click_finds_the_source() {
+    let dir = project("exam");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let laid_out = updated(&events, |u| u.pages > 0);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    let first = receive_from(&mut ws, laid_out.revision);
+    let revision = first.update["revision"].as_u64().unwrap();
+    indexed(&events, revision);
+    let text = std::fs::read_to_string(dir.path().join("main.fol")).unwrap();
+    let at = text.find("Answer *all*").unwrap();
+
+    // The editor's cursor, inside the word: one glyph.
+    assert_eq!(preview.reveal("main.fol", at + 2..at + 2), 1);
+    let reveal = message_of(&mut ws, "reveal");
+    assert_eq!(reveal["revision"], revision);
+    let area = &reveal["areas"][0];
+    assert_eq!(area["page"], 0);
+    let rect: Vec<f64> = serde_json::from_value(area["rect"].clone()).unwrap();
+    assert!(rect[2] > 0.0 && rect[3] > 0.0);
+    // A range: the whole word, one area.
+    assert_eq!(preview.reveal("main.fol", at..at + 6), 1);
+    let word = message_of(&mut ws, "reveal");
+    let wide: Vec<f64> = serde_json::from_value(word["areas"][0]["rect"].clone()).unwrap();
+    assert!(wide[2] > rect[2]);
+    // Nowhere: nothing is sent.
+    assert_eq!(preview.reveal("nothing.fol", 0..0), 0);
+
+    // A click in the middle of that glyph finds its character.
+    let click = serde_json::json!({
+        "type": "click", "revision": revision, "page": 0,
+        "x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0,
+    });
+    ws.send(Message::text(click.to_string())).unwrap();
+    let source = message_of(&mut ws, "source");
+    assert_eq!(source["location"]["path"], "main.fol");
+    assert_eq!(
+        source["location"]["bytes"],
+        serde_json::json!({"start": at + 2, "end": at + 3})
+    );
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match events.recv_deadline(deadline) {
+            Ok(Event::Clicked(clicked)) => {
+                assert_eq!(clicked.location.bytes, at + 2..at + 3);
+                assert_eq!(clicked.location.start.line, 5);
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => panic!("no click event"),
+        }
+    }
+
+    // A click on another revision, or off every item, finds nothing; a
+    // message of a later version is ignored.
+    ws.send(Message::text(r#"{"type":"later","x":1}"#)).unwrap();
+    let stale = serde_json::json!({
+        "type": "click", "revision": revision + 100, "page": 0,
+        "x": rect[0] + 1.0, "y": rect[1] + 1.0,
+    });
+    ws.send(Message::text(stale.to_string())).unwrap();
+    assert!(message_of(&mut ws, "source")["location"].is_null());
+    let off = serde_json::json!({
+        "type": "click", "revision": revision, "page": 99, "x": 1.0, "y": 1.0,
+    });
+    ws.send(Message::text(off.to_string())).unwrap();
+    assert!(message_of(&mut ws, "source")["location"].is_null());
+}
+
+#[test]
+fn diagnostics_are_marked_on_the_pages() {
+    let dir = project("exam");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let laid_out = updated(&events, |u| u.pages > 0);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    let first = receive_from(&mut ws, laid_out.revision);
+    let revision = first.update["revision"].as_u64().unwrap();
+    let file = edit(
+        dir.path(),
+        "main.fol",
+        "= Section A",
+        "= Section A #nonexistent",
+    );
+    preview.changed([file]);
+    let edited = updated(&events, |u| u.revision > revision);
+    // The overlays follow the pages, in an update of the same revision.
+    let mut next = receive_from(&mut ws, edited.revision);
+    while next.update["overlays"].as_array().unwrap().is_empty() {
+        next = receive(&mut ws);
+    }
+    assert_eq!(next.update["revision"], edited.revision);
+    let diagnostics = next.update["diagnostics"].as_array().unwrap();
+    let error = diagnostics
+        .iter()
+        .position(|d| d["severity"] == "error")
+        .expect("an error");
+    let overlays = next.update["overlays"].as_array().unwrap();
+    let marked = overlays
+        .iter()
+        .find(|o| o["diagnostic"] == error)
+        .expect("the error is marked on a page");
+    assert!(!marked["rects"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn glyphs_are_rasterised_for_clients_that_draw() {
+    let dir = project("exam");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let laid_out = updated(&events, |u| u.pages > 0);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    let first = receive_from(&mut ws, laid_out.revision);
+    let (font, id) = first
+        .frames
+        .iter()
+        .find_map(|(_, message)| match message {
+            wire::Message::List(list) => list.items.iter().find_map(|item| match &item.command {
+                folio_render::Command::Glyphs(run) => Some((run.font.0, run.glyphs[0].id)),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("a glyph run");
+    let token = preview.token();
+    let (status, body) = get(
+        &preview,
+        &format!("/glyphs/{font}?token={token}&size=24&g={id}.0,{id}.2,3"),
+        &[],
+    );
+    assert!(status.contains("200"), "{status}");
+    let u32_at = |at: usize| u32::from_le_bytes(body[at..at + 4].try_into().unwrap());
+    assert_eq!(u32_at(0), 3);
+    let mut at = 4;
+    let mut glyphs = Vec::new();
+    for _ in 0..3 {
+        let gid = u16::from_le_bytes(body[at..at + 2].try_into().unwrap());
+        let sub = body[at + 2];
+        let (width, height) = (u32_at(at + 12), u32_at(at + 16));
+        at += 20 + (width * height) as usize;
+        glyphs.push((gid, sub, width, height));
+    }
+    assert_eq!(at, body.len());
+    assert_eq!((glyphs[0].0, glyphs[0].1), (id, 0));
+    assert_eq!((glyphs[1].0, glyphs[1].1), (id, 2));
+    assert!(glyphs[0].2 > 0 && glyphs[0].3 > 0);
+
+    for bad in [
+        format!("/glyphs/{font}?token={token}&size=0&g=1"),
+        format!("/glyphs/{font}?token={token}&size=24&g=1.4"),
+        format!("/glyphs/{font}?token={token}&size=99999&g=1"),
+        format!("/glyphs/x?token={token}&size=24&g=1"),
+    ] {
+        assert!(get(&preview, &bad, &[]).0.contains("400"), "{bad}");
+    }
+    let (missing, _) = get(
+        &preview,
+        &format!("/glyphs/999?token={token}&size=24&g=1"),
+        &[],
+    );
+    assert!(missing.contains("404"));
+    let (refused, _) = get(&preview, &format!("/glyphs/{font}?size=24&g=1"), &[]);
+    assert!(refused.contains("403"));
+}
+
+#[test]
+fn pages_kept_from_an_earlier_revision_find_no_source() {
+    let dir = project("exam");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    indexed(&events, first.revision);
+    let text = std::fs::read_to_string(dir.path().join("main.fol")).unwrap();
+    let at = text.find("Answer").unwrap();
+    assert_eq!(preview.reveal("main.fol", at..at), 1);
+
+    // The entry file is gone: the last pages stay, under a banner.
+    let entry = dir.path().join("main.fol");
+    std::fs::remove_file(&entry).unwrap();
+    preview.changed([&entry]);
+    let broken = updated(&events, |u| u.revision > first.revision);
+    assert!(broken.banner.is_some());
+    assert_eq!(preview.reveal("main.fol", at..at), 0);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    receive_from(&mut ws, broken.revision);
+    let click = serde_json::json!({
+        "type": "click", "revision": broken.revision, "page": 0, "x": 100.0, "y": 100.0,
+    });
+    ws.send(Message::text(click.to_string())).unwrap();
+    assert!(message_of(&mut ws, "source")["location"].is_null());
 }

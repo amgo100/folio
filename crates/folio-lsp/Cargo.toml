@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 folio.workspace = true
+folio-preview.workspace = true
 crossbeam-channel.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true
@@ -16,6 +17,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true
