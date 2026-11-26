@@ -96,8 +96,9 @@ impl Kept {
         f: impl FnOnce(&mut Last),
     ) {
         let mut kept = self.lock();
+        let last = kept.remove(&build).unwrap_or_default();
         retain(&mut kept, builds);
-        f(kept.entry(build).or_default());
+        f(kept.entry(build).or_insert(last));
     }
 
     /// Forgets the builds of variants that the manifest no longer

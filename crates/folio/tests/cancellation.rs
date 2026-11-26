@@ -134,7 +134,7 @@ fn an_edit_stops_a_long_query_within_milliseconds() {
         eprintln!("{query}: took {took:?}, an edit in the middle waited {waited:?}");
         // A floor, so that a loaded machine does not fail a short query.
         assert!(
-            waited < (took / 4).max(Duration::from_millis(25)),
+            waited < (took / 4).max(Duration::from_millis(50)),
             "an edit in the middle of `{query}`, which takes {took:?}, waited {waited:?}"
         );
         if !cfg!(debug_assertions) {

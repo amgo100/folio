@@ -512,7 +512,9 @@ fn catch<T>(world: &World, f: impl FnOnce() -> T) -> Result<T, Cancelled> {
 /// A query that an edit stops on one thread gives up its claim as if it
 /// had panicked, so the queries on other threads that wait for it see a
 /// panic on another thread: this tells the two apart. The edit waits for
-/// this handle, so the revision stays cancelled while it is asked.
+/// this handle, so the revision stays cancelled while it is asked. A real
+/// panic that an edit happens to follow is taken for a cancellation; the
+/// next compilation meets it again.
 fn cancelled_by_edit(world: &World) -> bool {
     salsa::Cancelled::catch(AssertUnwindSafe(|| {
         salsa::Database::unwind_if_revision_cancelled(world.db())
@@ -555,7 +557,8 @@ fn panic_message(payload: &(dyn Any + Send)) -> EcoString {
 /// may have read more (SPEC §12.2). The kind of a file that the build is
 /// not known to have read is told by its extension. A file that the build
 /// that panicked named but the world lacks is not listed: a watcher that
-/// needs it watches the project's directory.
+/// needs it watches the project's directory. `folio.toml`, `folio.lock`
+/// and the fonts are not listed either; a watcher always watches them.
 fn watched(
     world: &World,
     mut sources: EcoVec<ProjectPath>,
