@@ -23,6 +23,15 @@
 //!   to no Unicode value), the writer says why and writes the same tagged
 //!   PDF without the claim.
 //!
+//! Before it writes, the writer checks the document ([`preflight()`]): it
+//! walks the pages as it would draw them, without drawing, and finds what
+//! it will warn about, including why a document with a title cannot claim
+//! PDF/UA-1. So a build that only checks a document (`folio check`) gets
+//! the writer's warnings without a file, and a document that cannot meet
+//! PDF/UA-1 is written once, without the claim, rather than written under
+//! the validator and again without it. Only a failure the check does not
+//! foresee still costs the second writing.
+//!
 //! Like every writer it reads no clock, so the same input gives the same
 //! bytes (SPEC §2.4): the PDF has no dates, and its IDs are hashes of its
 //! content.
@@ -31,7 +40,7 @@
 
 mod tags;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
 use std::num::NonZeroU64;
 use std::ops::Range;
@@ -218,44 +227,125 @@ pub struct Error {
     pub message: EcoString,
 }
 
+/// What the writer finds in a document before it writes it: whether the
+/// file will claim PDF/UA-1, and the warnings writing it gives.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+pub struct Preflight {
+    /// Whether the file is expected to claim PDF/UA-1: the document has a
+    /// title and the check found nothing that PDF/UA-1 does not allow.
+    pub pdf_ua: bool,
+    /// The problems writing the document gives: content the writer leaves
+    /// out, and why a document with a title does not claim PDF/UA-1.
+    pub warnings: Vec<Warning>,
+}
+
+/// Checks a document as [`write()`] would write it, without writing it:
+/// the warnings that writing gives, and whether the file can claim
+/// PDF/UA-1.
+///
+/// The check walks the pages as the writer draws them, matching
+/// fragments to the structure, loading fonts, and reading every glyph
+/// the PDF will show, and finds what PDF/UA-1 does not allow there: a
+/// heading with content but no text, a glyph that is the font's
+/// `.notdef`, and a glyph whose text, where it is first shown, is no
+/// character or one that PDF/UA-1 does not allow. It costs a small part
+/// of writing, as it neither encodes nor subsets anything.
+///
+/// These are the reasons the content Folio writes today can fail PDF/UA-1.
+/// A document the check expects to fail is written once, without the
+/// validator, so a reason only the validator knows is not reported with
+/// them; content that brings new reasons, such as figures without alt
+/// text, must teach the check to find them. A reason the check misses in
+/// a document it expects to pass is still found, by writing it under the
+/// validator, and costs a second writing.
+pub fn preflight(document: &Document<'_>) -> Preflight {
+    // The tagger needs the ids of marked content, which only a surface
+    // gives: they come from one page of a document that is never written.
+    let settings = SerializeSettings {
+        enable_tagging: true,
+        compress_content_streams: false,
+        ..SerializeSettings::default()
+    };
+    let mut scratch = krilla::Document::new_with(settings);
+    let mut writer = Writer::new(document, true);
+    {
+        let size = Size::from_wh(1.0, 1.0).expect("a page of one point is valid");
+        let mut kpage = scratch.start_page_with(PageSettings::new(size));
+        let mut surface = kpage.surface();
+        for (index, page) in document.pages.iter().enumerate() {
+            writer.tagger.start_page(index);
+            writer.page(&mut surface, page);
+        }
+        surface.finish();
+        kpage.finish();
+    }
+    let Writer {
+        tagger,
+        mut warnings,
+        names,
+        dry,
+        ..
+    } = writer;
+    if document.info.title.is_none() {
+        return Preflight {
+            pdf_ua: false,
+            warnings,
+        };
+    }
+    let (_, _, untitled) = tagger.finish(document.info.lang.as_deref());
+    let dry = dry.expect("the check walks dry");
+    let mut errors = dry.notdef;
+    errors.extend(dry.unmapped);
+    if !untitled.is_empty() {
+        errors.push(ValidationError::MissingHeadingTitle);
+    }
+    let why = reasons(&errors, &untitled, &names);
+    let pdf_ua = why.is_empty();
+    warnings.extend(why);
+    Preflight { pdf_ua, warnings }
+}
+
 /// Writes a document as a tagged PDF 1.7, conforming to PDF/UA-1 where
 /// the document allows.
 pub fn write(document: &Document<'_>) -> Result<Written, Error> {
+    write_checked(document, &preflight(document))
+}
+
+/// Writes a document that [`preflight()`] has checked, with what the check
+/// found: a document that the check expects to claim PDF/UA-1 is written
+/// under the validator, and any other once, without the claim. `checked`
+/// must be the check of this document.
+///
+/// The warnings of the result are those of `checked`, in their order,
+/// followed by any that only writing found: the reasons not to claim
+/// PDF/UA-1 that the check did not foresee, each once.
+pub fn write_checked(document: &Document<'_>, checked: &Preflight) -> Result<Written, Error> {
+    let mut warnings = checked.warnings.clone();
     // PDF/UA requires a title, which documents need not have: one without
     // is written tagged, without the claim and without a warning.
-    if document.info.title.is_none() {
+    if !checked.pdf_ua || document.info.title.is_none() {
         let rendered = render(document, false);
         let bytes = rendered.result.map_err(|e| failure(e, &rendered.names))?;
         return Ok(Written {
             bytes,
             pdf_ua: false,
-            warnings: rendered.warnings,
+            warnings,
         });
     }
     let first = render(document, true);
-    let mut warnings = first.warnings;
     let (bytes, pdf_ua) = match first.result {
         Ok(bytes) => (bytes, true),
         Err(KrillaError::Validation(errors)) => {
-            let mut why = Vec::new();
-            for (error, _) in &errors {
-                let found = match error {
-                    // krilla does not say which: the tagger does.
-                    ValidationError::MissingHeadingTitle if !first.untitled.is_empty() => first
-                        .untitled
-                        .iter()
-                        .map(|&source| untitled_heading(source))
-                        .collect(),
-                    _ => vec![not_ua(error, &first.names)],
-                };
-                for warning in found {
-                    if !why.contains(&warning) {
-                        why.push(warning);
-                    }
+            // A failure the check did not foresee: the document is written
+            // again, without the claim.
+            let errors: Vec<_> = errors.into_iter().map(|(error, _)| error).collect();
+            let why = reasons(&errors, &first.untitled, &first.names);
+            for warning in why {
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
                 }
             }
             let second = render(document, false);
-            warnings.extend(why);
             let bytes = second.result.map_err(|e| failure(e, &second.names))?;
             (bytes, false)
         }
@@ -268,10 +358,36 @@ pub fn write(document: &Document<'_>) -> Result<Written, Error> {
     })
 }
 
+/// Why a document is not PDF/UA-1, from the validator's errors, each once.
+/// `untitled` holds the sources of the headings without text, which the
+/// validator does not name.
+fn reasons(
+    errors: &[ValidationError],
+    untitled: &[SourceRef],
+    names: &[(krilla::text::Font, EcoString)],
+) -> Vec<Warning> {
+    let mut why = Vec::new();
+    for error in errors {
+        let found = match error {
+            // krilla does not say which: the tagger does.
+            ValidationError::MissingHeadingTitle if !untitled.is_empty() => untitled
+                .iter()
+                .map(|&source| untitled_heading(source))
+                .collect(),
+            _ => vec![not_ua(error, names)],
+        };
+        for warning in found {
+            if !why.contains(&warning) {
+                why.push(warning);
+            }
+        }
+    }
+    why
+}
+
 /// What writing the document once gave.
 struct Rendered {
     result: Result<Vec<u8>, KrillaError>,
-    warnings: Vec<Warning>,
     /// The PostScript names of the fonts krilla was given, for messages.
     names: Vec<(krilla::text::Font, EcoString)>,
     /// The sources of headings without text.
@@ -294,6 +410,8 @@ fn render_with(
     ua: bool,
     inspect: &mut dyn FnMut(&krilla::tagging::TagTree, &Headings),
 ) -> Rendered {
+    #[cfg(test)]
+    RENDERS.with(|renders| renders.set(renders.get() + 1));
     let mut builder = ConfigurationBuilder::new().with_version(PdfVersion::Pdf17);
     if ua {
         builder = builder.set_validator(Validator::Ua(Accessibility::UA1));
@@ -309,14 +427,7 @@ fn render_with(
         ..SerializeSettings::default()
     };
     let mut pdf = krilla::Document::new_with(settings);
-    let mut writer = Writer {
-        fonts: document.fonts,
-        loaded: HashMap::new(),
-        names: Vec::new(),
-        tagger: Tagger::new(document.structure),
-        warnings: Vec::new(),
-        last: None,
-    };
+    let mut writer = Writer::new(document, false);
     for (index, page) in document.pages.iter().enumerate() {
         let size = Size::from_wh(pt(page.size.width), pt(page.size.height))
             .or_else(|| Size::from_wh(1.0, 1.0))
@@ -328,12 +439,8 @@ fn render_with(
         surface.finish();
         kpage.finish();
     }
-    let Writer {
-        tagger,
-        warnings,
-        names,
-        ..
-    } = writer;
+    // The warnings are the check's, which walked the same pages.
+    let Writer { tagger, names, .. } = writer;
     let (tree, headings, untitled) = tagger.finish(document.info.lang.as_deref());
     inspect(&tree, &headings);
     pdf.set_tag_tree(tree);
@@ -342,7 +449,6 @@ fn render_with(
     pdf.set_metadata(metadata(&document.info));
     Rendered {
         result: pdf.finish(),
-        warnings,
         names,
         untitled,
     }
@@ -364,6 +470,12 @@ fn metadata(info: &Info) -> Metadata {
     metadata
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has written a document, for tests.
+    static RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Pages being drawn.
 struct Writer<'a> {
     fonts: &'a dyn FontTable,
@@ -375,6 +487,104 @@ struct Writer<'a> {
     warnings: Vec<Warning>,
     /// The source of the last glyph drawn.
     last: Option<(SourceRef, Range<u32>)>,
+    /// For [`preflight()`], which walks the pages without drawing them:
+    /// what PDF/UA-1 does not allow in the glyphs walked.
+    dry: Option<Dry>,
+}
+
+/// What a walk without drawing finds in the glyphs that PDF/UA-1 does not
+/// allow, as the validator would report it.
+#[derive(Default)]
+struct Dry {
+    /// Whether to check the glyphs: only for a document with a title,
+    /// which alone can claim PDF/UA-1.
+    glyphs: bool,
+    /// Glyphs that are their font's `.notdef`, in the order drawn.
+    notdef: Vec<ValidationError>,
+    /// Glyphs whose text, where each is first shown, is not a valid
+    /// mapping to Unicode, in that order.
+    unmapped: Vec<ValidationError>,
+    /// The glyphs shown so far, a set of glyph ids for each font as krilla
+    /// knows it, which keeps one ToUnicode map for each: the first showing
+    /// of a glyph gives its mapping. A document uses few fonts, so they
+    /// are searched in order.
+    mapped: Vec<(krilla::text::Font, Vec<u64>)>,
+    /// The errors found, to report each once.
+    seen: HashSet<ValidationError>,
+}
+
+impl Dry {
+    /// Notes the glyphs of a run set in `font`, as the validator checks
+    /// them: in the content stream, whether each is the `.notdef` glyph;
+    /// in the ToUnicode map, which holds the text of a glyph's first
+    /// showing, whether that is a character PDF/UA allows.
+    fn run(&mut self, run: &GlyphRun, font: &krilla::text::Font, last_resort: bool) {
+        let index = match self.mapped.iter().position(|(f, _)| f == font) {
+            Some(index) => index,
+            None => {
+                let none = vec![0; usize::from(u16::MAX) / 64 + 1];
+                self.mapped.push((font.clone(), none));
+                self.mapped.len() - 1
+            }
+        };
+        for g in run.glyphs.iter() {
+            let text = run.text.get(usize_range(&g.range)).unwrap_or_default();
+            let location = location(g.source.0);
+            if g.id == 0 || last_resort {
+                let error =
+                    ValidationError::ContainsNotDefGlyph(font.clone(), location, text.into());
+                if self.seen.insert(error.clone()) {
+                    self.notdef.push(error);
+                }
+            }
+            // The ToUnicode map has no entry for the `.notdef` glyph,
+            // which is reported above.
+            if g.id == 0 {
+                continue;
+            }
+            let bits = &mut self.mapped[index].1;
+            let (word, bit) = (usize::from(g.id) / 64, 1u64 << (g.id % 64));
+            if bits[word] & bit != 0 {
+                continue;
+            }
+            bits[word] |= bit;
+            let gid = GlyphId::new(u32::from(g.id));
+            // The validator names the last such character.
+            let invalid = text
+                .chars()
+                .rev()
+                .find(|&c| matches!(c as u32, 0x0 | 0xFEFF | 0xFFFE));
+            let error = match invalid {
+                Some(c) => ValidationError::InvalidCodepointMapping(font.clone(), gid, c, location),
+                None if text.is_empty() => {
+                    ValidationError::NoCodepointMapping(font.clone(), gid, location)
+                }
+                None => continue,
+            };
+            if self.seen.insert(error.clone()) {
+                self.unmapped.push(error);
+            }
+        }
+    }
+}
+
+impl<'a> Writer<'a> {
+    /// A writer for a document, which draws, or for [`preflight()`] walks
+    /// without drawing (`dry`).
+    fn new(document: &Document<'a>, dry: bool) -> Self {
+        Self {
+            fonts: document.fonts,
+            loaded: HashMap::new(),
+            names: Vec::new(),
+            tagger: Tagger::new(document.structure),
+            warnings: Vec::new(),
+            last: None,
+            dry: dry.then(|| Dry {
+                glyphs: document.info.title.is_some(),
+                ..Dry::default()
+            }),
+        }
+    }
 }
 
 impl Writer<'_> {
@@ -414,6 +624,7 @@ impl Writer<'_> {
                 self.tagger.advance();
             }
             FragmentItem::Text(run) => self.text(surface, run, at, node),
+            FragmentItem::Shape { .. } if self.dry.is_some() => {}
             FragmentItem::Shape { shape, .. } => {
                 // Shapes are the backgrounds and borders of boxes.
                 surface.start_tagged(ContentTag::Artifact(krilla::tagging::Artifact::with_kind(
@@ -453,6 +664,17 @@ impl Writer<'_> {
         let Some(font) = self.font(run) else {
             return;
         };
+        if let Some(dry) = &mut self.dry {
+            // Only a document with a title can claim PDF/UA-1.
+            if dry.glyphs {
+                let last_resort = name(&font, &self.names) == "LastResort";
+                dry.run(run, &font, last_resort);
+            }
+            let id = surface.start_tagged(ContentTag::Span(SpanTag::empty()));
+            surface.end_tagged();
+            self.tagger.content(node, id);
+            return;
+        }
         let size = pt(run.size);
         let actual = if inserted {
             Some("\u{AD}")
@@ -716,3 +938,185 @@ fn failure(error: KrillaError, names: &[(krilla::text::Font, EcoString)]) -> Err
 
 #[cfg(test)]
 mod tests;
+
+/// Tests of the check before writing: that it foresees what the
+/// validator finds, so that a document is written once.
+#[cfg(test)]
+mod preflight_tests {
+    use folio_component::{Color, Em, Glyph, Paint, Size};
+    use folio_fonts::bundled;
+
+    use super::*;
+
+    /// Every id is the first bundled face.
+    struct Fonts;
+
+    impl FontTable for Fonts {
+        fn font(&self, _: FontId) -> Option<Font> {
+            bundled()[0].faces().ok()?.first().cloned()
+        }
+    }
+
+    /// A glyph run from node `source`: each glyph an id and the bytes of
+    /// `text` it shows.
+    fn run(text: &str, source: u64, glyphs: &[(u16, Range<u32>)]) -> FragmentItem {
+        FragmentItem::Text(GlyphRun {
+            font: FontId(0),
+            size: Abs::pt(10.0),
+            fill: Paint::Solid(Color::BLACK),
+            text: text.into(),
+            glyphs: glyphs
+                .iter()
+                .map(|(id, range)| Glyph {
+                    id: *id,
+                    x_advance: Em::new(0.5),
+                    x_offset: Em::new(0.0),
+                    y_offset: Em::new(0.0),
+                    range: range.clone(),
+                    source: (SourceRef(source), range.clone()),
+                })
+                .collect(),
+        })
+    }
+
+    /// A glyph per character, its id the character's.
+    fn plain(text: &str, source: u64) -> FragmentItem {
+        let glyphs: Vec<_> = text
+            .char_indices()
+            .map(|(i, c)| (c as u16, i as u32..(i + c.len_utf8()) as u32))
+            .collect();
+        run(text, source, &glyphs)
+    }
+
+    fn boxed(source: u64, items: Vec<FragmentItem>) -> FragmentItem {
+        let mut fragment =
+            Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(100.0))).with_source(SourceRef(source));
+        for (i, item) in items.into_iter().enumerate() {
+            fragment.push(
+                Point::new(Abs::zero(), Abs::pt(12.0 * i as f64 + 10.0)),
+                item,
+            );
+        }
+        FragmentItem::Group(fragment)
+    }
+
+    fn page(items: Vec<FragmentItem>) -> Fragment {
+        let mut page =
+            Fragment::new(Size::new(Abs::pt(400.0), Abs::pt(600.0))).with_source(SourceRef(1));
+        page.push(Point::new(Abs::pt(50.0), Abs::pt(50.0)), boxed(1, items));
+        page
+    }
+
+    /// Checks a document, a section with heading `heading` (node 2,
+    /// without text when `None`) and a paragraph (node 3) holding `body`:
+    /// that the check foresees whether it claims PDF/UA-1 (`ua`) and the
+    /// warnings, in the validator's order, and that the document is then
+    /// written once.
+    fn check(ua: bool, heading: Option<&str>, body: FragmentItem) {
+        let mut head = Tag::new(Role::Heading, SourceRef(2));
+        head.text = heading.map(Into::into);
+        let mut section = Tag::new(Role::Section, SourceRef(2));
+        section.children = vec![head, Tag::new(Role::Paragraph, SourceRef(3))];
+        let mut root = Tag::new(Role::Document, SourceRef(1));
+        root.children = vec![section];
+        let section = boxed(
+            2,
+            vec![
+                boxed(2, vec![plain("\u{a0}Forces", 2)]),
+                boxed(3, vec![body]),
+            ],
+        );
+        let pages = [page(vec![boxed(1, vec![section])])];
+        let document = Document {
+            pages: pages.iter().collect(),
+            fonts: &Fonts,
+            structure: &root,
+            info: Info {
+                title: Some("Forces".into()),
+                subject: None,
+                lang: Some("en".into()),
+            },
+        };
+        let checked = preflight(&document);
+        // What the validator finds, as the writer found it before the
+        // check: written under the validator, whatever the check found.
+        let validated = write_checked(
+            &document,
+            &Preflight {
+                pdf_ua: true,
+                warnings: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(validated.pdf_ua, ua, "{:?}", validated.warnings);
+        assert_eq!(checked.pdf_ua, ua, "{:?}", checked.warnings);
+        assert_eq!(checked.warnings, validated.warnings);
+        // Written after the check, the document is written once.
+        RENDERS.with(|r| r.set(0));
+        let written = write_checked(&document, &checked).unwrap();
+        assert_eq!(RENDERS.with(|r| r.get()), 1);
+        assert_eq!(written.pdf_ua, checked.pdf_ua);
+        assert_eq!(written.warnings, checked.warnings);
+        assert_eq!(written.bytes, validated.bytes);
+    }
+
+    #[test]
+    fn foresees_a_document_that_claims_pdf_ua_1() {
+        check(true, Some("Forces"), plain("A ball falls.", 3));
+    }
+
+    #[test]
+    fn foresees_a_heading_without_text() {
+        check(false, None, plain("A ball falls.", 3));
+    }
+
+    #[test]
+    fn foresees_a_notdef_glyph() {
+        check(
+            false,
+            Some("Forces"),
+            run("ab", 3, &[(0, 0..1), (98, 1..2)]),
+        );
+    }
+
+    /// The `.notdef` glyph is reported once, not again for its text,
+    /// which the ToUnicode map does not hold.
+    #[test]
+    fn foresees_a_notdef_glyph_without_text() {
+        let text = "a\u{feff}b";
+        let glyphs = [(97, 0..1), (0, 1..4), (0, 4..4), (98, 4..5)];
+        check(false, Some("Forces"), run(text, 3, &glyphs));
+    }
+
+    /// Reasons of every kind together, in the validator's order.
+    #[test]
+    fn foresees_several_reasons_in_order() {
+        let text = "ab\u{feff}";
+        let glyphs = [(0, 0..1), (120, 1..1), (98, 1..2), (300, 2..5)];
+        check(false, None, run(text, 3, &glyphs));
+    }
+
+    #[test]
+    fn foresees_a_glyph_without_text() {
+        let glyphs = [(97, 0..1), (120, 1..1), (98, 1..2)];
+        check(false, Some("Forces"), run("ab", 3, &glyphs));
+    }
+
+    #[test]
+    fn foresees_a_character_pdf_ua_does_not_allow() {
+        let text = "a\u{feff}b";
+        check(
+            false,
+            Some("Forces"),
+            run(text, 3, &[(97, 0..1), (300, 1..4), (98, 4..5)]),
+        );
+    }
+
+    /// A glyph's mapping is the text it first shows, as in the ToUnicode
+    /// map: a later showing with no text is no problem.
+    #[test]
+    fn maps_a_glyph_by_its_first_showing() {
+        let glyphs = [(97, 0..1), (97, 1..1), (97, 1..2)];
+        check(true, Some("Forces"), run("aa", 3, &glyphs));
+    }
+}

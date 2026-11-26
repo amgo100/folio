@@ -28,7 +28,9 @@
 //! revision shares them.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Target, Value};
@@ -77,17 +79,82 @@ pub struct Face {
 enum Source {
     Loaded(Font),
     /// A system face, read on first use.
-    System(SystemFont),
+    System(SystemFace),
 }
 
 impl Face {
-    /// The face, read from its file if it is a system face that no compile
-    /// of this process has read yet. `None` when the file cannot be read.
+    /// The face, read from its file if it is a system face that the world
+    /// has not read yet. `None` when the file cannot be read.
     pub fn font(&self) -> Option<Font> {
         match &self.source {
             Source::Loaded(font) => Some(font.clone()),
-            Source::System(system) => system.load().ok(),
+            // A failed read is kept too, so that every query of a build
+            // agrees on the face.
+            Source::System(system) => system.read.get_or_init(|| system.font.load().ok()).clone(),
         }
+    }
+}
+
+/// A system face and what reading its file gave, once it has been read.
+#[derive(Debug, Clone)]
+struct SystemFace {
+    font: SystemFont,
+    read: Arc<OnceLock<Option<Font>>>,
+}
+
+/// Equal when the faces are and they share what reading them gave, as the
+/// faces of one [`SystemFaces`] do; a face of the store that replaced it is
+/// not equal, so the queries that hold it are not kept.
+impl PartialEq for SystemFace {
+    fn eq(&self, other: &Self) -> bool {
+        self.font == other.font && Arc::ptr_eq(&self.read, &other.read)
+    }
+}
+
+impl Eq for SystemFace {}
+
+impl Hash for SystemFace {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.font.hash(state);
+    }
+}
+
+/// What a world has read of the system faces its documents use: each face's
+/// file is read at most once, on first use, and a failed read is kept too, and every query and every
+/// revision sees what that read gave, until the host sets the system fonts
+/// again. A file that changes on disk meanwhile therefore cannot make two
+/// queries of one build disagree; reading it is not a tracked input.
+#[derive(Default)]
+pub struct SystemFaces {
+    read: Mutex<HashMap<SystemFont, Arc<OnceLock<Option<Font>>>>>,
+}
+
+impl SystemFaces {
+    /// The cell that holds what reading a face gave.
+    fn cell(&self, font: &SystemFont) -> Arc<OnceLock<Option<Font>>> {
+        let mut read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
+        read.entry(font.clone()).or_default().clone()
+    }
+
+    /// The number of faces that have been asked for.
+    pub fn len(&self) -> usize {
+        self.read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
+    /// Whether no face has been asked for.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl std::fmt::Debug for SystemFaces {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SystemFaces")
+            .field("faces", &self.len())
+            .finish()
     }
 }
 
@@ -295,7 +362,10 @@ pub fn fonts(db: &dyn Db, project: Project) -> Fonts {
             family: font.key.families.first().cloned().unwrap_or_default(),
             postscript_name: font.postscript_name.clone(),
             pin: Pin::Unpinned,
-            source: Source::System(font.clone()),
+            source: Source::System(SystemFace {
+                font: font.clone(),
+                read: db.system_faces().cell(font),
+            }),
         });
     }
     out

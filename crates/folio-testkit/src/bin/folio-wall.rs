@@ -91,8 +91,8 @@ fn compiled(project: Project, edit: fn(&Project) -> Edit) -> Prepared {
 /// The preview path: the pages, without emit, which is what a preview
 /// repaints from; returns the number of pages, and panics when the build
 /// cannot be laid out, so that a broken edit is not timed as a fast one.
-/// Point it at a query that stops at the pages and runs the build's checks
-/// once there is one.
+/// The check path, which also runs the PDF writer's check and gathers the
+/// diagnostics, is [`check_after_edit`].
 fn preview(world: &World) -> usize {
     folio::pages(world, Target::Pdf, None)
         .expect("not cancelled")
@@ -129,6 +129,18 @@ fn preview_after_edit(prepared: Prepared) -> usize {
     };
     apply(&edit, &mut world);
     preview(&world)
+}
+
+/// Edits a world and checks it again ([`folio::check`]): every stage
+/// before Emit and the PDF writer's check, as `folio check` runs them;
+/// returns the number of diagnostics.
+fn check_after_edit(prepared: Prepared) -> usize {
+    let Prepared::Compiled(mut world, edit) = prepared else {
+        unreachable!("set up as a compiled world")
+    };
+    apply(&edit, &mut world);
+    let checked = folio::check(&world, Target::Pdf, None).expect("not cancelled");
+    checked.diagnostics.len()
 }
 
 /// The variant that [`compile_one_variant`] compiles: the teacher's, which
@@ -237,6 +249,13 @@ fn scenarios() -> Vec<Scenario> {
             bounds: Some(PREVIEW),
             setup: reference_word_edit,
             run: preview_after_edit,
+        },
+        Scenario {
+            name: "check-edit",
+            what: "100 pages, a one-word edit in the middle, checked without emit",
+            bounds: None,
+            setup: reference_word_edit,
+            run: check_after_edit,
         },
         Scenario {
             name: "stylesheet-edit",

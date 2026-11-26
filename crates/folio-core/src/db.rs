@@ -78,6 +78,11 @@ pub trait Db: salsa::Database {
     /// The page cache (SPEC §2.3), shared by every handle of the database
     /// like the line-break cache.
     fn page_cache(&self) -> &crate::layout::PageCache;
+
+    /// What the world has read of the system faces its documents use,
+    /// shared by every handle of the database: each face is read at most
+    /// once, so that the queries of a build agree on it.
+    fn system_faces(&self) -> &crate::fonts::SystemFaces;
 }
 
 /// What a build reads besides source text, one field per kind of input.
@@ -214,11 +219,58 @@ pub struct Dependency {
 /// What the build query ([`build_output`]) produces: what a build reads,
 /// checked. The stages that turn it into output are queries of their own
 /// (see [`crate::pipeline`]).
+///
+/// Every file a build reads, sources and the data files and images that
+/// evaluation reads too, is reported as a [`Read`] by the query that reads
+/// it; collect them with `accumulated::<Read>` on the query that compiles
+/// the build.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct BuildOutput {
     /// The source files the build read, in the order they were found. A
     /// watcher recompiles when one of them changes.
     pub sources: EcoVec<ProjectPath>,
+}
+
+/// How a build reads a file.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum FileKind {
+    /// A content file (`.fol`): the entry file, or one imported or
+    /// included.
+    Content,
+    /// A stylesheet (`.fsty`): the project's, a variant's, or one imported.
+    Stylesheet,
+    /// A file read as data or text, by `read`, `json`, `csv` or `toml`.
+    Data,
+    /// An image, named by an `image` element.
+    Image,
+}
+
+/// A file that a build read, or tried to read: a file named but missing is
+/// listed too, so that a watcher rebuilds when it appears.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct FileRead {
+    /// Where the file is in the project.
+    pub path: ProjectPath,
+    /// How the build reads it.
+    pub kind: FileKind,
+}
+
+/// A file read as reported by a query: the salsa accumulator that
+/// [`report_read`] adds to. Like diagnostics, reads are stored with the
+/// memo of the query that made them, so a query that is not re-run keeps
+/// them.
+#[salsa::accumulator]
+#[derive(Debug)]
+pub struct Read(pub FileRead);
+
+/// Reports that the running query read, or tried to read, a file.
+///
+/// # Panics
+///
+/// Panics when no query is running.
+pub fn report_read(db: &dyn Db, path: ProjectPath, kind: FileKind) {
+    use salsa::Accumulator;
+    Read(FileRead { path, kind }).accumulate(db);
 }
 
 /// The source file at a path, if the project has one.
@@ -328,6 +380,11 @@ pub fn build_files(db: &dyn Db, build: Build<'_>) -> EcoVec<SourceFile> {
         if !seen.insert(path.clone()) {
             continue;
         }
+        let kind = match path.extension() {
+            Some("fsty") => FileKind::Stylesheet,
+            _ => FileKind::Content,
+        };
+        report_read(db, path.clone(), kind);
         let Some(file) = source_file(db, project, path.clone()) else {
             diag::report(
                 db,

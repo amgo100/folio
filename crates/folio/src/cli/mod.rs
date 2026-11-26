@@ -1,9 +1,10 @@
-//! The commands of SPEC §12.1 and their arguments. `folio build` and
-//! `folio toolchain install` are implemented; the other commands, and the
-//! flags of `folio build` for later features, are parsed and rejected as
-//! not yet supported.
+//! The commands of SPEC §12.1 and their arguments. `folio build`, `folio
+//! check` and `folio toolchain install` are implemented; the other
+//! commands, and the flags of `folio build` and `folio check` for later
+//! features, are parsed and rejected as not yet supported.
 
 mod build;
+mod check;
 mod project;
 mod toolchain;
 
@@ -42,8 +43,9 @@ enum Command {
     Watch(Later),
     /// Run the live presentation with presenter view (not yet supported)
     Present(Later),
-    /// Report diagnostics without writing output (not yet supported)
-    Check(Later),
+    /// Report diagnostics without writing output: every variant and target
+    /// the manifest declares, or those chosen
+    Check(CheckArgs),
     /// Format `.fol` and `.fsty` files canonically (not yet supported)
     Fmt(Later),
     /// Move a local override into a stylesheet (not yet supported)
@@ -60,11 +62,10 @@ impl Command {
     /// The command's name, for a command that is not supported yet.
     fn later(&self) -> Option<&'static str> {
         Some(match self {
-            Self::Build(_) | Self::Toolchain(_) => return None,
+            Self::Build(_) | Self::Check(_) | Self::Toolchain(_) => return None,
             Self::New(_) => "new",
             Self::Watch(_) => "watch",
             Self::Present(_) => "present",
-            Self::Check(_) => "check",
             Self::Fmt(_) => "fmt",
             Self::Promote(_) => "promote",
             Self::Query(_) => "query",
@@ -81,14 +82,15 @@ struct Later {
     _args: Vec<OsString>,
 }
 
-/// The arguments of `folio build`.
+/// The arguments that `folio build` and `folio check` share: which builds,
+/// of which project, and how to report.
 #[derive(Debug, Args)]
-pub(crate) struct BuildArgs {
-    /// Build only this variant; repeat for several
+pub(crate) struct ProjectArgs {
+    /// Only this variant; repeat for several
     #[arg(long = "variant", value_name = "VARIANT")]
     pub(crate) variants: Vec<String>,
 
-    /// Build only for this target; repeat for several
+    /// Only this target; repeat for several
     #[arg(long = "target", value_name = "TARGET", value_parser = parse_target)]
     pub(crate) targets: Vec<Target>,
 
@@ -102,8 +104,8 @@ pub(crate) struct BuildArgs {
     #[arg(long, value_name = "DIR")]
     pub(crate) root: Option<PathBuf>,
 
-    /// Build with this compiler instead of the version folio.toml pins;
-    /// `current` is the running one
+    /// Use this compiler instead of the version folio.toml pins; `current`
+    /// is the running one
     #[arg(long, value_name = "VERSION", value_parser = ["current"])]
     pub(crate) compiler: Option<String>,
 
@@ -120,6 +122,13 @@ pub(crate) struct BuildArgs {
         default_value_t = DiagnosticsFormat::Human
     )]
     pub(crate) diagnostics: DiagnosticsFormat,
+}
+
+/// The arguments of `folio build`.
+#[derive(Debug, Args)]
+pub(crate) struct BuildArgs {
+    #[command(flatten)]
+    pub(crate) project: ProjectArgs,
 
     /// Force strict mode for this build, or with `report` list violations
     /// (not yet supported)
@@ -144,6 +153,42 @@ impl BuildArgs {
             Some("--strict")
         } else if self.strict_a11y {
             Some("--strict-a11y")
+        } else {
+            None
+        }
+    }
+}
+
+/// The arguments of `folio check`.
+#[derive(Debug, Args)]
+pub(crate) struct CheckArgs {
+    #[command(flatten)]
+    pub(crate) project: ProjectArgs,
+
+    /// Also report layout problems: overfull lines, widows and orphans,
+    /// keeps that were broken (not yet supported)
+    #[arg(long)]
+    pub(crate) layout: bool,
+
+    /// Also check that content hidden from a variant does not reach its
+    /// outputs (not yet supported)
+    #[arg(long)]
+    pub(crate) leaks: bool,
+
+    /// List the local overrides (not yet supported)
+    #[arg(long, value_name = "WHAT", value_parser = ["overrides"])]
+    pub(crate) report: Option<String>,
+}
+
+impl CheckArgs {
+    /// The first flag given that is not supported yet.
+    fn later(&self) -> Option<&'static str> {
+        if self.layout {
+            Some("--layout")
+        } else if self.leaks {
+            Some("--leaks")
+        } else if self.report.is_some() {
+            Some("--report")
         } else {
             None
         }
@@ -209,6 +254,7 @@ pub(crate) fn run() -> ExitCode {
     let cli = Cli::parse_from(args);
     let later = match &cli.command {
         Command::Build(args) => args.later().map(|flag| format!("`folio build {flag}`")),
+        Command::Check(args) => args.later().map(|flag| format!("`folio check {flag}`")),
         command => command.later().map(|name| format!("`folio {name}`")),
     };
     if let Some(what) = later {
@@ -216,7 +262,8 @@ pub(crate) fn run() -> ExitCode {
         return ExitCode::from(USAGE);
     }
     match cli.command {
-        Command::Build(args) => build::build(&args),
+        Command::Build(args) => build::build(&args.project),
+        Command::Check(args) => check::check(&args.project),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         _ => unreachable!("every other command is rejected above"),
     }
@@ -255,9 +302,9 @@ mod tests {
             "2026-11-24",
         ])
         .unwrap();
-        assert_eq!(args.variants, ["exam", "markscheme"]);
-        assert_eq!(args.targets, [Target::Pdf]);
-        assert_eq!(args.today.unwrap().to_string(), "2026-11-24");
+        assert_eq!(args.project.variants, ["exam", "markscheme"]);
+        assert_eq!(args.project.targets, [Target::Pdf]);
+        assert_eq!(args.project.today.unwrap().to_string(), "2026-11-24");
         assert_eq!(args.later(), None);
 
         assert!(parse(&["--target", "html"]).is_err());
@@ -278,9 +325,41 @@ mod tests {
     }
 
     #[test]
+    fn check_flags() {
+        let parse = |args: &[&str]| {
+            let mut all = vec!["folio", "check"];
+            all.extend(args);
+            match Cli::try_parse_from(all).map(|cli| cli.command) {
+                Ok(Command::Check(args)) => Ok(args),
+                Ok(other) => panic!("{other:?}"),
+                Err(error) => Err(error.kind()),
+            }
+        };
+        let args = parse(&[
+            "--variant",
+            "exam",
+            "--target",
+            "pdf",
+            "--diagnostics",
+            "json",
+        ])
+        .unwrap();
+        assert_eq!(args.project.variants, ["exam"]);
+        assert_eq!(args.project.targets, [Target::Pdf]);
+        assert_eq!(args.project.diagnostics, DiagnosticsFormat::Json);
+        assert_eq!(args.later(), None);
+        assert_eq!(parse(&["--layout"]).unwrap().later(), Some("--layout"));
+        assert_eq!(parse(&["--leaks"]).unwrap().later(), Some("--leaks"));
+        assert_eq!(
+            parse(&["--report", "overrides"]).unwrap().later(),
+            Some("--report")
+        );
+        assert!(parse(&["--report", "fonts"]).is_err());
+        assert!(parse(&["--strict"]).is_err());
+    }
+
+    #[test]
     fn later_commands_take_any_arguments() {
-        let cli = Cli::try_parse_from(["folio", "check", "--leaks", "--report", "overrides"]);
-        assert_eq!(cli.unwrap().command.later(), Some("check"));
         let cli = Cli::try_parse_from(["folio", "watch"]);
         assert_eq!(cli.unwrap().command.later(), Some("watch"));
     }

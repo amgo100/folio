@@ -15,7 +15,7 @@ use super::ops::{self, a_type};
 use super::value::{Applied, Arg, Args, Array, Dict, Func, Module, NativeFunc, Scope, Value};
 use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
-use crate::db::{Bytes, data_file, source_file};
+use crate::db::{Bytes, FileKind, data_file, report_read, source_file};
 
 /// The global scope: the library, the built-in elements content can call,
 /// and the elements of the components in use, unqualified where the name
@@ -340,6 +340,7 @@ fn load(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(Bytes, Span)> {
                 .into(),
         );
     };
+    report_read(vm.db, path.clone(), FileKind::Data);
     let bytes = if let Some(file) = data_file(vm.db, vm.project, path.clone()) {
         file.bytes(vm.db).clone()
     } else if let Some(file) = source_file(vm.db, vm.project, path.clone()) {
