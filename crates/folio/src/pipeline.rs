@@ -23,7 +23,7 @@
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{FontId, QualifiedName, SourceRef, Target};
-use folio_core::db::{Build, Bytes, Db, build_output, source_file};
+use folio_core::db::{Build, Bytes, Db, build_files, build_output, source_file};
 use folio_core::diag::{self, Diagnostic};
 use folio_core::eval::Value;
 use folio_core::fonts::{Fonts, fonts};
@@ -173,7 +173,9 @@ pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let text = text(db, build).as_ref()?;
     let project = build.project(db);
     let doc = document(db, project, build.variant(db).clone()).as_ref()?;
-    let structure = structure(&text.root, text);
+    let files = build_files(db, build);
+    let alt = |span: Span| formula_source(db, &files, span);
+    let structure = structure(&text.root, text, &alt);
     let plain = |field: &str| match doc.root.field(field) {
         Some(Value::Content(content)) => Some(content.plain_text()),
         Some(Value::Str(text)) => Some(text.clone()),
@@ -307,23 +309,81 @@ fn navigation(resolution: &Resolution) -> Navigation {
 
 /// The structure of a document for the PDF writer: a node for every block
 /// of the text stage, whose boxes the page builder's fragments are, with
-/// the role of its element or part (SPEC §11.1).
-pub(crate) fn structure(block: &TextBlock, text: &Text) -> Tag {
+/// the role of its element or part (SPEC §11.1), and a node for every
+/// inline formula, whose chunks are boxes too. A formula's text is its
+/// alternate description: `alt` gives the source of the formula at a span.
+pub(crate) fn structure(
+    block: &TextBlock,
+    text: &Text,
+    alt: &dyn Fn(Span) -> Option<EcoString>,
+) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
     let mut tag = Tag::new(role, source_ref(block.span));
     tag.instance = block.location.instance;
-    if role == Role::Heading {
-        tag.text = block_text(block, text);
+    match role {
+        Role::Heading => tag.text = block_text(block, text),
+        Role::Formula => tag.text = formula_alt(text, block.span, alt),
+        _ => {}
     }
-    tag.children = block
-        .children
-        .iter()
-        .filter_map(|child| match child {
-            TextFlow::Block(block) => Some(structure(block, text)),
-            TextFlow::Paragraph(_) => None,
-        })
-        .collect();
+    for child in &block.children {
+        match child {
+            TextFlow::Block(block) => tag.children.push(structure(block, text, alt)),
+            TextFlow::Paragraph(index) => {
+                // A formula's first chunk; the others continue it.
+                let formulas = text.paragraphs[*index]
+                    .objects
+                    .iter()
+                    .filter(|object| object.math.is_some_and(|m| m.chunk == 0));
+                for object in formulas {
+                    let mut formula = Tag::new(Role::Formula, source_ref(object.span));
+                    formula.instance = object.location.instance;
+                    formula.text = formula_alt(text, object.span, alt);
+                    tag.children.push(formula);
+                }
+            }
+        }
+    }
     tag
+}
+
+/// The alternate description of the formula of the `math` element at
+/// `span`: its source, or, where that cannot be read, a description of
+/// its tree.
+fn formula_alt(
+    text: &Text,
+    span: Span,
+    alt: &dyn Fn(Span) -> Option<EcoString>,
+) -> Option<EcoString> {
+    alt(span).or_else(|| {
+        let math = text.maths.iter().find(|math| math.span == span)?;
+        clean(math.formula.repr().into())
+    })
+}
+
+/// The source of the node at `span` among a build's files, as an
+/// alternate description: without the dollar signs around a formula
+/// written in markup or the `:tex` that marks LaTeX, and with runs of
+/// spaces as one space.
+fn formula_source(
+    db: &dyn Db,
+    files: &[folio_core::db::SourceFile],
+    span: Span,
+) -> Option<EcoString> {
+    let id = span.id()?;
+    let file = files.iter().find(|file| file.source(db).id() == id)?;
+    let source = file.source(db);
+    let node = source.find(span)?;
+    let written = source.text().get(node.range())?;
+    let inner = written
+        .strip_prefix('$')
+        .and_then(|w| w.strip_suffix('$'))
+        .unwrap_or(written);
+    let inner = inner
+        .trim_start()
+        .strip_prefix(":tex")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .unwrap_or(inner);
+    clean(inner.into())
 }
 
 /// The text of the paragraphs a block holds directly, as [`clean`] gives
@@ -359,6 +419,7 @@ fn role(element: &QualifiedName, part: Option<&str>) -> Role {
         ("terms-item", Some("term")) => Role::Label,
         ("sidenote", None) => Role::Note,
         ("raw", None) => Role::Code,
+        ("math", None) => Role::Formula,
         (_, Some("caption")) => Role::Caption,
         _ => Role::Group,
     }

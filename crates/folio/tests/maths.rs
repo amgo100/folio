@@ -265,3 +265,84 @@ fn a_number_the_math_font_cannot_set_is_a_warning() {
         ]
     );
 }
+
+/// The texts of the glyph runs on a build's first page, and its
+/// diagnostics' messages.
+fn drawn(world: &World) -> (Vec<String>, Vec<String>) {
+    let compiled = folio::compile(world, Target::Pdf, None).unwrap();
+    let pages = folio::pages(world, Target::Pdf, None).unwrap().unwrap();
+    let mut texts = Vec::new();
+    collect_texts(&pages.pages[0].fragment, &mut texts);
+    let messages = compiled
+        .diagnostics
+        .iter()
+        .map(|d| d.message.to_string())
+        .collect();
+    (texts, messages)
+}
+
+#[test]
+fn every_formula_is_a_pdf_formula_with_its_source_as_alt_text() {
+    let world = world(
+        "",
+        "Speed $v = u + a t$ and $:tex \\frac{1}{2}$ here.\n\n$ s = u t $\n",
+    );
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    let pdf = compiled.output.expect("a PDF");
+    let pdf = String::from_utf8_lossy(pdf.as_ref());
+    assert_eq!(pdf.matches("/S/Formula").count(), 3, "three formulas");
+    for alt in ["/Alt(v = u + a t)", "/Alt(\\\\frac{1}{2})", "/Alt(s = u t)"] {
+        assert!(pdf.contains(alt), "{alt}");
+    }
+}
+
+#[test]
+fn math_font_chooses_the_family_and_warns_of_what_it_cannot_use() {
+    let width = |style: &str| {
+        let world = world(style, "A formula $x + y = z$ here.\n");
+        let (_, messages) = drawn(&world);
+        let lines = lines(&world);
+        let line = &lines.paragraphs[0].lines[0];
+        (line.width, messages)
+    };
+    let (newcm, messages) = width("");
+    assert!(messages.is_empty(), "{messages:?}");
+    let (stix, messages) = width("math { math-font: \"STIX Two Math\"; }\n");
+    assert!(messages.is_empty(), "{messages:?}");
+    assert_ne!(newcm, stix, "STIX Two Math sets the formula");
+    let (fallback, messages) = width("math { math-font: \"Nope Math\"; }\n");
+    assert_eq!(fallback, newcm, "New Computer Modern Math sets it instead");
+    assert!(
+        messages.iter().any(|m| m.contains("no family of `math-font`")),
+        "{messages:?}"
+    );
+    let (_, messages) = width("math { math-font: \"Source Serif 4\"; }\n");
+    assert!(
+        messages.iter().any(|m| m.contains("is not a math font")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn vectors_are_set_in_the_style_of_their_part() {
+    let text = |style: &str| drawn(&world(style, "A field $vec(E)$ here.\n")).0.concat();
+    assert!(text("").contains('𝐄'), "bold upright by default");
+    assert!(
+        text("math.vector { math-style: bold-italic; }\n").contains('𝑬'),
+        "bold italic"
+    );
+    let arrow = text("math.vector { math-style: arrow; }\n");
+    assert!(arrow.contains('𝐸') && arrow.contains('\u{20D7}'), "{arrow}");
+}
+
+#[test]
+fn quantities_are_written_with_the_decimal_marker() {
+    let text = |style: &str| {
+        drawn(&world(style, "Gravity $g = qty(9.81, \"m s^-2\")$ here.\n"))
+            .0
+            .concat()
+    };
+    assert!(text("").contains("9.81"), "{}", text(""));
+    let comma = text("math { decimal-marker: comma; }\n");
+    assert!(comma.contains("9,81"), "{comma}");
+}

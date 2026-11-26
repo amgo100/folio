@@ -144,8 +144,10 @@ impl<'a> Tagger<'a> {
     pub(crate) fn enter(&mut self, node: usize, location: Location, y: Abs) -> usize {
         let out = &self.nodes[node];
         let children = out.children;
-        if self.leading
-            && let Some(last) = out.cursor
+        // A box continues the node last entered at the top of a page, and
+        // a formula's next chunk, on a later line, continues the formula.
+        if let Some(last) = out.cursor
+            && (self.leading || children[last].role == Role::Formula)
             && is_box_of(&children[last], location)
             && let Some(entered) = out.entered[last]
         {
@@ -264,6 +266,7 @@ impl<'a> Tagger<'a> {
                     | Role::Label
                     | Role::Caption
                     | Role::Code
+                    | Role::Formula
             ),
             Kind::Top | Kind::ListBody | Kind::Link => false,
         };
@@ -360,6 +363,7 @@ fn group(out: Out<'_>, nodes: &mut [Option<Out<'_>>]) -> Option<TagGroup> {
             Role::Caption => KTag::Caption.into(),
             Role::Note => KTag::Note.into(),
             Role::Code => KTag::Code.into(),
+            Role::Formula => KTag::Formula(tag.text.as_ref().map(|t| t.to_string())).into(),
         },
     };
     let children: Vec<Node> = out

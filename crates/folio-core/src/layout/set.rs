@@ -6,7 +6,7 @@ use std::ops::Range;
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{
-    Abs, Em, FontId, FragmentItem, Glyph, GlyphRun, ObjectBox, Paint, Point, Size,
+    Abs, Em, FontId, Fragment, FragmentItem, Glyph, GlyphRun, ObjectBox, Paint, Point, Size,
 };
 use folio_text::{Item, ItemKind, Paragraph, Segment};
 
@@ -348,16 +348,20 @@ impl Runs<'_> {
             return pen + tracking;
         };
         self.flush();
-        // A chunk of a formula draws its glyphs and rules.
+        let top = self.baseline - m.shift - m.ascent;
+        // A chunk of a formula draws its glyphs and rules, in a box of the
+        // formula's element, which the PDF writer tags it by.
         if let Some(items) = &object.content {
-            let baseline = self.baseline - m.shift;
-            for (pos, item) in items {
-                self.out
-                    .push((Point::new(pen + pos.x, baseline + pos.y), item.clone()));
-            }
+            let mut chunk = Fragment::new(Size::new(m.width, m.ascent + m.descent))
+                .with_location(object.location);
+            chunk.items = items
+                .iter()
+                .map(|(pos, item)| (Point::new(pos.x, m.ascent + pos.y), item.clone()))
+                .collect();
+            self.out
+                .push((Point::new(pen, top), FragmentItem::Group(chunk)));
             return pen + m.width + tracking;
         }
-        let top = self.baseline - m.shift - m.ascent;
         self.out.push((
             Point::new(pen, top),
             FragmentItem::Object(ObjectBox {

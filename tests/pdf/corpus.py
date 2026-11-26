@@ -18,6 +18,11 @@ a hyphen that a break inserted), joins the lines around it; a hyphen after a
 letter at the end of a line joins it to the next without a space (the line
 broke at an explicit hyphen); any other run of white space, including line
 and page breaks, is one space.
+
+In a document with maths (a character of the Mathematical Alphanumeric
+Symbols block in its text), text is compared without white space:
+`pdftotext` puts a space between glyphs by the gap between them, and math
+layout spaces a formula's atoms by gaps, not by space characters.
 """
 
 import argparse
@@ -82,6 +87,14 @@ def extract(command, path):
     return normalise(out.replace(SHY, ""))
 
 
+def has_maths(text):
+    return any("\U0001D400" <= c <= "\U0001D7FF" for c in text)
+
+
+def bare(text):
+    return "".join(text.split())
+
+
 def normalise(text):
     return " ".join(text.split())
 
@@ -112,6 +125,8 @@ def main():
             with open(os.path.join(out, f"{name}.txt"), encoding="utf-8") as f:
                 expected = normalise(f.read())
             extracted = extract(pdftotext_cmd, pdf)
+            if has_maths(expected):
+                expected, extracted = bare(expected), bare(extracted)
             same = extracted == expected
             ok = compliant and same
             failures += not ok
