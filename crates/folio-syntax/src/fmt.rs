@@ -340,7 +340,6 @@ fn is_container(kind: SyntaxKind) -> bool {
             | SyntaxKind::OverlayBody
             | SyntaxKind::MasterBlock
             | SyntaxKind::TemplateBlock
-            | SyntaxKind::SelectorList
     )
 }
 
@@ -634,8 +633,30 @@ impl Walk {
             let prev = i.checked_sub(1).map(|i| self.tokens[i]);
             let next = self.tokens.get(i).copied();
             let ascii = text.chars().all(|c| matches!(c, ' ' | '\t' | '\n' | '\r'));
-            let mut newlines = count_newlines(text);
-            if ascii && need[i] > 0 && prev.is_some() && next.is_some() {
+            let written = count_newlines(text);
+            let mut newlines = written;
+            // In a stylesheet, a declaration block's braces hold no blank
+            // line next to them, and an empty block is `{}`.
+            let brace = |t: Option<Token>, kind| {
+                t.is_some_and(|t| t.kind == kind && is_rule_block(t.parent))
+            };
+            let after_open = brace(prev, SyntaxKind::LeftBrace);
+            let before_close = brace(next, SyntaxKind::RightBrace);
+            if !self.markup && ascii && (after_open || before_close) {
+                newlines = newlines.min(1);
+                if after_open && before_close {
+                    newlines = 0;
+                }
+            }
+            // A break is not added where it would start a line that opens
+            // markup going on below: moving its list markers would change
+            // how the items below nest.
+            if ascii
+                && need[i] > 0
+                && prev.is_some()
+                && next.is_some()
+                && !(newlines == 0 && self.opens_markup(i))
+            {
                 if newlines == 0 && next.is_some_and(|t| t.is_comment()) {
                     // A comment on the line stays there; the break goes
                     // after it.
@@ -701,7 +722,11 @@ impl Walk {
                             // are indented once more, unless a bracket it
                             // opened still is, which indents them already.
                             // `else` belongs with its `if`.
-                            if gap.continues == Some(open.len()) && next.kind != SyntaxKind::Else {
+                            // A declaration block's `{` is no continuation.
+                            if gap.continues == Some(open.len())
+                                && next.kind != SyntaxKind::Else
+                                && !brace(Some(next), SyntaxKind::LeftBrace)
+                            {
                                 base.push_str("  ");
                             }
                         }
@@ -975,6 +1000,15 @@ mod tests {
         style("a:step( 1 , 2 ) { }", "a:step(1, 2) {}\n");
         style("a[level=1] { }", "a[level=1] {}\n");
         style("a {}", "a {}\n");
+        style("a {\n}\nb {\n\n}", "a {}\n\nb {}\n");
+        style("a {\n\n  b: c;\n\n\n}", "a {\n  b: c;\n}\n");
+        style("a\n{ b: c; }", "a\n{\n  b: c;\n}\n");
+        style("a,\nb { c: d; }", "a,\n  b {\n    c: d;\n  }\n");
+        // A line that opens markup going on below stays as written.
+        style(
+            "a { b: c; d: [- x\n  - y]; }",
+            "a { b: c; d: [- x\n  - y];\n}\n",
+        );
     }
 
     #[test]

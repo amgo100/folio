@@ -73,7 +73,8 @@ fn formatting_is_idempotent_and_keeps_meaning() {
             "{}: formatting changed the tree",
             path.display()
         );
-        // SPEC's examples are written in the canonical style.
+        // The corpus's copies of SPEC's examples are in the canonical style
+        // (SPEC's own text follows in a later edit).
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         assert!(
             !name.starts_with("spec-") || edits.is_empty(),
