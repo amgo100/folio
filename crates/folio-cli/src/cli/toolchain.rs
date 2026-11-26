@@ -5,13 +5,13 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 use clap::{Args, Subcommand};
 use folio::diag::TextFiles;
 use folio::toolchain::{self, Channel, Curl, InstallError, Toolchains};
 use folio::{Diagnostic, Manifest, World};
-use folio_syntax::DiagSpan;
+use folio_syntax::{DiagSpan, Spanned};
 use semver::Version;
 
 use super::build::{error, print};
@@ -151,9 +151,11 @@ fn project_pin(root: Option<&Path>) -> Result<Version, String> {
 
 /// Hands the command line (`args`, without the program name) to the
 /// compiler version that a project's manifest pins, when the command builds,
-/// checks or formats a project, the pin is another version, it is installed, and
-/// `--compiler current` was not given. Returns the exit status of the
-/// pinned version, or `None` when this version runs the command.
+/// checks, formats or watches a project, the pin is another version, it is
+/// installed, and `--compiler current` was not given. Returns the exit
+/// status of the pinned version, or `None` when this version runs the
+/// command. A pinned version without `folio watch` is an error for `folio
+/// watch`, which suggests `--compiler current`.
 ///
 /// It runs before the arguments are parsed and reads only `--root`,
 /// `--compiler` and `--color` from them, and only `project.compiler` from
@@ -161,7 +163,7 @@ fn project_pin(root: Option<&Path>) -> Result<Version, String> {
 /// version knows still reach it. A pin this version cannot run is reported
 /// by [`check`] once the manifest is parsed.
 pub(crate) fn dispatch(args: &[OsString]) -> Option<ExitCode> {
-    if !matches!(args.first()?.to_str()?, "build" | "check" | "fmt") {
+    if !matches!(args.first()?.to_str()?, "build" | "check" | "fmt" | "watch") {
         return None;
     }
     let mut root = None;
@@ -225,9 +227,42 @@ fn dispatch_to_pin(
         files.insert(World::MANIFEST, MANIFEST, manifest.to_owned());
         print(&files, &[unfixed(pin.span, &pin.v, &floor)], color);
     }
+    if args.first().is_some_and(|command| command == "watch") && !has_watch(&binary) {
+        let mut files = TextFiles::new();
+        files.insert(World::MANIFEST, MANIFEST, manifest.to_owned());
+        let error = Diagnostic::error(
+            pin.span,
+            format!(
+                "the project pins compiler {}, which has no `folio watch`",
+                pin.v
+            ),
+        )
+        .with_hint(format!(
+            "`folio watch --compiler current` previews and writes the outputs with Folio {} \
+             instead; they may differ from what Folio {} builds",
+            folio::VERSION,
+            pin.v
+        ));
+        print(&files, &[error], color);
+        return Some(ExitCode::from(FAILURE));
+    }
     let mut command = Command::new(&binary);
     command.args(args).env(DISPATCHED, folio::VERSION);
     Some(run(command, &binary, &pin.v, color))
+}
+
+/// Whether a compiler binary has `folio watch`. Versions before it either
+/// lack the command or parse it with any arguments and reject it as not yet
+/// supported, so only one that has it shows the help of `watch --port 0`.
+fn has_watch(binary: &Path) -> bool {
+    Command::new(binary)
+        .args(["watch", "--port", "0", "--help"])
+        .env(DISPATCHED, folio::VERSION)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Runs the pinned version in place of this process, where the platform
@@ -270,11 +305,19 @@ fn cannot_run(binary: &Path, version: &Version, why: &std::io::Error, color: boo
 /// asks for this one, which is a warning. A pin below the oldest version
 /// that still receives security fixes is a warning.
 pub(crate) fn check(manifest: &Manifest, current: bool) -> Option<Diagnostic> {
+    check_version(&manifest.project.compiler, current)
+}
+
+/// [`check`], given the pin alone, as [`Manifest::compiler_pin`] reads it.
+pub(crate) fn check_version(
+    pinned: &Spanned<Version, DiagSpan>,
+    current: bool,
+) -> Option<Diagnostic> {
     let dispatched = std::env::var_os(DISPATCHED);
     let toolchains = Toolchains::default_dir().map(Toolchains::new);
     let floor = toolchain::security_fixes_from(toolchains.as_ref());
     check_pin(
-        manifest,
+        pinned,
         current,
         dispatched.as_ref(),
         toolchains.as_ref(),
@@ -286,13 +329,12 @@ pub(crate) fn check(manifest: &Manifest, current: bool) -> Option<Diagnostic> {
 /// handed the build to this one, the toolchain cache and the oldest version
 /// that still receives security fixes.
 fn check_pin(
-    manifest: &Manifest,
+    pinned: &Spanned<Version, DiagSpan>,
     current: bool,
     dispatched: Option<&OsString>,
     toolchains: Option<&Toolchains>,
     floor: &Version,
 ) -> Option<Diagnostic> {
-    let pinned = &manifest.project.compiler;
     let version = folio::VERSION;
     if pinned.v.to_string() == version {
         // The version that handed the build on warned already.
@@ -363,7 +405,7 @@ mod tests {
         let toolchains = Toolchains::new("/cache/toolchains");
         let by = OsString::from("9.9.9");
         check_pin(
-            world.manifest(),
+            &world.manifest().project.compiler,
             current,
             dispatched.then_some(&by),
             Some(&toolchains),

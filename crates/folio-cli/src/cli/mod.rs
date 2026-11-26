@@ -453,5 +453,7 @@ mod tests {
         assert!(matches!(cli.unwrap().command, Command::Watch(_)));
         assert!(Cli::try_parse_from(["folio", "watch", "--port", "70000"]).is_err());
         assert!(Cli::try_parse_from(["folio", "watch", "--target", "pdf"]).is_err());
+        assert!(Cli::try_parse_from(["folio", "watch", "--compiler", "current"]).is_ok());
+        assert!(Cli::try_parse_from(["folio", "watch", "--compiler", "1.2.0"]).is_err());
     }
 }
