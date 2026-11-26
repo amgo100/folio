@@ -109,12 +109,13 @@ pub fn read_image(bytes: Arc<[u8]>) -> Result<LoadedImage, EcoString> {
 /// depend on the machine's, and with images only from `data:` URLs, so
 /// that a drawing reads no file, inside the project or out of it.
 pub fn svg_options() -> usvg::Options<'static> {
-    let mut options = usvg::Options::default();
-    options.image_href_resolver = usvg::ImageHrefResolver {
-        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
-        resolve_string: Box::new(|_, _| None),
-    };
-    options
+    usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..usvg::Options::default()
+    }
 }
 
 /// Whether an SVG drawing has a `text` element, which is not drawn.

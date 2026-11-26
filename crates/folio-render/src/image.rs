@@ -296,12 +296,13 @@ fn base64(bytes: &[u8], out: &mut String) {
 /// (`folio_core::image::svg_options`): without fonts, and with images only
 /// from `data:` URLs, so that a drawing reads no file.
 fn svg_options() -> usvg::Options<'static> {
-    let mut options = usvg::Options::default();
-    options.image_href_resolver = usvg::ImageHrefResolver {
-        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
-        resolve_string: Box::new(|_, _| None),
-    };
-    options
+    usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..usvg::Options::default()
+    }
 }
 
 #[cfg(test)]
