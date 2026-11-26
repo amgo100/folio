@@ -2,10 +2,13 @@
 //! to what was encoded, damaged bytes fail to decode without a panic, and
 //! a decoder skips what a later version may add.
 
-use folio_component::{Color, FillRule, FontId, LineCap, LineJoin, SourceRef};
+use std::sync::Arc;
+
+use folio_component::{Color, FillRule, FontId, Image, ImageFormat, LineCap, LineJoin, SourceRef};
 use folio_render::wire::{self, DecodeError, MAGIC, Message, VERSION};
 use folio_render::{
-    Command, DisplayList, GlyphItem, Glyphs, Item, PathShape, Point, Rect, Segment, Span, Stroke,
+    Command, DisplayList, GlyphItem, Glyphs, ImageItem, Item, PathShape, Point, Rect, Segment,
+    Span, Stroke,
 };
 use proptest::prelude::*;
 
@@ -157,6 +160,22 @@ fn command() -> impl Strategy<Value = Command> {
             ),
         rect().prop_map(Command::Frame),
         rect().prop_map(Command::Box),
+        (
+            rect(),
+            prop_oneof![
+                Just(ImageFormat::Jpeg),
+                Just(ImageFormat::Png),
+                Just(ImageFormat::Webp),
+                Just(ImageFormat::Gif),
+                Just(ImageFormat::Svg),
+                Just(ImageFormat::Pdf),
+            ],
+            prop::collection::vec(any::<u8>(), 0..32),
+        )
+            .prop_map(|(rect, format, bytes)| Command::Image(ImageItem {
+                rect,
+                image: Image::new(Arc::from(bytes), format),
+            })),
     ]
 }
 

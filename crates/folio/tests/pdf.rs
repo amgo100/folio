@@ -24,7 +24,8 @@ fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus")
 }
 
-/// A world with a corpus project: its manifest and every source file.
+/// A world with a corpus project: its manifest, every source file, and its
+/// other files, such as images, as data files.
 fn project(dir: &Path) -> World {
     let manifest = fs::read_to_string(dir.join("folio.toml")).unwrap();
     let mut world = World::new(&manifest).unwrap();
@@ -34,15 +35,17 @@ fn project(dir: &Path) -> World {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 stack.push(path);
-            } else if matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("fol" | "fsty")
-            ) {
+            } else {
                 let relative = path.strip_prefix(dir).unwrap().to_str().unwrap();
-                let text = fs::read_to_string(&path).unwrap();
-                world
-                    .set_source(&relative.replace('\\', "/"), &text)
-                    .unwrap();
+                let relative = relative.replace('\\', "/");
+                match path.extension().and_then(|e| e.to_str()) {
+                    Some("fol" | "fsty") => {
+                        let text = fs::read_to_string(&path).unwrap();
+                        world.set_source(&relative, &text).unwrap();
+                    }
+                    _ if relative == "folio.toml" || relative.starts_with("out/") => {}
+                    _ => world.set_file(&relative, fs::read(&path).unwrap()).unwrap(),
+                }
             }
         }
     }
