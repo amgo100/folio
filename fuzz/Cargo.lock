@@ -477,6 +477,7 @@ dependencies = [
  "ecow",
  "folio-component",
  "folio-fonts",
+ "folio-math",
  "folio-syntax",
  "folio-text",
  "indexmap",
@@ -505,6 +506,15 @@ version = "0.0.0"
 dependencies = [
  "folio-testkit",
  "libfuzzer-sys",
+]
+
+[[package]]
+name = "folio-math"
+version = "0.0.0"
+dependencies = [
+ "ecow",
+ "folio-syntax",
+ "unicode-math-class",
 ]
 
 [[package]]

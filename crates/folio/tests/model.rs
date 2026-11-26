@@ -217,13 +217,13 @@ fn the_spec_example_evaluates_to_its_tree() {
         r#"doc(title: ["Mechanics: Test 3"], subject: "WPH11")
   section(level: 1)
     heading(level: 1, body: ["Kinematics"]) <sec:kin>
-    paragraph(body: ["A ball is thrown vertically upwards with speed", space, math(text: "u = qty(12, \"m s^-1\")", block: false), ".", space, "Air resistance is negligible.", sidenote(body: [paragraph(body: ["Take", space, math(text: "g = qty(9.81, \"m s^-2\")", block: false), "."])])])
+    paragraph(body: ["A ball is thrown vertically upwards with speed", space, math(block: false, tree: formula([u, rel(=), op(qty), delim('(', [num(12), punct(,), text("m s^-1")], ')')])), ".", space, "Air resistance is negligible.", sidenote(body: [paragraph(body: ["Take", space, math(block: false, tree: formula([g, rel(=), op(qty), delim('(', [num(9.81), punct(,), text("m s^-2")], ')')])), "."])])])
     figure(caption: ["Path of the ball."], placement: "wrap", side: "outer", width: 0.3333333333333333) <fig:ball>
       paragraph(body: [image(path: "assets/ball.svg")])
     exam.question(marks: 3)
       paragraph(body: ["Calculate the maximum height reached. See", space, ref(target: <fig:ball>), "."])
       exam.answer(lines: 4)
-        paragraph(body: [math(text: "h = u^2 / (2g) = qty(7.3, \"m\")", block: false), space, exam.mark(code: "M1"), space, exam.mark(code: "A1")])
+        paragraph(body: [math(block: false, tree: formula([h, rel(=), frac([attach([u], sup: [num(2)])], [num(2), g]), rel(=), op(qty), delim('(', [num(7.3), punct(,), text("m")], ')')])), space, exam.mark(code: "M1"), space, exam.mark(code: "A1")])
 "#
     );
 

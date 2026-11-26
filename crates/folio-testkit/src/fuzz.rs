@@ -252,8 +252,8 @@ pub fn style(data: &[u8]) {
 }
 
 /// The ways [`nesting`] wraps a value `v` once: in content, in an array or
-/// a dictionary, in a closure, in a function's arguments, and by changing
-/// a place in an array or a dictionary. None repeats `v`, which would make
+/// a dictionary, in a closure, in a function's arguments, by changing a
+/// place in an array or a dictionary, and in an equation. None repeats `v`, which would make
 /// the value grow exponentially rather than nest.
 pub const WRAPPERS: &[&str] = &[
     "[*#v*]",
@@ -271,6 +271,8 @@ pub const WRAPPERS: &[&str] = &[
     "{ let a = (); a.push(v); a }",
     "{ let d = (x: none); d.x = v; d }",
     "{ let a = (none,); a.at(0) = v; a }",
+    "$(#v)/2$",
+    "$sqrt(#v)_i$",
 ];
 
 /// The script [`nesting`] compiles: for each pair of bytes, a wrapper of
@@ -318,7 +320,7 @@ compiler = \"0.0.0\"
 ";
 
 /// What [`differential`] inserts into content: markup that opens and closes
-/// blocks, scripts, references and labels, words, and breaks, so that
+/// blocks, scripts, equations, references and labels, words, and breaks, so that
 /// random edits restructure the document as well as reflow it.
 pub const CONTENT_SNIPPETS: &[&str] = &[
     "x",
@@ -351,6 +353,12 @@ pub const CONTENT_SNIPPETS: &[&str] = &[
     "#let v = 1\n",
     "#v",
     "#if true [yes] else [no]",
+    "$",
+    "$v^2 = u^2 + 2 a s$",
+    "$ x &= 1/2 a t^2 <eq:l> \\ y $",
+    "(m v - m u) / t",
+    "sum_(i=1)^n ",
+    "&",
     "żółć ",
     "biało-czerwony ",
     "A sentence long enough to move a line break or two further down the page. ",
