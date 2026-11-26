@@ -120,6 +120,7 @@ The instruction-count benchmarks (`cargo bench -p folio-testkit --bench compile`
 | `compile_cold exam`, `notes` | Corpus documents from source to PDF in a fresh world. |
 | `recompile_after_edit m0_exit` | The ten-page document recompiled to PDF after a word in its middle is replaced by a longer one. |
 | `preview_after_edit reference` | The preview path: the reference document laid out again to its pages, without emit, after a word in its middle is replaced by a longer one. |
+| `check_after_edit reference` | The check path (`folio check`): the reference document checked again after the same one-word edit, every stage before Emit and the PDF writer's check, without writing the PDF. |
 | `restyle reference` | The preview path after a stylesheet edit: the reference document's body font size changes from 11pt to 12pt. |
 | `compile_variants one`, `three` | The ten-page document with three variants from source to PDF in a fresh world: the teacher's variant alone, and all three one after another. |
 | `parse reference` | Parsing the reference document's markup. |
@@ -128,8 +129,9 @@ Callgrind counts only the benchmark's own thread. Paragraphs that
 `folio-text` shapes several at a time run on its shaping thread, so a full
 compile's and a stylesheet edit's counts leave most shaping out; the
 wall-clock times include it. The preview benchmarks go through one
-function, `preview`, to point at a query that stops at the pages once
-there is one.
+function, `preview`, which stops at the pages; the check benchmarks call
+`folio::check`, which also runs the PDF writer's check and gathers the
+diagnostics.
 
 `folio-wall` (`scripts/bench.sh --wall`) prints three tables, each against
 the limits of SPEC §14.1 and §15:
@@ -137,7 +139,8 @@ the limits of SPEC §14.1 and §15:
 - scenarios, each run 20 times after a warm-up and judged by its 95th
   percentile: the M0 exit check (gated: 200 ms); the reference document's
   full compile, one-word edit to PDF, one-word edit to the pages (the
-  preview of the M1 exit check: 80 ms), stylesheet edit, and the ratio of
+  preview of the M1 exit check: 80 ms), one-word edit checked without
+  emit (reported only), stylesheet edit, and the ratio of
   three variants in parallel to the teacher's variant alone (all but the
   M0 exit check are release criteria and only reported);
 - stages of the reference document's PDF build: the median and 95th

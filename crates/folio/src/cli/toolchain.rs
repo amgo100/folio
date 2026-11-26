@@ -151,7 +151,7 @@ fn project_pin(root: Option<&Path>) -> Result<Version, String> {
 
 /// Hands the command line (`args`, without the program name) to the
 /// compiler version that a project's manifest pins, when the command builds
-/// a project, the pin is another version, it is installed, and
+/// or checks a project, the pin is another version, it is installed, and
 /// `--compiler current` was not given. Returns the exit status of the
 /// pinned version, or `None` when this version runs the command.
 ///
@@ -161,7 +161,7 @@ fn project_pin(root: Option<&Path>) -> Result<Version, String> {
 /// version knows still reach it. A pin this version cannot run is reported
 /// by [`check`] once the manifest is parsed.
 pub(crate) fn dispatch(args: &[OsString]) -> Option<ExitCode> {
-    if args.first()?.to_str()? != "build" {
+    if !matches!(args.first()?.to_str()?, "build" | "check") {
         return None;
     }
     let mut root = None;

@@ -1,7 +1,8 @@
 //! The command line (SPEC §12.1): `folio build` compiles the test corpus to
 //! the outputs the determinism check recorded, prints diagnostics with
 //! source excerpts, exits with an error when a build has errors, and
-//! rejects what is not supported yet.
+//! rejects what is not supported yet; `folio check` reports the same
+//! diagnostics and writes nothing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -173,6 +174,8 @@ fn rejects_what_is_not_supported_yet() {
         &["build", "--strict-a11y"],
         &["watch"],
         &["check", "--leaks"],
+        &["check", "--layout"],
+        &["check", "--report", "overrides"],
         &["fmt"],
     ] {
         let output = folio(dir.path(), args);
@@ -283,4 +286,98 @@ fn writes_json_for_builds_without_errors_and_without_a_project() {
 
     let output = folio(dir.path(), &["build", "--diagnostics", "xml"]);
     assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn checks_report_what_builds_report_and_write_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir(&corpus().join("exam"), dir.path());
+    let check = folio(dir.path(), &["check"]);
+    assert!(check.status.success(), "{}", stderr(&check));
+    assert!(!dir.path().join("out").exists());
+    let build = folio(dir.path(), &["build"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    // The same diagnostics, without the lines that say what was written.
+    let built: String = stderr(&build)
+        .lines()
+        .filter(|line| !line.starts_with("wrote "))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert_eq!(stderr(&check), built);
+
+    // With errors, a check fails as a build does.
+    let broken = project(&[("folio.toml", MANIFEST), ("main.fol", "A ball #box(\n")]);
+    let check = folio(broken.path(), &["check"]);
+    assert_eq!(check.status.code(), Some(1));
+    assert!(
+        stderr(&check).contains("unclosed delimiter"),
+        "{}",
+        stderr(&check)
+    );
+    let build = folio(broken.path(), &["build"]);
+    assert_eq!(build.status.code(), Some(1));
+    assert_eq!(
+        stderr(&check),
+        stderr(&build).replace(
+            "did not write out/main.pdf: the build of the document (pdf) has errors\n",
+            ""
+        )
+    );
+    assert!(!broken.path().join("out").exists());
+}
+
+#[test]
+fn checks_write_diagnostics_as_json() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir(&corpus().join("exam"), dir.path());
+    let check = folio(
+        dir.path(),
+        &["check", "--variant", "exam", "--diagnostics", "json"],
+    );
+    assert!(check.status.success(), "{}", stderr(&check));
+    let checked = json(&check);
+    assert_eq!(checked["version"], 1);
+    assert_eq!(
+        checked["builds"],
+        serde_json::json!([
+            {"variant": "exam", "target": "pdf", "path": null, "status": "checked"},
+            {"variant": "exam", "target": "docx", "path": null, "status": "checked"}
+        ])
+    );
+    assert!(!dir.path().join("out").exists());
+    let build = folio(
+        dir.path(),
+        &["build", "--variant", "exam", "--diagnostics", "json"],
+    );
+    assert_eq!(json(&build)["diagnostics"], checked["diagnostics"]);
+}
+
+/// What would stop a build from writing its output stops a check too,
+/// though the check writes nothing.
+#[test]
+fn checks_report_outputs_that_cannot_be_written() {
+    let outside = format!("{MANIFEST}\n[output]\npath = \"../{{stem}}.{{ext}}\"\n");
+    let not_dir = format!("{MANIFEST}\n[output]\npath = \"out/main.pdf/x.pdf\"\n");
+    for (manifest, expected) in [
+        (&outside, "leaves the project"),
+        (&not_dir, "is not a directory"),
+    ] {
+        let dir = project(&[("folio.toml", manifest), ("main.fol", "Text.\n")]);
+        if manifest == &not_dir {
+            fs::create_dir(dir.path().join("out")).unwrap();
+            fs::write(dir.path().join("out/main.pdf"), "").unwrap();
+        }
+        let check = folio(dir.path(), &["check"]);
+        assert_eq!(check.status.code(), Some(1), "{}", stderr(&check));
+        assert!(stderr(&check).contains(expected), "{}", stderr(&check));
+        let build = folio(dir.path(), &["build"]);
+        assert_eq!(build.status.code(), Some(1), "{}", stderr(&build));
+        assert_eq!(stderr(&check), stderr(&build));
+    }
+    // A check creates no directory on the way.
+    let nested = format!("{MANIFEST}\n[output]\npath = \"a/b/{{stem}}.{{ext}}\"\n");
+    let dir = project(&[("folio.toml", &nested), ("main.fol", "Text.\n")]);
+    let check = folio(dir.path(), &["check"]);
+    assert!(check.status.success(), "{}", stderr(&check));
+    assert!(!dir.path().join("a").exists());
 }

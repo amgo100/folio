@@ -104,7 +104,8 @@ fn counts(items: &[(&str, usize)]) -> BTreeMap<String, usize> {
 
 /// The stages a build runs from Style to Emit (SPEC §2.1), and the build
 /// queries around them.
-const STAGES: &str = "styles select sequence resolve step_style collect_text text lines pages emit";
+const STAGES: &str = "styles select sequence resolve step_style collect_text text lines pages \
+                      pdf_input pdf_check emit";
 
 #[test]
 fn compiles_end_to_end_to_pdf() {
@@ -131,7 +132,7 @@ fn compiles_end_to_end_to_pdf() {
     let executed = logged.take();
     for stage in STAGES
         .split_whitespace()
-        .chain(["compile_build", "build_output"])
+        .chain(["compile_build", "check_build", "build_output"])
     {
         assert_eq!(executed.get(stage), Some(&1), "{stage}: {executed:?}");
     }

@@ -14,6 +14,12 @@
 //!   using Layout only for measurement. Their writers come with M4 and M5;
 //!   until then a build for them styles the document, reports what it
 //!   finds, and produces nothing.
+//!
+//! A build is checked ([`check_build`]) before it is emitted: the check
+//! runs every stage up to the writer and the writer's own check
+//! ([`folio_pdf::preflight`]), and reports every diagnostic that emitting
+//! would, without writing. `folio check`, the language server and the
+//! preview stop there; [`compile_build`] goes on to [`emit`].
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{FontId, QualifiedName, SourceRef, Target};
@@ -21,13 +27,13 @@ use folio_core::db::{Build, Bytes, Db, build_output, source_file};
 use folio_core::diag::{self, Diagnostic};
 use folio_core::eval::Value;
 use folio_core::fonts::{Fonts, fonts};
-use folio_core::layout::pages;
+use folio_core::layout::{Pages, pages};
 use folio_core::model::document;
 use folio_core::pipeline::step_styled;
 use folio_core::project::ProjectPath;
 use folio_core::span_map::{source_ref, span};
 use folio_core::text::{Text, TextBlock, TextFlow, text};
-use folio_pdf::{ListKind, Role, Tag};
+use folio_pdf::{ListKind, Preflight, Role, Tag};
 use folio_syntax::{DiagSpan, Span, SubRange};
 
 /// What compiling a build produces, without its diagnostics, which
@@ -40,110 +46,201 @@ pub(crate) struct Built {
     pub output: Option<Bytes>,
 }
 
-/// Compiles a build: checks what it reads ([`build_output`]) and runs it
-/// through every stage to [`emit`]. The diagnostics of the build are those
-/// of this query and of every query it depends on.
+/// Compiles a build: checks it ([`check_build`]) and emits it. The
+/// diagnostics of the build are those of this query and of every query it
+/// depends on.
 #[salsa::tracked(returns(ref))]
 pub(crate) fn compile_build(db: &dyn Db, build: Build<'_>) -> Built {
-    let checked = build_output(db, build);
+    let sources = check_build(db, build).sources.clone();
     let output = emit(db, build).clone();
-    Built {
+    Built { sources, output }
+}
+
+/// What checking a build finds, without its diagnostics.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct Checked {
+    /// The source files the build read.
+    pub sources: EcoVec<ProjectPath>,
+    /// Whether emitting the build would write a file.
+    pub writes: bool,
+}
+
+/// Checks a build without emitting it: checks what it reads
+/// ([`build_output`]) and runs it through every stage before Emit, and for
+/// PDF the writer's check. Its diagnostics are those that
+/// [`compile_build`] reports, but for the few that only writing finds: an
+/// error of the writer itself, such as a font it cannot subset, and a
+/// reason not to claim PDF/UA-1 that the writer's check does not foresee.
+#[salsa::tracked(returns(ref))]
+pub(crate) fn check_build(db: &dyn Db, build: Build<'_>) -> Checked {
+    let checked = build_output(db, build);
+    let writes = *check_target(db, build);
+    Checked {
         sources: checked.sources.clone(),
-        output,
+        writes,
     }
+}
+
+/// Runs a build through every stage before Emit, and for PDF the writer's
+/// check: whether emitting it would write a file, which only PDF does, and
+/// only when the document could be styled. A target that has no writer
+/// yet is reported here.
+#[salsa::tracked]
+pub(crate) fn check_target(db: &dyn Db, build: Build<'_>) -> bool {
+    let target = build.target(db);
+    match target {
+        Target::Pdf => pdf_check(db, build).is_some(),
+        Target::Live => {
+            if pages(db, build).is_some() {
+                unsupported(
+                    db,
+                    build,
+                    "the live target is not implemented yet: this build lays the \
+                     document out but presents nothing",
+                );
+            }
+            false
+        }
+        Target::Docx | Target::Pptx => {
+            if step_styled(db, build).is_some() {
+                let format = target.as_str().to_uppercase();
+                unsupported(
+                    db,
+                    build,
+                    eco_format!(
+                        "{format} output is not implemented yet: this build checks the \
+                         document but writes no file"
+                    ),
+                );
+            }
+            false
+        }
+    }
+}
+
+/// What the PDF writer reads of a build besides its pages and fonts: the
+/// structure, the metadata, and where problems of the whole document are
+/// reported.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct PdfInput {
+    structure: Tag,
+    info: folio_pdf::Info,
+    whole: DiagSpan,
+}
+
+impl PdfInput {
+    /// The document the writer writes, of these pages and fonts.
+    fn document<'a>(
+        &'a self,
+        pages: &'a Pages,
+        fonts: &'a FontTable<'a>,
+    ) -> folio_pdf::Document<'a> {
+        folio_pdf::Document {
+            pages: pages.pages.iter().map(|page| &page.fragment).collect(),
+            fonts,
+            structure: &self.structure,
+            info: self.info.clone(),
+        }
+    }
+
+    /// Where the writer's problem with `source` is reported.
+    fn at(&self, source: SourceRef) -> DiagSpan {
+        if source.is_detached() {
+            self.whole
+        } else {
+            span(source).into()
+        }
+    }
+
+    /// Reports a warning of the writer.
+    fn warn(&self, db: &dyn Db, warning: &folio_pdf::Warning) {
+        let mut diagnostic = Diagnostic::warning(self.at(warning.source), warning.message.clone());
+        if let Some(hint) = &warning.hint {
+            diagnostic = diagnostic.with_hint(hint.clone());
+        }
+        diag::report(db, diagnostic);
+    }
+}
+
+/// What the PDF writer reads of a PDF build besides its pages and fonts,
+/// or `None` when the document could not be styled.
+#[salsa::tracked(returns(ref))]
+pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
+    let text = text(db, build).as_ref()?;
+    let project = build.project(db);
+    let doc = document(db, project, build.variant(db).clone()).as_ref()?;
+    let structure = structure(&text.root, text);
+    let plain = |field: &str| match doc.root.field(field) {
+        Some(Value::Content(content)) => Some(content.plain_text()),
+        Some(Value::Str(text)) => Some(text.clone()),
+        _ => None,
+    };
+    let lang = project.manifest(db).project.lang.v.as_str();
+    // The title as it is shown, with the language's quotation marks, if
+    // it is shown.
+    let shown = text.root.children.iter().find_map(|child| match child {
+        TextFlow::Block(block) if block.part.as_ref().is_some_and(|p| p.as_str() == "title") => {
+            block_text(block, text)
+        }
+        _ => None,
+    });
+    let info = folio_pdf::Info {
+        title: shown.or_else(|| plain("title").and_then(clean)),
+        subject: plain("subject").and_then(clean),
+        lang: Some(lang.into()),
+    };
+    // Problems without a source of their own concern the document.
+    let whole = document_span(db, build, doc.root.span);
+    Some(PdfInput {
+        structure,
+        info,
+        whole,
+    })
+}
+
+/// The PDF writer's check of a build ([`folio_pdf::preflight`]), which
+/// reports the warnings that writing it gives; or `None` when the document
+/// could not be styled.
+#[salsa::tracked(returns(ref))]
+pub(crate) fn pdf_check(db: &dyn Db, build: Build<'_>) -> Option<Preflight> {
+    let pages = pages(db, build).as_ref()?;
+    let input = pdf_input(db, build).as_ref()?;
+    let fonts = FontTable(fonts(db, build.project(db)));
+    let checked = folio_pdf::preflight(&input.document(pages, &fonts));
+    for warning in &checked.warnings {
+        input.warn(db, warning);
+    }
+    Some(checked)
 }
 
 /// Emits a build (stage 9): the file its target writes, or `None` when the
 /// document could not be styled, or the target writes no file or has no
-/// writer yet.
+/// writer yet. What the build's check reports ([`check_build`]) is not
+/// reported again.
 #[salsa::tracked(returns(ref))]
 pub(crate) fn emit(db: &dyn Db, build: Build<'_>) -> Option<Bytes> {
-    let target = build.target(db);
-    match target {
+    match build.target(db) {
         Target::Pdf => {
+            let checked = pdf_check(db, build).as_ref()?;
             let pages = pages(db, build).as_ref()?;
-            let text = text(db, build).as_ref()?;
-            let project = build.project(db);
-            let doc = document(db, project, build.variant(db).clone()).as_ref()?;
-            let fonts = FontTable(fonts(db, project));
-            let structure = structure(&text.root, text);
-            let plain = |field: &str| match doc.root.field(field) {
-                Some(Value::Content(content)) => Some(content.plain_text()),
-                Some(Value::Str(text)) => Some(text.clone()),
-                _ => None,
-            };
-            let lang = project.manifest(db).project.lang.v.as_str();
-            // The title as it is shown, with the language's quotation
-            // marks, if it is shown.
-            let shown = text.root.children.iter().find_map(|child| match child {
-                TextFlow::Block(block)
-                    if block.part.as_ref().is_some_and(|p| p.as_str() == "title") =>
-                {
-                    block_text(block, text)
-                }
-                _ => None,
-            });
-            let info = folio_pdf::Info {
-                title: shown.or_else(|| plain("title").and_then(clean)),
-                subject: plain("subject").and_then(clean),
-                lang: Some(lang.into()),
-            };
-            let document = folio_pdf::Document {
-                pages: pages.pages.iter().map(|page| &page.fragment).collect(),
-                fonts: &fonts,
-                structure: &structure,
-                info,
-            };
-            // Problems without a source of their own concern the document.
-            let whole = document_span(db, build, doc.root.span);
-            let at = |source: SourceRef| {
-                if source.is_detached() {
-                    whole
-                } else {
-                    span(source).into()
-                }
-            };
-            match folio_pdf::write(&document) {
+            let input = pdf_input(db, build).as_ref()?;
+            let fonts = FontTable(fonts(db, build.project(db)));
+            match folio_pdf::write_checked(&input.document(pages, &fonts), checked) {
                 Ok(written) => {
-                    for warning in written.warnings {
-                        let mut diagnostic =
-                            Diagnostic::warning(at(warning.source), warning.message);
-                        if let Some(hint) = warning.hint {
-                            diagnostic = diagnostic.with_hint(hint);
-                        }
-                        diag::report(db, diagnostic);
+                    // Those the check foresaw come first.
+                    for warning in written.warnings.iter().skip(checked.warnings.len()) {
+                        input.warn(db, warning);
                     }
                     Some(written.bytes.into())
                 }
                 Err(error) => {
-                    diag::report(db, Diagnostic::error(at(error.source), error.message));
+                    let at = input.at(error.source);
+                    diag::report(db, Diagnostic::error(at, error.message));
                     None
                 }
             }
         }
-        Target::Live => {
-            pages(db, build).as_ref()?;
-            unsupported(
-                db,
-                build,
-                "the live target is not implemented yet: this build lays the \
-                 document out but presents nothing",
-            );
-            None
-        }
-        Target::Docx | Target::Pptx => {
-            step_styled(db, build)?;
-            let format = target.as_str().to_uppercase();
-            unsupported(
-                db,
-                build,
-                eco_format!(
-                    "{format} output is not implemented yet: this build checks the \
-                     document but writes no file"
-                ),
-            );
-            None
-        }
+        Target::Live | Target::Docx | Target::Pptx => None,
     }
 }
 
