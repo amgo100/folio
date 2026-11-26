@@ -37,9 +37,10 @@ static POOL: LazyLock<Option<ThreadPool>> = LazyLock::new(|| {
 /// Shaping is a pure function of a paragraph, so a paragraph that is equal
 /// to one shaped before, in any compile, gets the earlier result. A
 /// compile hands every paragraph of its document to
-/// [`shape_all`](Self::shape_all), which shapes the new ones in parallel
-/// and forgets those that no call asked for in a while; an edit therefore
-/// re-shapes only the paragraphs it changed.
+/// [`shape_all`](Self::shape_all), which shapes the new ones (in parallel
+/// when the shaping pool has several threads) and forgets those that no
+/// call asked for in a while; an edit therefore re-shapes only the
+/// paragraphs it changed.
 #[derive(Default)]
 pub struct Cache {
     paragraphs: Mutex<HashMap<Paragraph, Entry>>,
@@ -117,7 +118,9 @@ impl Cache {
     /// the cache's own, which share no state with the caller's thread. The
     /// caller waits for them without running other work, so it may hold
     /// thread-local state, as a thread running a database query does, and
-    /// may itself be a thread of another `rayon` pool.
+    /// may itself be a thread of another `rayon` pool. When the shaping
+    /// pool has one thread (as with `RAYON_NUM_THREADS=1`), the caller
+    /// shapes them itself, in order.
     ///
     /// # Panics
     ///
@@ -198,7 +201,8 @@ impl Cache {
     }
 
     /// Runs `f` on each item, in parallel on the threads that shape
-    /// paragraphs when there are several items, and hands each result to
+    /// paragraphs when there are several items and several threads (else
+    /// on the caller's thread, in order), and hands each result to
     /// `each` on the caller's thread with the item's index and the item,
     /// as the results come in, a few at a time.
     ///
@@ -223,7 +227,13 @@ impl Cache {
         O: Send + 'static,
         F: Fn(&I) -> O + Send + Sync + 'static,
     {
-        let pool = POOL.as_ref().filter(|_| items.len() > 1);
+        // With a single thread in the pool (`RAYON_NUM_THREADS=1`),
+        // handing the work over gains nothing, so the caller runs it in
+        // order itself; this also keeps it on the thread that the
+        // instruction-count benchmarks measure.
+        let pool = POOL
+            .as_ref()
+            .filter(|pool| items.len() > 1 && pool.current_num_threads() > 1);
         let Some(pool) = pool else {
             for (i, item) in items.iter().enumerate() {
                 each(i, item, f(item));
