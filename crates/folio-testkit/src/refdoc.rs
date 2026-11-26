@@ -63,7 +63,7 @@ impl Spec {
 /// and headings, fill one page of the generated document's page set-up,
 /// net of its figures, equations and tables. Tuned against the page count
 /// that `tests/refdoc.rs` checks.
-pub const CHARS_PER_PAGE: usize = 3100;
+pub const CHARS_PER_PAGE: usize = 2650;
 
 /// The characters of running text that an item displaces from its page.
 const FIGURE_CHARS: usize = 900;

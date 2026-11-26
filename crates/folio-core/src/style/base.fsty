@@ -1,0 +1,40 @@
+// Folio's base stylesheet (SPEC §5.1): the lowest origin of the cascade,
+// below every component default, theme and project stylesheet, which
+// restyle only what they change. It gives every build a readable default,
+// in the spirit of a printed school handout. Lengths are in `em`, so they
+// follow the font size a project chooses.
+//
+// It uses only properties the stages read: a declaration that has no
+// effect yet would be reported in every build.
+
+// The document's title, set above its body.
+doc > title { font-size: 1.6em; font-weight: bold; space-after: 1em; keep-with-next: true; }
+
+// Headings: bold, sized by level, with more space above than below, and
+// kept with what follows.
+heading { font-weight: bold; space-before: 1.2em; space-after: 0.5em; keep-with-next: true; }
+heading[level=1] { font-size: 1.4em; }
+heading[level=2] { font-size: 1.2em; }
+
+// Paragraphs are separated by space, not indented.
+paragraph { space-before: 0.5em; space-after: 0.5em; }
+
+// Lists are indented and set apart from the text around them; their items
+// are closer together than paragraphs.
+list, enum, terms { space-before: 0.5em; space-after: 0.5em; padding: 0pt 0pt 0pt 1.5em; }
+list-item > paragraph, enum-item > paragraph, terms-item > paragraph {
+  space-before: 0.2em; space-after: 0.2em;
+}
+terms-item > term { font-weight: bold; }
+
+// Figures stand apart from the text.
+figure { space-before: 1em; space-after: 1em; }
+
+// `strong` and `emph` say what text is (SPEC §4.3); this is how it looks.
+strong { font-weight: bold; }
+emph { font-style: italic; }
+
+// Code in a monospaced face, slightly smaller so that it does not look
+// heavier than the text around it. New Computer Modern, the initial
+// font, sets the characters Source Code Pro lacks.
+raw { font: "Source Code Pro", "New Computer Modern"; font-size: 0.9em; }
