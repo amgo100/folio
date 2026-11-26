@@ -201,12 +201,9 @@ impl Cache {
                     self.hits.fetch_add(1, Ordering::Relaxed);
                     out[i] = Some(entry.layout.clone());
                 } else if let Some(&m) = missing.get(&key) {
-                    // Broken once, and then found like a paragraph in the
-                    // cache.
-                    self.hits.fetch_add(1, Ordering::Relaxed);
+                    // Broken once; counted when its lines are.
                     targets[m].push(i);
                 } else {
-                    self.misses.fetch_add(1, Ordering::Relaxed);
                     missing.insert(key.clone(), misses.len());
                     misses.push(Job {
                         key,
@@ -219,6 +216,16 @@ impl Cache {
         }
 
         folio_text::Cache::parallel(misses, Job::run, &mut |m, job, layout| {
+            // The first paragraph was broken; the others with its key are
+            // found in the cache, as they would be one after another, when
+            // its lines are kept.
+            let (found, broken) = if layout.optimal {
+                (targets[m].len() - 1, 1)
+            } else {
+                (0, targets[m].len())
+            };
+            self.hits.fetch_add(found as u64, Ordering::Relaxed);
+            self.misses.fetch_add(broken as u64, Ordering::Relaxed);
             let layout = Arc::new(layout);
             let layout = if layout.optimal {
                 lock(&self.entries)

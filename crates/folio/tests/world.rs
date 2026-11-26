@@ -429,6 +429,25 @@ fn a_panic_in_a_query_is_a_diagnostic_in_a_long_lived_world() {
     assert!(!fixed.has_errors(), "{:?}", fixed.diagnostics);
     assert!(fixed.output.is_some());
     assert_ne!(fixed.output, good.output);
+
+    // A build the manifest no longer declares is forgotten once another
+    // compiles, so it keeps no output if it comes back.
+    let markscheme = Name::new("markscheme").unwrap();
+    let without_exam = MANIFEST.replace("[variants.exam]\ntargets = [\"pdf\", \"docx\"]\n", "");
+    assert_ne!(without_exam, MANIFEST);
+    world.set_manifest(&without_exam).unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, Some(&markscheme)).unwrap();
+    assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+    world.set_manifest(MANIFEST).unwrap();
+    world.set_source("main.fol", "= Momentum\n").unwrap();
+    armed.store(true, Ordering::SeqCst);
+    let failed = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(
+        failed.diagnostics[0].code.as_deref(),
+        Some("internal-error")
+    );
+    assert_eq!(failed.output, None);
+    assert!(failed.sources.is_empty());
 }
 
 #[test]

@@ -87,9 +87,17 @@ impl Kept {
         self.lock().get(build).cloned().unwrap_or_default()
     }
 
-    /// Updates what is kept of a build.
-    pub(crate) fn update(&self, build: (Option<Name>, Target), f: impl FnOnce(&mut Last)) {
-        f(self.lock().entry(build).or_default());
+    /// Updates what is kept of a build, and forgets the builds that are
+    /// not among `builds`, the builds the manifest declares now.
+    pub(crate) fn update(
+        &self,
+        build: (Option<Name>, Target),
+        builds: &[(Option<Name>, Target)],
+        f: impl FnOnce(&mut Last),
+    ) {
+        let mut kept = self.lock();
+        kept.retain(|build, _| builds.contains(build));
+        f(kept.entry(build).or_default());
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<(Option<Name>, Target), Last>> {

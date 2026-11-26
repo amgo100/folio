@@ -102,7 +102,7 @@ pub fn compile(
     let build = (variant.cloned(), target);
     match isolate(|| compile_now(world, target, variant))? {
         Ok(compiled) => {
-            kept.update(build, |last| {
+            kept.update(build, &world.builds(), |last| {
                 last.sources = compiled.sources.clone();
                 last.files = compiled.files.clone();
                 if compiled.output.is_some() {
@@ -166,7 +166,7 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
     let build = (variant.cloned(), target);
     match isolate(|| check_now(world, target, variant))? {
         Ok(checked) => {
-            kept.update(build, |last| {
+            kept.update(build, &world.builds(), |last| {
                 last.sources = checked.sources.clone();
                 last.files = checked.files.clone();
                 last.writes = checked.writes;
