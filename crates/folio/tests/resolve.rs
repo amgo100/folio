@@ -382,3 +382,28 @@ fn hanging_markers_are_not_laid_out_yet() {
     // The marker stays in the line.
     assert_eq!(paragraphs(&world), ["1.~One", "Two"]);
 }
+
+#[test]
+fn the_resolution_is_public() {
+    let world = world(
+        "en",
+        NUMBERED,
+        "= Motion <sec:motion>\n\n#figure[Ball][Path.] <fig:ball>\n\nSee @fig:ball.\n",
+    );
+    let resolution = folio::resolve(&world, Target::Pdf, None).unwrap().unwrap();
+    let counters: Vec<&str> = resolution
+        .numbers
+        .iter()
+        .map(|n| n.counter.as_str())
+        .collect();
+    assert_eq!(counters, ["heading", "figure"]);
+    let figure = resolution.label("fig:ball").unwrap();
+    assert_eq!(
+        resolution.number(figure.target).unwrap().number.as_deref(),
+        Some("1")
+    );
+    let reference = &resolution.references[0];
+    assert_eq!(reference.target, Some(figure.target));
+    assert_eq!(reference.text, "Figure\u{a0}1");
+    assert_eq!(resolution.reference(reference.location), Some(reference));
+}
