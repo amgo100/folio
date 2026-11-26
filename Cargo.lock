@@ -710,9 +710,12 @@ dependencies = [
  "folio",
  "folio-component",
  "folio-fonts",
+ "folio-preview",
  "folio-render",
  "folio-syntax",
  "gungraun",
+ "tempfile",
+ "tokio-tungstenite",
 ]
 
 [[package]]

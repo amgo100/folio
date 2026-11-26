@@ -9,7 +9,12 @@
 //! It reports three tables:
 //!
 //! - the scenarios: each runs once to warm up, then `N` times (20 by
-//!   default), and its 95th percentile is compared with its bounds;
+//!   default), and its 95th percentile is compared with its bounds. The
+//!   M1 exit check, the preview updated within 80 ms of an edit, is
+//!   `watch-edit`: the exam of the test corpus served by `folio watch`'s
+//!   preview ([`folio_preview`]), an edit written to disk, and the time
+//!   until a websocket client has received the display lists of the pages
+//!   it changed;
 //! - the stages of the reference document's builds: how long each query
 //!   from evaluation to emit takes in a full compile, after a one-word
 //!   edit and after a stylesheet edit, measured by running the public
@@ -28,12 +33,17 @@
 
 #![forbid(unsafe_code)]
 
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use folio::{BuildMode, Name, Target, World};
 use folio_testkit::corpus::Project;
+use folio_preview::{Event, Preview};
+use folio_testkit::corpus;
 use folio_testkit::refdoc::{self, Edit, Spec};
+use tokio_tungstenite::tungstenite::{self, Message, WebSocket};
 
 /// What a scenario is measured against.
 #[derive(Debug, Copy, Clone)]
@@ -78,6 +88,120 @@ enum Prepared {
     Project(Project),
     /// A compiled world and an edit to make to it.
     Compiled(World, Edit),
+    /// A project served by the preview, with a client that has every page.
+    Watching(Box<Watching>),
+}
+
+/// A copy of a corpus project served by the preview, with a websocket
+/// client that has received every page, and an edit to write to disk.
+struct Watching {
+    /// Removed, with the copy, when the run ends.
+    _dir: tempfile::TempDir,
+    _preview: Preview,
+    client: WebSocket<TcpStream>,
+    /// The revision the client has.
+    revision: u64,
+    /// The file to edit, and its text after the edit.
+    file: PathBuf,
+    edited: String,
+}
+
+/// The corpus project that `watch-edit` previews: the exam, until the
+/// acceptance exam replaces it (#57).
+const WATCHED: &str = "exam";
+
+/// The edit `watch-edit` writes: a number in a question on the second
+/// page.
+const WATCH_EDIT: (&str, &str) = ("weight 260 N", "weight 261 N");
+
+/// Copies a directory into another, recursively.
+fn copy_dir(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).expect("a readable corpus") {
+        let entry = entry.expect("a readable corpus");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            std::fs::create_dir(&target).expect("a temporary directory");
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("a temporary copy");
+        }
+    }
+}
+
+/// Serves a copy of [`WATCHED`] with `folio watch`'s preview, watching the
+/// disk, and connects a client that receives every page.
+fn watching() -> Prepared {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    copy_dir(&corpus::dir().join(WATCHED), dir.path());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let options = folio_preview::Options::new(dir.path())
+        .system_fonts(false)
+        .on_event(move |event| {
+            if let Event::Updated(update) = event {
+                let _ = tx.send(update.revision);
+            }
+        });
+    let preview = Preview::start(options).expect("the preview starts");
+    let revision = rx.recv().expect("the first revision");
+    let url = format!("ws://{}/ws?token={}", preview.addr(), preview.token());
+    let stream = TcpStream::connect(preview.addr()).expect("the server");
+    let (mut client, _) = tungstenite::client(url, stream).expect("the websocket opens");
+    while received(&mut client) < revision {}
+    let file = dir.path().join("main.fol");
+    let text = std::fs::read_to_string(&file).expect("the entry file");
+    assert!(text.contains(WATCH_EDIT.0), "the edit's text is in the exam");
+    let edited = text.replacen(WATCH_EDIT.0, WATCH_EDIT.1, 1);
+    Prepared::Watching(Box::new(Watching {
+        _dir: dir,
+        _preview: preview,
+        client,
+        revision,
+        file,
+        edited,
+    }))
+}
+
+/// Reads one revision from the preview's websocket, to its `done`
+/// message; returns the revision and how many pages' display lists came.
+fn received_lists(client: &mut WebSocket<TcpStream>) -> (u64, usize) {
+    let mut lists = 0;
+    loop {
+        match client.read().expect("the preview's messages") {
+            Message::Binary(_) => lists += 1,
+            Message::Text(text) if text.starts_with(r#"{"type":"done""#) => {
+                let revision = text
+                    .trim_end_matches('}')
+                    .rsplit(':')
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .expect("a revision");
+                return (revision, lists);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// [`received_lists`]: the revision only.
+fn received(client: &mut WebSocket<TcpStream>) -> u64 {
+    received_lists(client).0
+}
+
+/// Writes the edit to disk and waits until the client has the display
+/// lists of the pages it changed: the preview path of `folio watch`.
+/// Returns how many pages were sent, and panics when none were.
+fn watch_after_edit(prepared: Prepared) -> usize {
+    let Prepared::Watching(mut watching) = prepared else {
+        unreachable!("set up as a watched project")
+    };
+    std::fs::write(&watching.file, &watching.edited).expect("the edit is written");
+    loop {
+        let (revision, lists) = received_lists(&mut watching.client);
+        if revision > watching.revision {
+            assert!(lists > 0, "the edit changed a page");
+            return lists;
+        }
+    }
 }
 
 /// A world of a project that has compiled its PDF, and an edit to make.
@@ -251,6 +375,16 @@ fn scenarios() -> Vec<Scenario> {
             run: preview_after_edit,
         },
         Scenario {
+            name: "watch-edit",
+            what: "the corpus exam in `folio watch`, an edit on disk to changed display lists",
+            bounds: Some(Bounds {
+                gated: true,
+                ..PREVIEW
+            }),
+            setup: watching,
+            run: watch_after_edit,
+        },
+        Scenario {
             name: "check-edit",
             what: "100 pages, a one-word edit in the middle, checked without emit",
             bounds: None,
@@ -314,6 +448,7 @@ fn stage_times(prepared: Prepared) -> [Duration; STAGES.len()] {
             let took = time(|| apply(&edit, &mut world));
             (world, took)
         }
+        Prepared::Watching(_) => unreachable!("stages are timed on worlds"),
     };
     let target = Target::Pdf;
     [

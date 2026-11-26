@@ -25,7 +25,7 @@ from the scripts in `scripts/`.
 | Before every push | `scripts/check.sh` | Build, every test (golden files, fuzz regressions and seeds on stable, determinism, PDF/UA-1), clippy, rustfmt, rustdoc, the wasm32 build of `folio-render`, MSRV, cargo-deny for both workspaces. |
 | Before pushing a branch, and after each merge to main | `scripts/bench.sh` | The regression gate: instruction counts of the benchmarks against where the branch started; fails above 3%. Needs Valgrind and `gungraun-runner`. |
 | On a schedule (nightly or weekly) | `scripts/fuzz.sh [seconds]` | The fuzz smoke job: each target for 60 s by default. Needs nightly Rust and `cargo-fuzz`. |
-| Nightly, on the reference machine | `scripts/bench.sh --wall` | Wall-clock times of the M0 exit check (gated: 200 ms) and of the reference document against the targets of SPEC §14.1 (reported). |
+| Nightly, on the reference machine | `scripts/bench.sh --wall` | Wall-clock times of the M0 exit check (gated: 200 ms), the M1 exit check through `folio watch` (gated: 80 ms) and of the reference document against the targets of SPEC §14.1 (reported). |
 | After changes to PDF output | `python tests/pdf/corpus.py` | veraPDF's PDF/UA-1 profile and text extraction (`tests/pdf/README.md`). |
 
 A schedule is up to the machine that runs it, for example a `cron` entry
@@ -151,7 +151,12 @@ check and gathers the diagnostics.
 the limits of SPEC §14.1 and §15:
 
 - scenarios, each run 20 times after a warm-up and judged by its 95th
-  percentile: the M0 exit check (gated: 200 ms); the reference document's
+  percentile: the M0 exit check (gated: 200 ms); the M1 exit check
+  (`watch-edit`, gated: 80 ms), which serves the corpus exam with `folio
+  watch`'s preview (`folio-preview`), watching a temporary copy on disk,
+  writes a one-word edit to it and times until a websocket client has the
+  display lists of the pages the edit changed (#57 points it at the
+  acceptance exam); the reference document's
   full compile, one-word edit to PDF, one-word edit to the pages (the
   preview of the M1 exit check: 80 ms), one-word edit checked without
   emit (reported only), stylesheet edit, and the ratio of
