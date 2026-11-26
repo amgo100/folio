@@ -102,8 +102,10 @@ pub struct Pages {
     /// again when a font file changes.
     pub hashes: EcoVec<u64>,
     /// The page numbers the build's page-number references were set with
-    /// (SPEC §2.3): of the layout pass before this one. Empty when the
-    /// build has none.
+    /// (SPEC §2.3): those its layout pass was keyed by, or those the
+    /// fixpoint settled on for the build itself. Empty when the build has
+    /// none. The fixpoint keeps its own record of them; these tell a
+    /// reader of the pages which numbers they show.
     pub page_refs: PageNumbers,
 }
 
@@ -114,15 +116,22 @@ impl Pages {
     /// in its paragraph's lines without a box of its own. This is the map
     /// from locations to pages that page-number references read.
     pub fn pages_of(&self, targets: &[Location]) -> Vec<Option<usize>> {
+        // Each target's index, looked up but never iterated.
+        let mut index_of: HashMap<Location, Vec<usize>> = HashMap::new();
+        for (i, target) in targets.iter().enumerate() {
+            index_of.entry(*target).or_default().push(i);
+        }
         let mut found: Vec<Option<usize>> = vec![None; targets.len()];
+        let mut left = targets.len();
         for (index, page) in self.pages.iter().enumerate() {
-            if found.iter().all(Option::is_some) {
+            if left == 0 {
                 break;
             }
             visit(&page.fragment, &mut |location| {
-                for (target, page) in targets.iter().zip(&mut found) {
-                    if page.is_none() && *target == location {
-                        *page = Some(index);
+                if let Some(indices) = index_of.remove(&location) {
+                    for i in indices {
+                        found[i] = Some(index);
+                        left -= 1;
                     }
                 }
             });
@@ -319,9 +328,10 @@ impl Debug for Regions<'_> {
 /// [`lines`] is to leave them to it once masters vary.
 ///
 /// The pages carry the page numbers their page-number references were set
-/// with, which the fixpoint compares with where the pages put each target
-/// ([`crate::pipeline::settle`]). A layout pass of the fixpoint reports
-/// nothing: the build reports what its own layout finds.
+/// with ([`Pages::page_refs`]); the fixpoint finds where they put each
+/// target ([`Pages::pages_of`], [`crate::pipeline::settle`]). A layout
+/// pass of the fixpoint reports nothing here: the build reports what its
+/// own layout finds.
 #[salsa::tracked(returns(ref))]
 pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     // The lines at the master's widths, broken in parallel: what the page

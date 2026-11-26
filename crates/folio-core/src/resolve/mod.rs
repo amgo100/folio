@@ -249,11 +249,6 @@ impl Resolution {
         Some(&self.references[*self.index.references.get(&location)?])
     }
 
-    /// Whether the build has page-number references.
-    pub fn has_page_refs(&self) -> bool {
-        self.references.iter().any(|r| r.page.is_some())
-    }
-
     /// The targets of the page-number references, each once, in the order
     /// they are first referred to.
     pub fn page_targets(&self) -> Vec<Location> {
