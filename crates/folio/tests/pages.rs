@@ -3,6 +3,7 @@
 //! orphans as costs, forced breaks, impossible constraints, the box model
 //! of blocks, and the page cache across edits.
 
+use folio::layout::{PageCache, PageStats, Regions};
 use folio::{
     Abs, Diagnostic, Fragment, FragmentItem, LineRef, Page, Pages, Point, Severity, SourceRef,
     Target, Text, World,
@@ -734,4 +735,193 @@ fn odd_and_even_page_breaks_pad_with_blank_pages() {
         heads,
         [s("Intro."), None, s("One"), None, s("Three"), s("Four")]
     );
+}
+
+/// The pages of a world built by [`folio::layout::paginate`] in regions
+/// that test hooks change, with caches of their own.
+fn paginate(world: &World, regions: Regions<'_>, cache: &PageCache) -> Pages {
+    let styled = folio::styles(world, Target::Pdf, None).unwrap().unwrap();
+    let lines = folio::lines(world, Target::Pdf, None).unwrap().unwrap();
+    let fonts = folio::fonts(world).unwrap();
+    folio::layout::paginate(
+        &text(world),
+        &lines,
+        &styled,
+        &fonts,
+        &folio::layout::Cache::new(),
+        cache,
+        regions,
+    )
+}
+
+/// The body of a page: its one group.
+fn body(page: &Page) -> &Fragment {
+    match &page.fragment.items[0].1 {
+        FragmentItem::Group(body) => body,
+        _ => panic!("a page holds its body"),
+    }
+}
+
+/// Every line of a build, in order, as its pages hold them.
+fn all_lines(pages: &Pages) -> Vec<LineRef> {
+    pages
+        .pages
+        .iter()
+        .flat_map(|p| p.lines.iter().copied())
+        .collect()
+}
+
+#[test]
+fn pages_without_hooks_are_those_of_the_query() {
+    let world = world("", &document(6));
+    let cache = PageCache::new();
+    let built = paginate(&world, Regions::default(), &cache);
+    assert_eq!(built, pages(&world));
+    // The same flow again is the same pages, every one from the cache.
+    let misses = cache.stats().misses;
+    assert_eq!(misses, built.pages.len() as u64);
+    assert_eq!(paginate(&world, Regions::default(), &cache), built);
+    assert_eq!(cache.stats().misses, misses);
+}
+
+#[test]
+fn space_reserved_at_a_page_foot_moves_lines_to_the_next_page() {
+    let world = world("", &document(6));
+    let before = pages(&world);
+    let height = before.master.body.size.height;
+    let first = &before.pages[0].lines;
+    assert!(first.len() > 10, "{first:?}");
+
+    // A line in the middle of the first page reserves a third of the body,
+    // as a footnote would: it stays, and the lines that no longer fit
+    // above the reserved space move to the next page.
+    let anchor = first[first.len() / 2];
+    let third = height / 3.0;
+    let reserve = |line: LineRef| {
+        if line == anchor { third } else { Abs::zero() }
+    };
+    let regions = Regions {
+        reserve: Some(&reserve),
+        ..Regions::default()
+    };
+    let after = paginate(&world, regions, &PageCache::new());
+    let page = &after.pages[0];
+    assert!(page.lines.contains(&anchor));
+    assert!(page.lines.len() < first.len());
+    assert_eq!(page.lines[..], first[..page.lines.len()]);
+    assert!(body(page).last_baseline <= height - third);
+    // The next line would not have fitted: the old page held it lower.
+    let moved = first[page.lines.len()];
+    assert_eq!(after.pages[1].lines[0], moved);
+    // No line is lost or repeated.
+    assert_eq!(all_lines(&after), all_lines(&before));
+
+    // A line that would not fit above its own reserve moves with it.
+    let last = *first.last().unwrap();
+    let reserve = |line: LineRef| {
+        if line == last { third } else { Abs::zero() }
+    };
+    let regions = Regions {
+        reserve: Some(&reserve),
+        ..Regions::default()
+    };
+    let after = paginate(&world, regions, &PageCache::new());
+    assert!(!after.pages[0].lines.contains(&last));
+    assert!(after.pages[1].lines.contains(&last));
+    assert!(body(&after.pages[1]).last_baseline <= height - third);
+    assert_eq!(all_lines(&after), all_lines(&before));
+}
+
+#[test]
+fn a_paragraph_is_broken_at_the_width_of_the_region_it_starts_in() {
+    let world = world("", &document(6));
+    let before = pages(&world);
+    let lines = folio::lines(&world, Target::Pdf, None).unwrap().unwrap();
+    let full = before.master.body.size.width;
+    let narrow = full - Abs::pt(120.0);
+    let width = |page: usize| if page == 0 { narrow } else { full };
+    let regions = Regions {
+        width: Some(&width),
+        ..Regions::default()
+    };
+    let after = paginate(&world, regions, &PageCache::new());
+
+    let page = &after.pages[0];
+    assert_eq!(body(page).size.width, narrow);
+    // Every line of the first page ends within the narrower body.
+    fn right(fragment: &Fragment, x: Abs, out: &mut Abs) {
+        for (pos, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(group) => right(group, x + pos.x, out),
+                FragmentItem::Text(run) => *out = (*out).max(x + pos.x + run.width()),
+                FragmentItem::Shape { .. } => {}
+            }
+        }
+    }
+    let mut edge = Abs::zero();
+    right(body(page), Abs::zero(), &mut edge);
+    assert!(edge.to_pt() <= narrow.to_pt() + 0.01, "{edge:?}");
+    let count =
+        |pages: &Pages, p: usize| all_lines(pages).iter().filter(|l| l.paragraph == p).count();
+    // The paragraphs that start on the first page have more lines than in
+    // the full width; one that continues onto the second page keeps them.
+    let starting: Vec<usize> = page
+        .lines
+        .iter()
+        .filter(|l| l.line == 0)
+        .map(|l| l.paragraph)
+        .collect();
+    let prose = starting
+        .iter()
+        .copied()
+        .filter(|&p| lines.paragraphs[p].lines.len() > 2)
+        .collect::<Vec<_>>();
+    assert!(!prose.is_empty());
+    for p in prose {
+        assert!(count(&after, p) > lines.paragraphs[p].lines.len(), "{p}");
+    }
+    // Paragraphs that start on later pages have their full-width lines.
+    let later = after.pages[2].lines[0].paragraph + 1;
+    for p in later..lines.paragraphs.len() {
+        assert_eq!(count(&after, p), lines.paragraphs[p].lines.len(), "{p}");
+    }
+}
+
+#[test]
+fn pages_are_cached_by_the_state_coming_into_them() {
+    let world = world("", &document(6));
+    let cache = PageCache::new();
+    let plain = paginate(&world, Regions::default(), &cache);
+    let n = plain.pages.len() as u64;
+    assert_eq!(cache.stats(), PageStats { hits: 0, misses: n });
+
+    // A reserve on the second page changes where the third starts. What
+    // lines reserve is part of a page's key, so with a hook every page is
+    // broken again, the first too.
+    let anchor = plain.pages[1].lines[3];
+    let reserve = |line: LineRef| {
+        if line == anchor {
+            Abs::pt(100.0)
+        } else {
+            Abs::zero()
+        }
+    };
+    let regions = Regions {
+        reserve: Some(&reserve),
+        ..Regions::default()
+    };
+    let reserved = paginate(&world, regions, &cache);
+    assert_ne!(reserved.pages[2].lines[0], plain.pages[2].lines[0]);
+    // The same hook again finds them all.
+    let stats = cache.stats();
+    assert_eq!(stats.hits, 0);
+    let again = paginate(&world, regions, &cache);
+    assert_eq!(again, reserved);
+    assert_eq!(cache.stats().misses, stats.misses);
+
+    // Pages that start at other lines of the same paragraphs did not
+    // replace the ones without a reserve: those are all still found.
+    let hits = cache.stats().hits;
+    assert_eq!(paginate(&world, Regions::default(), &cache), plain);
+    assert_eq!(cache.stats().hits, hits + n);
 }

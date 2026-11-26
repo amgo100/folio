@@ -1,13 +1,16 @@
 //! The flow of a build (SPEC §7.1): its blocks and lines flattened into
 //! what the page builder breaks.
 //!
-//! The flow is a sequence of *leaves*, the things a page holds whole (the
-//! lines of paragraphs, and empty blocks), with a *boundary* before each
-//! and one after the last. A boundary says what lies between two leaves:
-//! the leading between lines, and where blocks end and start, their
-//! padding, borders and spaces. It also says what a page break there costs.
-//! Pages break only at boundaries, so a line is never split, and the page
-//! builder decides by these costs alone.
+//! The flow is a sequence of *leaves* (paragraphs, and empty blocks), with
+//! a *boundary* before each and one after the last. A boundary says what
+//! lies between two leaves: where blocks end and start, their padding,
+//! borders and spaces, and half the leading of the paragraphs on either
+//! side. It also says what a page break there costs. The page builder
+//! breaks each paragraph into lines at the width of the region it starts
+//! in ([`ParagraphInfo::at_width`]), and the boundaries between its lines
+//! ([`Item::between`]) hold the leading and what a break between them
+//! costs. Pages break only at boundaries, so a line is never split, and
+//! the page builder decides by these costs alone.
 //!
 //! **Spaces.** `space-after` and `space-before` meet at a boundary and
 //! collapse to the largest of the spaces that meet, unless padding or a
@@ -45,7 +48,7 @@ use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
 use super::master::{BlockBox, BreakBefore};
-use super::paragraph::{LineSlot, ParagraphLayout};
+use super::paragraph::{LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics};
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
@@ -94,15 +97,20 @@ pub(super) fn slots(
     out
 }
 
-/// A paragraph broken into lines, with what setting its lines needs.
+/// A paragraph broken into lines, with what breaking it at another width
+/// and setting its lines needs.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(super) struct ParagraphInfo {
     /// The paragraph shaped.
     pub shaped: Arc<Shaped>,
-    /// Its lines.
+    /// Its lines, broken at the width of `slot`.
     pub layout: Arc<ParagraphLayout>,
     /// The slot its lines are placed in, from the left of the body.
     pub slot: LineSlot,
+    /// What the paragraph builder reads of its style.
+    pub style: ParagraphStyle,
+    /// What the paragraph builder reads of each of its segments.
+    pub metrics: EcoVec<SegmentMetrics>,
     /// The space between one line's descent and the next line's ascent.
     pub leading: Abs,
     /// The indent of the first line.
@@ -137,6 +145,49 @@ pub(super) struct SegmentPaint {
 }
 
 impl ParagraphInfo {
+    /// The paragraph broken into lines in a region `width` wide, whose
+    /// blocks are as much narrower or wider than in the body as the region
+    /// is: itself where that is the width it was broken at, or else broken
+    /// through the line-break cache, with the hyphens its new lines need,
+    /// and shared with the flows that break it at that width too. The
+    /// second value says whether it was broken again.
+    pub(super) fn at_width(
+        self: &Arc<Self>,
+        body: Abs,
+        width: Abs,
+        caches: Caches<'_>,
+    ) -> (Arc<Self>, bool) {
+        if width == body {
+            return (self.clone(), false);
+        }
+        let slot = LineSlot {
+            offset: self.slot.offset,
+            width: (self.slot.width + (width - body)).max(Abs::zero()),
+        };
+        let input = ParagraphInput {
+            shaped: &self.shaped,
+            style: self.style,
+            segments: self.metrics.clone(),
+            objects: EcoVec::new(),
+        };
+        let layout = caches.cache.layout(
+            &input,
+            &[LineSlot {
+                offset: Abs::zero(),
+                width: slot.width,
+            }],
+            None,
+        );
+        let segments = paints(caches.cache, &self.shaped, &layout, &self.segments);
+        let info = Self {
+            layout,
+            slot,
+            segments,
+            ..(**self).clone()
+        };
+        (caches.shared.paragraph(info, caches.now), true)
+    }
+
     /// The source of the bytes `range` of the paragraph's text, as a glyph
     /// that shows them names it ([`folio_component::Glyph::source`]): the
     /// node the first byte comes from, with the bytes of its text that the
@@ -174,41 +225,24 @@ fn offset(at: usize) -> u32 {
     u32::try_from(at).unwrap_or(u32::MAX)
 }
 
-/// What a page holds whole.
+/// A leaf of the flow.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(super) enum Leaf {
-    /// A line of a paragraph.
-    Line {
-        /// The paragraph.
-        paragraph: Arc<ParagraphInfo>,
-        /// The index of the line.
-        line: usize,
-    },
+    /// A paragraph, which the page builder breaks into lines.
+    Paragraph(Arc<ParagraphInfo>),
     /// A block without lines, which is as tall as its padding and borders.
     Empty,
 }
 
 impl Leaf {
-    /// How tall it is: a line from its ascent to its descent.
-    pub(super) fn height(&self) -> Abs {
-        match self {
-            Self::Line { paragraph, line } => {
-                let line = &paragraph.layout.lines[*line];
-                line.ascent + line.descent
-            }
-            Self::Empty => Abs::zero(),
-        }
-    }
-
     /// A cheap fingerprint for looking it up: equal leaves of the same
     /// shared paragraph have equal ones.
     pub(super) fn fingerprint(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         match self {
-            Self::Line { paragraph, line } => {
+            Self::Paragraph(paragraph) => {
                 (Arc::as_ptr(&paragraph.layout) as usize).hash(&mut hasher);
                 (Arc::as_ptr(&paragraph.shaped) as usize).hash(&mut hasher);
-                line.hash(&mut hasher);
             }
             Self::Empty => 0u8.hash(&mut hasher),
         }
@@ -374,18 +408,42 @@ pub(super) struct Item {
     /// The blocks it is in, outermost first, each with the location of the
     /// element instance it is the box of.
     pub stack: EcoVec<(Arc<BlockBox>, Location)>,
+    /// What a break inside the blocks it is in costs, for a break between
+    /// the lines of a paragraph: no parts, only the penalty and
+    /// constraints of its `keep-together` and unbreakable blocks.
+    pub inside: Boundary,
+}
+
+impl Item {
+    /// The boundary between lines `line - 1` and `line` of `paragraph`,
+    /// this item's paragraph broken into lines: the leading between them,
+    /// and what a break there costs.
+    pub(super) fn between(&self, paragraph: &ParagraphInfo, line: usize) -> Boundary {
+        let lines = &paragraph.layout.lines;
+        let (above, below) = (&lines[line - 1], &lines[line]);
+        let lead = below.baseline - above.baseline - above.descent - below.ascent;
+        let mut out = Boundary::default();
+        out.parts.push(Part::Lead(lead.max(Abs::zero())));
+        if line < paragraph.orphans {
+            out.penalty += WIDOW;
+            out.constraints.push(Constraint::Orphan(paragraph.span));
+        }
+        if lines.len() - line < paragraph.widows {
+            out.penalty += WIDOW;
+            out.constraints.push(Constraint::Widow(paragraph.span));
+        }
+        out.penalty += self.inside.penalty;
+        out.constraints
+            .extend(self.inside.constraints.iter().copied());
+        out
+    }
 }
 
 /// Where a leaf comes from, for the pages' line lists.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub(super) enum Origin {
-    /// Line `line` of paragraph `paragraph` of the build's text.
-    Line {
-        /// The paragraph.
-        paragraph: usize,
-        /// The line.
-        line: usize,
-    },
+    /// Paragraph `.0` of the build's text.
+    Paragraph(usize),
     /// An empty block.
     Empty,
 }
@@ -402,9 +460,10 @@ pub(super) struct Flow {
 }
 
 impl Flow {
-    /// Flattens a build's blocks and lines. `layouts` and `slots` hold the
-    /// lines and line slots of each paragraph of `text`; `caches` memoise
-    /// the hyphens they need and share what earlier flows built.
+    /// Flattens a build's blocks and paragraphs. `layouts` and `slots`
+    /// hold the lines and line slots of each paragraph of `text` in a body
+    /// `width` wide; `caches` memoise the hyphens they need and share what
+    /// earlier flows built.
     pub(super) fn new(
         text: &Text,
         caches: Caches<'_>,
@@ -676,59 +735,26 @@ impl Builder<'_> {
             Some(Value::Int(n)) => usize::try_from(*n).unwrap_or(0),
             _ => 0,
         };
-        // The hyphens each segment's lines need: an inserted one at a
-        // line's end, and the explicit one a line repeats at its start.
-        let segments = &paragraph.shaped.paragraph.segments;
-        let mut needs: Vec<Vec<char>> = vec![Vec::new(); segments.len()];
-        let segment_at = |offset: usize| {
-            segments
-                .partition_point(|s| s.range.end < offset)
-                .min(segments.len().saturating_sub(1))
-        };
-        let text = paragraph.shaped.text();
-        for line in &layout.lines {
-            let mut need = |at: usize, c: char| {
-                let list = &mut needs[segment_at(at)];
-                if !list.contains(&c) {
-                    list.push(c);
-                }
-            };
-            if line.hyphen {
-                need(line.content_end, '-');
-            }
-            if line.repeated_hyphen
-                && let Some(c) = text[..line.range.start].chars().next_back()
-            {
-                need(line.range.start, c);
-            }
-        }
-        let cache = self.cache;
-        let paints = paragraph
+        let base: EcoVec<SegmentPaint> = paragraph
             .segments
             .iter()
             .zip(&input.segments)
-            .enumerate()
-            .map(|(i, (seg, metrics))| SegmentPaint {
+            .map(|(seg, metrics)| SegmentPaint {
                 face: seg.face.and_then(|f| u32::try_from(f).ok()),
                 size: metrics.size,
                 tracking: metrics.tracking,
                 fill: fill(&seg.style, self.props),
-                hyphens: needs
-                    .get(i)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|&c| {
-                        let (glyphs, units) = cache.hyphen(segments.get(i)?, c)?;
-                        Some((c, glyphs, units))
-                    })
-                    .collect(),
+                hyphens: EcoVec::new(),
             })
             .collect();
+        let paints = paints(self.cache, &paragraph.shaped, &layout, &base);
         let info = self.shared.paragraph(
             ParagraphInfo {
                 shaped: paragraph.shaped.clone(),
-                layout: layout.clone(),
+                layout,
                 slot: self.slots[index],
+                style,
+                metrics: input.segments,
                 leading: style.leading,
                 indent: style.indent,
                 widows: count("widows"),
@@ -739,26 +765,22 @@ impl Builder<'_> {
             },
             self.now,
         );
-        for line in 0..layout.lines.len() {
-            self.leaf(
-                Leaf::Line {
-                    paragraph: info.clone(),
-                    line,
-                },
-                Origin::Line {
-                    paragraph: index,
-                    line,
-                },
-            );
-        }
+        self.leaf(Leaf::Paragraph(info), Origin::Paragraph(index));
     }
 
     fn leaf(&mut self, leaf: Leaf, origin: Origin) {
         let before = self.boundary(Some(&leaf));
+        let mut inside = Boundary::default();
+        if let Leaf::Paragraph(_) = leaf {
+            for (b, _) in &self.stack {
+                breaking(b, &mut inside);
+            }
+        }
         self.items.push(Item {
             before,
             leaf: leaf.clone(),
             stack: self.stack.clone(),
+            inside,
         });
         self.origins.push(origin);
         self.prev = Some(leaf);
@@ -771,42 +793,7 @@ impl Builder<'_> {
         let mut out = Boundary::default();
         let prev = self.prev.as_ref();
 
-        // Two lines of one paragraph: the next line of the same shared
-        // paragraph. Equal paragraphs share one `Arc` (`Shared`), so two
-        // paragraphs in a row may too; the line numbers tell them apart.
-        if let (
-            Some(Leaf::Line {
-                paragraph: a,
-                line: i,
-            }),
-            Some(Leaf::Line {
-                paragraph: b,
-                line: j,
-            }),
-        ) = (prev, next)
-            && Arc::ptr_eq(a, b)
-            && *j == *i + 1
-            && events.is_empty()
-        {
-            let lines = &a.layout.lines;
-            let (above, below) = (&lines[*i], &lines[*j]);
-            let lead = below.baseline - above.baseline - above.descent - below.ascent;
-            out.parts.push(Part::Lead(lead.max(Abs::zero())));
-            let before = *j;
-            let after = lines.len() - *j;
-            if before < a.orphans {
-                out.penalty += WIDOW;
-                out.constraints.push(Constraint::Orphan(a.span));
-            }
-            if after < a.widows {
-                out.penalty += WIDOW;
-                out.constraints.push(Constraint::Widow(a.span));
-            }
-            self.keeps(&mut out);
-            return out;
-        }
-
-        if let Some(Leaf::Line { paragraph, .. }) = prev {
+        if let Some(Leaf::Paragraph(paragraph)) = prev {
             out.parts.push(Part::Lead(paragraph.leading / 2.0));
         }
         for event in &events {
@@ -841,7 +828,7 @@ impl Builder<'_> {
                 }
             }
         }
-        if let Some(Leaf::Line { paragraph, .. }) = next {
+        if let Some(Leaf::Paragraph(paragraph)) = next {
             out.parts.push(Part::Lead(paragraph.leading / 2.0));
         }
         if prev.is_some() && next.is_some() {
@@ -866,15 +853,70 @@ impl Builder<'_> {
             if !Arc::ptr_eq(a, b) || at != bt {
                 break;
             }
-            if !b.breakable {
-                out.penalty += UNBREAKABLE;
-                out.constraints.push(Constraint::Unbreakable(b.span));
-            } else if b.keep_together {
-                out.penalty += KEEP;
-                out.constraints.push(Constraint::KeepTogether(b.span));
-            }
+            breaking(b, out);
         }
     }
+}
+
+/// Adds the cost of a break inside block `b` to `out`.
+fn breaking(b: &BlockBox, out: &mut Boundary) {
+    if !b.breakable {
+        out.penalty += UNBREAKABLE;
+        out.constraints.push(Constraint::Unbreakable(b.span));
+    } else if b.keep_together {
+        out.penalty += KEEP;
+        out.constraints.push(Constraint::KeepTogether(b.span));
+    }
+}
+
+/// The paints of a paragraph's segments, `base`, with the hyphens that its
+/// lines in `layout` need: an inserted one at a line's end, and the
+/// explicit one a line repeats at its start, each in its segment's font.
+fn paints(
+    cache: &Cache,
+    shaped: &Shaped,
+    layout: &ParagraphLayout,
+    base: &EcoVec<SegmentPaint>,
+) -> EcoVec<SegmentPaint> {
+    let segments = &shaped.paragraph.segments;
+    let mut needs: Vec<Vec<char>> = vec![Vec::new(); segments.len()];
+    let segment_at = |offset: usize| {
+        segments
+            .partition_point(|s| s.range.end < offset)
+            .min(segments.len().saturating_sub(1))
+    };
+    let text = shaped.text();
+    for line in &layout.lines {
+        let mut need = |at: usize, c: char| {
+            let list = &mut needs[segment_at(at)];
+            if !list.contains(&c) {
+                list.push(c);
+            }
+        };
+        if line.hyphen {
+            need(line.content_end, '-');
+        }
+        if line.repeated_hyphen
+            && let Some(c) = text[..line.range.start].chars().next_back()
+        {
+            need(line.range.start, c);
+        }
+    }
+    base.iter()
+        .enumerate()
+        .map(|(i, paint)| SegmentPaint {
+            hyphens: needs
+                .get(i)
+                .into_iter()
+                .flatten()
+                .filter_map(|&c| {
+                    let (glyphs, units) = cache.hyphen(segments.get(i)?, c)?;
+                    Some((c, glyphs, units))
+                })
+                .collect(),
+            ..paint.clone()
+        })
+        .collect()
 }
 
 /// The paint of text in a style: its `color`.
