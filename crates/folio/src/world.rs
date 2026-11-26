@@ -75,10 +75,6 @@ pub(crate) struct Last {
     /// The last output it compiled to: kept across compilations without
     /// output.
     pub output: Option<Bytes>,
-    /// Whether its last check said that compiling it writes a file, as
-    /// [`Checked::writes`](crate::Checked::writes), or its last compilation
-    /// wrote one; `None` before either.
-    pub writes: Option<bool>,
 }
 
 impl Kept {

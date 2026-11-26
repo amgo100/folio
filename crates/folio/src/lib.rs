@@ -110,7 +110,6 @@ pub fn compile(
                 if compiled.output.is_some() {
                     last.output = compiled.output.clone();
                 }
-                last.writes = Some(compiled.output.is_some());
             });
             Ok(compiled)
         }
@@ -169,7 +168,6 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
             kept.update(build, &world.builds(), |last| {
                 last.sources = checked.sources.clone();
                 last.files = checked.files.clone();
-                last.writes = Some(checked.writes);
             });
             Ok(checked)
         }
