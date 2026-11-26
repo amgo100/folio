@@ -8,24 +8,27 @@
 //! formatted:
 //!
 //! - Line ends are `\n`, lines carry no trailing whitespace (line comments
-//!   included; block comments, strings and raw text keep their bytes),
-//!   there is at most one blank line in a row, and a file that is not empty
-//!   starts with its first token, or in markup with its indentation, and
-//!   ends with one newline.
-//! - Lines of code and stylesheets are indented by two spaces for each
-//!   bracket (`{`, `(`, `[`) opened on an earlier line and still open, from
-//!   the indentation of the line that opened it; a line that starts by
-//!   closing a bracket, in markup too, gets the opener's indentation, and the continuation of an item
-//!   that runs over several lines (a declaration, an expression) two more
-//!   spaces. Several brackets opened on one line count once.
+//!   included; block comments, strings, raw text and equations keep their
+//!   bytes), there is at most one blank line in a row, and a file that is
+//!   not empty starts with its first token, or in markup with its
+//!   indentation, and ends with one newline.
+//! - Lines of code and stylesheets are indented by two spaces more than the
+//!   line that opened the innermost bracket (`{`, `(`, `[`) still open, so
+//!   several brackets opened on one line count once. A line that starts by
+//!   closing a bracket, in markup too, takes the opener's indentation. The
+//!   later lines of an item that runs over several lines (a declaration, an
+//!   expression, a selector) are indented two spaces more, except a line
+//!   that starts with `else`; a bracket opened on such a line indents from
+//!   the item's first line.
 //! - Other lines of markup keep their indentation, which is part of their
 //!   meaning (list items nest by it).
 //! - Within a line, a run of spaces becomes one space, except before a
 //!   comment and before the `{` of a rule, which keep the alignment they
-//!   were given. In code and stylesheets a space follows `,`, `;` and the
-//!   `:` of a named argument, declaration or field, surrounds `=` in a binding, `=>`, and the
-//!   combinators `>` and `+` of selectors, and separates the braces of a
-//!   declaration block from what they hold; none goes before `,`, `;` or
+//!   were given. In code and stylesheets a space follows `,` (except in the
+//!   step lists of selectors, `:step(1,3-4)`), `;` and the `:` of a named
+//!   argument, declaration or field, surrounds `=` in a binding, `=>`, and
+//!   the combinators `>` and `+` of selectors, and separates the braces of
+//!   a declaration block from what they hold; none goes before `,`, `;` or
 //!   the `:` of a named argument, after `(` or before `)`.
 //!
 //! Formatting never changes what a file means: the result parses to the same
@@ -491,10 +494,13 @@ impl Walk {
     /// Decides every gap.
     fn run(self) -> Edits {
         let mut edits = Edits::new();
-        // The indentation of the current line.
+        // The indentation of the current line, and that of the line that
+        // started its item when it continues one, which brackets opened on
+        // the line take.
         let mut indent = EcoString::new();
+        let mut item_indent = EcoString::new();
         // The open brackets, each with the indentation of the line that
-        // opened it.
+        // opened it, or of the line that started its item.
         let mut open: Vec<EcoString> = Vec::new();
 
         for (i, gap) in self.gaps.iter().enumerate() {
@@ -510,6 +516,7 @@ impl Walk {
                 _ if !ascii => {
                     if newlines > 0 {
                         indent = trailing_indent(text).into();
+                        item_indent = indent.clone();
                     }
                     None
                 }
@@ -518,12 +525,14 @@ impl Walk {
                 (None, Some(_)) if gap.markup => {
                     let start = text.rfind(crate::is_newline).map_or(0, |at| at + 1);
                     indent = text[start..].into();
+                    item_indent = indent.clone();
                     Some(indent.clone())
                 }
                 (None, _) => Some(EcoString::new()),
                 // The end of the file.
                 (_, None) => Some("\n".into()),
                 (Some(_), Some(next)) if newlines > 0 => {
+                    let mut continued = false;
                     let new_indent: EcoString = if next.closes() && !open.is_empty() {
                         open.last().cloned().unwrap_or_default()
                     } else if gap.markup {
@@ -537,13 +546,19 @@ impl Walk {
                             // An item over several lines: its later lines
                             // are indented once more, unless a bracket it
                             // opened still is, which indents them already.
-                            if gap.continues == Some(open.len()) {
+                            // `else` belongs with its `if`.
+                            if gap.continues == Some(open.len()) && next.kind != SyntaxKind::Else {
+                                item_indent = base.clone();
+                                continued = true;
                                 base.push_str("  ");
                             }
                         }
                         base
                     };
                     indent = new_indent.clone();
+                    if !continued {
+                        item_indent = indent.clone();
+                    }
                     let mut new = EcoString::from(if newlines > 1 { "\n\n" } else { "\n" });
                     new.push_str(&new_indent);
                     Some(new)
@@ -574,7 +589,7 @@ impl Walk {
                 // Each bracket remembers the indentation of the line that
                 // opened it, so several opened on one line count once.
                 if next.opens() {
-                    open.push(indent.clone());
+                    open.push(item_indent.clone());
                 } else if next.closes() {
                     open.pop();
                 }
@@ -654,7 +669,6 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
 
     // One space.
     if matches!(prev.kind, K::Comma | K::Semicolon) && !separated && !next.closes()
-        || prev.kind == K::Semicolon && next.kind == K::RightBrace && !separated && !next.closes()
         || named_colon(prev)
         || binding_eq(prev)
         || binding_eq(next)
@@ -761,6 +775,10 @@ mod tests {
             "@variant a {\n  q {\n    b: c;\n  }\n}\n",
         );
         style(
+            "question\nanswer {\nx: 1;\n}\n",
+            "question\n  answer {\n  x: 1;\n}\n",
+        );
+        style(
             "a {\n  trailer:\n  x y;\n}\n",
             "a {\n  trailer:\n    x y;\n}\n",
         );
@@ -806,6 +824,11 @@ mod tests {
         markup("#{x}\n", "#{ x }\n");
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
+        markup(
+            "#{\n  if a {\n    x\n  }\n  else {\n    y\n  }\n}\n",
+            "#{\n  if a {\n    x\n  }\n  else {\n    y\n  }\n}\n",
+        );
+        markup("#f((\n1))\n", "#f((\n  1))\n");
         markup(
             "#{\n[\n  - a\n  - b\n]\n}\n",
             "#{\n  [\n  - a\n  - b\n  ]\n}\n",

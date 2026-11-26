@@ -12,7 +12,6 @@
 //! there are errors, and with `--check` when a file is not formatted.
 
 use std::fs;
-use std::io::Read as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -137,7 +136,7 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
             continue;
         }
         let text = edits.apply(source.text());
-        match write(&canonical, &root.join(&path), &text) {
+        match write(&canonical, &root.join(&path), source.text(), &text) {
             Ok(()) => formatted.push(path),
             Err(message) => diagnostics.push(error(format!("cannot write {path}: {message}"))),
         }
@@ -156,10 +155,11 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
 const BOM: &str = "\u{FEFF}";
 
 /// Replaces the file at `path`, or the file a link there leads to, with
-/// `text`, through a temporary file beside it that takes the file's
-/// permissions. Keeps a byte order mark the file starts with; refuses a
-/// read-only file.
-fn write(root: &Path, path: &Path, text: &str) -> Result<(), String> {
+/// `text`, the formatted `old`, through a temporary file beside it that
+/// takes the file's permissions. Keeps a byte order mark the file starts
+/// with. Refuses a file that cannot be written to, and one that no longer
+/// holds `old`, which another program changed since it was read.
+fn write(root: &Path, path: &Path, old: &str, text: &str) -> Result<(), String> {
     let file = path.canonicalize().map_err(|e| e.to_string())?;
     if !file.starts_with(root) {
         return Err("it leads out of the project".into());
@@ -167,16 +167,17 @@ fn write(root: &Path, path: &Path, text: &str) -> Result<(), String> {
     let permissions = fs::metadata(&file)
         .map_err(|e| e.to_string())?
         .permissions();
-    if permissions.readonly() {
+    if permissions.readonly() || fs::OpenOptions::new().append(true).open(&file).is_err() {
         return Err("it is read-only".into());
     }
-    let mut start = [0; BOM.len()];
-    let bom = fs::File::open(&file)
-        .and_then(|mut f| f.read_exact(&mut start))
-        .is_ok_and(|()| start == BOM.as_bytes());
-    let bytes = match bom {
-        true => format!("{BOM}{text}"),
-        false => text.to_owned(),
+    let now = fs::read(&file).map_err(|e| e.to_string())?;
+    let (bom, now) = match now.strip_prefix(BOM.as_bytes()) {
+        Some(rest) => (BOM, rest),
+        None => ("", &now[..]),
     };
+    if now != old.as_bytes() {
+        return Err("it changed while it was being formatted".into());
+    }
+    let bytes = format!("{bom}{text}");
     replace(root, &file, bytes.as_bytes(), Some(permissions)).map_err(|e| e.to_string())
 }
