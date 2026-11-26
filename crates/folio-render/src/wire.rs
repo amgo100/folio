@@ -23,11 +23,16 @@
 //!
 //! # Compatibility
 //!
-//! A decoder skips an item whose tag it does not know, and the bytes at
-//! the end of an item's body that it does not read, so a later version of
-//! the format may add commands, and fields at the end of an item, without
-//! a new version. Every other change raises [`VERSION`], and a decoder
-//! rejects a version it does not know.
+//! Every item's body starts with its span, in every version. A decoder
+//! keeps an item whose tag it does not know as [`Command::Unknown`], with
+//! its span and nothing to draw, so that the items keep the indices a span
+//! map names them by; and it skips the bytes at the end of an item's body
+//! that it does not read. A later version of the format may therefore add
+//! commands, and fields at the end of an item, without a new version.
+//! Every other change raises [`VERSION`], and a decoder rejects a version
+//! it does not know.
+//!
+//! [`Command::Unknown`]: crate::Command::Unknown
 
 use std::fmt::{self, Display, Formatter};
 use std::ops::Range;
@@ -36,7 +41,7 @@ use folio_component::{Color, FillRule, FontId, LineCap, LineJoin, SourceRef};
 
 use crate::list::{
     Command, DisplayList, GlyphItem, Glyphs, Item, PathShape, Point, Rect, Segment, Span, SpanMap,
-    Stroke,
+    Stroke, Unknown,
 };
 
 /// The magic bytes every message starts with.
@@ -98,6 +103,7 @@ pub fn encode(list: &DisplayList) -> Vec<u8> {
                 body.rect(*rect);
                 TAG_BOX
             }
+            Command::Unknown(unknown) => unknown.tag,
         };
         w.uint(tag);
         w.uint(body.buf.len() as u64);
@@ -519,16 +525,15 @@ impl<'a> Reader<'a> {
                 bytes: self.take(len)?,
                 pos: 0,
             };
-            if !matches!(tag, TAG_GLYPHS | TAG_PATH | TAG_FRAME | TAG_BOX) {
-                // A command of a later version of the format.
-                continue;
-            }
             let span = body.span()?;
             let command = match tag {
                 TAG_GLYPHS => Command::Glyphs(body.glyphs(span.source)?),
                 TAG_PATH => Command::Path(body.path()?),
                 TAG_FRAME => Command::Frame(body.rect()?),
-                _ => Command::Box(body.rect()?),
+                TAG_BOX => Command::Box(body.rect()?),
+                // A command of a later version of the format: its span is
+                // kept, the rest of its body skipped.
+                tag => Command::Unknown(Unknown { tag }),
             };
             items.push(Item { command, span });
         }

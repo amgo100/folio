@@ -88,6 +88,25 @@ pub enum Command {
     /// The box of a nested fragment. Nothing is drawn: it is there for the
     /// span map, so hit-testing finds the element whose box a point is in.
     Box(Rect),
+    /// An item of a kind that a later version of the wire format added,
+    /// which this version decodes without knowing what it draws. Nothing
+    /// is drawn; it keeps its place and its span, so that the indices of
+    /// the items match those of a span map the newer encoder sends.
+    Unknown(Unknown),
+}
+
+/// An item of a kind this version of the wire format does not know
+/// ([`Command::Unknown`]). Only the decoder makes one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unknown {
+    pub(crate) tag: u64,
+}
+
+impl Unknown {
+    /// The item's tag in the wire format.
+    pub fn tag(&self) -> u64 {
+        self.tag
+    }
 }
 
 /// A rectangle.
@@ -398,6 +417,7 @@ impl DisplayList {
                         });
                     }
                 }
+                Command::Unknown(_) => {}
             }
         }
         hits

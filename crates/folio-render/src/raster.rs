@@ -249,7 +249,7 @@ pub fn render(
                 };
                 path(&mut pixmap, &frame, scale);
             }
-            Command::Box(_) => {}
+            Command::Box(_) | Command::Unknown(_) => {}
         }
     }
     let rgba = pixmap

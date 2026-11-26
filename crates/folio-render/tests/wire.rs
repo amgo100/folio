@@ -288,7 +288,8 @@ fn counts_cannot_exceed_the_input() {
 }
 
 /// A later version may add commands and append fields to an item: this
-/// decoder skips both.
+/// decoder keeps an unknown command as a placeholder with its span, and
+/// skips appended fields.
 #[test]
 fn later_additions_are_skipped() {
     let list = sample();
@@ -301,13 +302,37 @@ fn later_additions_are_skipped() {
 
     let mut extended = head.to_vec();
     extended[15] = 2;
-    // An unknown command with a body of three bytes.
+    // An unknown command: its span (node 1, instance 2) and a byte more.
     extended.extend([42, 3, 1, 2, 3]);
     // The box with a field appended.
     extended.extend([3, (body_len + 2) as u8]);
     extended.extend(body);
     extended.extend([0xaa, 0xbb]);
-    assert_eq!(wire::decode(&extended), Ok(Message::List(list)));
+    let Ok(Message::List(decoded)) = wire::decode(&extended) else {
+        panic!("the extended list does not decode");
+    };
+    assert_eq!(decoded.items.len(), 2);
+    let Command::Unknown(unknown) = &decoded.items[0].command else {
+        panic!("a placeholder for the unknown command");
+    };
+    assert_eq!(unknown.tag(), 42);
+    assert_eq!(
+        decoded.items[0].span,
+        Span {
+            source: SourceRef(1),
+            instance: 2
+        }
+    );
+    assert_eq!(decoded.items[1], list.items[0]);
+    assert!(decoded.hit(2.0, 3.0).iter().all(|hit| hit.item == 1));
+    assert_eq!(
+        wire::decode(&wire::encode(&decoded)),
+        Ok(Message::List(decoded.clone()))
+    );
+    // The newer encoder's span map, which counts the unknown item, fits.
+    let mut copy = decoded.clone();
+    copy.set_spans(decoded.spans()).unwrap();
+    assert_eq!(copy, decoded);
 }
 
 #[test]

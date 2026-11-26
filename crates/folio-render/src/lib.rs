@@ -48,7 +48,7 @@ pub mod wire;
 
 pub use self::list::{
     Command, DisplayList, FRAME_THICKNESS, GlyphItem, GlyphSpan, Glyphs, Hit, Item, PathShape,
-    Point, Rect, Segment, Span, SpanMap, SpanMismatch, Stroke,
+    Point, Rect, Segment, Span, SpanMap, SpanMismatch, Stroke, Unknown,
 };
 pub use self::raster::{
     FontBytes, Fonts, GlyphBitmap, Image, MAX_SIDE, Options, Outlines, RenderError,

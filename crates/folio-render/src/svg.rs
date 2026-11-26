@@ -71,7 +71,7 @@ pub fn svg(list: &DisplayList, fonts: &dyn Fonts, outlines: &mut Outlines) -> St
                     num(FRAME_THICKNESS)
                 );
             }
-            Command::Box(_) => {}
+            Command::Box(_) | Command::Unknown(_) => {}
         }
     }
     let mut out = format!(
