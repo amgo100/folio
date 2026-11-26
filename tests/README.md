@@ -125,10 +125,11 @@ The instruction-count benchmarks (`cargo bench -p folio-testkit --bench compile`
 | `compile_variants one`, `three` | The ten-page document with three variants from source to PDF in a fresh world: the teacher's variant alone, and all three one after another. |
 | `parse reference` | Parsing the reference document's markup. |
 
-Callgrind counts only the benchmark's own thread. Paragraphs that
-`folio-text` shapes several at a time run on its shaping thread, so a full
-compile's and a stylesheet edit's counts leave most shaping out; the
-wall-clock times include it. The preview benchmarks go through one
+Callgrind counts only the benchmark's own thread. The benchmarks run with
+one `rayon` thread (`RAYON_NUM_THREADS=1`), and with one thread `folio-text`
+shapes on the calling thread instead of handing paragraphs to its shaping
+pool, so every count includes all the shaping its compile does
+(`crates/folio-text/tests/shaping_thread.rs` checks this). The preview benchmarks go through one
 function, `preview`, which stops at the pages; the check benchmarks call
 `folio::check`, which also runs the PDF writer's check and gathers the
 diagnostics.

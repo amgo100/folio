@@ -189,10 +189,16 @@ impl Debug for Cache {
 }
 
 /// Shapes paragraphs, in parallel on the shaping threads when there are
-/// several. The caller blocks on a channel, which runs no other work, rather
-/// than in a `rayon` join, which may.
+/// several paragraphs and several threads. The caller blocks on a channel,
+/// which runs no other work, rather than in a `rayon` join, which may.
+///
+/// With a single shaping thread (`RAYON_NUM_THREADS=1`), handing the job over
+/// gains nothing, so the caller shapes in order itself. This also keeps the
+/// shaping on the thread that the instruction-count benchmarks measure.
 fn shape_many(paragraphs: Vec<Paragraph>) -> Vec<Shaped> {
-    let pool = POOL.as_ref().filter(|_| paragraphs.len() > 1);
+    let pool = POOL
+        .as_ref()
+        .filter(|pool| paragraphs.len() > 1 && pool.current_num_threads() > 1);
     let Some(pool) = pool else {
         return paragraphs.iter().map(shape).collect();
     };
