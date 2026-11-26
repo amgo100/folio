@@ -450,3 +450,34 @@ fn pages_that_look_the_same_get_new_span_maps() {
             .all(|(_, m)| matches!(m, wire::Message::Spans(_)))
     );
 }
+
+#[test]
+fn a_font_change_sends_every_page_again() {
+    let dir = project("exam");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    receive_from(&mut ws, first.revision);
+    // A font file in the project's font directory: the pages' hashes may
+    // stay, but every page is drawn again.
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("../folio-fonts/bundled");
+    let font = std::fs::read_dir(&bundled)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "otf" || e == "ttf"))
+        .expect("a bundled font file");
+    let fonts = dir.path().join("fonts");
+    std::fs::create_dir(&fonts).unwrap();
+    std::fs::copy(&font, fonts.join(font.file_name().unwrap())).unwrap();
+    preview.changed([&fonts]);
+    let next = updated(&events, |u| u.revision > first.revision);
+    assert_eq!(next.lists, (0..next.pages).collect::<Vec<_>>());
+    let received = receive_from(&mut ws, next.revision);
+    assert_eq!(received.frames.len(), next.pages, "the client gets every page");
+    assert!(
+        received
+            .frames
+            .iter()
+            .all(|(_, m)| matches!(m, wire::Message::List(_)))
+    );
+}

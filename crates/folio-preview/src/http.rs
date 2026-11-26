@@ -130,9 +130,14 @@ impl Request {
     }
 }
 
-/// The hosts, with the port, that name the server.
-fn local_hosts(port: u16) -> [String; 2] {
-    [format!("127.0.0.1:{port}"), format!("localhost:{port}")]
+/// The hosts, with the port, that name the server; without it too on
+/// port 80, which browsers leave out.
+fn local_hosts(port: u16) -> Vec<String> {
+    let mut hosts = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    if port == 80 {
+        hosts.extend(["127.0.0.1".into(), "localhost".into()]);
+    }
+    hosts
 }
 
 /// Compares two byte strings in time that depends only on their lengths.
@@ -198,6 +203,13 @@ mod tests {
         assert!(request.origin_allowed(8000));
         assert!(!request.origin_allowed(8001));
         assert!(request.is_upgrade());
+
+        let default_port =
+            parse("GET / HTTP/1.1\r\nHost: localhost\r\nOrigin: http://127.0.0.1\r\n\r\n");
+        assert!(default_port.host_is_local(80));
+        assert!(default_port.origin_allowed(80));
+        assert!(!default_port.host_is_local(8080));
+        assert!(!default_port.origin_allowed(8080));
 
         let foreign = parse(
             "GET / HTTP/1.1\r\nHost: evil.example:8000\r\nOrigin: http://evil.example\r\n\r\n",

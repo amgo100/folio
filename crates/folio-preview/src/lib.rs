@@ -335,16 +335,25 @@ impl Preview {
     pub fn start(options: Options) -> Result<Self, Error> {
         let root = std::path::absolute(&options.root).unwrap_or_else(|_| options.root.clone());
         let token: Arc<str> = http::token().map_err(|e| Error(e.to_string()))?.into();
-        let engine::Started {
-            handle: engine,
-            published,
-            thread: engine_thread,
-        } = engine::start(&root, &options)?;
+        // The watcher starts before the project is read, so that a change
+        // saved meanwhile queues for the engine. Nothing runs until every
+        // part has started, so a failure leaves nothing behind.
+        let pending = engine::prepare(&root, &options)?;
+        let engine = pending.handle.clone();
         let watcher = match options.watch {
             true => Some(watch::Watcher::start(&root, engine.clone())?),
             false => None,
         };
-        let (server, addr, server_thread) = server::start(options.port, token.clone(), published)?;
+        let (server, addr, server_thread) =
+            server::start(options.port, token.clone(), pending.published.clone())?;
+        let engine_thread = match pending.spawn() {
+            Ok(thread) => thread,
+            Err(e) => {
+                server.stop();
+                let _ = server_thread.join();
+                return Err(e);
+            }
+        };
         Ok(Self {
             addr,
             token,

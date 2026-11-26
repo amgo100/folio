@@ -83,11 +83,15 @@ pub(crate) struct Published {
 /// A page as the clients are sent it.
 #[derive(Debug, Clone)]
 pub(crate) struct PageEntry {
-    /// The page's content hash.
-    pub(crate) hash: u64,
-    /// One more each time the page's spans change while its content hash
-    /// stays: a client that has an older one is sent the span map.
-    pub(crate) generation: u64,
+    /// Names what the page shows: a new number whenever a client must be
+    /// sent the whole display list, because the page's content hash
+    /// changed or every page is drawn again (a font changed). Never
+    /// repeats, so a client never mistakes an older page for this one.
+    pub(crate) content: u64,
+    /// Names this entry: a new number whenever the page's display list or
+    /// its spans change. A client whose page has the same `content` but
+    /// another `id` is sent only the span map.
+    pub(crate) id: u64,
     /// The display list.
     pub(crate) list: Arc<DisplayList>,
     /// The display list in the wire format.
@@ -175,8 +179,10 @@ impl Settings {
     }
 }
 
-/// Starts the engine for the project in `root` and its first check.
-pub(crate) fn start(root: &Path, options: &Options) -> Result<Started, Error> {
+/// Prepares the engine for the project in `root`, without reading the
+/// project yet: what changes from now on queues for it, so that the
+/// watcher can start before the first read and miss nothing.
+pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> {
     let settings = Settings {
         variant: options.variant.clone(),
         system_fonts: options.system_fonts,
@@ -195,7 +201,7 @@ pub(crate) fn start(root: &Path, options: &Options) -> Result<Started, Error> {
         target: Target::Pdf.as_str(),
         ..Published::default()
     }));
-    let mut engine = Engine {
+    let engine = Engine {
         settings,
         root: root.to_path_buf(),
         canonical: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
@@ -211,27 +217,39 @@ pub(crate) fn start(root: &Path, options: &Options) -> Result<Started, Error> {
         publish,
         idle_at: None,
         written: 0,
+        ids: 0,
     };
-    engine.load();
-    let thread = thread::Builder::new()
-        .name("folio-preview".into())
-        .spawn(move || engine.run(&rx))
-        .map_err(|e| Error(format!("cannot start the preview: {e}")))?;
-    Ok(Started {
+    Ok(Pending {
         handle: Handle(tx),
         published,
-        thread,
+        engine,
+        rx,
     })
 }
 
-/// A started engine.
-pub(crate) struct Started {
+/// An engine that has not read the project yet ([`prepare`]).
+pub(crate) struct Pending {
     /// The handle that tells it what changed.
     pub(crate) handle: Handle,
     /// What it publishes for the clients.
     pub(crate) published: watch::Receiver<Arc<Published>>,
-    /// Its thread.
-    pub(crate) thread: JoinHandle<()>,
+    engine: Engine,
+    rx: Receiver<Input>,
+}
+
+impl Pending {
+    /// Starts the engine's thread, which reads the project, checks it,
+    /// and then applies the changes that queued meanwhile.
+    pub(crate) fn spawn(self) -> Result<JoinHandle<()>, Error> {
+        let Self { mut engine, rx, .. } = self;
+        thread::Builder::new()
+            .name("folio-preview".into())
+            .spawn(move || {
+                engine.load();
+                engine.run(&rx);
+            })
+            .map_err(|e| Error(format!("cannot start the preview: {e}")))
+    }
 }
 
 struct Engine {
@@ -262,6 +280,8 @@ struct Engine {
     idle_at: Option<Instant>,
     /// The last revision whose outputs were written.
     written: u64,
+    /// The last number given to a page entry ([`PageEntry::id`]).
+    ids: u64,
 }
 
 impl Engine {
@@ -457,7 +477,13 @@ impl Engine {
                 pages: None,
                 lists: Vec::new(),
                 banner: Some(
-                    "folio.toml or folio.lock has errors, so the project cannot be built".into(),
+                    match self.errors {
+                        Some(_) => {
+                            "folio.toml or folio.lock has errors, so the project cannot be built"
+                        }
+                        None => "the project cannot be read, so it cannot be built",
+                    }
+                    .into(),
                 ),
                 diagnostics,
                 files,
@@ -516,10 +542,15 @@ impl Engine {
         let mut spans = Vec::new();
         if let Some(new) = &frame.pages {
             pages.truncate(new.pages.len());
-            for (index, entry, spans_only) in frame.lists {
+            for (index, mut entry, spans_only) in frame.lists {
+                self.ids += 1;
+                entry.id = self.ids;
                 if spans_only {
+                    // Remapped pages are pages `before` had, which were sent.
+                    entry.content = pages.get(index).map_or(entry.id, |old| old.content);
                     spans.push(index);
                 } else {
+                    entry.content = entry.id;
                     lists.push(index);
                 }
                 if index < pages.len() {
@@ -605,27 +636,27 @@ impl Engine {
     }
 }
 
-/// The build to preview: the chosen variant, or the first declared, for
-/// PDF, or else for the live target, which is laid out too.
+/// The build to preview (SPEC §12.2): the chosen variant, or else the
+/// first the manifest declares, for PDF.
 fn choose(world: &World, variant: Option<&str>) -> Result<(Option<Name>, Target), String> {
     let builds = world.builds();
-    let of_variant: Vec<_> = builds
-        .iter()
-        .filter(|(v, _)| variant.is_none_or(|want| v.as_ref().is_some_and(|v| v.as_str() == want)))
-        .collect();
-    if of_variant.is_empty() {
-        let variant = variant.unwrap_or_default();
-        return Err(format!("the manifest declares no variant `{variant}`"));
+    if let Some(want) = variant
+        && !builds
+            .iter()
+            .any(|(v, _)| v.as_ref().is_some_and(|v| v.as_str() == want))
+    {
+        return Err(format!("the manifest declares no variant `{want}`"));
     }
-    for target in [Target::Pdf, Target::Live] {
-        if let Some((v, t)) = of_variant.iter().find(|(_, t)| *t == target) {
-            return Ok((v.clone(), *t));
-        }
-    }
-    Err(match variant {
-        Some(v) => format!("the variant `{v}` is built for no target that is laid out (pdf)"),
-        None => "no variant is built for a target that is laid out (pdf)".into(),
-    })
+    builds
+        .into_iter()
+        .find(|(v, target)| {
+            *target == Target::Pdf
+                && variant.is_none_or(|want| v.as_ref().is_some_and(|v| v.as_str() == want))
+        })
+        .ok_or_else(|| match variant {
+            Some(v) => format!("the variant `{v}` is not built for PDF, which the preview shows"),
+            None => "no variant is built for PDF, which the preview shows".into(),
+        })
 }
 
 /// Checks a build on a handle of the world and prepares what changed
@@ -690,14 +721,10 @@ fn check(
     };
     let mut lists = Vec::with_capacity(changed.len() + remapped.len());
     for index in changed {
-        lists.push((index, entry(&pages, index, 0), false));
+        lists.push((index, entry(&pages, index), false));
     }
     for index in remapped {
-        let generation = published
-            .pages
-            .get(index)
-            .map_or(0, |entry| entry.generation + 1);
-        lists.push((index, entry(&pages, index, generation), true));
+        lists.push((index, entry(&pages, index), true));
     }
     Some(Frame {
         variant: name,
@@ -713,14 +740,15 @@ fn check(
     })
 }
 
-/// A page's display list, encoded.
-fn entry(pages: &Pages, index: usize, generation: u64) -> PageEntry {
+/// A page's display list, encoded, without its numbers, which the engine
+/// gives it when it is sent ([`Engine::done`]).
+fn entry(pages: &Pages, index: usize) -> PageEntry {
     let list = DisplayList::from_fragment(&pages.pages[index].fragment);
     let bytes = wire::encode(&list).into();
     let spans = wire::encode_spans(&list.spans()).into();
     PageEntry {
-        hash: pages.hashes[index],
-        generation,
+        content: 0,
+        id: 0,
         list: Arc::new(list),
         bytes,
         spans,

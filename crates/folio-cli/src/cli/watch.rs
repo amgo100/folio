@@ -64,7 +64,7 @@ pub(crate) fn watch(args: &WatchArgs) -> ExitCode {
     };
     notice_pin(&root);
 
-    let shown: Arc<Mutex<Option<Vec<Diagnostic>>>> = Arc::default();
+    let shown: Arc<Mutex<Option<Shown>>> = Arc::default();
     let mut options = Options::new(&root)
         .port(args.port)
         .today(args.today)
@@ -104,13 +104,19 @@ fn notice_pin(root: &Path) {
     }
 }
 
-/// Prints a revision's diagnostics when they differ from the last shown.
-fn updated(event: &Event, shown: &Mutex<Option<Vec<Diagnostic>>>, color: bool) {
+/// What the terminal last showed of a revision: its diagnostics and
+/// banner.
+type Shown = (Vec<Diagnostic>, Option<String>);
+
+/// Prints a revision's diagnostics and banner when they differ from the
+/// last shown.
+fn updated(event: &Event, shown: &Mutex<Option<Shown>>, color: bool) {
     let Event::Updated(update) = event else {
         return;
     };
     let mut shown = shown.lock().unwrap_or_else(|e| e.into_inner());
-    if shown.as_ref() == Some(&update.diagnostics) {
+    let now = (update.diagnostics.clone(), update.banner.clone());
+    if shown.as_ref() == Some(&now) {
         return;
     }
     print(&*update.files, &update.diagnostics, color);
@@ -123,7 +129,7 @@ fn updated(event: &Event, shown: &Mutex<Option<Vec<Diagnostic>>>, color: bool) {
             update.pages
         ),
     }
-    *shown = Some(update.diagnostics.clone());
+    *shown = Some(now);
 }
 
 /// Writes the outputs of a quiet revision, as `folio build` does: only

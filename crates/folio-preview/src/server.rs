@@ -266,7 +266,8 @@ async fn websocket(mut stream: TcpStream, request: &Request, shared: Arc<Shared>
     client(ws, shared).await;
 }
 
-/// What a client has of a page: its content hash and span generation.
+/// What a client has of each page: its content and entry numbers
+/// ([`PageEntry`](crate::engine::PageEntry)).
 type Known = Vec<(u64, u64)>;
 
 /// Serves a websocket client: every revision it has not seen, until it
@@ -340,16 +341,20 @@ async fn send(
     visible: &[usize],
 ) -> Result<(), tokio_tungstenite::tungstenite::Error> {
     let count = published.pages.len();
-    let mut order: Vec<usize> = visible.iter().copied().filter(|&i| i < count).collect();
-    order.dedup();
-    order.extend((0..count).filter(|i| !visible.contains(i)));
+    let mut seen = vec![false; count];
+    let mut order = Vec::with_capacity(count);
+    for i in visible.iter().copied().chain(0..count) {
+        if i < count && !std::mem::replace(&mut seen[i], true) {
+            order.push(i);
+        }
+    }
     let mut lists = Vec::new();
     let mut spans = Vec::new();
     for i in order {
         let entry = &published.pages[i];
         match known.get(i) {
-            Some(&(hash, generation)) if hash == entry.hash => {
-                if generation != entry.generation {
+            Some(&(content, id)) if content == entry.content => {
+                if id != entry.id {
                     spans.push(i);
                 }
             }
@@ -393,7 +398,7 @@ async fn send(
     *known = published
         .pages
         .iter()
-        .map(|entry| (entry.hash, entry.generation))
+        .map(|entry| (entry.content, entry.id))
         .collect();
     Ok(())
 }

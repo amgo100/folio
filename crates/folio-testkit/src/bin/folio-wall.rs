@@ -95,9 +95,10 @@ enum Prepared {
 /// A copy of a corpus project served by the preview, with a websocket
 /// client that has received every page, and an edit to write to disk.
 struct Watching {
+    /// Fields drop in order: the preview stops before its directory goes.
+    _preview: Preview,
     /// Removed, with the copy, when the run ends.
     _dir: tempfile::TempDir,
-    _preview: Preview,
     client: WebSocket<TcpStream>,
     /// The revision the client has.
     revision: u64,
@@ -155,8 +156,8 @@ fn watching() -> Prepared {
     );
     let edited = text.replacen(WATCH_EDIT.0, WATCH_EDIT.1, 1);
     Prepared::Watching(Box::new(Watching {
-        _dir: dir,
         _preview: preview,
+        _dir: dir,
         client,
         revision,
         file,
@@ -190,9 +191,27 @@ fn received(client: &mut WebSocket<TcpStream>) -> u64 {
     received_lists(client).0
 }
 
+thread_local! {
+    /// What a timed run leaves to be dropped after its time is taken, such
+    /// as a preview whose threads take time to stop ([`bury`]).
+    static GRAVEYARD: std::cell::RefCell<Vec<Box<dyn std::any::Any>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Keeps a value until [`bury`] drops it, outside the timing.
+fn defer_drop(value: Box<dyn std::any::Any>) {
+    GRAVEYARD.with(|graveyard| graveyard.borrow_mut().push(value));
+}
+
+/// Drops what timed runs left ([`defer_drop`]).
+fn bury() {
+    GRAVEYARD.with(|graveyard| graveyard.borrow_mut().clear());
+}
+
 /// Writes the edit to disk and waits until the client has the display
 /// lists of the pages it changed: the preview path of `folio watch`.
-/// Returns how many pages were sent, and panics when none were.
+/// Returns how many pages were sent, and panics when none were. The
+/// preview is stopped after the time is taken.
 fn watch_after_edit(prepared: Prepared) -> usize {
     let Prepared::Watching(mut watching) = prepared else {
         unreachable!("set up as a watched project")
@@ -202,6 +221,7 @@ fn watch_after_edit(prepared: Prepared) -> usize {
         let (revision, lists) = received_lists(&mut watching.client);
         if revision > watching.revision {
             assert!(lists > 0, "the edit changed a page");
+            defer_drop(watching);
             return lists;
         }
     }
@@ -572,12 +592,15 @@ fn main() -> ExitCode {
     let mut p95s = Vec::new();
     for scenario in scenarios() {
         (scenario.run)((scenario.setup)());
+        bury();
         let mut times: Vec<Duration> = (0..iterations)
             .map(|_| {
                 let prepared = (scenario.setup)();
                 let start = Instant::now();
                 std::hint::black_box((scenario.run)(prepared));
-                start.elapsed()
+                let took = start.elapsed();
+                bury();
+                took
             })
             .collect();
         times.sort();

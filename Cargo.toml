@@ -92,11 +92,11 @@ stacker = "0.1.25"
 tempfile = "3.27.0"
 # The span-preserving parser only: the manifest and lockfile readers report
 # errors on keys and values themselves, so serde is not needed.
+toml = { version = "1.2.2", default-features = false, features = ["std", "parse", "preserve_order"] }
 # The preview server (SPEC §2.2): its runtime, and websockets over it
 # without the client side's TLS.
 tokio = { version = "1.48.0", features = ["rt", "net", "io-util", "sync", "time", "macros"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
-toml = { version = "1.2.2", default-features = false, features = ["std", "parse", "preserve_order"] }
 unicode-bidi = "0.3.18"
 unicode-ident = "1.0"
 # The Unicode math class of a character, which spaces and stretches it in
