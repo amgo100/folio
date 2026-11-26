@@ -427,6 +427,10 @@ impl Ctx {
         class: MathClass,
         style: Style,
     ) -> Option<GlyphFragment> {
+        // Empty text, such as an empty string, sets nothing.
+        if text.is_empty() {
+            return None;
+        }
         let size = self.font_size(style);
         let glyph = GlyphFragment::new(
             &self.font,

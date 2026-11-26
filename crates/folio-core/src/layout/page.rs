@@ -1100,7 +1100,13 @@ fn assemble(run: &Run<'_>, end: usize, first: bool) -> Fragment {
                     }),
                 ),
             }
-            asm.baseline(y + object.size.height);
+            match object.baselines {
+                Some((first, last)) => {
+                    asm.baseline(y + first);
+                    asm.baseline(y + last);
+                }
+                None => asm.baseline(y + object.size.height),
+            }
         }
         y += leaf.height();
         if k + 1 < end {

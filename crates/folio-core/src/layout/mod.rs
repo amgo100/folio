@@ -181,6 +181,27 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     for (paragraph, layout) in text.paragraphs.iter().zip(&paragraphs) {
         report_lines(db, build.project(db), paragraph, layout);
     }
+    // A display wider than its block is an overfull line (SPEC §7.9).
+    for (i, content) in flow::display_widths(&text.root, props, width, &text.maths) {
+        let Some(display) = maths.display(i) else {
+            continue;
+        };
+        let overflow = math::display_overflow(display, content);
+        if overflow.to_pt() > 0.1 {
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    text.maths[i].span,
+                    eco_format!(
+                        "this display is overfull: {:.1}pt wider than its space",
+                        overflow.to_pt()
+                    ),
+                )
+                .with_code(codes::OVERFULL_LINE)
+                .with_hint("break it into lines with `\\`, or align its lines at `&`"),
+            );
+        }
+    }
     Some(Lines {
         width,
         paragraphs,

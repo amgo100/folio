@@ -19,6 +19,9 @@ use skrifa::raw::tables::math::{Math, MathConstant, MathKernCorner, StretchAxis}
 use skrifa::raw::{FontRef, TableProvider};
 use skrifa::{GlyphId, MetadataProvider};
 
+/// How many shaped texts a font keeps.
+const MAX_SHAPED: usize = 4096;
+
 /// The bytes of a font file, shared.
 pub type FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 
@@ -514,7 +517,13 @@ impl MathFont {
             return shaped.clone();
         }
         let shaped = self.shape_uncached(text, features);
-        lock(&self.0.shaped).insert(key, shaped.clone());
+        let mut cache = lock(&self.0.shaped);
+        // The cache only saves shaping again: a long session that shapes
+        // many texts starts it afresh rather than let it grow.
+        if cache.len() >= MAX_SHAPED {
+            cache.clear();
+        }
+        cache.insert(key, shaped.clone());
         shaped
     }
 

@@ -196,3 +196,72 @@ fn a_formula_s_glyphs_lead_back_to_their_nodes() {
         ]
     );
 }
+
+#[test]
+fn a_display_wider_than_its_block_is_overfull_and_numbered_below() {
+    let world = world(
+        "math { numbering: \"(1)\"; }\n",
+        "Text.\n\n$ a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t + u $\n",
+    );
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    let overfull = compiled
+        .diagnostics
+        .iter()
+        .find(|d| d.message.starts_with("this display is overfull"))
+        .expect("an overfull warning");
+    assert_eq!(overfull.code.as_deref(), Some("overfull-line"));
+    // The number is below the formula, not over it.
+    let pages = folio::pages(&world, Target::Pdf, None).unwrap().unwrap();
+    let mut runs = Vec::new();
+    collect_runs(&pages.pages[0].fragment, folio::Point::zero(), &mut runs);
+    let number = runs.iter().find(|(t, _)| t == "(1)").expect("the number").1;
+    let formula = runs
+        .iter()
+        .find(|(t, _)| t == "𝑢")
+        .expect("the last letter")
+        .1;
+    assert!(number.y > formula.y, "{number:?} below {formula:?}");
+}
+
+fn collect_runs(
+    fragment: &folio::Fragment,
+    at: folio::Point,
+    out: &mut Vec<(String, folio::Point)>,
+) {
+    for (pos, item) in fragment.items.iter() {
+        let p = folio::Point::new(at.x + pos.x, at.y + pos.y);
+        match item {
+            FragmentItem::Group(group) => collect_runs(group, p, out),
+            FragmentItem::Text(run) => out.push((run.text.to_string(), p)),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn an_empty_string_in_a_formula_sets_nothing_and_warns_of_nothing() {
+    let world = world("", "A formula $x #\"\" y$ here.\n");
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(
+        compiled.diagnostics.is_empty(),
+        "{:?}",
+        compiled.diagnostics
+    );
+}
+
+#[test]
+fn a_number_the_math_font_cannot_set_is_a_warning() {
+    let world = world("math { numbering: \"☃1\"; }\n", "Text.\n\n$ x $\n");
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    let messages: Vec<&str> = compiled
+        .diagnostics
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "the math font New Computer Modern Math cannot set the equation number `☃1`, so it is left out"
+        ]
+    );
+}

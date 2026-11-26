@@ -157,7 +157,19 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
         .map(|m| {
             db.unwind_if_revision_cancelled();
             let options = options(&font, &m.style, &styled.properties);
-            let laid = lay_out(db.layout_cache(), m, &options, resolution);
+            let (laid, unset) = lay_out(db.layout_cache(), m, &options, resolution);
+            for text in unset {
+                diag::report(
+                    db,
+                    Diagnostic::warning(
+                        m.span,
+                        eco_format!(
+                            "the math font {MATH_FONT} cannot set the equation number `{text}`, \
+                             so it is left out"
+                        ),
+                    ),
+                );
+            }
             let missing = match &laid {
                 LaidMath::Inline(math) => &math.missing,
                 LaidMath::Display(display) => &display.math.missing,
@@ -204,21 +216,23 @@ fn options(font: &MathFont, style: &ComputedStyle, props: &Properties) -> MathOp
     }
 }
 
-/// Lays out a formula, through the cache, with the numbers of a display.
+/// Lays out a formula, through the cache, with the numbers of a display,
+/// and the numbers the font could not set.
 fn lay_out(
     cache: &Cache,
     m: &TextMath,
     options: &MathOptions,
     resolution: &Resolution,
-) -> LaidMath {
+) -> (LaidMath, Vec<EcoString>) {
     if !m.display {
         let math = cache.math(&m.formula, options, false, || {
             CachedMath::Inline(Arc::new(layout_inline(&m.formula, options, &source_ref)))
         });
-        return match math {
+        let laid = match math {
             CachedMath::Inline(math) => LaidMath::Inline(math),
             CachedMath::Display(_) => unreachable!("an inline formula"),
         };
+        return (laid, Vec::new());
     }
     let math = match cache.math(&m.formula, options, true, || {
         CachedMath::Display(Arc::new(layout_display(&m.formula, options, &source_ref)))
@@ -226,9 +240,14 @@ fn lay_out(
         CachedMath::Display(math) => math,
         CachedMath::Inline(_) => unreachable!("a display"),
     };
+    let unset = std::cell::RefCell::new(Vec::new());
     let number = |target: Target| {
         let text = resolution.number(target)?.number.as_ref()?;
-        set_number(text, options, m.span)
+        let set = set_number(text, options, m.span);
+        if set.is_none() {
+            unset.borrow_mut().push(text.clone());
+        }
+        set
     };
     let lines: Vec<Option<Number>> = (0..m.formula.lines().len())
         .map(|i| {
@@ -243,7 +262,8 @@ fn lay_out(
         .all(Option::is_none)
         .then(|| number(Target::element(m.location)))
         .flatten();
-    LaidMath::Display(Arc::new(Display { math, lines, whole }))
+    let laid = LaidMath::Display(Arc::new(Display { math, lines, whole }));
+    (laid, unset.into_inner())
 }
 
 /// An equation's number, set in the math font.
@@ -258,14 +278,12 @@ fn set_number(text: &EcoString, options: &MathOptions, span: Span) -> Option<Num
 }
 
 /// The content of the block of a display, `width` wide: the formula
-/// centred, and its numbers at the end of the lines they number. Its items
-/// are positioned from the block's content box, and its height is that of
-/// the formula with its numbers.
-pub(super) fn display_content(
-    display: &Display,
-    width: Abs,
-    size: Abs,
-) -> (Size, EcoVec<(Point, FragmentItem)>) {
+/// centred, and its numbers at the end of the lines they number, or below
+/// it, one after another, where they do not fit beside it. Its items are
+/// positioned from the block's content box, and its height is that of the
+/// formula with its numbers. The baselines are those of its first and last
+/// lines, from its top.
+pub(super) fn display_content(display: &Display, width: Abs, size: Abs) -> DisplayContent {
     let math = &display.math;
     let gutter = size * NUMBER_GUTTER;
     // Numbers, each with the baseline it sits on.
@@ -288,7 +306,16 @@ pub(super) fn display_content(
         .max()
         .unwrap_or_default();
     let centred = (width - math.width) / 2.0;
-    let x = if numbers.is_empty() {
+    let beside = math.width + gutter + widest <= width;
+    if !beside {
+        // Each number on a line of its own below the formula.
+        let mut bottom = math.height;
+        for (number, baseline) in &mut numbers {
+            *baseline = bottom + gutter / 2.0 + number.ascent;
+            bottom = *baseline + number.descent;
+        }
+    }
+    let x = if numbers.is_empty() || !beside {
         centred
     } else {
         centred.min(width - widest - gutter - math.width)
@@ -320,7 +347,26 @@ pub(super) fn display_content(
             ));
         }
     }
-    (Size::new(width, above + math.height + below), items)
+    let first = math.baselines.first().copied().unwrap_or(math.height);
+    let last = math.baselines.last().copied().unwrap_or(math.height);
+    DisplayContent {
+        size: Size::new(width, above + math.height + below),
+        items,
+        baselines: (above + first, above + last),
+    }
+}
+
+/// The content of a display's block.
+pub(super) struct DisplayContent {
+    pub size: Size,
+    pub items: EcoVec<(Point, FragmentItem)>,
+    /// The baselines of its first and last lines, from its top.
+    pub baselines: (Abs, Abs),
+}
+
+/// How far a display is wider than its block's content, or zero.
+pub(super) fn display_overflow(display: &Display, width: Abs) -> Abs {
+    (display.math.width - width).max(Abs::zero())
 }
 
 /// The id a face's glyph runs name it by: its index in the build's faces.

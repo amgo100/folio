@@ -103,6 +103,52 @@ pub(super) fn slots(
     out
 }
 
+/// The content width of the block of each display, by its index in
+/// [`Text::maths`], in a body `width` wide.
+pub(super) fn display_widths(
+    root: &TextBlock,
+    props: &Properties,
+    width: Abs,
+    maths: &[crate::text::TextMath],
+) -> Vec<(usize, Abs)> {
+    fn walk(
+        block: &TextBlock,
+        boxed: &BlockBox,
+        props: &Properties,
+        displays: &HashMap<Location, usize>,
+        out: &mut Vec<(usize, Abs)>,
+    ) {
+        if block.part.is_none()
+            && let Some(&i) = displays.get(&block.location)
+        {
+            out.push((i, boxed.content().1));
+        }
+        for child in &block.children {
+            if let TextFlow::Block(b) = child {
+                walk(
+                    b,
+                    &boxed.child(&b.style, props, b.span),
+                    props,
+                    displays,
+                    out,
+                );
+            }
+        }
+    }
+    let displays: HashMap<Location, usize> = maths
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.display)
+        .map(|(i, m)| (m.location, i))
+        .collect();
+    let mut out = Vec::new();
+    if !displays.is_empty() {
+        let root_box = BlockBox::of(&root.style, props, root.span, Abs::zero(), width);
+        walk(root, &root_box, props, &displays, &mut out);
+    }
+    out
+}
+
 /// A paragraph broken into lines, with what breaking it at another width
 /// and setting its lines needs.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -176,6 +222,9 @@ pub(super) struct BlockObject {
     /// What it draws, from its top-left corner: a display. `None` for a
     /// box drawn as such.
     pub content: Option<EcoVec<(Point, FragmentItem)>>,
+    /// The baselines of its first and last lines, from its top; `None` for
+    /// a box, whose baseline is its bottom.
+    pub baselines: Option<(Abs, Abs)>,
 }
 
 /// How a segment of a paragraph is set.
@@ -805,6 +854,7 @@ impl Builder<'_> {
                     size,
                     location: block.location,
                     content: None,
+                    baselines: None,
                 })),
                 None => match self.display(block, &boxed) {
                     Some(object) => Leaf::Box(Arc::new(object)),
@@ -826,11 +876,12 @@ impl Builder<'_> {
         let index = *self.displays.get(&block.location)?;
         let display = self.sizes.maths.display(index)?;
         let size = length(&block.style, self.props, "font-size");
-        let (size, items) = display_content(display, boxed.content().1, size);
+        let content = display_content(display, boxed.content().1, size);
         Some(BlockObject {
-            size,
+            size: content.size,
             location: block.location,
-            content: Some(items),
+            content: Some(content.items),
+            baselines: Some(content.baselines),
         })
     }
 
