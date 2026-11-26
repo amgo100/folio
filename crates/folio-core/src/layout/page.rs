@@ -244,9 +244,12 @@ impl Debug for Regions<'_> {
 }
 
 /// The pages of a build, or `None` when the document could not be styled.
-/// Reports constraints that a page break had to relax, content that does
-/// not fit on a page, and the overfull and underfull lines of paragraphs
-/// that a region broke at another width than [`lines`] did.
+/// Reports constraints that a page break had to relax, and content that
+/// does not fit on a page. Every region is the master's body, so every
+/// paragraph is broken as [`lines`] broke it, which reports its lines;
+/// the page builder reports the lines of paragraphs that a region breaks
+/// at another width, which only the test hooks of [`paginate`] make, and
+/// [`lines`] is to leave them to it once masters vary.
 #[salsa::tracked(returns(ref))]
 pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     // The lines at the master's widths, broken in parallel: what the page
@@ -941,7 +944,7 @@ impl Assembler {
         let block = &open.block;
         let top = open.top;
         let height = (y - top).max(Abs::zero());
-        let size = Size::new(block.width + self.widen, height);
+        let size = Size::new((block.width + self.widen).max(Abs::zero()), height);
         let mut fragment = Fragment::new(size).with_location(open.location);
         decorate(&mut fragment, block, !open.continued, !continues);
         let origin = Point::new(block.x, top);
@@ -1126,6 +1129,10 @@ pub struct PageCache {
 /// the first page, and a fingerprint of the leaf and line it starts at.
 type PageKey = (PageMaster, Abs, bool, u64);
 
+/// What each line a page's builder read reserves at the page's foot, by
+/// its leaf counted from the page's first and its line.
+type Reserves = Arc<[(usize, usize, Abs)]>;
+
 struct Entry {
     /// The line and width of the state the page started at.
     state: (usize, Abs),
@@ -1136,7 +1143,7 @@ struct Entry {
     /// What each line the builder read reserves at the page's foot, by its
     /// leaf counted from the page's first and its line, when a test hook
     /// reserved space.
-    reserves: Option<Vec<(usize, usize, Abs)>>,
+    reserves: Option<Reserves>,
     out: Arc<PageOut>,
     /// The page as last dressed, and the root it was dressed for.
     dressed: (Location, Fragment),
@@ -1190,15 +1197,9 @@ impl PageCache {
             state == State::START,
             start.finish(),
         );
-        if let Some(bucket) = lock(&self.entries).get_mut(&key)
-            && let Some(entry) = bucket.iter_mut().find(|e| e.matches(page))
-        {
-            entry.used = now;
-            if entry.dressed.0 != root {
-                entry.dressed = (root, dress(&entry.out.fragment, root));
-            }
+        if let Some(hit) = self.find(&key, page, root) {
             self.hits.fetch_add(1, Ordering::Relaxed);
-            return (entry.out.clone(), entry.dressed.1.clone());
+            return hit;
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
         let (out, run, read) = layout_page(page);
@@ -1228,6 +1229,51 @@ impl PageCache {
         (out, dressed)
     }
 
+    /// The page asked for, if the cache has it, dressed as a box of
+    /// `root`. The reserve hook is called without the cache locked, so
+    /// that it may build pages with the same cache.
+    fn find(
+        &self,
+        key: &PageKey,
+        page: &PageRequest<'_>,
+        root: Location,
+    ) -> Option<(Arc<PageOut>, Fragment)> {
+        let now = page.caches.now;
+        let take = |entry: &mut Entry| {
+            entry.used = now;
+            if entry.dressed.0 != root {
+                entry.dressed = (root, dress(&entry.out.fragment, root));
+            }
+            (entry.out.clone(), entry.dressed.1.clone())
+        };
+        let Some(f) = page.reserve else {
+            let mut entries = lock(&self.entries);
+            let entry = entries
+                .get_mut(key)?
+                .iter_mut()
+                .find(|e| e.reserves.is_none() && e.matches(page))?;
+            return Some(take(entry));
+        };
+        let candidates: Vec<(Arc<PageOut>, Reserves)> = lock(&self.entries)
+            .get(key)?
+            .iter()
+            .filter(|e| e.matches(page))
+            .filter_map(|e| Some((e.out.clone(), e.reserves.clone()?)))
+            .collect();
+        let item = page.state.item;
+        let (out, _) = candidates.into_iter().find(|(_, reserves)| {
+            reserves
+                .iter()
+                .all(|&(k, line, reserve)| f(item + k, line) == reserve)
+        })?;
+        let mut entries = lock(&self.entries);
+        let entry = entries
+            .get_mut(key)?
+            .iter_mut()
+            .find(|e| Arc::ptr_eq(&e.out, &out))?;
+        Some(take(entry))
+    }
+
     /// How often the cache had a page since it was made.
     pub fn stats(&self) -> PageStats {
         PageStats {
@@ -1249,7 +1295,8 @@ impl PageCache {
 
 impl Entry {
     /// Whether the page asked for starts where this one did, and its flow
-    /// has, from there on, what this page's builder read.
+    /// has, from there on, what this page's builder read, but for what its
+    /// lines reserve.
     fn matches(&self, page: &PageRequest<'_>) -> bool {
         let (flow, state) = (page.flow, page.state);
         if self.state != (state.line, state.width) {
@@ -1259,18 +1306,9 @@ impl Entry {
         if stop > flow.items.len() || flow.items[state.item..stop] != self.items[..] {
             return false;
         }
-        if let Some(end) = &self.end
-            && (stop != flow.items.len() || flow.end != *end)
-        {
-            return false;
-        }
-        match (&self.reserves, page.reserve) {
-            (None, None) => true,
-            (Some(reserves), Some(f)) => reserves
-                .iter()
-                .all(|&(k, line, reserve)| f(state.item + k, line) == reserve),
-            _ => false,
-        }
+        self.end
+            .as_ref()
+            .is_none_or(|end| stop == flow.items.len() && flow.end == *end)
     }
 }
 

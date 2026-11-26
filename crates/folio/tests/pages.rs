@@ -895,9 +895,9 @@ fn pages_are_cached_by_the_state_coming_into_them() {
     let n = plain.pages.len() as u64;
     assert_eq!(cache.stats(), PageStats { hits: 0, misses: n });
 
-    // A reserve on the second page changes where the third starts: the
-    // first page comes from the cache, and the pages from the second on
-    // are broken again, a reserve being part of their key.
+    // A reserve on the second page changes where the third starts. What
+    // lines reserve is part of a page's key, so with a hook every page is
+    // broken again, the first too.
     let anchor = plain.pages[1].lines[3];
     let reserve = |line: LineRef| {
         if line == anchor {
@@ -912,8 +912,7 @@ fn pages_are_cached_by_the_state_coming_into_them() {
     };
     let reserved = paginate(&world, regions, &cache);
     assert_ne!(reserved.pages[2].lines[0], plain.pages[2].lines[0]);
-    // Without a hook the cache holds no reserves to compare, so every
-    // page with one is a miss; the same hook again finds them all.
+    // The same hook again finds them all.
     let stats = cache.stats();
     assert_eq!(stats.hits, 0);
     let again = paginate(&world, regions, &cache);

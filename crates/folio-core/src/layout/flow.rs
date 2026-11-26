@@ -162,7 +162,7 @@ impl ParagraphInfo {
         }
         let slot = LineSlot {
             offset: self.slot.offset,
-            width: self.slot.width + (width - body),
+            width: (self.slot.width + (width - body)).max(Abs::zero()),
         };
         let input = ParagraphInput {
             shaped: &self.shaped,
