@@ -235,3 +235,61 @@ fn display_maths_and_page_rules_of_other_targets() {
         ["maths is not laid out yet, so the output leaves it out"]
     );
 }
+
+#[test]
+fn hints_and_overrides_in_content_warn_as_declarations_do() {
+    // The same warnings as a stylesheet's declarations, at the element,
+    // and none for an initial value or another target's field.
+    let world = world(
+        "",
+        "#figure(placement: top)[]\n\n\
+         #figure(placement: here, width@docx: 50%)[]\n\n\
+         #heading(override: (numbering: \"1.\", space-before: 2pt))[Forces]\n",
+    );
+    let compiled = compile(&world, Target::Pdf);
+    let not_implemented =
+        |prop: &str| format!("`{prop}` is not implemented yet, so this declaration has no effect");
+    assert_eq!(
+        located(&world, &compiled),
+        [
+            warning(&not_implemented("placement"), "figure(placement: top)[]"),
+            warning(
+                &not_implemented("numbering"),
+                "heading(override: (numbering: \"1.\", space-before: 2pt))[Forces]"
+            ),
+        ]
+    );
+}
+
+#[test]
+fn scoped_rules_warn_only_when_they_apply() {
+    let world = world(
+        "",
+        "#rule @target docx heading { numbering: \"1.\"; }\n\
+         #rule @variant markscheme emph { display: hidden; }\n\
+         #rule strong { display: hidden; }\n\
+         Text.\n",
+    );
+    let compiled = compile(&world, Target::Pdf);
+    assert_eq!(
+        located(&world, &compiled),
+        [warning(
+            "`display` is not implemented yet, so this declaration has no effect",
+            "display: hidden;"
+        )]
+    );
+    // The same rules in a DOCX build: the first applies there.
+    let docx: Vec<String> = compile(&world, Target::Docx)
+        .diagnostics
+        .iter()
+        .map(|d| d.message.to_string())
+        .filter(|m| m.contains("is not implemented yet, so this declaration"))
+        .collect();
+    assert_eq!(
+        docx,
+        [
+            "`numbering` is not implemented yet, so this declaration has no effect",
+            "`display` is not implemented yet, so this declaration has no effect",
+        ]
+    );
+}

@@ -299,7 +299,10 @@ fn selectors() {
          #exam.question(marks: 3)[Q] #exam.example[#statement[S] #solution[T]]\n",
         &[(
             "styles/main.fsty",
-            "heading + paragraph { indent: 1pt; }\n\
+            // Undo the base stylesheet's spaces, so that only these
+            // rules set them.
+            "paragraph { space-before: 0pt; space-after: 0pt; }\n\
+             heading + paragraph { indent: 1pt; }\n\
              paragraph:first { space-before: 1pt; }\n\
              paragraph:nth(3) { space-before: 3pt; }\n\
              list-item:last { space-after: 9pt; }\n\
@@ -658,7 +661,10 @@ fn equal_styles_share_memory() {
         "= A\n\nOne.\n\nTwo.\n\n= B\n\nThree.\n\n#figure[] #figure(class: \"wide\")[]\n",
         &[(
             "styles/main.fsty",
-            "paragraph { indent: 1pt; color: #f00; } .wide { color: #f00; }\n",
+            // The figures' spaces, which the base stylesheet sets, are
+            // reset to their initial values: an equal group is shared.
+            "paragraph { indent: 1pt; color: #f00; } .wide { color: #f00; }\n\
+             figure { space-before: 0pt; space-after: 0pt; }\n",
         )],
     );
     let styled = styled(&world, "exam", Target::Pdf);

@@ -3,10 +3,12 @@
 //!
 //! The writer walks each page's fragments in painting order. A group is a
 //! box of a node of the [`Tag`] tree: of a child of the node whose box
-//! holds it, found by its source among the children not yet entered, in
-//! document order; or, at the top of a page, the child last entered, which
-//! continues from the page before. A group that matches no child, such as
-//! a page's body region, belongs to the node around it.
+//! holds it, found by its location (source and instance) among the
+//! children not yet entered, in document order; or, at the top of a page,
+//! the child last entered if the group has its location, which continues
+//! from the page before. The instance tells apart the blocks that a loop
+//! or the calls of a closure make from one source. A group that matches
+//! no child, such as a page's body region, belongs to the node around it.
 //!
 //! The tree written follows the input with two kinds of elements added: a
 //! `P` around text that a node holds directly where PDF expects no text
@@ -18,7 +20,7 @@
 use std::num::NonZeroU16;
 
 use ecow::EcoString;
-use folio_component::{Abs, SourceRef};
+use folio_component::{Abs, Location, SourceRef};
 use krilla::destination::XyzDestination;
 use krilla::outline::{Outline, OutlineNode};
 use krilla::tagging::{Identifier, ListNumbering, Node, Tag as KTag, TagGroup, TagKind, TagTree};
@@ -128,14 +130,14 @@ impl<'a> Tagger<'a> {
         self.leading = false;
     }
 
-    /// The node a group with source `source` within a box of `node` is a
-    /// box of, with its top at `y` on the page.
-    pub(crate) fn enter(&mut self, node: usize, source: SourceRef, y: Abs) -> usize {
+    /// The node a group of the element instance at `location` within a
+    /// box of `node` is a box of, with its top at `y` on the page.
+    pub(crate) fn enter(&mut self, node: usize, location: Location, y: Abs) -> usize {
         let out = &self.nodes[node];
         let children = out.children;
         if self.leading
             && let Some(last) = out.cursor
-            && children[last].source == source
+            && is_box_of(&children[last], location)
             && let Some(entered) = out.entered[last]
         {
             return entered;
@@ -143,7 +145,7 @@ impl<'a> Tagger<'a> {
         let from = out.cursor.map_or(0, |last| last + 1);
         let Some(index) = children[from..]
             .iter()
-            .position(|child| child.source == source)
+            .position(|child| is_box_of(child, location))
             .map(|i| from + i)
         else {
             return node;
@@ -258,6 +260,16 @@ impl<'a> Tagger<'a> {
         }
         (tree, self.headings, self.untitled)
     }
+}
+
+/// Whether a group of the element instance at `location` is a box of
+/// `tag`: they name the same source and the same instance, or one of them
+/// does not know which instance it is ([`Location::UNKNOWN_INSTANCE`]).
+fn is_box_of(tag: &Tag, location: Location) -> bool {
+    tag.source == location.source
+        && (tag.instance == location.instance
+            || tag.instance == Location::UNKNOWN_INSTANCE
+            || location.instance == Location::UNKNOWN_INSTANCE)
 }
 
 fn take<'a>(nodes: &mut [Option<Out<'a>>], index: usize) -> Out<'a> {

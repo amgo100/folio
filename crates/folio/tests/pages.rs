@@ -304,7 +304,8 @@ fn headings_are_kept_with_what_follows() {
             let style = if keep {
                 "heading { keep-with-next: true; }\nparagraph { space-after: 3pt; }\n"
             } else {
-                "paragraph { space-after: 3pt; }\n"
+                // The base stylesheet keeps headings with what follows.
+                "heading { keep-with-next: false; }\nparagraph { space-after: 3pt; }\n"
             };
             let world = world(style, &source);
             let text = text(&world);

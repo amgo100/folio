@@ -56,6 +56,7 @@ pub use folio_core::eval::Limits;
 pub use folio_core::fonts::{Face, FontRun, Fonts, Pin};
 pub use folio_core::layout;
 pub use folio_core::layout::{Line, LineRef, Lines, Page, PageMaster, Pages, ParagraphLayout};
+pub use folio_core::locate;
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, OutputPattern, ProjectError, ProjectPath};
 pub use folio_core::style;

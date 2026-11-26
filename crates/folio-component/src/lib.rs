@@ -57,5 +57,5 @@ pub use self::names::{ComponentName, Name, QualifiedName, Target, is_ident};
 pub use self::property::{Effect, PropertyDecl};
 pub use self::registry::{Registered, Registry, RegistryError};
 pub use self::template::TemplateDecl;
-pub use self::text::{FontId, Glyph, GlyphRun, SourceRef};
+pub use self::text::{FontId, Glyph, GlyphRun, Location, SourceRef};
 pub use self::value::{FieldType, PropertyType, Value};

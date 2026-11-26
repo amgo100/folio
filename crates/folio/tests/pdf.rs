@@ -237,3 +237,29 @@ fn heading_without_text() {
     let text = String::from_utf8_lossy(&pdf);
     assert!(!text.contains("pdfuaid"));
 }
+
+/// The sections a loop makes share their source and differ in instance:
+/// each gets its structure element and bookmark, also those that start at
+/// the top of a page, which matching by source alone took for the section
+/// before continuing (#251).
+#[test]
+fn loop_made_sections_are_tagged_apart() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n";
+    let mut world = World::new(manifest).unwrap();
+    // Thirty sections over several pages, so that some start a page.
+    let body = "A ball falls. ".repeat(20);
+    let main =
+        format!("#doc(title: [Forces])\n\n#for i in range(30) [\n\n= Part #i\n\n{body}\n\n]\n");
+    world.set_source("main.fol", &main).unwrap();
+    let (pdf, diagnostics) = build(&world);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/S/Sect").count(), 30);
+    assert_eq!(text.matches("/S/H1").count(), 30);
+    for i in 0..30 {
+        assert!(
+            text.contains(&format!("/Title(Part {i})")),
+            "a bookmark for part {i}"
+        );
+    }
+}

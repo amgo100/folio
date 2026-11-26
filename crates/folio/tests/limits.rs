@@ -1,9 +1,12 @@
 //! Limits on property values that would otherwise reach layout and the PDF
 //! writer out of range, the suspects of fuzzing past the style stage (SPEC
 //! §11.1, §14.2), whose `compile` target and seeds cover them too: values
-//! that are not finite, and page sizes outside PDF's limits.
+//! that are not finite, lengths longer than 1,000,000pt (SPEC §5.1), and
+//! page sizes outside PDF's limits.
 
+use folio::style::NodeName;
 use folio::{Severity, Target, World, diag};
+use folio_component::{Abs, Value};
 
 const MANIFEST: &str = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\n\
                         compiler = \"0.0.0\"\nstyles = [\"main.fsty\"]\n";
@@ -75,10 +78,98 @@ fn values_that_are_not_finite_are_errors() {
 }
 
 #[test]
-fn an_em_length_that_overflows_at_a_font_size_is_left_out() {
-    // Finite where it is declared, at a nominal font size, but not at the
-    // element's: the value is left out, and the initial one used.
-    let world = build("doc { font-size: 1e300pt; }\nheading { space-before: 1e300em; }\n");
+fn lengths_longer_than_the_limit_are_errors() {
+    for (sheet, property) in [
+        ("doc { font-size: 1e300pt; }", "font-size"),
+        ("paragraph { indent: 1e300pt; }", "indent"),
+        ("paragraph { indent: -1000001pt; }", "indent"),
+        ("heading { space-before: 1e6pt + 1pt; }", "space-before"),
+        ("page { page-size: 1e300pt 100mm; }", "page-size"),
+        ("page { page-size: 100mm 2e6pt; }", "page-size"),
+        // At the nominal font size it is checked at, 10pt.
+        ("heading { space-before: 1e300em; }", "space-before"),
+    ] {
+        let world = build(sheet);
+        let diags = diagnostics(&world);
+        let error = diags
+            .iter()
+            .find(|(severity, ..)| *severity == Severity::Error)
+            .unwrap_or_else(|| panic!("{sheet}: no error in {diags:?}"));
+        assert_eq!(
+            error.1,
+            format!(
+                "wrong value for `{property}`: this length is beyond ±1000000pt \
+                 (about 350 m), the limit of a length"
+            ),
+            "{sheet}"
+        );
+        assert!(sheet.contains(&error.2), "{sheet}: points at {:?}", error.2);
+    }
+}
+
+#[test]
+fn lengths_up_to_the_limit_are_kept() {
+    let world = build("doc { font-size: 1000000pt; }\nparagraph { indent: -1e6pt; }\n");
+    let diags = diagnostics(&world);
+    assert!(
+        !diags
+            .iter()
+            .any(|(severity, ..)| *severity == Severity::Error),
+        "{diags:?}"
+    );
+    let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
+    let nodes = styled.nodes();
+    let paragraph = nodes
+        .iter()
+        .find(|n| styled.value(n, "indent") == Some(&Value::Length(Abs::pt(-1e6))))
+        .unwrap_or_else(|| panic!("no paragraph with the indent"));
+    assert_eq!(
+        styled.value(paragraph, "font-size"),
+        Some(&Value::Length(Abs::pt(1e6)))
+    );
+}
+
+#[test]
+fn an_em_length_longer_than_the_limit_at_a_font_size_is_left_out() {
+    // Within the limit where it is declared, at a nominal font size, but
+    // not at the element's: the value is left out, and the initial one
+    // used, so nothing after Style sees it.
+    let world = build("doc { font-size: 1e6pt; }\nheading { space-before: 2em; }\n");
+    let diags = diagnostics(&world);
+    assert!(
+        !diags
+            .iter()
+            .any(|(severity, ..)| *severity == Severity::Error),
+        "{diags:?}"
+    );
+    let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
+    let nodes = styled.nodes();
+    let heading = nodes
+        .iter()
+        .find(|n| matches!(&n.name, NodeName::Element(q) if q.to_string() == "heading"))
+        .expect("a heading");
+    assert_eq!(
+        styled.value(heading, "font-size"),
+        Some(&Value::Length(Abs::pt(1e6)))
+    );
+    // Not `2em`, 2,000,000pt, but what the heading has without it.
+    let without = build("doc { font-size: 1e6pt; }\n");
+    let styled_without = folio::styles(&without, Target::Pdf, None).unwrap().unwrap();
+    let nodes_without = styled_without.nodes();
+    let heading_without = nodes_without
+        .iter()
+        .find(|n| matches!(&n.name, NodeName::Element(q) if q.to_string() == "heading"))
+        .expect("a heading");
+    assert_eq!(
+        styled.value(heading, "space-before"),
+        styled_without.value(heading_without, "space-before")
+    );
+    // The base stylesheet's `1.2em` is too long there as well, so both fall
+    // back to the initial value.
+    assert_eq!(
+        styled.value(heading, "space-before"),
+        Some(&Value::Length(Abs::zero()))
+    );
     let pages = folio::pages(&world, Target::Pdf, None).unwrap().unwrap();
     for page in &pages.pages {
         let mut stack = vec![&page.fragment];
@@ -111,12 +202,16 @@ fn page_sizes_outside_pdf_limits_are_clamped_with_a_warning() {
     );
     assert_eq!(warning.2, "page-size: 20000pt 2pt;");
 
-    // Huge sizes are written in scientific notation.
-    let huge = build("page { page-size: 1e300pt 100mm; }\n");
+    // Up to the limit of a length, which is written in scientific
+    // notation.
+    let huge = build("page { page-size: 1e6pt 100mm; }\n");
+    assert_eq!(page_size(&huge).0, 14_400.0);
     assert!(
         diagnostics(&huge)
             .iter()
-            .any(|(_, message, _)| message.starts_with("this page size, 1e300pt by"))
+            .any(|(_, message, _)| message.starts_with("this page size, 1e6pt by")),
+        "{:?}",
+        diagnostics(&huge)
     );
 }
 

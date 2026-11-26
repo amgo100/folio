@@ -1,122 +1,124 @@
 # Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
 master 595.28 × 841.89, 2 page(s)
-page 1 595.28 × 841.89, 36 line(s)
-  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 10.87..682.08
-    box (0.00, 0.00) 481.89 × 684.46 main.fol:1:2 baselines 10.87..682.08
-      box (0.00, 0.00) 481.89 × 16.50 main.fol:1:2 baselines 10.87..10.87
-        text (0.00, 10.87) STIXTwoText-Regular 10.00 w 74.61 17 glyph(s) "Mechanics: Test 3"
-      box (0.00, 28.50) 481.89 × 95.74 main.fol:3:1 baselines 16.25..90.11
+page 1 595.28 × 841.89, 33 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 15.44..676.58
+    box (0.00, 0.00) 481.89 × 678.96 main.fol:1:2 baselines 15.44..676.58
+      box (0.00, 0.00) 481.89 × 22.50 main.fol:1:2 baselines 15.44..15.44 keep penalty 10000
+        text (0.00, 15.44) STIXTwoText-Bold 16.00 w 131.70 17 glyph(s) "Mechanics: Test 3"
+      box (0.00, 38.50) 481.89 × 104.74 main.fol:3:1 baselines 16.25..99.11
         box (0.00, 0.00) 481.89 × 23.74 main.fol:3:1 baselines 16.25..16.25 keep penalty 10000
-          text (0.00, 16.25) SourceSans3-Regular 13.00 w 64.69 12 glyph(s) "Instructions"
+          text (0.00, 16.25) SourceSans3-Bold 13.00 w 69.30 12 glyph(s) "Instructions"
         box (0.00, 29.74) 481.89 × 16.50 main.fol:5:1 baselines 10.87..10.87
-          text (0.00, 10.87) STIXTwoText-Regular 10.00 w 420.76 101 glyph(s) "Answer all questions. Write your answers in the spaces provided. The total mark for this paper is 40."
-        box (0.00, 46.24) 481.89 × 49.50 main.fol:7:1 baselines 10.87..43.87
-          box (0.00, 0.00) 481.89 × 16.50 main.fol:7:1 baselines 10.87..10.87
-            box (0.00, 0.00) 481.89 × 16.50 main.fol:7:3 baselines 10.87..10.87
+          text (0.00, 10.87) STIXTwoText-Regular 10.00 w 35.12 7 glyph(s) "Answer "
+          text (35.12, 10.87) STIXTwoText-Bold 10.00 w 11.82 3 glyph(s) "all"
+          text (46.94, 10.87) STIXTwoText-Regular 10.00 w 375.18 91 glyph(s) " questions. Write your answers in the spaces provided. The total mark for this paper is 40."
+        box (0.00, 51.24) 481.89 × 53.50 main.fol:7:1 baselines 10.87..47.87
+          box (15.00, 0.00) 466.89 × 16.50 main.fol:7:1 baselines 10.87..10.87
+            box (0.00, 0.00) 466.89 × 16.50 main.fol:7:3 baselines 10.87..10.87
               text (0.00, 10.87) STIXTwoText-Regular 10.00 w 68.91 16 glyph(s) "Use a black pen."
-          box (0.00, 16.50) 481.89 × 16.50 main.fol:8:1 baselines 10.87..10.87
-            box (0.00, 0.00) 481.89 × 16.50 main.fol:8:3 baselines 10.87..10.87
+          box (15.00, 18.50) 466.89 × 16.50 main.fol:8:1 baselines 10.87..10.87
+            box (0.00, 0.00) 466.89 × 16.50 main.fol:8:3 baselines 10.87..10.87
               text (0.00, 10.87) STIXTwoText-Regular 10.00 w 170.37 39 glyph(s) "Show your working in every calculation."
-          box (0.00, 33.00) 481.89 × 16.50 main.fol:9:1 baselines 10.87..10.87
-            box (0.00, 0.00) 481.89 × 16.50 main.fol:9:3 baselines 10.87..10.87
+          box (15.00, 37.00) 466.89 × 16.50 main.fol:9:1 baselines 10.87..10.87
+            box (0.00, 0.00) 466.89 × 16.50 main.fol:9:3 baselines 10.87..10.87
               text (0.00, 10.87) STIXTwoText-Regular 10.00 w 303.93 71 glyph(s) "Give numerical answers to an appropriate number of significant figures."
-      box (0.00, 136.24) 481.89 × 163.24 main.fol:11:1 baselines 16.25..157.61
+      box (0.00, 155.24) 481.89 × 163.24 main.fol:11:1 baselines 16.25..157.61
         box (0.00, 0.00) 481.89 × 23.74 main.fol:11:1 baselines 16.25..16.25 keep penalty 10000
-          text (0.00, 16.25) SourceSans3-Regular 13.00 w 50.61 9 glyph(s) "Section A"
+          text (0.00, 16.25) SourceSans3-Bold 13.00 w 53.17 9 glyph(s) "Section A"
         box (0.00, 29.74) 481.89 × 133.50 main.fol:13:1 baselines 10.87..127.87
-          box (0.00, 0.00) 481.89 × 33.00 main.fol:13:1 baselines 10.87..27.37
-            box (0.00, 0.00) 481.89 × 33.00 main.fol:13:3 baselines 10.87..27.37
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 118 glyph(s) "A ball is thrown vertically upwards at 12 m/s from the edge of a cliff 30 m high. Calculate the time it takes to reach"
-              text (0.00, 27.37) STIXTwoText-Regular 10.00 w 194.47 49 glyph(s) "the sea below, and its speed just before it does."
-          box (0.00, 39.00) 481.89 × 33.00 main.fol:14:1 baselines 10.87..27.37
-            box (0.00, 0.00) 481.89 × 33.00 main.fol:14:3 baselines 10.87..27.37
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 114 glyph(s) "A trolley of mass 2.0 kg is pushed along a smooth horizontal track by a constant force. Its speed doubles from 1.5"
-              text (0.00, 27.37) STIXTwoText-Regular 10.00 w 261.92 64 glyph(s) "m/s to 3.0 m/s in 4.0 s. Find the force on it and the work done."
-          box (0.00, 78.00) 481.89 × 16.50 main.fol:15:1 baselines 10.87..10.87
-            box (0.00, 0.00) 481.89 × 16.50 main.fol:15:3 baselines 10.87..10.87
+          box (15.00, 0.00) 466.89 × 33.00 main.fol:13:1 baselines 10.87..27.37
+            box (0.00, 0.00) 466.89 × 33.00 main.fol:13:3 baselines 10.87..27.37
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 466.89 112 glyph(s) "A ball is thrown vertically upwards at 12 m/s from the edge of a cliff 30 m high. Calculate the time it takes to"
+              text (0.00, 27.37) STIXTwoText-Regular 10.00 w 220.19 55 glyph(s) "reach the sea below, and its speed just before it does."
+          box (15.00, 39.00) 466.89 × 33.00 main.fol:14:1 baselines 10.87..27.37
+            box (0.00, 0.00) 466.89 × 33.00 main.fol:14:3 baselines 10.87..27.37
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 466.89 110 glyph(s) "A trolley of mass 2.0 kg is pushed along a smooth horizontal track by a constant force. Its speed doubles from"
+              text (0.00, 27.37) STIXTwoText-Regular 10.00 w 276.62 68 glyph(s) "1.5 m/s to 3.0 m/s in 4.0 s. Find the force on it and the work done."
+          box (15.00, 78.00) 466.89 × 16.50 main.fol:15:1 baselines 10.87..10.87
+            box (0.00, 0.00) 466.89 × 16.50 main.fol:15:3 baselines 10.87..10.87
               text (0.00, 10.87) STIXTwoText-Regular 10.00 w 405.33 97 glyph(s) "State Newton’s third law of motion, and explain why the forces in a pair never cancel each other."
-          box (0.00, 100.50) 481.89 × 33.00 main.fol:16:1 baselines 10.87..27.37
-            box (0.00, 0.00) 481.89 × 33.00 main.fol:16:3 baselines 10.87..27.37
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 114 glyph(s) "A car of mass 1200 kg rounds a bend of radius 50 m at a constant speed of 15 m/s. Calculate the resultant force on"
-              text (0.00, 27.37) STIXTwoText-Regular 10.00 w 124.30 32 glyph(s) "the car and state its direction."
-      box (0.00, 311.48) 481.89 × 372.99 main.fol:18:1 baselines 16.25..370.61
+          box (15.00, 100.50) 466.89 × 33.00 main.fol:16:1 baselines 10.87..27.37
+            box (0.00, 0.00) 466.89 × 33.00 main.fol:16:3 baselines 10.87..27.37
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 466.89 111 glyph(s) "A car of mass 1200 kg rounds a bend of radius 50 m at a constant speed of 15 m/s. Calculate the resultant force"
+              text (0.00, 27.37) STIXTwoText-Regular 10.00 w 137.55 35 glyph(s) "on the car and state its direction."
+      box (0.00, 330.48) 481.89 × 348.49 main.fol:18:1 baselines 16.25..346.11
         box (0.00, 0.00) 481.89 × 23.74 main.fol:18:1 baselines 16.25..16.25 keep penalty 10000
-          text (0.00, 16.25) SourceSans3-Regular 13.00 w 51.18 9 glyph(s) "Section B"
+          text (0.00, 16.25) SourceSans3-Bold 13.00 w 53.59 9 glyph(s) "Section B"
         box (0.00, 29.74) 481.89 × 49.50 main.fol:20:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "A projectile is launched at 20 degrees to the horizontal with a speed of 10 m/s. Ignoring air resistance, determine its"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 112 glyph(s) "range, its maximum height and its time of flight. Comment on how the answers would change if air resistance were"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 80.99 19 glyph(s) "taken into account."
-        box (0.00, 79.24) 481.89 × 49.50 main.fol:22:1 baselines 10.87..43.87
+        box (0.00, 84.24) 481.89 × 49.50 main.fol:22:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "A projectile is launched at 25 degrees to the horizontal with a speed of 11 m/s. Ignoring air resistance, determine its"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 112 glyph(s) "range, its maximum height and its time of flight. Comment on how the answers would change if air resistance were"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 80.99 19 glyph(s) "taken into account."
-        box (0.00, 128.74) 481.89 × 49.50 main.fol:24:1 baselines 10.87..43.87
+        box (0.00, 138.74) 481.89 × 49.50 main.fol:24:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "A projectile is launched at 30 degrees to the horizontal with a speed of 12 m/s. Ignoring air resistance, determine its"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 112 glyph(s) "range, its maximum height and its time of flight. Comment on how the answers would change if air resistance were"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 80.99 19 glyph(s) "taken into account."
-        box (0.00, 178.24) 481.89 × 49.50 main.fol:26:1 baselines 10.87..43.87
+        box (0.00, 193.24) 481.89 × 49.50 main.fol:26:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "A projectile is launched at 35 degrees to the horizontal with a speed of 13 m/s. Ignoring air resistance, determine its"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 112 glyph(s) "range, its maximum height and its time of flight. Comment on how the answers would change if air resistance were"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 80.99 19 glyph(s) "taken into account."
-        box (0.00, 227.74) 481.89 × 49.50 main.fol:28:1 baselines 10.87..43.87
+        box (0.00, 247.74) 481.89 × 49.50 main.fol:28:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "A projectile is launched at 40 degrees to the horizontal with a speed of 14 m/s. Ignoring air resistance, determine its"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 112 glyph(s) "range, its maximum height and its time of flight. Comment on how the answers would change if air resistance were"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 80.99 19 glyph(s) "taken into account."
-        box (0.00, 277.24) 481.89 × 49.50 main.fol:30:1 baselines 10.87..43.87
+        box (0.00, 302.24) 481.89 × 46.25 main.fol:30:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "A projectile is launched at 45 degrees to the horizontal with a speed of 15 m/s. Ignoring air resistance, determine its"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 112 glyph(s) "range, its maximum height and its time of flight. Comment on how the answers would change if air resistance were"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 80.99 19 glyph(s) "taken into account."
-        box (0.00, 326.74) 481.89 × 46.25 main.fol:32:1 baselines 10.87..43.87
-          text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 4.0 m and weight 210 N rests against a smooth vertical wall, with its foot on rough"
-          text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
-          text (0.00, 43.87) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
-page 2 595.28 × 841.89, 27 line(s)
-  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 7.62..479.86
-    box (0.00, 0.00) 481.89 × 482.24 main.fol:1:2 baselines 7.62..479.86
-      box (0.00, 0.00) 481.89 × 343.25 main.fol:18:1 baselines 7.62..337.62
-        box (0.00, 0.00) 481.89 × 46.25 main.fol:34:1 baselines 7.62..40.62
-          text (0.00, 7.62) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 5.0 m and weight 220 N rests against a smooth vertical wall, with its foot on rough"
+page 2 595.28 × 841.89, 30 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 7.62..569.36
+    box (0.00, 0.00) 481.89 × 571.74 main.fol:1:2 baselines 7.62..569.36
+      box (0.00, 0.00) 481.89 × 427.75 main.fol:18:1 baselines 7.62..422.12
+        box (0.00, 0.00) 481.89 × 46.25 main.fol:32:1 baselines 7.62..40.62
+          text (0.00, 7.62) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 4.0 m and weight 210 N rests against a smooth vertical wall, with its foot on rough"
           text (0.00, 24.12) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
           text (0.00, 40.62) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
-        box (0.00, 46.25) 481.89 × 49.50 main.fol:36:1 baselines 10.87..43.87
+        box (0.00, 51.25) 481.89 × 49.50 main.fol:34:1 baselines 10.87..43.87
+          text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 5.0 m and weight 220 N rests against a smooth vertical wall, with its foot on rough"
+          text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
+          text (0.00, 43.87) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
+        box (0.00, 105.75) 481.89 × 49.50 main.fol:36:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 6.0 m and weight 230 N rests against a smooth vertical wall, with its foot on rough"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
-        box (0.00, 95.75) 481.89 × 49.50 main.fol:38:1 baselines 10.87..43.87
+        box (0.00, 160.25) 481.89 × 49.50 main.fol:38:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 4.0 m and weight 240 N rests against a smooth vertical wall, with its foot on rough"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
-        box (0.00, 145.25) 481.89 × 49.50 main.fol:40:1 baselines 10.87..43.87
+        box (0.00, 214.75) 481.89 × 49.50 main.fol:40:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 5.0 m and weight 250 N rests against a smooth vertical wall, with its foot on rough"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
-        box (0.00, 194.75) 481.89 × 49.50 main.fol:42:1 baselines 10.87..43.87
+        box (0.00, 269.25) 481.89 × 49.50 main.fol:42:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 6.0 m and weight 260 N rests against a smooth vertical wall, with its foot on rough"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
-        box (0.00, 244.25) 481.89 × 49.50 main.fol:44:1 baselines 10.87..43.87
+        box (0.00, 323.75) 481.89 × 49.50 main.fol:44:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 4.0 m and weight 270 N rests against a smooth vertical wall, with its foot on rough"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
-        box (0.00, 293.75) 481.89 × 49.50 main.fol:46:1 baselines 10.87..43.87
+        box (0.00, 378.25) 481.89 × 49.50 main.fol:46:1 baselines 10.87..43.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 481.89 110 glyph(s) "A uniform ladder of length 5.0 m and weight 280 N rests against a smooth vertical wall, with its foot on rough"
           text (0.00, 27.37) STIXTwoText-Regular 10.00 w 481.89 119 glyph(s) "horizontal ground. Draw a free-body diagram of the ladder and find the least coefficient of friction that stops it from"
           text (0.00, 43.87) STIXTwoText-Regular 10.00 w 36.17 9 glyph(s) "slipping."
-      box (0.00, 355.25) 481.89 × 126.99 main.fol:51:3 baselines 16.25..124.61
+      box (0.00, 439.75) 481.89 × 131.99 main.fol:51:3 baselines 16.25..129.61
         box (0.00, 0.00) 481.89 × 23.74 main.fol:51:3 baselines 16.25..16.25 keep penalty 10000
-          text (0.00, 16.25) SourceSans3-Regular 13.00 w 71.67 11 glyph(s) "Mark scheme"
+          text (0.00, 16.25) SourceSans3-Bold 13.00 w 75.52 11 glyph(s) "Mark scheme"
         box (0.00, 29.74) 481.89 × 84.00 main.fol:53:3 baselines 10.87..78.37
-          box (0.00, 0.00) 481.89 × 16.50 main.fol:53:3 baselines 10.87..10.87
-            box (0.00, 0.00) 481.89 × 16.50 main.fol:53:5 baselines 10.87..10.87
+          box (15.00, 0.00) 466.89 × 16.50 main.fol:53:3 baselines 10.87..10.87
+            box (0.00, 0.00) 466.89 × 16.50 main.fol:53:5 baselines 10.87..10.87
               text (0.00, 10.87) STIXTwoText-Regular 10.00 w 439.61 105 glyph(s) "Time to reach the sea: 3.98 s; speed: 27.1 m/s. Award one mark for each, and one for using g = 9.81 m/s²."
-          box (0.00, 22.50) 481.89 × 16.50 main.fol:54:3 baselines 10.87..10.87
-            box (0.00, 0.00) 481.89 × 16.50 main.fol:54:5 baselines 10.87..10.87
+          box (15.00, 22.50) 466.89 × 16.50 main.fol:54:3 baselines 10.87..10.87
+            box (0.00, 0.00) 466.89 × 16.50 main.fol:54:5 baselines 10.87..10.87
               text (0.00, 10.87) STIXTwoText-Regular 10.00 w 135.63 33 glyph(s) "Force: 0.75 N; work done: 6.75 J."
-          box (0.00, 45.00) 481.89 × 16.50 main.fol:55:3 baselines 10.87..10.87
-            box (0.00, 0.00) 481.89 × 16.50 main.fol:55:5 baselines 10.87..10.87
+          box (15.00, 45.00) 466.89 × 16.50 main.fol:55:3 baselines 10.87..10.87
+            box (0.00, 0.00) 466.89 × 16.50 main.fol:55:5 baselines 10.87..10.87
               text (0.00, 10.87) STIXTwoText-Regular 10.00 w 386.48 92 glyph(s) "Award one mark for the statement and one for noting that the forces act on different bodies."
-          box (0.00, 67.50) 481.89 × 16.50 main.fol:56:3 baselines 10.87..10.87
-            box (0.00, 0.00) 481.89 × 16.50 main.fol:56:5 baselines 10.87..10.87
+          box (15.00, 67.50) 466.89 × 16.50 main.fol:56:3 baselines 10.87..10.87
+            box (0.00, 0.00) 466.89 × 16.50 main.fol:56:5 baselines 10.87..10.87
               text (0.00, 10.87) STIXTwoText-Regular 10.00 w 233.51 56 glyph(s) "Resultant force: 5400 N, towards the centre of the bend."
-        box (0.00, 113.74) 481.89 × 13.25 main.fol:58:3 baselines 10.87..10.87
+        box (0.00, 118.74) 481.89 × 13.25 main.fol:58:3 baselines 10.87..10.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 368.55 90 glyph(s) "Section B, first projectile: range 6.55 m, maximum height 0.596 m, time of flight 0.697 s."

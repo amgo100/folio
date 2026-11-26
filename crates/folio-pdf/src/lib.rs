@@ -48,8 +48,8 @@ use std::sync::Arc;
 
 use ecow::EcoString;
 use folio_component::{
-    Abs, FillRule, FontId, Fragment, FragmentItem, GlyphRun, LineCap, LineJoin, Paint, PathItem,
-    Point, Shape, SourceRef,
+    Abs, FillRule, FontId, Fragment, FragmentItem, GlyphRun, LineCap, LineJoin, Location, Paint,
+    PathItem, Point, Shape, SourceRef,
 };
 use folio_fonts::Font;
 use krilla::color::rgb;
@@ -130,6 +130,11 @@ pub struct Tag {
     pub role: Role,
     /// The source its fragments name.
     pub source: SourceRef,
+    /// Which instance of the source's element the node is, as its
+    /// fragments name it ([`Fragment::location`]): the blocks that a loop
+    /// or the calls of a closure make share a source and differ here.
+    /// [`Location::UNKNOWN_INSTANCE`] matches a box of any instance.
+    pub instance: u32,
     /// The node's text where the writer needs it whole: a heading's, for
     /// its structure element's title and its bookmark.
     pub text: Option<EcoString>,
@@ -138,11 +143,13 @@ pub struct Tag {
 }
 
 impl Tag {
-    /// A node without text or children.
+    /// A node without text or children, of any instance of `source`
+    /// ([`Location::UNKNOWN_INSTANCE`]).
     pub fn new(role: Role, source: SourceRef) -> Self {
         Self {
             role,
             source,
+            instance: Location::UNKNOWN_INSTANCE,
             text: None,
             children: Vec::new(),
         }
@@ -660,7 +667,7 @@ impl Writer<'_> {
     fn item(&mut self, surface: &mut Surface<'_>, item: &FragmentItem, at: Point, node: usize) {
         match item {
             FragmentItem::Group(group) => {
-                let child = self.tagger.enter(node, group.source, at.y);
+                let child = self.tagger.enter(node, group.location(), at.y);
                 self.fragment(surface, group, at, child);
                 self.tagger.advance();
             }

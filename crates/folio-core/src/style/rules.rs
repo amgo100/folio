@@ -4,12 +4,12 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Body, FieldType, Name, PropertyType, QualifiedName, Target};
 use folio_syntax::ast::{self, AstNode, SimpleSelector, StyleItem};
-use folio_syntax::{Span, SyntaxNode};
+use folio_syntax::{Source, Span, SyntaxNode};
 
 use super::props::{PropId, Properties, Property, confusable, not_implemented};
 use super::selector::{AttrTest, Compound, Needs, NodeName, Pseudo, Selector, Specificity};
@@ -27,6 +27,9 @@ use crate::project::{Manifest, ProjectPath};
 pub enum Origin {
     /// The initial values of built-in and component properties.
     Default,
+    /// The core's base stylesheet ([`BASE_STYLESHEET`]): the look of the
+    /// built-in elements in a project that does not restyle them.
+    Base,
     /// A stylesheet another stylesheet imports.
     Theme,
     /// A project stylesheet (`project.styles`).
@@ -179,10 +182,27 @@ impl Cascade {
     }
 }
 
-/// The rules of a build: those of its project stylesheets and their
-/// imports, of its variant's overlays, and of the overrides sheet, with the
-/// `@variant` and `@target` blocks that apply to it. Reports errors in the
-/// rules of every block, whether or not it applies.
+/// The core's base stylesheet (SPEC §5.1): the lowest origin of every
+/// build's cascade, which gives the built-in elements a readable look.
+/// Every other stylesheet wins over it.
+pub const BASE_STYLESHEET: &str = include_str!("base.fsty");
+
+/// The path that function calls in the base stylesheet would see as their
+/// file. It has none, so the path only has to be a valid one.
+const BASE_PATH: &str = "folio-base.fsty";
+
+/// The base stylesheet, parsed once per process. Its spans are detached:
+/// it is in no project, and it has nothing to report.
+fn base_sheet() -> &'static Source {
+    static BASE: LazyLock<Source> = LazyLock::new(|| Source::detached_stylesheet(BASE_STYLESHEET));
+    &BASE
+}
+
+/// The rules of a build: those of the base stylesheet, of its project
+/// stylesheets and their imports, of its variant's overlays, and of the
+/// overrides sheet, with the `@variant` and `@target` blocks that apply to
+/// it. Reports errors in the rules of every block, whether or not it
+/// applies.
 ///
 /// Reads no content file, so an edit to content does not re-run it.
 #[salsa::tracked(returns(ref))]
@@ -206,6 +226,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
         office: BTreeSet::new(),
         order: 0,
     };
+    gather.base();
     for path in &manifest.project.styles {
         gather.file(&path.v, Origin::Project);
     }
@@ -306,6 +327,17 @@ struct Gather<'a> {
 }
 
 impl Gather<'_> {
+    /// Gathers the base stylesheet, first.
+    fn base(&mut self) {
+        let sheet = base_sheet()
+            .root()
+            .cast::<ast::Stylesheet<'_>>()
+            .expect("the base stylesheet is a stylesheet");
+        let path = ProjectPath::new(BASE_PATH).expect("a valid project path");
+        let items: Vec<_> = sheet.items().collect();
+        self.items(&path, &items, Origin::Base, true);
+    }
+
     /// Gathers a stylesheet, once per build. A missing file is reported by
     /// the search for the build's files.
     fn file(&mut self, path: &ProjectPath, origin: Origin) {
@@ -531,24 +563,11 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Compiles a rule, as [`Self::compile_rule`], without the warnings of
-    /// [`Self::lint_rule`]: for a scoped rule in content, whose caller lints
-    /// it once it applies (not yet done: #243).
-    pub(super) fn rule<'s>(
-        &self,
-        values: &Values<'_>,
-        selectors: ast::SelectorList<'s>,
-        declarations: impl Iterator<Item = ast::Declaration<'s>>,
-        origin: Origin,
-        order: u32,
-        span: Span,
-    ) -> Compiled {
-        self.compile_rule(values, selectors, declarations, origin, order, span)
-    }
-
     /// Compiles a rule: one rule per selector, sharing the declarations.
-    /// A selector with an error is left out, after it is reported.
-    fn compile_rule<'s>(
+    /// A selector with an error is left out, after it is reported. The
+    /// warnings that a declaration has no effect are [`Self::lint_rule`]'s,
+    /// which the caller runs once it knows that the rule applies.
+    pub(super) fn compile_rule<'s>(
         &self,
         values: &Values<'_>,
         selectors: ast::SelectorList<'s>,
@@ -585,10 +604,11 @@ impl<'a> Compiler<'a> {
     }
 
     /// Warns about the declarations of a compiled rule that set a property
-    /// no stage reads yet. The cascade calls it only for a rule that applies
-    /// to the build: one that another variant or target has has no effect
-    /// here anyway. Nothing is reported for a rule whose selectors were all
-    /// ignored. Its selectors share the declarations.
+    /// no stage reads yet. The cascade and the scoped rules in content call
+    /// it only for a rule that applies to the build: a rule of another
+    /// variant or target has no effect here anyway. Nothing is reported
+    /// for a rule whose selectors were all ignored. Its selectors share
+    /// the declarations.
     pub(super) fn lint_rule(&self, compiled: &Compiled) {
         let first = compiled
             .rules
@@ -603,7 +623,7 @@ impl<'a> Compiler<'a> {
                 DeclValue::Value(value) => Some(value),
                 DeclValue::Template(_) => None,
             };
-            self.lint_not_implemented(property, value, decl.span);
+            self.lint_not_implemented(property, value, false, decl.span);
         }
     }
 
@@ -651,8 +671,20 @@ impl<'a> Compiler<'a> {
     }
 
     /// Warns that a declaration sets a property no stage reads yet, so it
-    /// has no effect.
-    fn lint_not_implemented(&self, property: &Property, value: Option<&Declared>, span: Span) {
+    /// has no effect: in a stylesheet, a scoped rule or an element's own
+    /// fields alike. `content` says whether the value comes from content,
+    /// which writes keywords as strings (see [`coerce`]).
+    pub(super) fn lint_not_implemented(
+        &self,
+        property: &Property,
+        value: Option<&Declared>,
+        content: bool,
+        span: Span,
+    ) {
+        // Most properties are never reported: skip computing their values.
+        if not_implemented(property, None).is_none() {
+            return;
+        }
         // The value as plain data, compared with the initial one. It is
         // computed at two font sizes: a value in ems that equals the
         // initial value at one size is not initial at the other.
@@ -660,7 +692,7 @@ impl<'a> Compiler<'a> {
             value.map(|v| {
                 compute(v, folio_component::Abs::pt(size))
                     .ok()
-                    .map(|v| coerce(v, &property.ty, false))
+                    .map(|v| coerce(v, &property.ty, content))
             })
         };
         let (computed, other) = (at(10.0), at(13.0));

@@ -37,7 +37,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::EcoVec;
-use folio_component::{Abs, Color, Em, Paint, SourceRef, Value};
+use folio_component::{Abs, Color, Em, Location, Paint, SourceRef, Value};
 
 use crate::span_map::source_ref;
 use folio_syntax::Span;
@@ -228,8 +228,9 @@ pub(super) enum Part {
     Solid(Abs),
     /// The innermost open block ends.
     Close,
-    /// A block starts.
-    Open(Arc<BlockBox>),
+    /// A block starts: its box, and the location of the element instance
+    /// it is the box of.
+    Open(Arc<BlockBox>, Location),
 }
 
 /// A constraint that a page break goes against.
@@ -305,7 +306,7 @@ impl Boundary {
         let first_open = self
             .parts
             .iter()
-            .position(|p| matches!(p, Part::Open(_)))
+            .position(|p| matches!(p, Part::Open(..)))
             .unwrap_or(self.parts.len());
         let parts = match how {
             Walk::Through => &self.parts[..],
@@ -342,7 +343,7 @@ impl Boundary {
                     }
                 }
                 Part::Close => f(part, y),
-                Part::Open(_) => opening.push(part),
+                Part::Open(..) => opening.push(part),
             }
         }
         settle(&mut y, &mut pending, &mut opening, &mut f);
@@ -358,7 +359,7 @@ impl Boundary {
     pub(super) fn opens(&self) -> usize {
         self.parts
             .iter()
-            .filter(|p| matches!(p, Part::Open(_)))
+            .filter(|p| matches!(p, Part::Open(..)))
             .count()
     }
 }
@@ -370,8 +371,9 @@ pub(super) struct Item {
     pub before: Boundary,
     /// The leaf.
     pub leaf: Leaf,
-    /// The blocks it is in, outermost first.
-    pub stack: EcoVec<Arc<BlockBox>>,
+    /// The blocks it is in, outermost first, each with the location of the
+    /// element instance it is the box of.
+    pub stack: EcoVec<(Arc<BlockBox>, Location)>,
 }
 
 /// Where a leaf comes from, for the pages' line lists.
@@ -615,7 +617,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// What the boundary being built has seen since the last leaf.
 enum Event {
     Close(Arc<BlockBox>),
-    Open(Arc<BlockBox>),
+    Open(Arc<BlockBox>, Location),
 }
 
 struct Builder<'a> {
@@ -628,8 +630,8 @@ struct Builder<'a> {
     slots: &'a [LineSlot],
     props: &'a Properties,
     metrics: FaceMetrics<'a>,
-    /// The blocks open, outermost first.
-    stack: EcoVec<Arc<BlockBox>>,
+    /// The blocks open, outermost first, with their locations.
+    stack: EcoVec<(Arc<BlockBox>, Location)>,
     /// The blocks that closed and opened since the last leaf.
     pending: Vec<Event>,
     /// The last leaf.
@@ -640,8 +642,9 @@ struct Builder<'a> {
 
 impl Builder<'_> {
     fn block(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) {
-        self.stack.push(boxed.clone());
-        self.pending.push(Event::Open(boxed.clone()));
+        self.stack.push((boxed.clone(), block.location));
+        self.pending
+            .push(Event::Open(boxed.clone(), block.location));
         let before = self.items.len();
         for child in &block.children {
             match child {
@@ -817,9 +820,9 @@ impl Builder<'_> {
                         out.constraints.push(Constraint::KeepWithNext(b.span));
                     }
                 }
-                Event::Open(b) => {
+                Event::Open(b, location) => {
                     out.parts.push(Part::Space(b.space_before));
-                    out.parts.push(Part::Open(b.clone()));
+                    out.parts.push(Part::Open(b.clone(), *location));
                     out.parts.push(Part::Solid(b.inset().top));
                     if prev.is_some() {
                         match b.break_before {
@@ -857,8 +860,10 @@ impl Builder<'_> {
         let Some(prev) = self.items.last() else {
             return;
         };
-        for (a, b) in prev.stack.iter().zip(&self.stack[..across]) {
-            if !Arc::ptr_eq(a, b) {
+        for ((a, at), (b, bt)) in prev.stack.iter().zip(&self.stack[..across]) {
+            // Equal boxes are one `Arc`, so the locations tell two blocks
+            // of one loop or call apart.
+            if !Arc::ptr_eq(a, b) || at != bt {
                 break;
             }
             if !b.breakable {

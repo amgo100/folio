@@ -4,8 +4,8 @@
 use std::fmt::Write as _;
 
 use folio_component::{
-    Abs, Color, Em, FontId, Fragment, FragmentItem, Glyph, GlyphRun, Paint, Path, Point, Shape,
-    Size, SourceRef,
+    Abs, Color, Em, FontId, Fragment, FragmentItem, Glyph, GlyphRun, Location, Paint, Path, Point,
+    Shape, Size, SourceRef,
 };
 use folio_fonts::{Font, bundled};
 use krilla::tagging::{Node, TagKind, TagTree};
@@ -72,6 +72,18 @@ fn boxed(source: u64, items: Vec<FragmentItem>) -> FragmentItem {
         );
     }
     FragmentItem::Group(fragment)
+}
+
+/// A box of instance `instance` of node `source` holding `items`, as
+/// the page builder makes it for a block whose location it knows.
+fn located(source: u64, instance: u32, items: Vec<FragmentItem>) -> FragmentItem {
+    let FragmentItem::Group(fragment) = boxed(source, items) else {
+        unreachable!()
+    };
+    FragmentItem::Group(fragment.with_location(Location {
+        source: SourceRef(source),
+        instance,
+    }))
 }
 
 /// A page whose body region, a box of the root as the page builder dresses
@@ -342,6 +354,94 @@ Section
 "
     );
     assert_eq!(headings, [(1, "Forces".into(), 0)]);
+}
+
+/// The blocks that the iterations of a loop make share a source and
+/// differ in instance: a block at the top of a page that is another
+/// instance than the block before it is a block of its own, with its own
+/// structure element and bookmark, not a continuation (#251).
+#[test]
+fn loop_made_blocks_at_the_top_of_a_page_are_new() {
+    let at = |tag: Tag, instance: u32| Tag { instance, ..tag };
+    let section = |instance: u32, title: &str| {
+        at(
+            tag(
+                Role::Section,
+                2,
+                vec![
+                    at(heading(3, title), instance),
+                    at(tag(Role::Paragraph, 4, vec![]), instance),
+                ],
+            ),
+            instance,
+        )
+    };
+    let structure = tag(
+        Role::Document,
+        1,
+        vec![section(1, "Forces"), section(2, "Energy")],
+    );
+    let block = |instance: u32, title: &str, body: &str| {
+        located(
+            2,
+            instance,
+            vec![
+                located(3, instance, vec![run(title, 13)]),
+                located(4, instance, vec![run(body, 14)]),
+            ],
+        )
+    };
+    let first = page(vec![boxed(1, vec![block(1, "Forces", "A ball falls.")])]);
+    let second = page(vec![boxed(1, vec![block(2, "Energy", "It is kept.")])]);
+    let pages = [first, second];
+    let (tree, headings) = tagged(&document(&pages, &structure));
+    assert_eq!(
+        tree,
+        "\
+Section
+  H1 Forces
+    ·
+  P
+    ·
+Section
+  H1 Energy
+    ·
+  P
+    ·
+"
+    );
+    assert_eq!(headings, [(1, "Forces".into(), 0), (1, "Energy".into(), 1)]);
+
+    // The same instance at the top of the next page still continues.
+    let first = page(vec![boxed(
+        1,
+        vec![located(2, 1, vec![located(3, 1, vec![run("Forces", 13)])])],
+    )]);
+    let second = page(vec![boxed(
+        1,
+        vec![
+            located(2, 1, vec![located(4, 1, vec![run("A ball falls.", 14)])]),
+            block(2, "Energy", "It is kept."),
+        ],
+    )]);
+    let pages = [first, second];
+    let (tree, headings) = tagged(&document(&pages, &structure));
+    assert_eq!(
+        tree,
+        "\
+Section
+  H1 Forces
+    ·
+  P
+    ·
+Section
+  H1 Energy
+    ·
+  P
+    ·
+"
+    );
+    assert_eq!(headings, [(1, "Forces".into(), 0), (1, "Energy".into(), 1)]);
 }
 
 /// Parts with their element's source are matched in order, and a box that

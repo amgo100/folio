@@ -43,7 +43,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::{EcoVec, eco_format};
-use folio_component::{Abs, Fragment, FragmentItem, Path, Point, Shape, Size, SourceRef, Stroke};
+use folio_component::{Abs, Fragment, FragmentItem, Location, Path, Point, Shape, Size, Stroke};
 use folio_syntax::Span;
 
 use super::flow::{
@@ -128,6 +128,7 @@ fn same(a: &Fragment, b: &Fragment) -> bool {
     let shared = a.items.as_ptr() == b.items.as_ptr() && a.items.len() == b.items.len();
     if shared {
         a.size == b.size
+            // Span maps name sources, not instances.
             && a.source == b.source
             && a.first_baseline == b.first_baseline
             && a.last_baseline == b.last_baseline
@@ -204,7 +205,7 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     );
 
     // The page and its body are boxes of the document.
-    let root = source_ref(text.root.span);
+    let root = text.root.location;
     // Glyph runs name their fonts by index into the faces, so the faces
     // are part of what every page shows.
     let mut faces = Fx::default();
@@ -310,11 +311,12 @@ fn content_hash(fragment: &Fragment) -> u64 {
 /// A page and its body as boxes of the document's root, `root`. Pages come
 /// from the cache whatever document they were made for, so they are
 /// dressed afterwards; the cache keeps a page as it was last dressed.
-fn dress(page: &Fragment, root: SourceRef) -> Fragment {
-    let mut page = page.clone().with_source(root);
+fn dress(page: &Fragment, root: Location) -> Fragment {
+    let mut page = page.clone().with_location(root);
     for (_, item) in page.items.make_mut() {
         if let FragmentItem::Group(body) = item {
-            body.source = root;
+            body.source = root.source;
+            body.instance = root.instance;
         }
     }
     page
@@ -514,7 +516,7 @@ fn layout_page(flow: &Flow, master: &PageMaster, start: usize, first: bool) -> (
         let item = &flow.items[start];
         let span = match &item.leaf {
             Leaf::Line { paragraph, .. } => paragraph.span,
-            Leaf::Empty => item.stack.last().map_or(Span::detached(), |b| b.span),
+            Leaf::Empty => item.stack.last().map_or(Span::detached(), |(b, _)| b.span),
         };
         (span, found.overflow)
     });
@@ -531,6 +533,8 @@ fn layout_page(flow: &Flow, master: &PageMaster, start: usize, first: bool) -> (
 /// A block open on the page being assembled.
 struct OpenBox {
     block: Arc<BlockBox>,
+    /// The location of the element instance it is the box of.
+    location: Location,
     /// The top of its box on the page, from the top of the body.
     top: Abs,
     /// Whether it started on an earlier page.
@@ -553,8 +557,9 @@ impl Assembler {
     /// Handles a block that ends or starts at `y`.
     fn event(&mut self, part: &Part, y: Abs) {
         match part {
-            Part::Open(block) => self.open.push(OpenBox {
+            Part::Open(block, location) => self.open.push(OpenBox {
                 block: block.clone(),
+                location: *location,
                 top: y,
                 continued: false,
                 items: Vec::new(),
@@ -575,7 +580,7 @@ impl Assembler {
         let top = open.top;
         let height = (y - top).max(Abs::zero());
         let size = Size::new(block.width, height);
-        let mut fragment = Fragment::new(size).with_source(source_ref(block.span));
+        let mut fragment = Fragment::new(size).with_location(open.location);
         decorate(&mut fragment, block, !open.continued, !continues);
         let origin = Point::new(block.x, top);
         for (pos, item) in open.items {
@@ -625,9 +630,10 @@ fn assemble(flow: &Flow, master: &PageMaster, start: usize, end: usize, first: b
         y += head.before.walk(Walk::Through, |p, at| asm.event(p, at));
     } else {
         let continued = head.stack.len().saturating_sub(head.before.opens());
-        for block in &head.stack[..continued] {
+        for (block, location) in &head.stack[..continued] {
             asm.open.push(OpenBox {
                 block: block.clone(),
+                location: *location,
                 top: Abs::zero(),
                 continued: true,
                 items: Vec::new(),
@@ -754,7 +760,7 @@ struct Entry {
     end: Option<Boundary>,
     out: Arc<PageOut>,
     /// The page as last dressed, and the root it was dressed for.
-    dressed: (SourceRef, Fragment),
+    dressed: (Location, Fragment),
     /// The clock when it was last asked for.
     used: u64,
 }
@@ -801,7 +807,7 @@ impl PageCache {
         start: usize,
         first: bool,
         now: u64,
-        root: SourceRef,
+        root: Location,
     ) -> (Arc<PageOut>, Fragment) {
         let key = (master, first, flow.items[start].leaf.fingerprint());
         if let Some(bucket) = lock(&self.entries).get_mut(&key)
@@ -916,16 +922,16 @@ mod tests {
             Part::Close,
             Part::Space(pt(6.0)),
             Part::Space(pt(10.0)),
-            Part::Open(block.clone()),
+            Part::Open(block.clone(), Location::DETACHED),
             Part::Solid(pt(2.0)),
             Part::Space(pt(4.0)),
-            Part::Open(block),
+            Part::Open(block, Location::DETACHED),
             Part::Solid(Abs::zero()),
             Part::Lead(pt(1.0)),
         ]);
         let mut events = Vec::new();
         let gap = b.walk(Walk::Through, |p, y| {
-            events.push((matches!(p, Part::Open(_)), y.to_pt()))
+            events.push((matches!(p, Part::Open(..)), y.to_pt()))
         });
         // 1 + max(6, 10) + 2 + 4 + 1.
         assert_eq!(gap, pt(18.0));

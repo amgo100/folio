@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{BODY, LAYOUT_HINTS, Name, QualifiedName, Target};
+use folio_component::{BODY, LAYOUT_HINTS, Location, Name, QualifiedName, Target};
 use folio_syntax::ast::{self, AstNode};
 use folio_syntax::{Span, SyntaxNode};
 
@@ -25,6 +25,7 @@ use super::value::{Declared, Values, check};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Content, Element, Node, Value};
+use crate::locate::StyledChildren;
 use crate::model::document;
 use crate::project::ProjectPath;
 
@@ -51,12 +52,18 @@ pub struct Styled {
 /// other than the body, in the canonical order of its fields (SPEC §4.3),
 /// which does not depend on how a call was written. A part holds the
 /// elements of its content.
+///
+/// A node names the element it styles by its location, so later stages
+/// that drop or add nodes keep every node with its element
+/// ([`crate::locate::StyledChildren`]).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StyledNode {
     /// The element's name, or the part's.
     pub name: NodeName,
     /// The element, or the element whose part it is.
     pub span: Span,
+    /// The location of the element, or of the element whose part it is.
+    pub location: Location,
     /// Its style.
     pub style: ComputedStyle,
     /// Its children.
@@ -212,14 +219,23 @@ impl<'a> Child<'a> {
 }
 
 /// The children of an element with their nodes in the styled tree
-/// (`node` is the element's node), in the styled tree's order.
+/// (`node` is the element's node), in the order of the element's fields.
+/// Each is paired with its node by location, or by name for a part
+/// ([`StyledChildren`]); a child without a node is left out.
 pub(crate) fn styled_children<'a>(
     element: &'a Element,
     node: &'a StyledNode,
 ) -> Vec<(Child<'a>, &'a StyledNode)> {
+    let mut styled = StyledChildren::new(node);
     element_children(element)
         .into_iter()
-        .zip(&node.children)
+        .filter_map(|child| {
+            let node = match child {
+                Child::Element(element) => styled.element(element),
+                Child::Part(name, _) => styled.part(&Name::new(name)?),
+            }?;
+            Some((child, node))
+        })
         .collect()
 }
 
@@ -315,23 +331,24 @@ struct Walker<'a> {
 impl<'a> Walker<'a> {
     fn root(&mut self, root: &Element) -> StyledNode {
         let siblings = [Child::Element(root)];
-        self.node(&siblings, 0, None, None, root.span)
+        self.node(&siblings, 0, None, None, (root.span, root.location))
     }
 
     /// Styles the child `i` of `siblings`, with the context of its parent;
-    /// `owner` is the element whose children they are.
+    /// `owner` is the span and location of the element whose children they
+    /// are.
     fn node(
         &mut self,
         siblings: &[Child<'_>],
         i: usize,
         context: Option<ContextKey<'a>>,
         parent: Option<&ComputedStyle>,
-        owner: Span,
+        owner: (Span, Location),
     ) -> StyledNode {
         let needs = &self.cascade.needs;
         let child = siblings[i];
-        let span = match child {
-            Child::Element(element) => element.span,
+        let (span, location) = match child {
+            Child::Element(element) => (element.span, element.location),
             Child::Part(..) => owner,
         };
         let view = self.view(siblings, i, &needs.subject, needs);
@@ -380,7 +397,10 @@ impl<'a> Walker<'a> {
         }
         let grandchildren = child.children();
         let children = (0..grandchildren.len())
-            .map(|j| self.node(&grandchildren, j, child_context, Some(&style), span))
+            .map(|j| {
+                let owner = (span, location);
+                self.node(&grandchildren, j, child_context, Some(&style), owner)
+            })
             .collect();
         if scoped_view.is_some() {
             self.scoped_chain.pop();
@@ -390,6 +410,7 @@ impl<'a> Walker<'a> {
         StyledNode {
             name: name_of(child),
             span,
+            location,
             style,
             children,
         }
@@ -417,7 +438,8 @@ impl<'a> Walker<'a> {
     }
 
     /// Compiles a scoped rule, in document order, once: its errors are
-    /// reported whether or not it applies to the build, and the rules that
+    /// reported whether or not it applies to the build, its warnings that
+    /// something has no effect yet only when it does, and the rules that
     /// apply are kept for the walk.
     fn compile_scoped(&mut self, node: &SyntaxNode) {
         let Some(rule) = node.cast::<ast::ScopedRule<'_>>() else {
@@ -436,7 +458,8 @@ impl<'a> Walker<'a> {
         let file = self.file_of(node.span());
         let values = Values::new(self.compiler.values, file);
         self.order += 1;
-        let compiled = self.compiler.rule(
+        self.compiler.applies.set(applies);
+        let compiled = self.compiler.compile_rule(
             &values,
             rule.selectors(),
             rule.declarations(),
@@ -444,9 +467,11 @@ impl<'a> Walker<'a> {
             self.order,
             rule.span(),
         );
+        self.compiler.applies.set(true);
         if !applies {
             return;
         }
+        self.compiler.lint_rule(&compiled);
         for rule in &compiled.rules {
             self.scoped_needs.add(&rule.selector);
         }
@@ -507,9 +532,10 @@ impl<'a> Walker<'a> {
         ranked.into_iter().flatten().collect()
     }
 
-    /// A declaration of the field `key`: `override` or a hint. The span is
-    /// the element's, since instances do not keep the spans of their
-    /// arguments.
+    /// A declaration of the field `key`: `override` or a hint, with the
+    /// warning a stylesheet's declaration would give if no stage reads its
+    /// property yet. The span is the element's, since instances do not keep
+    /// the spans of their arguments.
     fn inline_decl(&self, key: &str, name: &str, value: &Value, span: Span) -> Option<Decl> {
         let prop = self.compiler.property_named(name, span)?;
         let property = self.cascade.properties.get(prop);
@@ -524,6 +550,8 @@ impl<'a> Walker<'a> {
             );
             return None;
         }
+        self.compiler
+            .lint_not_implemented(property, Some(&declared), true, span);
         Some(Decl {
             prop,
             value: DeclValue::Value(declared),

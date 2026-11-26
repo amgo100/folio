@@ -5,16 +5,17 @@
 //!   and those of the components in use, each with a type, an initial
 //!   value, inheritance, and whether it affects layout or only paint
 //!   (SPEC §10.2), sorted into property groups.
-//! - **Rules** ([`cascade()`]): a build reads its project stylesheets and
-//!   what they `@import`, its variant's overlay stylesheets, and the
-//!   overrides sheet. Tokens (`$accent`) are defined across them, and
+//! - **Rules** ([`cascade()`]): a build reads the core's base stylesheet
+//!   ([`BASE_STYLESHEET`]), its project stylesheets and what they
+//!   `@import`, its variant's overlay stylesheets, and the overrides
+//!   sheet. Tokens (`$accent`) are defined across them, and
 //!   values are evaluated with the operators and standard library of
 //!   scripts. `@variant` and `@target` blocks apply to the builds they
 //!   name. Rules with `:step(..)` are collected for step styling, not
 //!   applied.
-//! - **Cascade**: origin first (defaults < imported theme < project <
-//!   variant overlay < target overlay < overrides sheet < local overrides
-//!   in content), then specificity, then source order. There is no
+//! - **Cascade**: origin first (defaults < base stylesheet < imported
+//!   theme < project < variant overlay < target overlay < overrides sheet
+//!   < local overrides in content), then specificity, then source order. There is no
 //!   `!important`.
 //! - **Matching** ([`styles()`]): a node is matched by a query keyed by
 //!   what rules can see of it, so an insertion re-matches only the
@@ -35,7 +36,9 @@ mod value;
 
 pub use self::computed::{Computed, ComputedStyle, PropertyGroup};
 pub use self::props::{GroupId, PropId, Properties, Property};
-pub use self::rules::{Cascade, Decl, DeclValue, Origin, Priority, Rule, StepRule, Steps, cascade};
+pub use self::rules::{
+    BASE_STYLESHEET, Cascade, Decl, DeclValue, Origin, Priority, Rule, StepRule, Steps, cascade,
+};
 pub use self::selector::{
     Attr, AttrOp, AttrTest, Combinator, Compound, Need, Needs, NodeName, NodeView, Position,
     Pseudo, Selector, Specificity, Subject,
