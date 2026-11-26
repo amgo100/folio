@@ -71,82 +71,61 @@ pub const KEEP: f64 = 10_000.0;
 pub const UNBREAKABLE: f64 = 100_000.0;
 
 /// The width and offset of every paragraph's lines: the content width of
-/// the block whose content it is, from the left of the body.
+/// the block whose content it is, from the left of the body; and the
+/// content width of the block of each display, by its index in
+/// [`Text::maths`](crate::text::Text::maths). One walk of the blocks gives
+/// both.
 pub(super) fn slots(
     root: &TextBlock,
     props: &Properties,
     width: Abs,
     count: usize,
-) -> Vec<LineSlot> {
-    fn walk(block: &TextBlock, boxed: &BlockBox, props: &Properties, out: &mut [LineSlot]) {
+    maths: &[crate::text::TextMath],
+) -> (Vec<LineSlot>, Vec<(usize, Abs)>) {
+    struct Walk<'a> {
+        props: &'a Properties,
+        displays: HashMap<Location, usize>,
+        slots: Vec<LineSlot>,
+        widths: Vec<(usize, Abs)>,
+    }
+    fn walk(block: &TextBlock, boxed: &BlockBox, w: &mut Walk<'_>) {
         let (offset, width) = boxed.content();
+        if block.part.is_none()
+            && let Some(&i) = w.displays.get(&block.location)
+        {
+            w.widths.push((i, width));
+        }
         for child in &block.children {
             match child {
                 TextFlow::Paragraph(i) => {
-                    if let Some(slot) = out.get_mut(*i) {
+                    if let Some(slot) = w.slots.get_mut(*i) {
                         *slot = LineSlot { offset, width };
                     }
                 }
-                TextFlow::Block(b) => walk(b, &boxed.child(&b.style, props, b.span), props, out),
+                TextFlow::Block(b) => walk(b, &boxed.child(&b.style, w.props, b.span), w),
             }
         }
     }
-    let mut out = vec![
-        LineSlot {
-            offset: Abs::zero(),
-            width,
-        };
-        count
-    ];
+    let mut w = Walk {
+        props,
+        displays: maths
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.display)
+            .map(|(i, m)| (m.location, i))
+            .collect(),
+        slots: vec![
+            LineSlot {
+                offset: Abs::zero(),
+                width,
+            };
+            count
+        ],
+        widths: Vec::new(),
+    };
     let root_box = BlockBox::of(&root.style, props, root.span, Abs::zero(), width);
-    walk(root, &root_box, props, &mut out);
-    out
-}
-
-/// The content width of the block of each display, by its index in
-/// [`Text::maths`], in a body `width` wide.
-pub(super) fn display_widths(
-    root: &TextBlock,
-    props: &Properties,
-    width: Abs,
-    maths: &[crate::text::TextMath],
-) -> Vec<(usize, Abs)> {
-    fn walk(
-        block: &TextBlock,
-        boxed: &BlockBox,
-        props: &Properties,
-        displays: &HashMap<Location, usize>,
-        out: &mut Vec<(usize, Abs)>,
-    ) {
-        if block.part.is_none()
-            && let Some(&i) = displays.get(&block.location)
-        {
-            out.push((i, boxed.content().1));
-        }
-        for child in &block.children {
-            if let TextFlow::Block(b) = child {
-                walk(
-                    b,
-                    &boxed.child(&b.style, props, b.span),
-                    props,
-                    displays,
-                    out,
-                );
-            }
-        }
-    }
-    let displays: HashMap<Location, usize> = maths
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| m.display)
-        .map(|(i, m)| (m.location, i))
-        .collect();
-    let mut out = Vec::new();
-    if !displays.is_empty() {
-        let root_box = BlockBox::of(&root.style, props, root.span, Abs::zero(), width);
-        walk(root, &root_box, props, &displays, &mut out);
-    }
-    out
+    walk(root, &root_box, &mut w);
+    (w.slots, w.widths)
 }
 
 /// A paragraph broken into lines, with what breaking it at another width

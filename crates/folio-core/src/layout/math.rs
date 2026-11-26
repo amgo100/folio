@@ -243,7 +243,7 @@ fn lay_out(
     let unset = std::cell::RefCell::new(Vec::new());
     let number = |target: Target| {
         let text = resolution.number(target)?.number.as_ref()?;
-        let set = set_number(text, options, m.span);
+        let set = set_number(cache, text, options, m.span);
         if set.is_none() {
             unset.borrow_mut().push(text.clone());
         }
@@ -267,8 +267,17 @@ fn lay_out(
 }
 
 /// An equation's number, set in the math font.
-fn set_number(text: &EcoString, options: &MathOptions, span: Span) -> Option<Number> {
-    let set = layout_text(text, options, source_ref(span))?;
+/// An equation's number, set in the math font, once per world for its
+/// text, options and source.
+fn set_number(
+    cache: &Cache,
+    text: &EcoString,
+    options: &MathOptions,
+    span: Span,
+) -> Option<Number> {
+    let set = cache.number(text, options, span, || {
+        layout_text(text, options, source_ref(span))
+    })?;
     Some(Number {
         width: set.width,
         ascent: set.ascent,

@@ -144,8 +144,9 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let maths = maths(db, build).unwrap_or_default();
 
     let width = PageMaster::of(&styled.page, props).body.size.width;
-    let slots: EcoVec<LineSlot> =
-        flow::slots(&text.root, props, width, text.paragraphs.len()).into();
+    let (slots, display_widths) =
+        flow::slots(&text.root, props, width, text.paragraphs.len(), &text.maths);
+    let slots: EcoVec<LineSlot> = slots.into();
     // The paragraph builder places lines relative to their slots.
     let widths: Vec<[LineSlot; 1]> = slots
         .iter()
@@ -182,7 +183,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         report_lines(db, build.project(db), paragraph, layout);
     }
     // A display wider than its block is an overfull line (SPEC §7.9).
-    for (i, content) in flow::display_widths(&text.root, props, width, &text.maths) {
+    for (i, content) in display_widths {
         let Some(display) = maths.display(i) else {
             continue;
         };

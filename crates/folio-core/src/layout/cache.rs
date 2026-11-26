@@ -9,11 +9,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use ecow::EcoVec;
+use ecow::{EcoString, EcoVec};
 use folio_component::Abs;
 use folio_fonts::Font;
 use folio_math::Formula;
-use folio_math::layout::{DisplayMath, InlineMath, MathFont, MathOptions};
+use folio_math::layout::{DisplayMath, InlineMath, MathFont, MathOptions, SetText};
+use folio_syntax::Span;
 use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind, Shaped, TextFont};
 
 use super::flow::Fx;
@@ -57,6 +58,8 @@ pub struct Cache {
     /// Formulas laid out (SPEC §8.2), by their tree and what they are set
     /// with, forgotten like paragraphs.
     maths: Mutex<HashMap<MathKey, (CachedMath, u64)>>,
+    /// Equations' numbers set, by their text, options and source.
+    numbers: Mutex<HashMap<(EcoString, MathOptions, Span), (Option<SetText>, u64)>>,
     /// The math fonts, by their face, each read once.
     math_fonts: Mutex<HashMap<(usize, Font), (MathFont, u64)>>,
 }
@@ -317,6 +320,7 @@ impl Cache {
             lock(&self.entries).retain(|_, entry| entry.used + MAX_AGE >= now);
             lock(&self.hyphens).retain(|_, (_, used)| *used + MAX_AGE >= now);
             lock(&self.maths).retain(|_, (_, used)| *used + MAX_AGE >= now);
+            lock(&self.numbers).retain(|_, (_, used)| *used + MAX_AGE >= now);
             lock(&self.math_fonts).retain(|_, (_, used)| *used + MAX_AGE >= now);
         }
         out.into_iter()
@@ -363,6 +367,26 @@ impl Cache {
             .or_insert((laid, now))
             .0
             .clone()
+    }
+
+    /// An equation's number set by `set`, once per world for its text,
+    /// options and source.
+    pub(super) fn number(
+        &self,
+        text: &EcoString,
+        options: &MathOptions,
+        span: Span,
+        set: impl FnOnce() -> Option<SetText>,
+    ) -> Option<SetText> {
+        let now = self.clock.load(Ordering::Relaxed);
+        let key = (text.clone(), options.clone(), span);
+        if let Some((found, used)) = lock(&self.numbers).get_mut(&key) {
+            *used = now;
+            return found.clone();
+        }
+        let laid = set();
+        lock(&self.numbers).insert(key, (laid.clone(), now));
+        laid
     }
 
     /// The math font of face `face` of a build, which is `font`, shaped
