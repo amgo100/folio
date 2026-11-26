@@ -39,7 +39,7 @@
 //!
 //! [`World::node_id`]: crate::World::node_id
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use ecow::EcoString;
@@ -137,16 +137,48 @@ pub fn find(files: &dyn Files, pages: &[&Fragment], path: &str, bytes: Range<usi
     Index::new(files, pages).find(path, bytes)
 }
 
-/// The places in files that pages show, resolved once, for [`find`]ing
-/// many of them. It holds no reference to the pages or the files.
-#[derive(Debug, Clone, Default)]
+/// The places in files that pages show, for [`find`]ing many of them.
+/// Building one walks each file's syntax tree once; a lookup resolves only
+/// the glyphs of the nodes that hold the bytes it looks for. It holds no
+/// reference to the pages; it keeps the files' sources, which are cheap to
+/// clone.
+#[derive(Clone, Default)]
 pub struct Index {
-    /// The project path of each file the pages show.
+    /// The id of each file the pages show, by project path.
     paths: HashMap<EcoString, FileId>,
-    /// Every glyph that shows text of a file, in painting order.
+    /// The sources of those files.
+    sources: HashMap<FileId, Source>,
+    /// Every glyph whose node is in a file, in painting order.
     glyphs: Vec<GlyphEntry>,
     /// Every box of a fragment or object whose node is in a file.
     boxes: Vec<BoxEntry>,
+    /// The end of the bytes of its text that a node's glyphs show.
+    extent: HashMap<SourceRef, u32>,
+}
+
+/// A node's file and its bytes there.
+type NodePlace = (FileId, Range<usize>);
+
+/// How the bytes of a node's text map to bytes of its file.
+#[derive(Copy, Clone)]
+enum Mapping {
+    /// Every byte maps to the whole node.
+    Whole,
+    /// Byte `i` of the text is byte `at + i` of the file: text written as
+    /// it is.
+    Shift(usize),
+    /// Some other way, glyph by glyph.
+    Each,
+}
+
+impl std::fmt::Debug for Index {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Index")
+            .field("files", &self.paths.len())
+            .field("glyphs", &self.glyphs.len())
+            .field("boxes", &self.boxes.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -154,8 +186,12 @@ struct GlyphEntry {
     page: usize,
     /// The glyph's run, numbered in painting order across the pages.
     run: usize,
+    node: SourceRef,
+    /// The bytes of the node's text that the glyph shows.
+    within: Range<u32>,
+    /// The node's file and bytes.
     file: FileId,
-    bytes: Range<usize>,
+    whole: Range<usize>,
     pos: Point,
     size: Size,
 }
@@ -163,26 +199,18 @@ struct GlyphEntry {
 #[derive(Debug, Clone)]
 struct BoxEntry {
     page: usize,
+    node: SourceRef,
+    /// The node's file and bytes.
     file: FileId,
-    bytes: Range<usize>,
+    whole: Range<usize>,
     pos: Point,
     size: Size,
 }
 
 impl Index {
-    /// Resolves what the pages show against the files they were made from.
+    /// Indexes what the pages show, against the files they were made from.
     pub fn new(files: &dyn Files, pages: &[&Fragment]) -> Self {
         let mut index = Self::default();
-        let mut sources: HashMap<FileId, Option<Source>> = HashMap::new();
-        let mut source_of = |source: SourceRef| -> Option<(Source, folio_syntax::Span)> {
-            let span = span(source);
-            let id = span.id()?;
-            let file = sources
-                .entry(id)
-                .or_insert_with(|| files.source(id))
-                .clone()?;
-            Some((file, span))
-        };
         let mut run = 0;
         for (page, fragment) in pages.iter().enumerate() {
             let mut last: Option<*const GlyphRun> = None;
@@ -193,20 +221,18 @@ impl Index {
                     last = Some(this);
                 }
                 let (node, within) = &placed.glyph.source;
-                let Some((file, span)) = source_of(*node) else {
+                if node.is_detached() {
                     continue;
-                };
-                let within = within.start as usize..within.end as usize;
-                let Some(bytes) = text_range(&file, span, within) else {
-                    continue;
-                };
+                }
                 let size = placed.run.size;
                 let advance = placed.glyph.x_advance.at(size);
                 index.glyphs.push(GlyphEntry {
                     page,
                     run,
-                    file: file.id(),
-                    bytes,
+                    node: *node,
+                    within: within.clone(),
+                    file: FileId::from_raw(std::num::NonZeroU16::MIN),
+                    whole: 0..0,
                     pos: Point::new(
                         placed.pos.x.min(placed.pos.x + advance),
                         placed.pos.y - size,
@@ -216,27 +242,93 @@ impl Index {
             }
             let mut found = Vec::new();
             boxes_in(fragment, Point::zero(), &mut found);
-            for (source, pos, size) in found {
-                let Some((file, span)) = source_of(source) else {
-                    continue;
-                };
-                let Some(node) = file.find(span) else {
-                    continue;
-                };
-                index.boxes.push(BoxEntry {
-                    page,
-                    file: file.id(),
-                    bytes: node.range(),
-                    pos,
-                    size,
-                });
+            for (node, pos, size) in found {
+                if !node.is_detached() {
+                    index.boxes.push(BoxEntry {
+                        page,
+                        node,
+                        file: FileId::from_raw(std::num::NonZeroU16::MIN),
+                        whole: 0..0,
+                        pos,
+                        size,
+                    });
+                }
             }
         }
-        for id in sources.into_iter().filter_map(|(id, s)| s.map(|_| id)) {
-            if let Some(path) = files.path(id) {
-                index.paths.insert(path, id);
+
+        // The nodes named, by file, found in one walk of each file's tree.
+        // Neighbouring glyphs mostly name the same node, which is looked
+        // up once.
+        let mut wanted: HashMap<FileId, HashSet<u64>> = HashMap::new();
+        let mut last = SourceRef::DETACHED;
+        let named = index.glyphs.iter().map(|g| g.node);
+        for node in named.chain(index.boxes.iter().map(|b| b.node)) {
+            if node != last
+                && let Some(id) = span(node).id()
+            {
+                wanted.entry(id).or_default().insert(node.0);
+            }
+            last = node;
+        }
+        let mut nodes: HashMap<u64, NodePlace> = HashMap::new();
+        for (id, named) in wanted {
+            let (Some(source), Some(path)) = (files.source(id), files.path(id)) else {
+                continue;
+            };
+            let mut stack = vec![(source.root(), 0)];
+            while let Some((node, start)) = stack.pop() {
+                let reference = source_ref(node.span()).0;
+                if named.contains(&reference) {
+                    nodes.insert(reference, (id, start..start + node.len()));
+                }
+                let mut at = start;
+                for child in node.children() {
+                    stack.push((child, at));
+                    at += child.len();
+                }
+            }
+            index.paths.insert(path, id);
+            index.sources.insert(id, source);
+        }
+        let mut last: Option<(SourceRef, Option<&NodePlace>)> = None;
+        index.glyphs.retain_mut(|g| {
+            let found = match last {
+                Some((node, found)) if node == g.node => found,
+                _ => nodes.get(&g.node.0),
+            };
+            last = Some((g.node, found));
+            let Some((file, whole)) = found else {
+                return false;
+            };
+            g.file = *file;
+            g.whole = whole.clone();
+            true
+        });
+        let mut run: Option<(SourceRef, u32)> = None;
+        for g in &index.glyphs {
+            match &mut run {
+                Some((node, end)) if *node == g.node => *end = (*end).max(g.within.end),
+                _ => {
+                    if let Some((node, end)) = run {
+                        let max = index.extent.entry(node).or_default();
+                        *max = (*max).max(end);
+                    }
+                    run = Some((g.node, g.within.end));
+                }
             }
         }
+        if let Some((node, end)) = run {
+            let max = index.extent.entry(node).or_default();
+            *max = (*max).max(end);
+        }
+        index.boxes.retain_mut(|b| {
+            let Some((file, whole)) = nodes.get(&b.node.0) else {
+                return false;
+            };
+            b.file = *file;
+            b.whole = whole.clone();
+            true
+        });
         index
     }
 
@@ -246,6 +338,60 @@ impl Index {
         let Some(&file) = self.paths.get(path) else {
             return Vec::new();
         };
+        let Some(source) = self.sources.get(&file) else {
+            return Vec::new();
+        };
+        // The glyphs whose nodes reach the bytes, with the bytes each
+        // shows. A glyph of a node that lies inside a range shows bytes
+        // of it, so only those of nodes at its edges are resolved.
+        let inside = |whole: &Range<usize>| {
+            !bytes.is_empty() && bytes.start <= whole.start && whole.end < bytes.end
+        };
+        // How each node maps, found from where the start and end of its
+        // text map to, so that the glyphs of a long text are not resolved
+        // one by one. A map that keeps the text's length between its ends
+        // is a shift, since it is monotonic and maps characters to
+        // characters.
+        let mut mappings: HashMap<SourceRef, Mapping> = HashMap::new();
+        let mut mapping = |g: &GlyphEntry| {
+            *mappings.entry(g.node).or_insert_with(|| {
+                let node = span(g.node);
+                let end = self.extent.get(&g.node).copied().unwrap_or(0) as usize;
+                let first = text_range(source, node, 0..0);
+                if !g.whole.is_empty() && first.as_ref() == Some(&g.whole) {
+                    return Mapping::Whole;
+                }
+                let last = text_range(source, node, end..end);
+                match (first, last) {
+                    (Some(a), Some(b))
+                        if a.is_empty() && b.is_empty() && b.start - a.start == end =>
+                    {
+                        Mapping::Shift(a.start)
+                    }
+                    _ => Mapping::Each,
+                }
+            })
+        };
+        let resolved: Vec<(usize, &GlyphEntry, Range<usize>)> = self
+            .glyphs
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| {
+                g.file == file && g.whole.start <= bytes.end && bytes.start <= g.whole.end
+            })
+            .filter_map(|(i, g)| {
+                if inside(&g.whole) {
+                    return Some((i, g, g.whole.clone()));
+                }
+                let within = g.within.start as usize..g.within.end as usize;
+                let range = match mapping(g) {
+                    Mapping::Whole => g.whole.clone(),
+                    Mapping::Shift(at) => at + within.start..at + within.end,
+                    Mapping::Each => text_range(source, span(g.node), within)?,
+                };
+                Some((i, g, range))
+            })
+            .collect();
         let overlaps = |r: &Range<usize>| {
             if bytes.is_empty() {
                 (r.start <= bytes.start && bytes.start < r.end) || r.start == bytes.start
@@ -255,39 +401,36 @@ impl Index {
                 r.start < bytes.end && bytes.start < r.end
             }
         };
-        let mut hits: Vec<(usize, &GlyphEntry)> = self
-            .glyphs
+        let mut hits: Vec<(usize, &GlyphEntry)> = resolved
             .iter()
-            .enumerate()
-            .filter(|(_, g)| g.file == file && overlaps(&g.bytes))
+            .filter(|(_, _, r)| overlaps(r))
+            .map(|&(i, g, _)| (i, g))
             .collect();
         if hits.is_empty() && bytes.is_empty() {
-            hits = self
-                .glyphs
+            hits = resolved
                 .iter()
-                .enumerate()
-                .filter(|(_, g)| {
-                    g.file == file && !g.bytes.is_empty() && g.bytes.end == bytes.start
-                })
+                .filter(|(_, _, r)| !r.is_empty() && r.end == bytes.start)
+                .map(|&(i, g, _)| (i, g))
                 .collect();
         }
         if !hits.is_empty() {
             return merge(&hits);
         }
         let holding = || {
-            self.boxes.iter().filter(|b| {
-                b.file == file
-                    && b.bytes.start <= bytes.start
-                    && bytes.end <= b.bytes.end
-                    && (!b.bytes.is_empty() || bytes.is_empty())
+            self.boxes.iter().filter_map(|b| {
+                let holds = b.file == file
+                    && b.whole.start <= bytes.start
+                    && bytes.end <= b.whole.end
+                    && (!b.whole.is_empty() || bytes.is_empty());
+                holds.then_some((b, b.whole.len()))
             })
         };
-        let Some(fewest) = holding().map(|b| b.bytes.len()).min() else {
+        let Some(fewest) = holding().map(|(_, len)| len).min() else {
             return Vec::new();
         };
         holding()
-            .filter(|b| b.bytes.len() == fewest)
-            .map(|b| Found {
+            .filter(|(_, len)| *len == fewest)
+            .map(|(b, _)| Found {
                 page: b.page,
                 pos: b.pos,
                 size: b.size,
