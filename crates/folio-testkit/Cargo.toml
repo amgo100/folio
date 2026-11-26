@@ -11,8 +11,12 @@ publish.workspace = true
 folio.workspace = true
 folio-component.workspace = true
 folio-fonts.workspace = true
+folio-preview.workspace = true
 folio-render.workspace = true
 folio-syntax.workspace = true
+# `folio-wall` times the preview through `folio watch`'s server.
+tempfile.workspace = true
+tokio-tungstenite.workspace = true
 
 [dev-dependencies]
 gungraun.workspace = true

@@ -35,8 +35,13 @@ unused-allowed-license = "allow"
 # University of Illinois/NCSA licence. It is a test tool, never shipped.
 # The main workspace does not have it, so cargo-deny warns there that the
 # exception is unmatched; that warning is expected.
+# `notify`, the file watcher of `folio watch` (SPEC §12.2), is dedicated to
+# the public domain under CC0-1.0, which waives copyright but not patents.
+# It alone may use that licence (decision D-50-1); any other CC0 crate
+# needs a decision of its own.
 exceptions = [
     { name = "libfuzzer-sys", allow = ["NCSA"] },
+    { name = "notify", allow = ["CC0-1.0"] },
 ]
 
 [licenses.private]
