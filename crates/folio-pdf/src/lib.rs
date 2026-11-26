@@ -1196,8 +1196,13 @@ impl Writer<'_> {
         self.last = run.glyphs.last().map(|g| g.source.clone());
         // The run is drawn in pieces, each of glyphs of one link or of
         // none, as the text of a link is content of its `Link` element.
-        let mut pieces: Vec<(Range<usize>, Option<usize>)> = Vec::new();
-        for (i, g) in run.glyphs.iter().enumerate() {
+        let mut pieces: Vec<(Range<usize>, Option<usize>)> = Vec::with_capacity(1);
+        // Without links, a run is one piece.
+        let linked = !self.links.sources.is_empty();
+        if !linked && !run.glyphs.is_empty() {
+            pieces.push((0..run.glyphs.len(), None));
+        }
+        for (i, g) in run.glyphs.iter().enumerate().filter(|_| linked) {
             let link = self.links.glyph(g.source.0, g.range.len());
             match pieces.last_mut() {
                 Some((range, last)) if *last == link => range.end = i + 1,
