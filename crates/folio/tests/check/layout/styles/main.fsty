@@ -1,0 +1,11 @@
+page { page-size: (60mm, 40mm); margin-top: 5mm; margin-bottom: 5mm; margin-inner: 5mm; margin-outer: 5mm; }
+doc { font: "Source Serif 4"; }
+heading { break-before: page; keep-with-next: false; }
+paragraph { hyphenate: false; justify: false; widows: 1; orphans: 1; }
+section:has(heading.ragged) paragraph { justify: true; }
+section:has(heading.widow) paragraph { widows: 9; }
+section:has(heading.orphan) paragraph { orphans: 9; }
+section:has(heading.kept) { keep-together: true; }
+section:has(heading.whole) { breakable: false; }
+heading.next { keep-with-next: true; }
+figure { padding: 300mm 0pt 0pt 0pt; }

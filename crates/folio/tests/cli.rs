@@ -174,7 +174,6 @@ fn rejects_what_is_not_supported_yet() {
         &["build", "--strict-a11y"],
         &["watch"],
         &["check", "--leaks"],
-        &["check", "--layout"],
         &["check", "--report", "overrides"],
         &["fmt"],
     ] {

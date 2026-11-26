@@ -165,8 +165,10 @@ pub(crate) struct CheckArgs {
     #[command(flatten)]
     pub(crate) project: ProjectArgs,
 
-    /// Also report layout problems: overfull lines, widows and orphans,
-    /// keeps that were broken (not yet supported)
+    /// Also report the softer layout problems: underfull lines, widows
+    /// and orphans, keeps and unbreakable blocks that a page break split
+    /// (overfull lines and content too tall for a page are always
+    /// reported)
     #[arg(long)]
     pub(crate) layout: bool,
 
@@ -183,9 +185,7 @@ pub(crate) struct CheckArgs {
 impl CheckArgs {
     /// The first flag given that is not supported yet.
     fn later(&self) -> Option<&'static str> {
-        if self.layout {
-            Some("--layout")
-        } else if self.leaks {
+        if self.leaks {
             Some("--leaks")
         } else if self.report.is_some() {
             Some("--report")
@@ -263,7 +263,7 @@ pub(crate) fn run() -> ExitCode {
     }
     match cli.command {
         Command::Build(args) => build::build(&args.project),
-        Command::Check(args) => check::check(&args.project),
+        Command::Check(args) => check::check(&args.project, args.layout),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         _ => unreachable!("every other command is rejected above"),
     }
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(args.project.targets, [Target::Pdf]);
         assert_eq!(args.project.diagnostics, DiagnosticsFormat::Json);
         assert_eq!(args.later(), None);
-        assert_eq!(parse(&["--layout"]).unwrap().later(), Some("--layout"));
+        assert_eq!(parse(&["--layout"]).unwrap().later(), None);
         assert_eq!(parse(&["--leaks"]).unwrap().later(), Some("--leaks"));
         assert_eq!(
             parse(&["--report", "overrides"]).unwrap().later(),
