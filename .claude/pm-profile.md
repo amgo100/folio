@@ -14,17 +14,22 @@ A teacher writing exams, notes and slides in Folio, today through the `folio` co
 ## read
 `CLAUDE.md` (all of it), `docs/SPEC.md` (§1.5 terminology, §2–§3, and the sections the issue names), `tests/README.md`.
 
+## environment
+Run the manager, and start every worker, in the cloud environment **folio** (`env_01Mvv8bmCsJLhRE8FAMwA8Gy`): pass it as `environment_id` to `create_session`. Its setup script installs everything in `setup` below, including veraPDF on `PATH`. The **Default** environment has none of it.
+
 ## setup
+In the **folio** environment these are already installed. Elsewhere, run them first:
 - `rustup toolchain install 1.95 --profile minimal`
 - `cargo install cargo-deny --locked`
 - For benchmarks: Valgrind and `cargo install gungraun-runner --version <the gungraun version in Cargo.lock> --locked`.
 - For fuzzing: `rustup toolchain install nightly --profile minimal` and `cargo install cargo-fuzz --locked`.
+- For the PDF/UA check: Java, Poppler's `pdftotext`, and veraPDF 1.28.2 (`org.verapdf.apps:greenfield-apps` from Maven Central, run through `org.verapdf.apps.GreenfieldCliWrapper`).
 
 ## gate
 - commands, in order, on the final head commit:
   1. `scripts/check.sh`, which must end with "all checks passed" (iterate with `scripts/check.sh --fast` and narrow `cargo test -p <crate> --test <name>`; the full script before every push).
   2. `scripts/bench.sh` when the change may affect performance (fails above 3%); `scripts/bench.sh --wall` for preview and typing figures.
-  3. `python tests/pdf/corpus.py` after changes to `folio-pdf` or to what layout draws. veraPDF installs from Maven Central (1.28.2 has worked in cloud sessions).
+  3. `python tests/pdf/corpus.py` after changes to `folio-pdf` or to what layout draws (veraPDF is on `PATH` in the folio environment).
   4. `scripts/fuzz.sh 60` for changes to the parser, the style matcher or a fuzz target.
 - docsOnly: none. Spec-only and documentation changes run the full gate too (CLAUDE.md).
 - codeReview: yes. CLAUDE.md requires `/code-review` on the branch's diff against its base before the PR is opened and before every later push.
