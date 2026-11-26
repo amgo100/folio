@@ -7,8 +7,8 @@
 //! children not yet entered, in document order; or, at the top of a page,
 //! the child last entered if the group has its location, which continues
 //! from the page before. The instance tells apart the blocks that a loop
-//! or the calls of a closure make from one source. A group that matches no child, such as
-//! a page's body region, belongs to the node around it.
+//! or the calls of a closure make from one source. A group that matches
+//! no child, such as a page's body region, belongs to the node around it.
 //!
 //! The tree written follows the input with two kinds of elements added: a
 //! `P` around text that a node holds directly where PDF expects no text
