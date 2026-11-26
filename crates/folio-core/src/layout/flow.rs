@@ -48,9 +48,7 @@ use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
 use super::master::{BlockBox, BreakBefore};
-use super::paragraph::{
-    LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
-};
+use super::paragraph::{LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics};
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
@@ -435,7 +433,8 @@ impl Item {
             out.constraints.push(Constraint::Widow(paragraph.span));
         }
         out.penalty += self.inside.penalty;
-        out.constraints.extend(self.inside.constraints.iter().copied());
+        out.constraints
+            .extend(self.inside.constraints.iter().copied());
         out
     }
 }

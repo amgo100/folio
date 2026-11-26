@@ -1,9 +1,14 @@
 //! The page builder (SPEC §7.1, §2.3): a build's flow broken into pages of
 //! one master, strictly forward, and each page assembled into a fragment.
 //!
-//! **Breaking.** Each page is filled from where the previous one ended. Its
-//! builder considers every boundary at which the page could end, from its
-//! first leaf until the content would no longer fit in the body, and takes
+//! **Breaking.** Each page is filled from where the previous one ended,
+//! which may be inside a paragraph. Its builder breaks the paragraphs that
+//! start on it into lines at the width of its region, through the
+//! line-break cache; a paragraph it starts inside keeps the breaks of the
+//! page it started on. It considers every boundary at which the page could
+//! end, from its first line until the content would no longer fit in the
+//! space left for it, the body less what the lines placed reserve at its
+//! foot ([`Regions::reserve`]), and takes
 //! the cheapest: the cost of a break is how empty it leaves the page
 //! ([`FILL`] times the square of the empty fraction) plus the penalties of
 //! the constraints it goes against ([`super::flow`]). Ties go to the later
@@ -18,9 +23,12 @@
 //! page, nested as the blocks are, with its background and borders, its
 //! lines as glyph runs, its baselines and its keep data.
 //!
-//! **The cache** ([`PageCache`]): each page, keyed on the master, whether it
-//! is the first, and the leaves and boundaries its builder read, from its
-//! first leaf to the boundary after the last it considered. A page whose
+//! **The cache** ([`PageCache`]): each page, keyed on the master, the width
+//! of its region, the state coming into it (whether it is the first, and
+//! where in the flow it starts: a leaf, or a line of a paragraph broken at
+//! some width), the first slice of the layout part of the flow state
+//! (§2.3), and the leaves and boundaries its builder read, from its first
+//! leaf to the boundary after the last line it considered. A page whose
 //! content is unchanged, wherever an edit has moved it, is found there and
 //! not broken or assembled again, and keeps its fragment: the page as
 //! dressed for the document is kept with it, so an unchanged page shares
@@ -48,13 +56,13 @@ use folio_syntax::Span;
 
 use super::cache::Cache;
 use super::flow::{
-    Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, ParagraphInfo, Part,
-    Shared, Walk,
+    Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, ParagraphInfo, Part, Shared,
+    Walk,
 };
-use super::paragraph::ParagraphLayout;
-use super::{Lines, lines, report_lines};
 use super::master::{BlockBox, PageMaster};
+use super::paragraph::ParagraphLayout;
 use super::set::set_line;
+use super::{Lines, lines, report_lines};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
@@ -309,6 +317,10 @@ struct Input<'a> {
     master: PageMaster,
 }
 
+/// What a page reports: the page, and the paragraphs, by index into the
+/// build's text, whose lines it broke.
+type Notes<'a> = dyn FnMut(&PageOut, &[(usize, &ParagraphLayout)]) + 'a;
+
 /// Builds the pages, calling `check` before each, which may unwind, and
 /// `notes` with each page and the paragraphs, by index, whose lines it
 /// reports.
@@ -318,7 +330,7 @@ fn build_pages(
     cache: &PageCache,
     regions: Regions<'_>,
     check: &mut dyn FnMut(),
-    notes: &mut dyn FnMut(&PageOut, &[(usize, &ParagraphLayout)]),
+    notes: &mut Notes<'_>,
 ) -> Pages {
     let Input {
         text,
@@ -1100,7 +1112,7 @@ fn decorate(fragment: &mut Fragment, block: &BlockBox, starts: bool, ends: bool)
 /// Shared by every handle of the database.
 #[derive(Default)]
 pub struct PageCache {
-    entries: Mutex<HashMap<(PageMaster, Abs, bool, u64), Vec<Entry>>>,
+    entries: Mutex<HashMap<PageKey, Vec<Entry>>>,
     /// The paragraphs and blocks of recent flows, shared so that the same
     /// one in the next flow is the same `Arc`.
     shared: Shared,
@@ -1109,6 +1121,10 @@ pub struct PageCache {
     hits: AtomicU64,
     misses: AtomicU64,
 }
+
+/// What a page is found by: its master, its region's width, whether it is
+/// the first page, and a fingerprint of the leaf and line it starts at.
+type PageKey = (PageMaster, Abs, bool, u64);
 
 struct Entry {
     /// The line and width of the state the page started at.

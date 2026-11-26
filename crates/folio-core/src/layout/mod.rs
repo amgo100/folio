@@ -22,19 +22,26 @@
 //! - **Diagnostics**: overfull and underfull lines, at the source of the
 //!   text they end with (§7.9).
 //!
-//! The [`lines()`] query breaks each of a build's paragraphs at the content
-//! width of its block: the default page master's body less the padding and
-//! borders of the blocks around it. It breaks by total fit, without a
-//! deadline, so that its result is deterministic (§2.4).
+//! The [`lines()`] query breaks each of a build's paragraphs, in parallel,
+//! at the content width of its block: the default page master's body less
+//! the padding and borders of the blocks around it. It breaks by total
+//! fit, without a deadline, so that its result is deterministic (§2.4).
+//! The page builder reads its lines wherever a region has those widths.
 //!
 //! The page builder ([`pages()`]) works on one master with one body
 //! region, and places figures in the flow where they stand:
 //!
-//! - **The flow**: the build's blocks and lines flattened into leaves
-//!   (lines, and blocks without lines) and the boundaries between them,
-//!   which hold the leading, the blocks' spaces, padding and borders, and
-//!   the cost of a page break there. Spaces collapse where they meet and
-//!   are dropped at a page break; a block broken across pages is sliced.
+//! - **The flow**: the build's blocks and paragraphs flattened into leaves
+//!   (paragraphs, and blocks without them) and the boundaries between
+//!   them, which hold the blocks' spaces, padding and borders, and the
+//!   cost of a page break there. Spaces collapse where they meet and are
+//!   dropped at a page break; a block broken across pages is sliced.
+//! - **Regions**: the page builder breaks each paragraph into lines at the
+//!   width of the region it starts in, through the line-break cache, and a
+//!   paragraph that continues on the next page keeps those breaks. The
+//!   height left for the flow can shrink as a page is filled, as footnotes
+//!   will make it; [`Regions`] holds test hooks that vary a page's width
+//!   and reserve space at its foot.
 //! - **Breaking**: strictly forward, each page at its cheapest break, where
 //!   a break costs how empty it leaves the page plus the penalties of the
 //!   widow, orphan and keep constraints it goes against ([`WIDOW`],
@@ -45,9 +52,11 @@
 //!   of the master's size, holding its body, which holds a fragment for
 //!   each block with its background, borders, glyph runs, baselines and
 //!   keep data.
-//! - **The page cache** ([`PageCache`]): each page, keyed on the master and
-//!   the leaves and boundaries its builder read, so an edit re-breaks only
-//!   the pages whose content it changed (§2.3).
+//! - **The page cache** ([`PageCache`]): each page, keyed on the master,
+//!   its region, the state coming into it (where it starts in the flow,
+//!   which may be inside a paragraph) and the leaves and boundaries its
+//!   builder read, so an edit re-breaks only the pages whose content it
+//!   changed (§2.3).
 //!
 //! This is the stage that becomes `folio-layout` (SPEC §2.2) once its
 //! interface settles.
@@ -72,9 +81,7 @@ use folio_syntax::{DiagSpan, SubRange};
 pub use self::cache::{Cache, Stats};
 pub use self::flow::{KEEP, UNBREAKABLE, WIDOW};
 pub use self::master::{BlockBox, BreakBefore, PageMaster, Sides};
-pub use self::page::{
-    FILL, LineRef, Page, PageCache, PageStats, Pages, Regions, pages, paginate,
-};
+pub use self::page::{FILL, LineRef, Page, PageCache, PageStats, Pages, Regions, pages, paginate};
 pub use self::paragraph::{
     Align, Line, LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
     layout_paragraph,
