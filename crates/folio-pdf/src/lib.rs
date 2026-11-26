@@ -851,17 +851,22 @@ struct Links<'a> {
 }
 
 impl<'a> Links<'a> {
-    fn new(document: &Document<'a>) -> Self {
+    /// The links of a document, or none when `drawn` is false.
+    fn new(document: &Document<'a>, drawn: bool) -> Self {
         let navigation = document.navigation;
         let mut sources: HashMap<SourceRef, (Vec<usize>, usize)> = HashMap::new();
         // Glyphs from no node are no link's.
         for (i, link) in navigation.links.iter().enumerate() {
-            if !link.source.is_detached() {
+            if drawn && !link.source.is_detached() {
                 sources.entry(link.source).or_default().0.push(i);
             }
         }
         Self {
-            places: places(document),
+            places: if drawn {
+                places(document)
+            } else {
+                HashMap::new()
+            },
             sources,
             occurrences: Vec::new(),
             current: None,
@@ -1080,7 +1085,8 @@ impl<'a> Writer<'a> {
             tagger: Tagger::new(document.structure),
             warnings: Vec::new(),
             last: None,
-            links: Links::new(document),
+            // The check finds nothing in links: it leaves them out.
+            links: Links::new(document, !dry),
             extents: HashMap::new(),
             dry: dry.then(|| Dry {
                 glyphs: document.info.title.is_some(),
