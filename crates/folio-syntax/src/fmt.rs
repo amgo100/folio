@@ -548,7 +548,14 @@ impl Walk {
                     }
                     None
                 }
-                // The end of the file.
+                // The end of the file, unless it is inside a block comment
+                // left open, where a line break would be part of the comment.
+                (Some(prev), None)
+                    if prev.kind == SyntaxKind::BlockComment
+                        && !self.text[prev.range.0..prev.range.1].ends_with("*/") =>
+                {
+                    None
+                }
                 (Some(_), None) => Some("\n".into()),
                 // The start of the file: markup keeps the indentation of
                 // its first line.
@@ -680,14 +687,6 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
             text.into()
         };
     }
-    if prev.is_comment() {
-        // A space separates a block comment from what follows it.
-        return if matches!(next.kind, K::Comma | K::Semicolon) {
-            "".into()
-        } else {
-            " ".into()
-        };
-    }
     if next.kind == K::LeftBrace && is_rule_block(next.parent) && !text.is_empty() {
         // Rules keep the alignment they were given (`mark   { .. }`).
         return text.into();
@@ -715,6 +714,15 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
             || t.kind == K::Arrow
     };
     let combinator = |t: Token| matches!(t.kind, K::Gt | K::Plus) && t.parent == K::Selector;
+
+    if prev.is_comment() {
+        // A space separates a block comment from what follows it.
+        return if matches!(next.kind, K::Comma | K::Semicolon) || named_colon(next) {
+            "".into()
+        } else {
+            " ".into()
+        };
+    }
 
     // No space.
     if next.kind == K::Comma
@@ -893,6 +901,9 @@ mod tests {
         markup("#{x}\n", "#{ x }\n");
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
+        markup("= Hi  \n/* the rest", "= Hi\n/* the rest");
+        style("a { b: c; } /* x", "a { b: c; } /* x");
+        style("a { b/* c */: c; }", "a { b /* c */: c; }\n");
         markup("#{\n[- x\n  - y]\n}\n", "#{\n[- x\n  - y]\n}\n");
         for frozen in [
             "#let x =  [- a\n           - b]\n",
