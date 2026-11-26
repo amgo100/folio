@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
@@ -12,6 +13,7 @@ use ecow::EcoVec;
 use folio_component::Abs;
 use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind, Shaped};
 
+use super::flow::Fx;
 use super::paragraph::{
     LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics, hyphen_glyphs,
     layout_paragraph,
@@ -57,8 +59,16 @@ type HyphenKey = (SegmentKind, Option<Lang>, char);
 /// The glyphs of a hyphen and the units per em they are measured in.
 pub(super) type Hyphen = Option<(EcoVec<Glyph>, u16)>;
 
-#[derive(Clone, Eq, PartialEq, Hash)]
+/// What decides a paragraph's breaks, with its hash, computed once: the
+/// maps that a key is looked up in hash only that.
+#[derive(Clone)]
 struct Key {
+    hash: u64,
+    data: KeyData,
+}
+
+#[derive(Clone, Eq, PartialEq, Hash)]
+struct KeyData {
     paragraph: Paragraph,
     style: ParagraphStyle,
     segments: EcoVec<SegmentMetrics>,
@@ -68,15 +78,35 @@ struct Key {
 
 impl Key {
     fn new(input: &ParagraphInput<'_>, slots: &[LineSlot]) -> Self {
-        Self {
+        let data = KeyData {
             paragraph: input.shaped.paragraph.clone(),
             style: input.style,
             segments: input.segments.clone(),
             objects: input.objects.clone(),
             widths: slots.iter().map(|s| s.width).collect(),
+        };
+        let mut hasher = Fx::default();
+        data.hash(&mut hasher);
+        Self {
+            hash: hasher.finish(),
+            data,
         }
     }
 }
+
+impl Hash for Key {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash && self.data == other.data
+    }
+}
+
+impl Eq for Key {}
 
 /// A paragraph to break on another thread: what its input borrows, owned.
 struct Job {
@@ -89,9 +119,9 @@ impl Job {
     fn run(&self) -> ParagraphLayout {
         let input = ParagraphInput {
             shaped: &self.shaped,
-            style: self.key.style,
-            segments: self.key.segments.clone(),
-            objects: self.key.objects.clone(),
+            style: self.key.data.style,
+            segments: self.key.data.segments.clone(),
+            objects: self.key.data.objects.clone(),
         };
         layout_paragraph(&input, &self.slots, None)
     }
