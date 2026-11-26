@@ -196,8 +196,9 @@ impl WorldBuilder {
     /// [`check_builds`](crate::check_builds), turn it into an error with
     /// the code `internal-error` and answer with the last output the build
     /// was compiled to, and with every source and file to watch. The
-    /// process lives on, and the next edit compiles again. Otherwise the panic unwinds out of them, as it does out of
-    /// the other functions in either kind of world.
+    /// process lives on, and the next edit compiles again. Otherwise the
+    /// panic unwinds out of them, as it does out of the other functions in
+    /// either kind of world.
     pub fn long_lived(mut self, long_lived: bool) -> Self {
         self.long_lived = long_lived;
         self

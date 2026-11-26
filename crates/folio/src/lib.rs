@@ -130,18 +130,16 @@ pub fn compile(
 
 /// Compiles a build, letting panics unwind.
 fn compile_now(world: &World, target: Target, variant: Option<&Name>) -> Compiled {
-    {
-        let db = world.db();
-        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
-        let built = pipeline::compile_build(db, build);
-        let diagnostics = collect(pipeline::compile_build::accumulated::<Reported>(db, build));
-        let files = files(pipeline::compile_build::accumulated::<Read>(db, build));
-        Compiled {
-            sources: built.sources.clone(),
-            files,
-            output: built.output.clone(),
-            diagnostics,
-        }
+    let db = world.db();
+    let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+    let built = pipeline::compile_build(db, build);
+    let diagnostics = collect(pipeline::compile_build::accumulated::<Reported>(db, build));
+    let files = files(pipeline::compile_build::accumulated::<Read>(db, build));
+    Compiled {
+        sources: built.sources.clone(),
+        files,
+        output: built.output.clone(),
+        diagnostics,
     }
 }
 
