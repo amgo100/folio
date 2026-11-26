@@ -236,21 +236,35 @@ pub(crate) fn diagnostics(
 ) -> BTreeMap<String, Vec<lsp::Diagnostic>> {
     let mut out: BTreeMap<String, Vec<lsp::Diagnostic>> = BTreeMap::new();
     let mut seen = HashSet::new();
-    let mut lines: HashMap<folio::FileId, Option<String>> = HashMap::new();
-    let mut range = |location: &Location| {
-        let text = lines
-            .entry(location.id)
-            .or_insert_with(|| files.lines(location.id).map(|l| l.text().to_owned()));
-        match text {
-            Some(text) => LineIndex::new(text).range(location.bytes.clone(), encoding),
-            None => lsp::Range::default(),
+    let resolved: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| seen.insert(*d))
+        .map(|d| (d, diag::resolve(files, d)))
+        .collect();
+    // Each file's text, and then its lines, once.
+    let mut texts: HashMap<folio::FileId, String> = HashMap::new();
+    for (_, r) in &resolved {
+        for location in r
+            .location
+            .iter()
+            .chain(r.related.iter().map(|r| &r.location))
+        {
+            if !texts.contains_key(&location.id)
+                && let Some(lines) = files.lines(location.id)
+            {
+                texts.insert(location.id, lines.text().to_owned());
+            }
         }
+    }
+    let indexes: HashMap<folio::FileId, LineIndex<'_>> = texts
+        .iter()
+        .map(|(id, text)| (*id, LineIndex::new(text)))
+        .collect();
+    let range = |location: &Location| match indexes.get(&location.id) {
+        Some(index) => index.range(location.bytes.clone(), encoding),
+        None => lsp::Range::default(),
     };
-    for diagnostic in diagnostics {
-        if !seen.insert(diagnostic) {
-            continue;
-        }
-        let resolved = diag::resolve(files, diagnostic);
+    for (diagnostic, resolved) in resolved {
         let (path, range_) = match &resolved.location {
             Some(location) => (location.path.to_string(), range(location)),
             None => (folio::loader::MANIFEST.to_owned(), lsp::Range::default()),

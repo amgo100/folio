@@ -1,6 +1,6 @@
 //! The server's state and main loop.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::thread;
 
@@ -66,7 +66,7 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
         dirty: false,
         results_tx,
         published: BTreeMap::new(),
-        noticed: None,
+        noticed: BTreeSet::new(),
         request_id: 0,
         watch: Watch::No,
         shut_down: false,
@@ -148,8 +148,8 @@ struct Server<'a> {
     /// The files that have diagnostics shown, by project path, with the URI
     /// they were published under.
     published: BTreeMap<String, Uri>,
-    /// The compiler pin the server last gave notice of.
-    noticed: Option<String>,
+    /// The compiler pins the server gave notice of.
+    noticed: BTreeSet<String>,
     request_id: i32,
     /// Whether the client can be asked to report changes on disk, and how.
     watch: Watch,
@@ -411,10 +411,9 @@ impl Server<'_> {
     /// Gives notice once when the project pins a compiler version other
     /// than this one.
     fn notice_pin(&mut self, pin: &str) {
-        if pin == folio::VERSION || self.noticed.as_deref() == Some(pin) {
+        if pin == folio::VERSION || !self.noticed.insert(pin.to_owned()) {
             return;
         }
-        self.noticed = Some(pin.to_owned());
         self.show(
             lsp::MessageType::WARNING,
             format!(
@@ -489,6 +488,7 @@ impl Server<'_> {
     fn source_path(&mut self, uri: &Uri) -> Option<String> {
         let path = convert::uri_to_path(uri)?;
         if self.project.is_none()
+            && self.options.root.is_none()
             && let Some(root) = path.parent().and_then(find_root)
         {
             self.open_project(root);
@@ -564,17 +564,24 @@ impl Server<'_> {
         let Some(path) = self.path_of_open(uri) else {
             return;
         };
-        self.docs.remove(&path);
-        // The file is what the disk has again, if the project has it there:
-        // the loader leaves out hidden files and outputs.
+        let Some(doc) = self.docs.remove(&path) else {
+            return;
+        };
+        // The file is what the disk has again.
+        let Some(project) = &self.project else {
+            return;
+        };
+        let file = project.root.join(&path);
+        self.disk_changed(vec![file.clone()]);
+        // The loader leaves out hidden files and outputs, so a buffer of
+        // one that it did not replace is dropped.
+        let disk = std::fs::read_to_string(&file).ok();
         if let Some(world) = self.world_mut()
+            && world.source(&path).is_some_and(|s| s.text() == doc.text)
+            && disk.as_deref() != Some(doc.text.as_str())
             && world.remove_source(&path)
         {
             self.edited();
-        }
-        if let Some(project) = &self.project {
-            let file = project.root.join(&path);
-            self.disk_changed(vec![file]);
         }
     }
 
@@ -600,8 +607,16 @@ impl Server<'_> {
                 .is_some_and(|rel| rel == loader::MANIFEST || rel == loader::LOCKFILE)
         });
         let Some(world) = &mut project.world else {
-            // The project could not be loaded: try again.
-            self.load_world();
+            // The project could not be loaded: try again when a file it
+            // reads changes.
+            let read = paths.iter().any(|path| {
+                project
+                    .project_path(path)
+                    .is_some_and(|rel| !rel.split('/').any(|part| part.starts_with('.')))
+            });
+            if read {
+                self.load_world();
+            }
             return;
         };
         // Both are read again, so that the errors are those of both.
@@ -614,7 +629,13 @@ impl Server<'_> {
         let update = match project.loader.update(world, &paths, &mut warnings) {
             Ok(update) => update,
             Err(e) => {
+                // Some paths may have been read: the buffers stand over
+                // them, and the world is checked again.
+                for (path, doc) in &self.docs {
+                    let _ = world.set_source(path, &doc.text);
+                }
                 self.show(lsp::MessageType::ERROR, format!("Folio: {e}"));
+                self.edited();
                 return;
             }
         };
@@ -708,6 +729,8 @@ impl Server<'_> {
                 });
             });
         if let Err(e) = spawned {
+            // Checked again at the next message.
+            self.dirty = true;
             self.log(
                 lsp::MessageType::ERROR,
                 format!("Folio: cannot start a check: {e}"),
