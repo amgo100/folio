@@ -89,10 +89,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// A panic in a query, a bug in the compiler, unwinds out of it; in a
 /// long-lived world ([`WorldBuilder::long_lived`]) it is instead an error
-/// with the code `internal-error`, with the last output of the build's
-/// last compilation that did not panic. Its sources and files are then
-/// what a watcher should watch: those the build last read, and every other
-/// source and file of the world.
+/// with the code `internal-error`, which stands in place of the build's
+/// diagnostics, with the last output the build was compiled to, if any.
+/// Its sources and files are then what a watcher should watch: those the
+/// build last read, and every other source and file of the world.
 pub fn compile(
     world: &World,
     target: Target,
@@ -177,7 +177,8 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
         }
         Err(panic) => {
             let last = kept.get(&build);
-            let writes = last.writes.unwrap_or(last.output.is_some());
+            // Compiling now would answer with the kept output.
+            let writes = last.output.is_some() || last.writes == Some(true);
             let (sources, files) = watched(world, last.sources, last.files);
             Ok(Checked {
                 sources,
@@ -608,7 +609,7 @@ fn internal_error(message: &str, kept_output: bool) -> Diagnostic {
     if kept_output {
         error
             .hints
-            .push("the output of the last compilation that did not fail this way is kept".into());
+            .push("the last output this build was compiled to is kept".into());
     }
     error
 }
