@@ -15,6 +15,11 @@ use crate::shape::TextFont;
 /// without being asked for.
 const MAX_AGE: u64 = 32;
 
+/// The most results of [`Cache::parallel`] that a thread sends back at
+/// once: few enough that the caller, which checks for cancellation as it
+/// takes them, is not kept waiting for long (SPEC §2.3).
+const CHUNK: usize = 8;
+
 /// The threads that shape paragraphs and run the other work handed to
 /// [`Cache::parallel`], shared by every cache of the process. They run
 /// nothing else, so a caller waiting for them never runs other work of its
@@ -184,7 +189,7 @@ impl Cache {
     /// Runs `f` on each item, in parallel on the threads that shape
     /// paragraphs when there are several items, and hands each result to
     /// `each` on the caller's thread with the item's index and the item,
-    /// as the results come in.
+    /// as the results come in, a few at a time.
     ///
     /// The order in which `each` sees the results depends on scheduling;
     /// the index says where each belongs. The caller blocks on a channel,
@@ -218,6 +223,10 @@ impl Cache {
         // Tells the job to start no more items when the caller is done
         // with it, by unwinding too.
         let _stop = Stop(stop.clone());
+        // The results go back a few at a time, so that the caller wakes
+        // less often than once per item, and enough chunks are left to
+        // balance the threads' load.
+        let size = (items.len() / (pool.current_num_threads() * 4)).clamp(1, CHUNK);
         let (tx, rx) = mpsc::channel();
         let job = items.clone();
         pool.spawn(move || {
@@ -225,22 +234,35 @@ impl Cache {
             // shared state that shaping touches, the plans of its fonts,
             // tolerates a panic while their lock is held.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                job.par_iter()
+                job.par_chunks(size)
                     .enumerate()
-                    .for_each_with(tx.clone(), |tx, (i, item)| {
-                        if !stop.load(Ordering::Relaxed) {
-                            // The caller may have stopped listening.
-                            let _ = tx.send(Ok((i, f(item))));
+                    .for_each_with(tx.clone(), |tx, (c, chunk)| {
+                        if stop.load(Ordering::Relaxed) {
+                            return;
                         }
+                        let start = c * size;
+                        let out: Vec<(usize, O)> = chunk
+                            .iter()
+                            .enumerate()
+                            .map(|(j, item)| (start + j, f(item)))
+                            .collect();
+                        // The caller may have stopped listening.
+                        let _ = tx.send(Ok(out));
                     });
             }));
             if let Err(panic) = result {
                 let _ = tx.send(Err(panic));
             }
         });
-        for _ in 0..items.len() {
+        let mut left = items.len();
+        while left > 0 {
             match rx.recv() {
-                Ok(Ok((i, out))) => each(i, &items[i], out),
+                Ok(Ok(out)) => {
+                    left -= out.len();
+                    for (i, out) in out {
+                        each(i, &items[i], out);
+                    }
+                }
                 Ok(Err(panic)) => std::panic::resume_unwind(panic),
                 Err(_) => unreachable!("the job sends every result or its panic"),
             }
