@@ -1,7 +1,7 @@
 //! The semantic math tree of Folio (SPEC §8).
 //!
-//! Evaluation turns an equation's native syntax (SPEC §8.1), and later its
-//! LaTeX input, into a [`Formula`]: lines of [`Row`]s of [`Node`]s. The tree
+//! Evaluation turns an equation's native syntax (SPEC §8.1) into a
+//! [`Formula`], and [`tex::parse`] reads LaTeX input into the same tree: lines of [`Row`]s of [`Node`]s. The tree
 //! says what a formula is, not how it looks: a fraction, a base with
 //! attachments, an n-ary operator with its limits, a vector, a matrix. Math
 //! layout (SPEC §8.2) sets it with the font's OpenType MATH table, and the
@@ -31,6 +31,7 @@
 #![forbid(unsafe_code)]
 
 mod symbols;
+pub mod tex;
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -41,7 +42,7 @@ use std::sync::Arc;
 use ecow::{EcoString, EcoVec};
 use folio_syntax::Span;
 
-pub use self::symbols::{is_symbol_base, symbol};
+pub use self::symbols::{is_symbol_base, operator, symbol};
 pub use unicode_math_class::MathClass;
 
 /// A formula: what one equation holds.
@@ -419,6 +420,100 @@ impl Node {
                 .collect(),
             Self::Styled(styled) => vec![&styled.body],
         }
+    }
+
+    /// The node of a character, as native math and LaTeX input both make
+    /// it: a letter is a variable, a large operator an n-ary operator
+    /// without limits, anything else a symbol of its class.
+    pub fn symbol(c: char, span: Span) -> Self {
+        let class = class(c);
+        if c.is_alphabetic() || class == MathClass::Alphabetic {
+            return Self::Ident(Atom {
+                text: c.into(),
+                class: MathClass::Alphabetic,
+                span,
+            });
+        }
+        if class == MathClass::Large {
+            return Self::Nary(Arc::new(Nary {
+                op: c,
+                sub: None,
+                sup: None,
+                span,
+            }));
+        }
+        Self::symbol_text(c.into(), span)
+    }
+
+    /// The node of a grapheme cluster: one character as
+    /// [`symbol`](Self::symbol) makes it, a letter with combining marks as a
+    /// variable, and anything else as a symbol of the class of its first
+    /// character.
+    pub fn grapheme(text: EcoString, span: Span) -> Self {
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => Self::symbol(c, span),
+            (Some(c), Some(_)) if c.is_alphabetic() => Self::Ident(Atom {
+                text,
+                class: MathClass::Alphabetic,
+                span,
+            }),
+            _ => Self::symbol_text(text, span),
+        }
+    }
+
+    /// A symbol of the class of its first character.
+    pub fn symbol_text(text: EcoString, span: Span) -> Self {
+        let class = text.chars().next().map_or(MathClass::Normal, class);
+        Self::Symbol(Atom { text, class, span })
+    }
+
+    /// A number: its digits.
+    pub fn number(digits: EcoString, span: Span) -> Self {
+        Self::Number(Atom {
+            text: digits,
+            class: MathClass::Normal,
+            span,
+        })
+    }
+
+    /// Upright text.
+    pub fn text(text: EcoString, span: Span) -> Self {
+        Self::Text(Atom {
+            text,
+            class: MathClass::Normal,
+            span,
+        })
+    }
+
+    /// A base with attachments, or an n-ary operator with its limits when
+    /// the base is one without limits.
+    pub fn attach(
+        base: Row,
+        sub: Option<Row>,
+        sup: Option<Row>,
+        primes: usize,
+        span: Span,
+    ) -> Self {
+        if primes == 0
+            && let [Self::Nary(nary)] = base.nodes()
+            && nary.sub.is_none()
+            && nary.sup.is_none()
+        {
+            return Self::Nary(Arc::new(Nary {
+                op: nary.op,
+                sub,
+                sup,
+                span,
+            }));
+        }
+        Self::Attach(Arc::new(Attach {
+            base,
+            sub,
+            sup,
+            primes: u8::try_from(primes).unwrap_or(u8::MAX),
+            span,
+        }))
     }
 
     /// How deeply the node nests: as deeply as its deepest row, or `0` for

@@ -93,6 +93,7 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | `manifest` | Reading a `folio.toml` finishes without a panic, and every build of a valid one compiles a small document. |
 | `lockfile` | Reading a `folio.lock` beside a fixed manifest finishes without a panic, and a valid one compiles. |
 | `wire` | Decoding a display list message of `folio-render`'s wire format finishes without a panic, and what decodes encodes to a message that decodes to the same. |
+| `tex` | Reading the body of a LaTeX equation (`$:tex …$`) into the math tree finishes without a panic, within the nesting limit, and every error of the build points into the file. |
 
 The `differential` harness also runs as a property test on stable:
 `cargo test -p folio-testkit --test differential` checks 12 random

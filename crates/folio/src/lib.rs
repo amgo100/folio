@@ -59,6 +59,9 @@ pub use folio_core::layout::{Line, LineRef, Lines, Page, PageMaster, Pages, Para
 pub use folio_core::locate;
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, OutputPattern, ProjectError, ProjectPath};
+pub use folio_core::resolve::{
+    Labelled, Marker, Number, Reference, Resolution, Target as ResolveTarget,
+};
 pub use folio_core::style;
 pub use folio_core::text::{SegmentStyle, Text, TextBlock, TextFlow, TextParagraph, TextSource};
 pub use folio_fonts::{
@@ -386,6 +389,28 @@ pub fn styles(
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         style::styles(db, build).clone()
+    })
+}
+
+/// Resolves the counters, markers, labels and cross-references of a variant
+/// of the world's document for a target (SPEC §2.1, §4.5): each numbered
+/// element's values and number, the marker set before its content, what
+/// each label names, and the text each `@label` shows; or `None` when the
+/// document could not be styled. Everything is keyed by location. The
+/// variant is `None` only for a project that declares no variants.
+///
+/// The problems found (references that do not resolve, counters that do
+/// not exist) are diagnostics that [`compile`] reports for the build. Fails
+/// only when an edit to the world cancels it.
+pub fn resolve(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+) -> Result<Option<Resolution>, Cancelled> {
+    catch(world, || {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        folio_core::pipeline::resolution(db, build).cloned()
     })
 }
 
