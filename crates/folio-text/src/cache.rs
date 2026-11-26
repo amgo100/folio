@@ -31,9 +31,10 @@ static POOL: LazyLock<Option<ThreadPool>> = LazyLock::new(|| {
 /// Shaping is a pure function of a paragraph, so a paragraph that is equal
 /// to one shaped before, in any compile, gets the earlier result. A
 /// compile hands every paragraph of its document to
-/// [`shape_all`](Self::shape_all), which shapes the new ones in parallel
-/// and forgets those that no call asked for in a while; an edit therefore
-/// re-shapes only the paragraphs it changed.
+/// [`shape_all`](Self::shape_all), which shapes the new ones (in parallel
+/// when the shaping pool has several threads) and forgets those that no
+/// call asked for in a while; an edit therefore re-shapes only the
+/// paragraphs it changed.
 #[derive(Default)]
 pub struct Cache {
     paragraphs: Mutex<HashMap<Paragraph, Entry>>,
@@ -109,7 +110,9 @@ impl Cache {
     /// the cache's own, which share no state with the caller's thread. The
     /// caller waits for them without running other work, so it may hold
     /// thread-local state, as a thread running a database query does, and
-    /// may itself be a thread of another `rayon` pool.
+    /// may itself be a thread of another `rayon` pool. When the shaping
+    /// pool has one thread (as with `RAYON_NUM_THREADS=1`), the caller
+    /// shapes them itself, in order.
     ///
     /// # Panics
     ///
@@ -189,10 +192,16 @@ impl Debug for Cache {
 }
 
 /// Shapes paragraphs, in parallel on the shaping threads when there are
-/// several. The caller blocks on a channel, which runs no other work, rather
-/// than in a `rayon` join, which may.
+/// several paragraphs and several threads. The caller blocks on a channel,
+/// which runs no other work, rather than in a `rayon` join, which may.
+///
+/// With a single shaping thread (`RAYON_NUM_THREADS=1`), handing the job over
+/// gains nothing, so the caller shapes in order itself. This also keeps the
+/// shaping on the thread that the instruction-count benchmarks measure.
 fn shape_many(paragraphs: Vec<Paragraph>) -> Vec<Shaped> {
-    let pool = POOL.as_ref().filter(|_| paragraphs.len() > 1);
+    let pool = POOL
+        .as_ref()
+        .filter(|pool| paragraphs.len() > 1 && pool.current_num_threads() > 1);
     let Some(pool) = pool else {
         return paragraphs.iter().map(shape).collect();
     };
