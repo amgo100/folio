@@ -295,8 +295,7 @@ fn navigation(resolution: &Resolution) -> Navigation {
         .map(|reference| Link {
             source: reference.location.source,
             destination: reference.target.map(|_| reference.label.clone()),
-            // Spaces as plain ones, for screen readers.
-            text: clean(reference.text.clone()).unwrap_or_else(|| reference.text.clone()),
+            text: reference.text.clone(),
         })
         .collect();
     Navigation {

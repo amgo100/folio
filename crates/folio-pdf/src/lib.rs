@@ -20,8 +20,8 @@
 //!   the first box of the element it names; a link annotation over the
 //!   text of each reference to it, tagged as a `Link` structure element
 //!   with the reference's text as its alternative description; and page
-//!   labels, written only where they differ from the viewer's plain 1, 2,
-//!   3;
+//!   labels, written for every page when some page's label differs from
+//!   its plain number (1, 2, 3), which viewers show without labels;
 //! - targets PDF/UA-1 on PDF 1.7. PDF/UA requires a title, so a document
 //!   without one is written tagged but without claiming PDF/UA-1; that is
 //!   no warning, as titles are optional. Where a document with a title
@@ -65,7 +65,7 @@ use krilla::configure::{
 };
 use krilla::destination::{NamedDestination, XyzDestination};
 use krilla::error::KrillaError;
-use krilla::geom::{PathBuilder, Quadrilateral, Rect, Size, Transform};
+use krilla::geom::{PathBuilder, Rect, Size, Transform};
 use krilla::metadata::Metadata;
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
@@ -161,8 +161,10 @@ pub struct Destination {
 /// as those of a reference name the `ref` element's node. A source may make
 /// several links, as a reference in a loop does: the writer gives each run
 /// of glyphs of the source, one after another in the order drawn, the next
-/// link of that source, and the last one to any after them. A run may
-/// break across lines and pages; it is one link, of an area for each line.
+/// link of that source, and the last one to any after them. A run ends
+/// where a glyph of another source follows, or where its glyphs have shown
+/// as many bytes as the link's text has. A run may break across lines and
+/// pages; it is one `Link` element, with an annotation for each line.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Link {
     /// The source of its glyphs.
@@ -171,8 +173,10 @@ pub struct Link {
     /// nowhere, such as a reference that does not resolve, which keeps the
     /// order of the source's links.
     pub destination: Option<EcoString>,
-    /// What it says, for the link's alternative description, which PDF/UA
-    /// requires: the text it shows (`Figure 3`).
+    /// The text it shows (`Figure 3`): where a run of its source's glyphs
+    /// ends, by the bytes of text they show, and its alternative
+    /// description, which PDF/UA requires, with plain spaces (or its
+    /// destination's name, where it has no words).
     pub text: EcoString,
 }
 
@@ -692,13 +696,18 @@ fn render_checked(
         writer.tagger.start_page(index);
         writer.page(&mut surface, page);
         surface.finish();
+        // An annotation for each line of a link, as viewers that ignore
+        // QuadPoints would make one over several lines active over the
+        // whole rectangle around them.
         for (occurrence, areas) in writer.links.areas.drain(..) {
             let link = &document.navigation.links[writer.links.occurrences[occurrence]];
-            let Some(annotation) = link_annotation(link, &writer.links.places, areas) else {
-                continue;
-            };
-            let id = kpage.add_tagged_annotation(annotation);
-            writer.tagger.annotation(occurrence, id);
+            for area in areas {
+                let Some(annotation) = link_annotation(link, &writer.links.places, area) else {
+                    continue;
+                };
+                let id = kpage.add_tagged_annotation(annotation);
+                writer.tagger.annotation(occurrence, id);
+            }
         }
         kpage.finish();
     }
@@ -749,29 +758,29 @@ fn page_number(index: usize) -> u32 {
     u32::try_from(index).map_or(u32::MAX, |i| i.saturating_add(1))
 }
 
-/// The annotation of a link over `areas` of a page, or `None` when it has
-/// no area.
+/// The annotation of a link over an area of a page, or `None` when it
+/// goes nowhere.
 fn link_annotation(
     link: &Link,
     places: &HashMap<EcoString, XyzDestination>,
-    areas: Vec<Rect>,
+    area: Rect,
 ) -> Option<Annotation> {
     let name = link.destination.as_ref()?;
     let place = places.get(name)?;
     let target = Target::Destination(krilla::destination::Destination::Named(
         NamedDestination::new(name.to_string(), place.clone()),
     ));
-    let annotation = match areas.as_slice() {
-        [] => return None,
-        [one] => LinkAnnotation::new(*one, target),
-        _ => LinkAnnotation::new_with_quad_points(
-            areas.into_iter().map(Quadrilateral::from).collect(),
-            target,
-        ),
+    // PDF/UA-1 requires a description: the text with plain spaces, for
+    // screen readers, or the label where the text has nothing to read.
+    let words: Vec<&str> = link.text.split_whitespace().collect();
+    let alt = if words.is_empty() {
+        name.to_string()
+    } else {
+        words.join(" ")
     };
     Some(Annotation::new_link(
-        annotation,
-        Some(link.text.to_string()),
+        LinkAnnotation::new(area, target),
+        Some(alt),
     ))
 }
 
@@ -831,9 +840,10 @@ struct Links<'a> {
     /// The link of each run of glyphs drawn that goes somewhere, by index
     /// into [`Navigation::links`]; a run's index here names it.
     occurrences: Vec<usize>,
-    /// The source of the last glyph drawn, and the run it is in, if it
-    /// goes somewhere.
-    current: Option<(SourceRef, Option<usize>)>,
+    /// The source of the last glyph drawn, the run it is in if it goes
+    /// somewhere, and how many bytes of its link's text the run has still
+    /// to show.
+    current: Option<(SourceRef, Option<usize>, usize)>,
     /// The areas of the runs on the page being drawn, in the order they
     /// start.
     areas: Vec<(usize, Vec<Rect>)>,
@@ -844,8 +854,11 @@ impl<'a> Links<'a> {
     fn new(document: &Document<'a>) -> Self {
         let navigation = document.navigation;
         let mut sources: HashMap<SourceRef, (Vec<usize>, usize)> = HashMap::new();
+        // Glyphs from no node are no link's.
         for (i, link) in navigation.links.iter().enumerate() {
-            sources.entry(link.source).or_default().0.push(i);
+            if !link.source.is_detached() {
+                sources.entry(link.source).or_default().0.push(i);
+            }
         }
         Self {
             places: places(document),
@@ -857,28 +870,39 @@ impl<'a> Links<'a> {
         }
     }
 
-    /// The run of links a glyph of `source` drawn next is in: the run of
-    /// the glyph before if that has the same source, else a new one;
-    /// `None` if it goes nowhere.
-    fn glyph(&mut self, source: SourceRef) -> Option<usize> {
-        if let Some((last, run)) = self.current
-            && last == source
+    /// The run of links a glyph of `source` that shows `bytes` bytes of
+    /// text, drawn next, is in: the run of the glyph before if that has the
+    /// same source and its link's text is not all shown yet, else a new
+    /// one; `None` if it goes nowhere. So two links of one source that
+    /// meet, as references of a loop can at a line break, stay two.
+    fn glyph(&mut self, source: SourceRef, bytes: usize) -> Option<usize> {
+        if let Some((last, run, left)) = &mut self.current
+            && *last == source
+            && *left > 0
         {
-            return run;
+            *left = left.saturating_sub(bytes);
+            return *run;
         }
-        let run = self.sources.get_mut(&source).and_then(|(links, drawn)| {
-            let link = links[(*drawn).min(links.len() - 1)];
-            *drawn += 1;
-            let goes = self.navigation.links[link]
-                .destination
-                .as_ref()
-                .is_some_and(|name| self.places.contains_key(name));
-            goes.then(|| {
-                self.occurrences.push(link);
-                self.occurrences.len() - 1
-            })
+        let Some((links, drawn)) = self.sources.get_mut(&source) else {
+            self.current = None;
+            return None;
+        };
+        let link = links[(*drawn).min(links.len() - 1)];
+        *drawn += 1;
+        // A link without text runs until a glyph of another source.
+        let text = match self.navigation.links[link].text.len() {
+            0 => usize::MAX,
+            n => n,
+        };
+        let goes = self.navigation.links[link]
+            .destination
+            .as_ref()
+            .is_some_and(|name| self.places.contains_key(name));
+        let run = goes.then(|| {
+            self.occurrences.push(link);
+            self.occurrences.len() - 1
         });
-        self.current = Some((source, run));
+        self.current = Some((source, run, text.saturating_sub(bytes)));
         run
     }
 
@@ -901,11 +925,14 @@ fn places(document: &Document<'_>) -> HashMap<EcoString, XyzDestination> {
         return places;
     }
     let mut by_source: HashMap<SourceRef, Vec<usize>> = HashMap::new();
+    // A destination from no node would be at the first box from none.
     for (i, destination) in destinations.iter().enumerate() {
-        by_source
-            .entry(destination.location.source)
-            .or_default()
-            .push(i);
+        if !destination.location.source.is_detached() {
+            by_source
+                .entry(destination.location.source)
+                .or_default()
+                .push(i);
+        }
     }
     let mut boxes: Vec<Option<(usize, Point)>> = vec![None; destinations.len()];
     let mut runs: Vec<Option<(usize, Point)>> = vec![None; destinations.len()];
@@ -1160,7 +1187,7 @@ impl Writer<'_> {
         // none, as the text of a link is content of its `Link` element.
         let mut pieces: Vec<(Range<usize>, Option<usize>)> = Vec::new();
         for (i, g) in run.glyphs.iter().enumerate() {
-            let link = self.links.glyph(g.source.0);
+            let link = self.links.glyph(g.source.0, g.range.len());
             match pieces.last_mut() {
                 Some((range, last)) if *last == link => range.end = i + 1,
                 _ => pieces.push((i..i + 1, link)),

@@ -793,7 +793,7 @@ fn navigation(links: Vec<Option<&str>>) -> Navigation {
             .map(|destination| Link {
                 source: SourceRef(30),
                 destination: destination.map(Into::into),
-                text: "Section 1".into(),
+                text: "Section\u{a0}1".into(),
             })
             .collect(),
         page_labels: Vec::new(),
@@ -831,8 +831,8 @@ fn references_link_to_named_destinations() {
     );
 }
 
-/// A reference broken across lines is one link with an area on each
-/// line; a reference that does not resolve, and one to a label whose
+/// A reference broken across lines is one link with an annotation on
+/// each line; a reference that does not resolve, and one to a label whose
 /// element is not on the pages, is text that goes nowhere.
 #[test]
 fn links_across_lines_and_links_that_go_nowhere() {
@@ -848,13 +848,13 @@ fn links_across_lines_and_links_that_go_nowhere() {
     let written = write(&document).unwrap();
     assert!(written.pdf_ua, "{:?}", written.warnings);
     let pdf = text(&written.bytes);
-    assert_eq!(pdf.matches("/Subtype/Link").count(), 1);
-    assert!(pdf.contains("/QuadPoints["));
+    assert_eq!(pdf.matches("/Subtype/Link").count(), 2);
+    assert!(!pdf.contains("/QuadPoints["));
     let (tree, _) = tagged(&document);
     assert_eq!(
         tree,
         // `See Sec`, then ` and ??`, which goes nowhere, in one piece.
-        "Section\n  H1 Forces\n    ·\n  P\n    ··\n    Link\n      ···\n"
+        "Section\n  H1 Forces\n    ·\n  P\n    ··\n    Link\n      ····\n"
     );
 
     let mut lost = navigation.clone();
@@ -958,4 +958,54 @@ fn writes_page_labels_that_differ_from_plain_numbers() {
     assert!(pdf.contains("/S/D/St 1"), "{pdf}");
     assert!(pdf.contains("/S/a/P(1)/St 1"), "{pdf}");
     assert!(pdf.contains("/P(1aa)"), "{pdf}");
+}
+
+/// Two references of one source that meet, as those of a loop can where
+/// the space between them is dropped at a line break, stay two links: a
+/// run of the source's glyphs ends where it has shown its link's text.
+#[test]
+fn references_that_meet_stay_apart() {
+    let (pages, structure) = linked(vec![
+        mixed(&[("See ", 3), ("Section\u{a0}1", 30)]),
+        mixed(&[("Section\u{a0}1", 30), ("Section\u{a0}1", 30)]),
+    ]);
+    let mut navigation = navigation(vec![Some("sec:forces"), None, Some("sec:forces")]);
+    navigation.links[2].text = "".into();
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    let pdf = text(&written.bytes);
+    // The second goes nowhere; the third, whose text has no words, is
+    // described by its destination's name.
+    assert_eq!(pdf.matches("/Subtype/Link").count(), 2, "{pdf}");
+    assert_eq!(pdf.matches("/Contents(Section 1)").count(), 1);
+    assert_eq!(pdf.matches("/Contents(sec:forces)").count(), 1);
+    let (tree, _) = tagged(&document);
+    assert_eq!(
+        tree,
+        "Section\n  H1 Forces\n    ·\n  P\n    ··\n    Link\n      ··\n    Link\n      ··\n"
+    );
+}
+
+/// Text from no node is no link's, and no destination is at it.
+#[test]
+fn detached_sources_neither_link_nor_land() {
+    let (pages, structure) = linked(vec![mixed(&[("See ", 0), ("Section\u{a0}1", 30)])]);
+    let mut navigation = navigation(vec![Some("sec:forces")]);
+    navigation.links[0].source = SourceRef::DETACHED;
+    navigation.destinations.push(Destination {
+        name: "nowhere".into(),
+        location: Location::DETACHED,
+    });
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    let pdf = text(&written.bytes);
+    assert!(!pdf.contains("/Subtype/Link"));
+    assert!(!pdf.contains("(nowhere)"));
 }
