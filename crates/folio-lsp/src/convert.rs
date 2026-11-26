@@ -94,6 +94,9 @@ impl<'a> LineIndex<'a> {
         }
         let line = self.starts.partition_point(|&start| start <= byte) - 1;
         let start = self.starts[line];
+        // Inside a line break is the end of the line before it.
+        let rest = &self.text[start..];
+        let byte = byte.min(start + rest.find(['\r', '\n']).unwrap_or(rest.len()));
         let column = self.text[start..byte]
             .chars()
             .map(|c| encoding.width(c))
@@ -173,14 +176,16 @@ pub(crate) fn uri_to_path(uri: &lsp::Uri) -> Option<PathBuf> {
     let path = path.split(['?', '#']).next().unwrap_or_default();
     let decoded = percent_decode(path)?;
     if cfg!(windows) {
-        // `/C:/dir` is `C:/dir`.
+        // `/c:/dir` is `C:/dir`: the drive in upper case, as paths given on
+        // the command line usually write it, so that they compare equal.
         let bytes = decoded.as_bytes();
         if bytes.len() >= 3
             && bytes[0] == b'/'
             && bytes[1].is_ascii_alphabetic()
             && bytes[2] == b':'
         {
-            return Some(PathBuf::from(&decoded[1..]));
+            let drive = char::from(bytes[1].to_ascii_uppercase());
+            return Some(PathBuf::from(format!("{drive}{}", &decoded[2..])));
         }
     }
     Some(PathBuf::from(decoded))
@@ -324,6 +329,8 @@ mod tests {
             // Past the end of the line is its end, before `\r\n`.
             assert_eq!(index.offset(lsp::Position::new(0, 99), encoding), 8);
         }
+        // Between `\r` and `\n`: the end of the line.
+        assert_eq!(index.position(9, Encoding::Utf16), lsp::Position::new(0, 5));
         assert_eq!(
             index.position(10, Encoding::Utf16),
             lsp::Position::new(1, 0)
@@ -350,6 +357,17 @@ mod tests {
         ];
         assert_eq!(Encoding::choose(Some(&kinds)), Encoding::Utf8);
         assert_eq!(Encoding::choose(None), Encoding::Utf16);
+    }
+
+    /// VS Code writes the drive's colon as `%3A`, and the drive letter in
+    /// lower case.
+    #[cfg(windows)]
+    #[test]
+    fn file_uris_as_vs_code_writes_them() {
+        let uri = lsp::Uri::from_str("file:///c%3A/Users/a%20b/main.fol").unwrap();
+        let path = uri_to_path(&uri).unwrap();
+        assert_eq!(path, PathBuf::from(r"C:\Users\a b\main.fol"));
+        assert!(path.starts_with(r"C:\Users"));
     }
 
     #[test]

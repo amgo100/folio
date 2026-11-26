@@ -69,9 +69,21 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
         noticed: BTreeSet::new(),
         request_id: 0,
         watch: Watch::No,
+        folders: Vec::new(),
         shut_down: false,
+        retry: false,
     };
     server.watch = watch_support(&params);
+    #[allow(deprecated)]
+    let folders = params
+        .workspace_folders
+        .iter()
+        .flatten()
+        .map(|f| &f.uri)
+        .chain(&params.root_uri)
+        .filter_map(convert::uri_to_path)
+        .collect();
+    server.folders = folders;
     if let Some(root) = server.initial_root(&params) {
         server.open_project(root);
     }
@@ -153,8 +165,14 @@ struct Server<'a> {
     request_id: i32,
     /// Whether the client can be asked to report changes on disk, and how.
     watch: Watch,
+    /// The client's workspace folders, which file events with a pattern of
+    /// [`Watch::Workspace`] are relative to.
+    folders: Vec<PathBuf>,
     /// Whether the client asked the server to shut down.
     shut_down: bool,
+    /// Whether a check could not be started, to be tried again at the
+    /// next message.
+    retry: bool,
 }
 
 /// How the client can be asked to report changes to files.
@@ -195,13 +213,26 @@ impl Server<'_> {
             select! {
                 recv(self.connection.receiver) -> message => {
                     let Ok(message) = message else { return Ok(()) };
+                    if std::mem::take(&mut self.retry) {
+                        self.dirty = true;
+                    }
                     match message {
                         Message::Request(request) => {
-                            if self.connection.handle_shutdown(&request)? {
+                            if request.method == req::Shutdown::METHOD {
+                                // Nothing more is done until `exit`.
                                 self.shut_down = true;
-                                return Ok(());
+                                self.dirty = false;
+                                self.retry = false;
+                                self.send(Response::new_ok(request.id, ()));
+                            } else if self.shut_down {
+                                self.send(Response::new_err(
+                                    request.id,
+                                    ErrorCode::InvalidRequest as i32,
+                                    "the server is shutting down".into(),
+                                ));
+                            } else {
+                                self.request(request);
                             }
-                            self.request(request);
                         }
                         Message::Notification(notification) => {
                             if notification.method == note::Exit::METHOD {
@@ -212,7 +243,9 @@ impl Server<'_> {
                                     false => Err(Error("the client exited without shutting the server down".into())),
                                 };
                             }
-                            self.notification(notification);
+                            if !self.shut_down {
+                                self.notification(notification);
+                            }
                         }
                         Message::Response(_) => {}
                     }
@@ -263,7 +296,20 @@ impl Server<'_> {
     fn watch_files(&mut self, root: &Path) {
         let glob_pattern = match self.watch {
             Watch::No => return,
-            Watch::Workspace => lsp::GlobPattern::String("**/*".into()),
+            Watch::Workspace => {
+                if !self.folders.iter().any(|folder| root.starts_with(folder)) {
+                    self.log(
+                        lsp::MessageType::WARNING,
+                        format!(
+                            "Folio: the project in {} is outside the workspace, so changes \
+                             made to its files outside the editor are not seen; open the \
+                             project's folder as the workspace",
+                            root.display()
+                        ),
+                    );
+                }
+                lsp::GlobPattern::String("**/*".into())
+            }
             Watch::Relative => match convert::path_to_uri(root) {
                 Some(base) => lsp::GlobPattern::Relative(lsp::RelativePattern {
                     base_uri: lsp::OneOf::Right(base),
@@ -414,14 +460,14 @@ impl Server<'_> {
         if pin == folio::VERSION || !self.noticed.insert(pin.to_owned()) {
             return;
         }
-        self.show(
-            lsp::MessageType::WARNING,
-            format!(
-                "This project pins Folio {pin}, but the language server is Folio {}: \
-                 its diagnostics may differ from those of `folio build`.",
-                folio::VERSION
-            ),
+        let message = format!(
+            "This project pins Folio {pin}, but the language server is Folio {}: \
+             its diagnostics may differ from those of `folio build`.",
+            folio::VERSION
         );
+        // Also in the log, where it stays when the editor hides notices.
+        self.log(lsp::MessageType::WARNING, message.clone());
+        self.show(lsp::MessageType::WARNING, message);
     }
 
     /// Logs what loading found that is not in any file.
@@ -564,24 +610,28 @@ impl Server<'_> {
         let Some(path) = self.path_of_open(uri) else {
             return;
         };
-        let Some(doc) = self.docs.remove(&path) else {
+        if self.docs.remove(&path).is_none() {
             return;
-        };
+        }
         // The file is what the disk has again.
         let Some(project) = &self.project else {
             return;
         };
         let file = project.root.join(&path);
         self.disk_changed(vec![file.clone()]);
-        // The loader leaves out hidden files and outputs, so a buffer of
-        // one that it did not replace is dropped.
-        let disk = std::fs::read_to_string(&file).ok();
-        if let Some(world) = self.world_mut()
-            && world.source(&path).is_some_and(|s| s.text() == doc.text)
-            && disk.as_deref() != Some(doc.text.as_str())
-            && world.remove_source(&path)
-        {
-            self.edited();
+        // The loader leaves out hidden files and outputs, so the buffer of
+        // one stays unless it is dropped here.
+        let hidden = path.split('/').any(|part| part.starts_with('.'));
+        if let Some(world) = self.world_mut() {
+            let output = world.builds().iter().any(|(variant, target)| {
+                world
+                    .manifest()
+                    .output_path(variant.as_ref(), *target)
+                    .is_some_and(|out| out.as_str() == path)
+            });
+            if (hidden || output) && world.remove_source(&path) {
+                self.edited();
+            }
         }
     }
 
@@ -601,19 +651,26 @@ impl Server<'_> {
         let Some(project) = &mut self.project else {
             return;
         };
+        // The project directory stands for every file in it.
         let names_project_file = paths.iter().any(|path| {
-            project
-                .project_path(path)
-                .is_some_and(|rel| rel == loader::MANIFEST || rel == loader::LOCKFILE)
+            path == &project.root
+                || path == &project.canonical
+                || project
+                    .project_path(path)
+                    .is_some_and(|rel| rel == loader::MANIFEST || rel == loader::LOCKFILE)
         });
         let Some(world) = &mut project.world else {
             // The project could not be loaded: try again when a file it
             // reads changes.
-            let read = paths.iter().any(|path| {
-                project
-                    .project_path(path)
-                    .is_some_and(|rel| !rel.split('/').any(|part| part.starts_with('.')))
-            });
+            // Only a valid manifest and lockfile can mend their errors;
+            // any other failure may mend with any file the loader reads.
+            let read = names_project_file
+                || project.errors.is_none()
+                    && paths.iter().any(|path| {
+                        project
+                            .project_path(path)
+                            .is_some_and(|rel| !rel.split('/').any(|part| part.starts_with('.')))
+                    });
             if read {
                 self.load_world();
             }
@@ -706,7 +763,9 @@ impl Server<'_> {
                 let mut diagnostics = Vec::new();
                 for output in outputs {
                     match output.result {
-                        Ok(checked) => diagnostics.extend(checked.diagnostics),
+                        // What plain `folio check` shows (SPEC §7.9).
+                        Ok(checked) => diagnostics
+                            .extend(folio::LayoutDiagnostics::Serious.filter(checked.diagnostics)),
                         Err(folio::Cancelled) => {
                             let _ = tx.send(Done {
                                 revision,
@@ -730,7 +789,7 @@ impl Server<'_> {
             });
         if let Err(e) = spawned {
             // Checked again at the next message.
-            self.dirty = true;
+            self.retry = true;
             self.log(
                 lsp::MessageType::ERROR,
                 format!("Folio: cannot start a check: {e}"),
@@ -740,6 +799,10 @@ impl Server<'_> {
 
     /// Publishes what a check found, unless an edit has overtaken it.
     fn done(&mut self, done: Done) {
+        // After `shutdown`, the server sends nothing but answers.
+        if self.shut_down {
+            return;
+        }
         let revision = done.revision;
         let outcome = match done.files {
             None => Outcome::Cancelled,
@@ -783,26 +846,31 @@ impl Server<'_> {
                 files.entry(path).or_default().extend(diagnostics);
             }
         }
-        let mut published = BTreeMap::new();
-        for (path, diagnostics) in files {
-            let Some(uri) = uris.get(&path) else {
-                continue;
-            };
-            self.notify::<note::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
-                uri: uri.clone(),
-                diagnostics,
-                version: versions.get(&path).copied(),
-            });
-            published.insert(path, uri);
-        }
+        let files: Vec<(String, Uri, Vec<lsp::Diagnostic>)> = files
+            .into_iter()
+            .filter_map(|(path, diagnostics)| Some((uris.get(&path)?, path, diagnostics)))
+            .map(|(uri, path, diagnostics)| (path, uri, diagnostics))
+            .collect();
+        // Clears first: a client that takes two spellings of a URI for one
+        // file must not clear what was just published.
+        let now: BTreeMap<&String, &Uri> = files.iter().map(|(p, u, _)| (p, u)).collect();
         for (path, uri) in std::mem::take(&mut self.published) {
-            if published.get(&path) != Some(&uri) {
+            if now.get(&path) != Some(&&uri) {
                 self.notify::<note::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
                     uri,
                     diagnostics: Vec::new(),
                     version: versions.get(&path).copied(),
                 });
             }
+        }
+        let mut published = BTreeMap::new();
+        for (path, uri, diagnostics) in files {
+            self.notify::<note::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
+                uri: uri.clone(),
+                diagnostics,
+                version: versions.get(&path).copied(),
+            });
+            published.insert(path, uri);
         }
         self.published = published;
     }
