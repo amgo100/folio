@@ -10,10 +10,12 @@
 //! or the calls of a closure make from one source. A group that matches
 //! no child, such as a page's body region, belongs to the node around it.
 //!
-//! The tree written follows the input with two kinds of elements added: a
+//! The tree written follows the input with three kinds of elements added: a
 //! `P` around text that a node holds directly where PDF expects no text
-//! (in a `Sect` or `Div`), and the `LBody` of a list item, around all it
-//! holds but its label. A heading is `H1` to `H6` by the sections around
+//! (in a `Sect` or `Div`), the `LBody` of a list item, around all it
+//! holds but its label, and a `Link` around the text of each link, with
+//! its annotations (one for each page it is on) first, as PDF/UA-1 asks
+//! (§7.18.5). A heading is `H1` to `H6` by the sections around
 //! it, so levels never skip, as PDF/UA-1 asks (§7.4.2), whatever levels
 //! the source wrote.
 
@@ -42,6 +44,8 @@ pub(crate) struct Tagger<'a> {
     /// The sources of headings with content but no text, which cannot
     /// have a title.
     untitled: Vec<SourceRef>,
+    /// The `Link` node of each run of a link's glyphs, by the run's index.
+    links: Vec<Option<usize>>,
 }
 
 /// A heading for the outline: its level, text, page and top.
@@ -80,11 +84,15 @@ enum Kind<'a> {
     Text,
     /// The body of a list item.
     ListBody,
+    /// A link: its annotations and the content they cover.
+    Link,
 }
 
 enum Kid {
     Node(usize),
     Content(Identifier),
+    /// An annotation, which a `Link` holds.
+    Annotation(Identifier),
 }
 
 impl<'a> Tagger<'a> {
@@ -98,6 +106,7 @@ impl<'a> Tagger<'a> {
             leading: true,
             headings: Vec::new(),
             untitled: Vec::new(),
+            links: Vec::new(),
         };
         tagger.push(Kind::Top, std::slice::from_ref(root), 0);
         tagger
@@ -164,12 +173,51 @@ impl<'a> Tagger<'a> {
         child
     }
 
-    /// Adds marked content to `node`.
-    pub(crate) fn content(&mut self, node: usize, id: Identifier) {
+    /// Adds marked content to `node`: to the `Link` of run `link` in it,
+    /// if it is a link's text.
+    pub(crate) fn content(&mut self, node: usize, id: Identifier, link: Option<usize>) {
         let target = self.text_target(node);
-        let out = &mut self.nodes[target];
-        // A heading is in the outline once it shows something, as it is
-        // in the tree only then.
+        self.note_heading(target);
+        let Some(link) = link else {
+            self.nodes[target].kids.push(Kid::Content(id));
+            return;
+        };
+        if self.links.len() <= link {
+            self.links.resize(link + 1, None);
+        }
+        let out = match self.links[link] {
+            Some(out) => out,
+            None => {
+                let sections = self.nodes[target].sections;
+                let out = self.push(Kind::Link, &[], sections);
+                self.nodes[target].kids.push(Kid::Node(out));
+                self.links[link] = Some(out);
+                out
+            }
+        };
+        self.nodes[out].kids.push(Kid::Content(id));
+    }
+
+    /// Adds an annotation of run `link` to its `Link`, after the
+    /// annotations it has, before its content.
+    pub(crate) fn annotation(&mut self, link: usize, id: Identifier) {
+        let Some(Some(out)) = self.links.get(link).copied() else {
+            return;
+        };
+        let kids = &mut self.nodes[out].kids;
+        let at = kids
+            .iter()
+            .position(|kid| !matches!(kid, Kid::Annotation(_)))
+            .unwrap_or(kids.len());
+        kids.insert(at, Kid::Annotation(id));
+    }
+
+    /// Notes a heading for the outline when `target`, which content is
+    /// about to be added to, is a heading that shows nothing yet: it is in
+    /// the outline once it shows something, as it is in the tree only
+    /// then.
+    fn note_heading(&mut self, target: usize) {
+        let out = &self.nodes[target];
         if let Kind::Input(tag) = out.kind
             && tag.role == Role::Heading
             && out.kids.is_empty()
@@ -182,7 +230,6 @@ impl<'a> Tagger<'a> {
                 _ => self.untitled.push(tag.source),
             }
         }
-        out.kids.push(Kid::Content(id));
     }
 
     /// Where a child of `role` of a node goes: into the node, or for a
@@ -218,7 +265,7 @@ impl<'a> Tagger<'a> {
                     | Role::Caption
                     | Role::Code
             ),
-            Kind::Top | Kind::ListBody => false,
+            Kind::Top | Kind::ListBody | Kind::Link => false,
         };
         if holds_text {
             return node;
@@ -255,7 +302,9 @@ impl<'a> Tagger<'a> {
                         tree.push(group);
                     }
                 }
-                Kid::Content(id) => tree.push(TagGroup::with_children(KTag::P, vec![id.into()])),
+                Kid::Content(id) | Kid::Annotation(id) => {
+                    tree.push(TagGroup::with_children(KTag::P, vec![id.into()]));
+                }
             }
         }
         (tree, self.headings, self.untitled)
@@ -279,7 +328,7 @@ fn take<'a>(nodes: &mut [Option<Out<'a>>], index: usize) -> Out<'a> {
 fn kid_node(kid: Kid, nodes: &mut [Option<Out<'_>>]) -> Option<Node> {
     match kid {
         Kid::Node(index) => group(take(nodes, index), nodes).map(Node::Group),
-        Kid::Content(id) => Some(Node::Leaf(id)),
+        Kid::Content(id) | Kid::Annotation(id) => Some(Node::Leaf(id)),
     }
 }
 
@@ -289,6 +338,7 @@ fn group(out: Out<'_>, nodes: &mut [Option<Out<'_>>]) -> Option<TagGroup> {
         Kind::Top => KTag::Div.into(),
         Kind::Text => KTag::P.into(),
         Kind::ListBody => KTag::LBody.into(),
+        Kind::Link => KTag::Link.into(),
         Kind::Input(tag) => match tag.role {
             Role::Document | Role::Group => KTag::Div.into(),
             Role::Title => KTag::Title.into(),
