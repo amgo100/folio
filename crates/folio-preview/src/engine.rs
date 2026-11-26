@@ -683,7 +683,12 @@ impl Engine {
         let font_generation = old.font_generation + u64::from(frame.fonts_changed);
         // The marks stay, rather than blink, while the pages are indexed,
         // when neither the pages nor the diagnostics changed.
-        let overlays = match lists.is_empty() && spans.is_empty() && *old.diagnostics == resolved {
+        let unchanged = frame.pages.is_some()
+            && count == old.pages.len()
+            && lists.is_empty()
+            && spans.is_empty()
+            && *old.diagnostics == resolved;
+        let overlays = match unchanged {
             true => old.overlays.clone(),
             false => Arc::new(Vec::new()),
         };

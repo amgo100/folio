@@ -217,7 +217,8 @@ function glyphFailed(key) {
 // Redraws when the earliest failed glyph is due again.
 function armRetry() {
   if (retryTimer || failed.size === 0) return;
-  const due = Math.min(...failed.values());
+  let due = Infinity;
+  for (const at of failed.values()) if (at < due) due = at;
   retryTimer = setTimeout(() => {
     retryTimer = 0;
     redrawVisible();
@@ -252,9 +253,9 @@ async function fetchGlyphs() {
       const url = `/glyphs/${font}?token=${encodeURIComponent(token)}&size=${size}&g=${part.join(",")}`;
       requests.push(fetch(url).then(async (response) => {
         if (cache !== glyphCache) return false;
-        if (response.status >= 400 && response.status < 500) {
-          // The server will not draw these glyphs, as for a font it does
-          // not have: they are drawn as nothing until the fonts change.
+        if (response.status === 404) {
+          // The server has no such font: the glyphs are drawn as nothing
+          // until the fonts change.
           for (const g of part) cache.set(keyOf(g), null);
           return true;
         }
@@ -262,18 +263,23 @@ async function fetchGlyphs() {
         const bytes = new Uint8Array(await response.arrayBuffer());
         // Glyphs of fonts the server has replaced since are dropped.
         if (cache !== glyphCache) return false;
-        readGlyphs(font, size, bytes);
-        // Glyphs an answer left out, past its size limit, are asked for
-        // again at once.
+        const count = readGlyphs(font, size, bytes);
+        // Glyphs an answer left out past its size limit are asked for
+        // again at once, as long as answers hold some; otherwise later.
         for (const g of part) {
-          if (glyphCache.get(keyOf(g)) === undefined) {
+          if (glyphCache.get(keyOf(g)) !== undefined) continue;
+          if (count > 0) {
             glyphCache.delete(keyOf(g));
             wantGlyph(font, size, ...g.split("."));
+          } else {
+            glyphFailed(keyOf(g));
           }
         }
         return true;
       }).catch(() => {
-        if (cache === glyphCache) for (const g of part) glyphFailed(keyOf(g));
+        if (cache !== glyphCache) return false;
+        // Glyphs read before the answer broke off are kept.
+        for (const g of part) if (cache.get(keyOf(g)) === undefined) glyphFailed(keyOf(g));
         return false;
       }));
     }
@@ -308,6 +314,7 @@ function readGlyphs(font, size, bytes) {
     at += width * height;
     glyphCache.set(`${font}|${size}|${id}|${sub}`, glyph);
   }
+  return count;
 }
 
 // The mask in a colour: black masks are drawn as they are.
