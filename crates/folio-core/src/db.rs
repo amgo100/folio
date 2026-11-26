@@ -151,7 +151,12 @@ pub struct DataFile {
 
 /// One output of a project: its target, and its variant, or none when the
 /// manifest declares no variants.
-#[salsa::interned(debug)]
+///
+/// A build may also be a layout pass of the page-number fixpoint (SPEC
+/// §2.3): the same output, with its page-number references set to the
+/// page numbers of the pass before ([`crate::resolve::page_refs`]). The
+/// build itself is made with [`Build::new`] and has no pass.
+#[salsa::interned(debug, constructor = with_pass)]
 pub struct Build<'db> {
     #[returns(copy)]
     pub project: Project,
@@ -159,6 +164,38 @@ pub struct Build<'db> {
     pub target: Target,
     #[returns(ref)]
     pub variant: Option<Name>,
+    /// For a layout pass, the page numbers it sets its page-number
+    /// references with; `None` for the build itself.
+    #[returns(ref)]
+    pub pass: Option<crate::resolve::PageNumbers>,
+}
+
+impl<'db> Build<'db> {
+    /// The build of a project's output for a target and a variant.
+    pub fn new(db: &'db dyn Db, project: Project, target: Target, variant: Option<Name>) -> Self {
+        Self::with_pass(db, project, target, variant, None)
+    }
+
+    /// The build that a layout pass is a pass of, or the build itself.
+    pub fn base(self, db: &'db dyn Db) -> Self {
+        if self.pass(db).is_none() {
+            return self;
+        }
+        Self::new(
+            db,
+            self.project(db),
+            self.target(db),
+            self.variant(db).clone(),
+        )
+    }
+
+    /// Whether the build is a layout pass of the page-number fixpoint,
+    /// whose diagnostics are those of the build it is a pass of. The stages
+    /// whose diagnostics depend on the text of page-number references, the
+    /// paragraph and page builders, report nothing for a pass.
+    pub fn is_pass(self, db: &'db dyn Db) -> bool {
+        self.pass(db).is_some()
+    }
 }
 
 /// The contents of a file, cheap to clone.

@@ -3,28 +3,26 @@
 //!
 //! A page-number reference shows the page its target is on, and the text
 //! it shows can move the target: a wider number can push a line, and so
-//! the target, onto the next page. Resolve therefore reads the pages that
-//! layout made with the numbers of the pass before, and layout reads what
-//! Resolve resolved, a cycle that [`page_numbers`](crate::pipeline::page_numbers) closes on salsa's cycle
-//! handling:
+//! the target, onto the next page. The build is therefore laid out in
+//! passes ([`settle`](crate::pipeline::settle)), each a build of its own
+//! whose references show the numbers the pass before measured:
 //!
 //! 1. The first pass knows no page: every page-number reference shows
-//!    [`UNRESOLVED`](super::UNRESOLVED), and layout lays the document out
-//!    with that.
-//! 2. Each later pass sets the pages the pass before measured, and lays
-//!    the document out again. When a pass measures the pages it was set
-//!    with, the numbers have converged, and that pass is the build's
-//!    layout. An ordinary document converges on the second pass: one extra
-//!    pass.
+//!    [`UNRESOLVED`](super::UNRESOLVED).
+//! 2. Each later pass sets the pages the pass before measured. When a pass
+//!    measures the pages it was set with, the numbers have converged. An
+//!    ordinary document converges on the second pass: one extra pass.
 //! 3. After [`EXTRA_PASSES`] extra passes without converging, the numbers
-//!    are frozen at those of the last pass, whose layout is kept, so the
-//!    output stays deterministic; Resolve warns at each reference whose
-//!    target's page did not settle.
+//!    are frozen at those of the last pass, so the output stays
+//!    deterministic, and Resolve warns at each reference whose target's
+//!    page did not settle.
 //!
-//! Every query of the cycle starts from the same knowledge, no page, so the
-//! passes are the same whichever query salsa makes the cycle's head:
-//! whichever stage a host asks for first, and whatever the previous
-//! revision computed.
+//! The build is then laid out with the numbers found, as the last pass
+//! was. The passes are explicit rather than a cycle of queries on salsa's
+//! fixpoint iteration, which does not allow the diagnostics that every
+//! stage reports, and they always start from no page known, so the numbers
+//! do not depend on which stage a host asks for first or on what an
+//! earlier revision found (SPEC §2.4).
 
 use ecow::EcoVec;
 use folio_component::Location;

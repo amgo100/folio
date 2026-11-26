@@ -108,87 +108,98 @@ pub fn sequence(db: &dyn Db, build: Build<'_>) -> Option<Sequenced> {
 /// (stage 6), or `None` when the document could not be styled: counters,
 /// markers and references so far ([`resolve_tree`]).
 ///
-/// Page-number references take the page numbers of the pass before
-/// ([`page_numbers`]), which makes Resolve part of the cycle that runs
-/// through layout ([`crate::resolve::page_refs`]). A fixed-layout build
-/// reads its own pages; the Office targets read those of the PDF build of
-/// their variant, whose page numbers are the cached results of their page
-/// fields (SPEC §11.2). A build without page-number references reads no
-/// pages, so it is in no cycle.
-#[salsa::tracked(returns(ref), cycle_initial = resolve_initial)]
+/// Page-number references show the page numbers that [`settle`] found
+/// for the build, or, for a layout pass of the fixpoint, those the pass
+/// was made with. What does not depend on pages is resolved once for a
+/// build and its passes ([`resolve_counters`]).
+#[salsa::tracked(returns(ref))]
 pub fn resolve(db: &dyn Db, build: Build<'_>) -> Option<Resolved> {
-    let sequenced = sequence(db, build).as_ref()?;
-    let mut resolution = resolve_tree(db, build, &sequenced.styled);
+    let counted = resolve_counters(db, build.base(db)).as_ref()?;
+    let mut resolution = counted.resolution.clone();
     if resolution.has_page_refs() {
-        let numbers = page_numbers(db, paged(db, build));
-        resolution.set_pages(numbers);
-        if numbers.frozen {
-            report_unsettled(db, &resolution);
+        match build.pass(db) {
+            Some(numbers) => resolution.set_pages(numbers),
+            None => {
+                let numbers = settle(db, build);
+                resolution.set_pages(numbers);
+                if numbers.frozen {
+                    report_unsettled(db, &resolution);
+                }
+            }
         }
     }
     Some(Resolved {
-        styled: sequenced.styled.clone(),
+        styled: counted.styled.clone(),
         resolution,
     })
 }
 
-/// What the cycle through layout starts from when salsa enters it at
-/// Resolve: nothing resolved yet, as for a document that could not be
-/// styled. The stages after it have nothing to lay out, so the pass that
-/// follows knows no page, as when the cycle is entered anywhere else.
-fn resolve_initial(
-    _db: &dyn Db,
-    _id: salsa::Id,
-    _last: Option<&Option<Resolved>>,
-    _build: Build<'_>,
-) -> Option<Resolved> {
-    None
+/// Resolves what does not depend on pages: [`resolve`] without the page
+/// numbers of page-number references, which show [`UNRESOLVED`] here.
+///
+/// [`UNRESOLVED`]: crate::resolve::UNRESOLVED
+#[salsa::tracked(returns(ref))]
+pub fn resolve_counters(db: &dyn Db, build: Build<'_>) -> Option<Resolved> {
+    let sequenced = sequence(db, build).as_ref()?;
+    Some(Resolved {
+        styled: sequenced.styled.clone(),
+        resolution: resolve_tree(db, build, &sequenced.styled),
+    })
 }
 
-/// The build whose pages the page-number references of a build show: the
-/// build itself where it is laid out, else the PDF build of its variant.
-fn paged<'db>(db: &'db dyn Db, build: Build<'db>) -> Build<'db> {
-    match build.target(db) {
-        Target::Pdf | Target::Live => build,
-        Target::Docx | Target::Pptx => Build::new(
-            db,
-            build.project(db),
-            Target::Pdf,
-            build.variant(db).clone(),
-        ),
+/// The page numbers that a build's page-number references show: the
+/// bounded fixpoint of [`page_refs`], run as layout passes of the build
+/// (SPEC §2.3).
+///
+/// The first pass knows no page. Each pass is the build with its
+/// references set to the numbers the pass before measured, a key of its
+/// own ([`Build::pass`]), so every pass is memoised like the build, and
+/// the shaping, line-break and page caches serve the paragraphs and pages
+/// that a pass leaves as they were. The passes stop when one measures the
+/// numbers it was set with, or freeze the numbers after the extra passes;
+/// the build is then laid out with them, as the last pass was. The
+/// passes always start from no page known, so the numbers do not depend on
+/// which stage a host asks for first or on what an earlier revision
+/// found (SPEC §2.4).
+///
+/// A fixed-layout build measures its own pages; the Office targets take
+/// the numbers of the PDF build of their variant, whose page numbers are
+/// the cached results of their page fields (SPEC §11.2).
+#[salsa::tracked(returns(ref))]
+pub fn settle(db: &dyn Db, build: Build<'_>) -> PageNumbers {
+    let build = build.base(db);
+    let project = build.project(db);
+    let variant = build.variant(db).clone();
+    if let Target::Docx | Target::Pptx = build.target(db) {
+        return settle(db, Build::new(db, project, Target::Pdf, variant)).clone();
     }
-}
-
-/// The page numbers that a build's page-number references show: one step
-/// of the bounded fixpoint ([`page_refs`]). It reads the pages laid out
-/// with the numbers of the pass before and gives the numbers they measure,
-/// or those numbers again where the pages measure them, or once the passes
-/// are used up. Before any pass, and where the document could not be
-/// laid out, every page is unknown.
-#[salsa::tracked(returns(ref), cycle_initial = page_numbers_initial)]
-pub fn page_numbers(db: &dyn Db, build: Build<'_>) -> PageNumbers {
-    let Some(pages) = pages(db, build).as_ref() else {
+    let Some(counted) = resolve_counters(db, build).as_ref() else {
         return PageNumbers::default();
     };
-    let used = &pages.page_refs;
-    let targets: Vec<_> = used.pages.iter().map(|(target, _)| *target).collect();
-    let measured: Vec<Option<u32>> = pages
-        .pages_of(&targets)
-        .into_iter()
-        .map(|page| page.and_then(|i| u32::try_from(i + 1).ok()))
-        .collect();
-    page_refs::next(used, &measured)
-}
-
-/// What the cycle through layout starts from when salsa enters it at
-/// [`page_numbers`]: no page known.
-fn page_numbers_initial(
-    _db: &dyn Db,
-    _id: salsa::Id,
-    _last: Option<&PageNumbers>,
-    _build: Build<'_>,
-) -> PageNumbers {
-    PageNumbers::default()
+    let mut used = PageNumbers::default().for_targets(counted.resolution.page_targets());
+    loop {
+        let pass = Build::with_pass(
+            db,
+            project,
+            build.target(db),
+            variant.clone(),
+            Some(used.clone()),
+        );
+        let Some(pages) = pages(db, pass).as_ref() else {
+            return used;
+        };
+        let targets: Vec<_> = used.pages.iter().map(|(target, _)| *target).collect();
+        let measured: Vec<Option<u32>> = pages
+            .pages_of(&targets)
+            .into_iter()
+            .map(|page| page.and_then(|i| u32::try_from(i + 1).ok()))
+            .collect();
+        let next = page_refs::next(&used, &measured);
+        if next == used || next.frozen {
+            return next;
+        }
+        used = next;
+    }
 }
 
 /// Warns at each page-number reference whose target's page did not
@@ -229,23 +240,12 @@ pub fn resolution<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<&'db Resolu
 /// Applies the `:step` rules of a build per step (stage 7), or `None` when
 /// the document could not be styled. Until steps (M4) it passes the tree
 /// on.
-#[salsa::tracked(returns(ref), cycle_initial = step_style_initial)]
+#[salsa::tracked(returns(ref))]
 pub fn step_style(db: &dyn Db, build: Build<'_>) -> Option<StepStyled> {
     let resolved = resolve(db, build).as_ref()?;
     Some(StepStyled {
         styled: resolved.styled.clone(),
     })
-}
-
-/// What the cycle of page-number references starts from when salsa enters
-/// it at Step styling: nothing to lay out ([`resolve`]).
-fn step_style_initial(
-    _db: &dyn Db,
-    _id: salsa::Id,
-    _last: Option<&Option<StepStyled>>,
-    _build: Build<'_>,
-) -> Option<StepStyled> {
-    None
 }
 
 /// The tree a build lays out or maps: the styled tree after every stage up

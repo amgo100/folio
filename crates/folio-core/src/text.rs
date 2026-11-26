@@ -246,32 +246,9 @@ impl TextSource {
     }
 }
 
-/// What the cycle of page-number references starts from when salsa enters
-/// it at [`text()`]: nothing to lay out, so the pass that follows knows no
-/// page ([`crate::resolve::page_refs`]).
-fn text_initial(
-    _db: &dyn Db,
-    _id: salsa::Id,
-    _last: Option<&Option<Text>>,
-    _build: Build<'_>,
-) -> Option<Text> {
-    None
-}
-
-/// What the cycle of page-number references starts from when salsa enters
-/// it at [`collect_text()`], as at [`text()`].
-fn collect_initial(
-    _db: &dyn Db,
-    _id: salsa::Id,
-    _last: Option<&Option<Collected>>,
-    _build: Build<'_>,
-) -> Option<Collected> {
-    None
-}
-
 /// The paragraphs of a build, shaped, or `None` when the document could not
 /// be styled: those of [`collect_text`], each shaped.
-#[salsa::tracked(returns(ref), cycle_initial = text_initial)]
+#[salsa::tracked(returns(ref))]
 pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
     let collected = collect_text(db, build).as_ref()?;
     let inputs: Vec<Paragraph> = collected
@@ -344,7 +321,7 @@ pub struct CollectedParagraph {
 /// and `hyphenate: true` for a language without hyphenation patterns:
 /// what shaping and breaking read, which DOCX and PPTX leave to Word and
 /// PowerPoint; and elements that layout does not draw yet.
-#[salsa::tracked(returns(ref), cycle_initial = collect_initial)]
+#[salsa::tracked(returns(ref))]
 pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
     let project = build.project(db);
     let styled = step_styled(db, build)?;

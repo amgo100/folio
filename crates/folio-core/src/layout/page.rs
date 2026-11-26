@@ -319,11 +319,11 @@ impl Debug for Regions<'_> {
 /// at another width, which only the test hooks of [`paginate`] make, and
 /// [`lines`] is to leave them to it once masters vary.
 ///
-/// Page-number references make the pages part of a cycle with Resolve
-/// ([`crate::resolve::page_refs`]): the pages carry the page numbers
-/// they were laid out with, which the next pass compares with where the
-/// pages put each target.
-#[salsa::tracked(returns(ref), cycle_initial = pages_initial)]
+/// The pages carry the page numbers their page-number references were set
+/// with, which the fixpoint compares with where the pages put each target
+/// ([`crate::pipeline::settle`]). A layout pass of the fixpoint reports
+/// nothing: the build reports what its own layout finds.
+#[salsa::tracked(returns(ref))]
 pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     // The lines at the master's widths, broken in parallel: what the page
     // builder reads wherever a region has those widths.
@@ -333,7 +333,10 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
     let (master, requested) = PageMaster::checked(&styled.page, props);
-    if let Some(requested) = requested {
+    let quiet = build.is_pass(db);
+    if let Some(requested) = requested
+        && !quiet
+    {
         report_page_size(db, build, master, requested, text.root.span);
     }
     let project = build.project(db);
@@ -355,6 +358,9 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         // An edit stops the query between pages (SPEC §2.3).
         &mut || db.unwind_if_revision_cancelled(),
         &mut |out, rebroken| {
+            if quiet {
+                return;
+            }
             report(db, out);
             for (paragraph, layout) in rebroken {
                 report_lines(db, project, &text.paragraphs[*paragraph], layout);
@@ -362,18 +368,6 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         },
     );
     Some(Pages { page_refs, ..pages })
-}
-
-/// What the cycle of page-number references starts from when salsa enters
-/// it at the page builder: no pages, so the pass that follows knows no
-/// page ([`crate::pipeline::resolve`]).
-fn pages_initial(
-    _db: &dyn Db,
-    _id: salsa::Id,
-    _last: Option<&Option<Pages>>,
-    _build: Build<'_>,
-) -> Option<Pages> {
-    None
 }
 
 /// The pages of a build as [`pages()`] makes them, from the stages before
@@ -624,7 +618,7 @@ fn report_page_size(
     requested: Size,
     root: Span,
 ) {
-    let cascade = crate::style::cascade(db, build);
+    let cascade = crate::style::cascade(db, build.base(db));
     let page_size = cascade.properties.builtin("page-size");
     let page = NodeView {
         subject: Subject {
