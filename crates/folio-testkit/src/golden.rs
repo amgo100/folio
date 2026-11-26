@@ -5,11 +5,16 @@
 //! golden test with `FOLIO_BLESS=1`) and review the diff before
 //! committing it; a difference nobody intended is a bug.
 //!
-//! Layout goldens are fragment dumps ([`dump_pages`]): every page, box,
-//! glyph run and shape with its position and size in points, rounded to
-//! hundredths. A change smaller than that is not a difference. Once the
-//! rasteriser exists (M1), page images compared with a perceptual
-//! threshold join them.
+//! Layout goldens come in two forms. Fragment dumps ([`dump_pages`]) hold
+//! every page, box, glyph run and shape with its position and size in
+//! points, rounded to hundredths, and where its source is; a change
+//! smaller than that is not a difference. Page images ([`page_images`])
+//! hold what `folio-render` draws of each page, at [`SCALE`] pixels per
+//! point, as PNG; [`check_image`] compares them pixel by pixel within
+//! [`TOLERANCE`], and writes the image it got beside the build's other
+//! outputs when they differ. The dumps say exactly what moved, and where
+//! its source is; the images show what a reader sees, and catch what the
+//! renderer gets wrong.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -17,7 +22,8 @@ use std::path::{Path, PathBuf};
 
 use folio::layout::{Cache, ObjectMetrics, PageCache, Regions, TextObject};
 use folio::{Abs, Fragment, FragmentItem, Pages, Point, Size, Target, TextBlock, World};
-use folio_component::{Color, Paint, PathItem};
+use folio_component::{Color, FontId, Paint, PathItem};
+use folio_render::{DisplayList, FontBytes, Image, Options, Outlines};
 
 /// The environment variable that makes [`check`] write golden files
 /// instead of comparing with them.
@@ -118,6 +124,161 @@ pub fn prune(dir: &Path, ext: &str, expected: &[PathBuf]) -> Result<(), String> 
     Err(format!(
         "golden files without a build: {}; run scripts/bless.sh to remove them",
         names.join(", ")
+    ))
+}
+
+/// Pixels per point of the page images: 72 dpi, so that a page of the
+/// corpus is a small file.
+pub const SCALE: f32 = 1.0;
+
+/// The largest difference, in levels of 255, that a channel of a pixel of
+/// a page image may have from the golden file's.
+///
+/// `folio-render` draws with scalar float code that IEEE 754 fixes, so a
+/// page should come out the same on every machine; the tolerance absorbs
+/// the rounding of a renderer update or another platform's float
+/// conversions, not a change anyone could see: a glyph that moves by a
+/// tenth of a pixel changes the pixels at its edges by far more.
+pub const TOLERANCE: u8 = 2;
+
+/// The fonts of a build, by the ids that glyph runs name them by, for
+/// `folio-render`.
+#[derive(Debug)]
+pub struct FontTable(Vec<Option<folio_fonts::Font>>);
+
+impl FontTable {
+    /// The faces of a world's fonts.
+    pub fn new(world: &World) -> Self {
+        let fonts = folio::fonts(world).expect("nothing cancels the build");
+        Self(fonts.faces().iter().map(|face| face.font()).collect())
+    }
+}
+
+impl folio_render::Fonts for FontTable {
+    fn font(&self, id: FontId) -> Option<FontBytes<'_>> {
+        let font = self.0.get(usize::try_from(id.0).ok()?)?.as_ref()?;
+        Some(FontBytes {
+            data: font.data(),
+            index: font.index(),
+        })
+    }
+}
+
+/// The display list of each page of a build.
+pub fn display_lists(pages: &Pages) -> Vec<DisplayList> {
+    pages
+        .pages
+        .iter()
+        .map(|page| DisplayList::from_fragment(&page.fragment))
+        .collect()
+}
+
+/// What `folio-render` draws of each page of a build, at [`SCALE`], on
+/// white.
+pub fn page_images(world: &World, pages: &Pages) -> Vec<Image> {
+    let fonts = FontTable::new(world);
+    let mut outlines = Outlines::new();
+    let options = Options {
+        scale: SCALE,
+        background: Some(Color::WHITE),
+    };
+    display_lists(pages)
+        .iter()
+        .map(|list| {
+            folio_render::render(list, &fonts, &mut outlines, &options)
+                .expect("a page of the corpus has a size that renders")
+        })
+        .collect()
+}
+
+/// Where an image that differs from its golden file is written for
+/// review: `target/golden/` and the golden file's name, under
+/// `CARGO_TARGET_DIR` when it is set.
+pub fn actual_path(golden: &Path) -> PathBuf {
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::root().join("target"));
+    target
+        .join("golden")
+        .join(golden.file_name().unwrap_or_default())
+}
+
+/// Compares a page image with the golden PNG at `path`, pixel by pixel
+/// within [`TOLERANCE`], or writes it there when blessing and it differs
+/// at all.
+///
+/// # Errors
+///
+/// When the file is missing, is not a PNG, or differs in size or in a
+/// pixel by more than the tolerance; the message counts the pixels that
+/// differ and names where the image was written ([`actual_path`]).
+pub fn check_image(path: &Path, actual: &Image) -> Result<(), String> {
+    let expected = fs::read(path).ok().map(|bytes| Image::from_png(&bytes));
+    let png = || actual.png().map_err(|e| format!("{}: {e}", path.display()));
+    if blessing() {
+        if !matches!(&expected, Some(Ok(image)) if image == actual) {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            fs::write(path, png()?).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        return Ok(());
+    }
+    let expected = match expected {
+        None => {
+            return Err(format!(
+                "{} is missing: run scripts/bless.sh to write it",
+                path.display()
+            ));
+        }
+        Some(Err(e)) => return Err(format!("{}: {e}", path.display())),
+        Some(Ok(image)) => image,
+    };
+    let problem = if (expected.width, expected.height) != (actual.width, actual.height) {
+        Some(format!(
+            "it is {} × {} pixels, not {} × {}",
+            actual.width, actual.height, expected.width, expected.height
+        ))
+    } else {
+        let mut count = 0usize;
+        let mut worst = 0u8;
+        for (a, b) in actual
+            .rgba
+            .chunks_exact(4)
+            .zip(expected.rgba.chunks_exact(4))
+        {
+            let diff = a
+                .iter()
+                .zip(b)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            if diff > TOLERANCE {
+                count += 1;
+                worst = worst.max(diff);
+            }
+        }
+        (count > 0)
+            .then(|| format!("{count} pixel(s) differ by more than {TOLERANCE}, by up to {worst}"))
+    };
+    let Some(problem) = problem else {
+        return Ok(());
+    };
+    let out = actual_path(path);
+    if let Some(parent) = out.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let written = match fs::write(&out, png()?) {
+        Ok(()) => format!("the new image is {}", out.display()),
+        Err(e) => format!(
+            "the new image could not be written to {}: {e}",
+            out.display()
+        ),
+    };
+    Err(format!(
+        "{} differs: {problem}; {written}; if the change is meant, run scripts/bless.sh and \
+         review the images",
+        path.display()
     ))
 }
 

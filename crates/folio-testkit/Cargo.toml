@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 folio.workspace = true
 folio-component.workspace = true
+folio-fonts.workspace = true
+folio-render.workspace = true
 folio-syntax.workspace = true
 
 [dev-dependencies]
