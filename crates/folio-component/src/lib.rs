@@ -34,6 +34,7 @@ mod draw;
 mod element;
 mod fragment;
 mod geom;
+mod image;
 mod names;
 mod property;
 mod registry;
@@ -51,8 +52,9 @@ pub use self::element::{
     BODY, Body, ContentKind, CounterDecl, ElementKind, ElementSchema, FieldDecl, LAYOUT_HINTS,
     LocaleString, SlotDecl, UNIVERSAL_FIELDS, Within,
 };
-pub use self::fragment::{BaselineGrid, Fragment, FragmentItem, ObjectBox, Regions};
+pub use self::fragment::{BaselineGrid, Fragment, FragmentItem, ImageBox, ObjectBox, Regions};
 pub use self::geom::{Abs, Em, Point, Ratio, Rect, Scalar, Size};
+pub use self::image::{Image, ImageFormat};
 pub use self::names::{ComponentName, Name, QualifiedName, Target, is_ident};
 pub use self::property::{Effect, PropertyDecl};
 pub use self::registry::{Registered, Registry, RegistryError};

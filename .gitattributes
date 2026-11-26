@@ -2,6 +2,8 @@
 # corpus outputs with digests recorded on another machine: the sources must
 # have the same bytes on every checkout, whatever `core.autocrlf` says.
 tests/corpus/** text eol=lf
+# Images are bytes: never converted.
+tests/corpus/*/assets/** -text
 crates/folio/tests/determinism/** text eol=lf
 # Golden files are compared byte for byte.
 tests/golden/** text eol=lf

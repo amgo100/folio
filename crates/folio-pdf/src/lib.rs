@@ -44,6 +44,7 @@
 
 #![forbid(unsafe_code)]
 
+mod image;
 mod tags;
 
 use std::collections::{HashMap, HashSet};
@@ -54,8 +55,8 @@ use std::sync::Arc;
 
 use ecow::EcoString;
 use folio_component::{
-    Abs, FillRule, FontId, Fragment, FragmentItem, GlyphRun, LineCap, LineJoin, Location, Paint,
-    PathItem, Point, Shape, SourceRef,
+    Abs, FillRule, FontId, Fragment, FragmentItem, GlyphRun, ImageBox, LineCap, LineJoin, Location,
+    Paint, PathItem, Point, Shape, SourceRef,
 };
 use folio_fonts::Font;
 use krilla::annotation::{Annotation, LinkAnnotation, Target};
@@ -397,6 +398,10 @@ pub enum Role {
     /// [`Tag::text`] as its alternate description, which PDF/UA-1 asks
     /// for (§7.7).
     Formula,
+    /// An image (`Figure`), with its [`Tag::text`] as its alternate
+    /// description, which PDF/UA-1 asks for (§7.3); one without cannot be
+    /// in a document that claims PDF/UA-1.
+    Figure,
     /// Anything else (`Div`): an element without a standard meaning, such
     /// as most components' elements.
     Group,
@@ -498,6 +503,9 @@ pub fn preflight_with(document: &Document<'_>, check: &mut dyn FnMut()) -> Prefl
     };
     let mut scratch = krilla::Document::new_with(settings);
     let mut writer = Writer::new(document, true);
+    // PDF figures are prepared as the file is expected to be written: a
+    // title lets it claim PDF/UA-1, which converts them.
+    writer.ua = document.info.title.is_some();
     {
         let size = Size::from_wh(1.0, 1.0).expect("a page of one point is valid");
         let mut kpage = scratch.start_page_with(PageSettings::new(size));
@@ -523,14 +531,17 @@ pub fn preflight_with(document: &Document<'_>, check: &mut dyn FnMut()) -> Prefl
             warnings,
         };
     }
-    let (_, _, untitled) = tagger.finish(document.info.lang.as_deref());
+    let missing = tagger.finish(document.info.lang.as_deref()).missing;
     let dry = dry.expect("the check walks dry");
     let mut errors = dry.notdef;
     errors.extend(dry.unmapped);
-    if !untitled.is_empty() {
+    if !missing.untitled.is_empty() {
         errors.push(ValidationError::MissingHeadingTitle);
     }
-    let why = reasons(&errors, &untitled, &names);
+    if !missing.undescribed.is_empty() {
+        errors.push(ValidationError::MissingAltText(None));
+    }
+    let why = reasons(&errors, &missing, &names);
     let pdf_ua = why.is_empty();
     warnings.extend(why);
     Preflight { pdf_ua, warnings }
@@ -585,7 +596,7 @@ pub fn write_checked_with(
             // A failure the check did not foresee: the document is written
             // again, without the claim.
             let errors: Vec<_> = errors.into_iter().map(|(error, _)| error).collect();
-            let why = reasons(&errors, &first.untitled, &first.names);
+            let why = reasons(&errors, &first.missing, &first.names);
             for warning in why {
                 if !warnings.contains(&warning) {
                     warnings.push(warning);
@@ -605,20 +616,26 @@ pub fn write_checked_with(
 }
 
 /// Why a document is not PDF/UA-1, from the validator's errors, each once.
-/// `untitled` holds the sources of the headings without text, which the
-/// validator does not name.
+/// `missing` holds the sources of the headings without text and the
+/// figures without descriptions, which the validator does not name.
 fn reasons(
     errors: &[ValidationError],
-    untitled: &[SourceRef],
+    missing: &tags::Missing,
     names: &[(krilla::text::Font, EcoString)],
 ) -> Vec<Warning> {
     let mut why = Vec::new();
     for error in errors {
         let found = match error {
             // krilla does not say which: the tagger does.
-            ValidationError::MissingHeadingTitle if !untitled.is_empty() => untitled
+            ValidationError::MissingHeadingTitle if !missing.untitled.is_empty() => missing
+                .untitled
                 .iter()
                 .map(|&source| untitled_heading(source))
+                .collect(),
+            ValidationError::MissingAltText(_) if !missing.undescribed.is_empty() => missing
+                .undescribed
+                .iter()
+                .map(|&source| undescribed_figure(source))
                 .collect(),
             _ => vec![not_ua(error, names)],
         };
@@ -636,8 +653,8 @@ struct Rendered {
     result: Result<Vec<u8>, KrillaError>,
     /// The PostScript names of the fonts krilla was given, for messages.
     names: Vec<(krilla::text::Font, EcoString)>,
-    /// The sources of headings without text.
-    untitled: Vec<SourceRef>,
+    /// What PDF/UA-1 asks that the tag tree lacks.
+    missing: tags::Missing,
 }
 
 /// Writes the document, under the PDF/UA-1 validator or none, calling
@@ -687,6 +704,7 @@ fn render_checked(
     };
     let mut pdf = krilla::Document::new_with(settings);
     let mut writer = Writer::new(document, false);
+    writer.ua = ua;
     let labels = page_labels(document);
     for (index, page) in document.pages.iter().enumerate() {
         check();
@@ -727,7 +745,11 @@ fn render_checked(
     }
     // The warnings are the check's, which walked the same pages.
     let Writer { tagger, names, .. } = writer;
-    let (tree, headings, untitled) = tagger.finish(document.info.lang.as_deref());
+    let tags::Finished {
+        tree,
+        headings,
+        missing,
+    } = tagger.finish(document.info.lang.as_deref());
     inspect(&tree, &headings);
     pdf.set_tag_tree(tree);
     let outline = tags::outline(headings);
@@ -736,7 +758,7 @@ fn render_checked(
     Rendered {
         result: pdf.finish(),
         names,
-        untitled,
+        missing,
     }
 }
 
@@ -835,6 +857,11 @@ struct Writer<'a> {
     /// For [`preflight()`], which walks the pages without drawing them:
     /// what PDF/UA-1 does not allow in the glyphs walked.
     dry: Option<Dry>,
+    /// Whether the file claims PDF/UA-1, which does not allow PDF figures
+    /// to be embedded as they are.
+    ua: bool,
+    /// Each image prepared, with the warning drawing it gives.
+    images: HashMap<folio_component::Image, image::Prepared>,
 }
 
 /// The links of a document as the pages draw them: which link each run of
@@ -996,6 +1023,7 @@ fn places(document: &Document<'_>) -> HashMap<EcoString, XyzDestination> {
                     walk(group, at, find);
                 }
                 FragmentItem::Object(object) => find(object.location, true, at),
+                FragmentItem::Image(image) => find(image.location, true, at),
                 FragmentItem::Text(run) => {
                     if let Some(glyph) = run.glyphs.first() {
                         let location = Location {
@@ -1133,6 +1161,8 @@ impl<'a> Writer<'a> {
                 glyphs: document.info.title.is_some(),
                 ..Dry::default()
             }),
+            ua: false,
+            images: HashMap::new(),
         }
     }
 }
@@ -1187,6 +1217,7 @@ impl Writer<'_> {
                 draw_shape(surface, shape, at);
                 surface.end_tagged();
             }
+            FragmentItem::Image(image) => self.image(surface, image, at, node),
             FragmentItem::Object(_) if self.dry.is_some() => {}
             FragmentItem::Object(object) => {
                 // No stage lays out the content of an object yet: its box
@@ -1208,6 +1239,45 @@ impl Writer<'_> {
                 surface.end_tagged();
             }
         }
+    }
+
+    /// Draws an image with its top-left corner at `at`, as content of the
+    /// structure node `node`, its `Figure`. An image that cannot be drawn
+    /// is left out, with a warning; the check does not read images.
+    fn image(&mut self, surface: &mut Surface<'_>, image: &ImageBox, at: Point, node: usize) {
+        self.tagger.advance();
+        let id = surface.start_tagged(ContentTag::Other);
+        // The check prepares images too, so that it foresees their
+        // warnings; it expects the claim of PDF/UA-1 a title allows.
+        let embed = !self.ua;
+        let prepared = self
+            .images
+            .entry(image.image.clone())
+            .or_insert_with(|| image::prepare(&image.image, embed))
+            .clone();
+        let warning = match prepared {
+            Ok((drawable, note)) => {
+                if self.dry.is_none()
+                    && let Some(size) = Size::from_wh(pt(image.size.width), pt(image.size.height))
+                {
+                    image::draw(surface, &drawable, pt(at.x), pt(at.y), size);
+                }
+                note.map(|message| (message, None))
+            }
+            Err(message) => Some((eco(format!("{message}, so it is left out")), None)),
+        };
+        if let Some((message, hint)) = warning {
+            let warning = Warning {
+                source: image.location.source,
+                message,
+                hint,
+            };
+            if !self.warnings.contains(&warning) {
+                self.warnings.push(warning);
+            }
+        }
+        surface.end_tagged();
+        self.tagger.content(node, id, None);
     }
 
     /// Draws a glyph run with its baseline starting at `at`, as content of
@@ -1490,6 +1560,16 @@ fn untitled_heading(source: SourceRef) -> Warning {
     }
 }
 
+/// The warning for an image without a description, which PDF/UA-1 does
+/// not allow.
+fn undescribed_figure(source: SourceRef) -> Warning {
+    Warning {
+        source,
+        message: "the PDF does not claim PDF/UA-1, because this image has no alt text".into(),
+        hint: Some("describe what it shows with `alt: \"..\"`".into()),
+    }
+}
+
 /// Why a document is not PDF/UA-1, as a warning.
 fn not_ua(error: &ValidationError, names: &[(krilla::text::Font, EcoString)]) -> Warning {
     let warning = |source: SourceRef, what: &str, hint: Option<&str>| Warning {
@@ -1507,6 +1587,11 @@ fn not_ua(error: &ValidationError, names: &[(krilla::text::Font, EcoString)]) ->
             SourceRef::DETACHED,
             "a heading has no text",
             Some("write the heading's text, or remove the heading"),
+        ),
+        ValidationError::MissingAltText(location) => warning(
+            source(*location),
+            "an image has no alt text",
+            Some("describe what it shows with `alt: \"..\"`"),
         ),
         ValidationError::ContainsNotDefGlyph(_, location, _) => warning(
             source(*location),

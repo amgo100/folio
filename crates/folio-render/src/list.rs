@@ -5,8 +5,8 @@ use std::ops::Range;
 
 use ecow::EcoString;
 use folio_component::{
-    Abs, Color, FillRule, FontId, Fragment, FragmentItem, GlyphRun, LineCap, LineJoin, Location,
-    Paint, PathItem, Shape, SourceRef,
+    Abs, Color, FillRule, FontId, Fragment, FragmentItem, GlyphRun, Image, LineCap, LineJoin,
+    Location, Paint, PathItem, Shape, SourceRef,
 };
 
 /// The thickness of the frame drawn for an object whose content no stage
@@ -85,6 +85,8 @@ pub enum Command {
     /// drawn as an empty frame [`FRAME_THICKNESS`] thick inside the box,
     /// as the PDF writer draws it.
     Frame(Rect),
+    /// An image, scaled to fill its box.
+    Image(ImageItem),
     /// The box of a nested fragment. Nothing is drawn: it is there for the
     /// span map, so hit-testing finds the element whose box a point is in.
     Box(Rect),
@@ -93,6 +95,15 @@ pub enum Command {
     /// is drawn; it keeps its place and its span, so that the indices of
     /// the items match those of a span map the newer encoder sends.
     Unknown(Unknown),
+}
+
+/// An image of a display list: the image file, and the box it fills.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageItem {
+    /// The box.
+    pub rect: Rect,
+    /// The image.
+    pub image: Image,
 }
 
 /// An item of a kind this version of the wire format does not know
@@ -318,6 +329,13 @@ impl DisplayList {
                     command: Command::Frame(rect(x, y, object.size.width, object.size.height)),
                     span: object.location.into(),
                 }),
+                FragmentItem::Image(image) => self.items.push(Item {
+                    command: Command::Image(ImageItem {
+                        rect: rect(x, y, image.size.width, image.size.height),
+                        image: image.image.clone(),
+                    }),
+                    span: image.location.into(),
+                }),
             }
         }
     }
@@ -377,8 +395,8 @@ impl DisplayList {
     /// The items whose box contains a point, topmost first: glyphs by
     /// the box from their pen position to the next, a font size high
     /// above the baseline and a quarter of it below; paths by the bounds
-    /// of their points, widened by as far as their stroke reaches; frames
-    /// and nested fragments by their box. What a click in a
+    /// of their points, widened by as far as their stroke reaches; frames,
+    /// images and nested fragments by their box. What a click in a
     /// preview leads to (SPEC §12.2).
     pub fn hit(&self, x: f32, y: f32) -> Vec<Hit> {
         let mut hits = Vec::new();
@@ -425,7 +443,9 @@ impl DisplayList {
                         });
                     }
                 }
-                Command::Frame(area) | Command::Box(area) => {
+                Command::Frame(area)
+                | Command::Box(area)
+                | Command::Image(ImageItem { rect: area, .. }) => {
                     if area.contains(x, y) {
                         hits.push(Hit {
                             item: index,

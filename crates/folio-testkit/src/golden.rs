@@ -451,6 +451,21 @@ fn dump_items(
                 }
                 out.push('\n');
             }
+            FragmentItem::Image(image) => {
+                let _ = write!(
+                    out,
+                    "{indent}image {} {} × {} {} {:016x}",
+                    point(*pos),
+                    len(image.size.width),
+                    len(image.size.height),
+                    image.image.format().name(),
+                    image.image.content_hash()
+                );
+                if let Some(at) = locate(world, image.location.source) {
+                    let _ = write!(out, " {at}");
+                }
+                out.push('\n');
+            }
         }
     }
 }

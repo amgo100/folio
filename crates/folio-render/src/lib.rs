@@ -41,14 +41,15 @@
 
 #![forbid(unsafe_code)]
 
+mod image;
 mod list;
 mod raster;
 mod svg;
 pub mod wire;
 
 pub use self::list::{
-    Command, DisplayList, FRAME_THICKNESS, GlyphItem, GlyphSpan, Glyphs, Hit, Item, PathShape,
-    Point, Rect, Segment, Span, SpanMap, SpanMismatch, Stroke, Unknown,
+    Command, DisplayList, FRAME_THICKNESS, GlyphItem, GlyphSpan, Glyphs, Hit, ImageItem, Item,
+    PathShape, Point, Rect, Segment, Span, SpanMap, SpanMismatch, Stroke, Unknown,
 };
 pub use self::raster::{
     FontBytes, Fonts, GlyphBitmap, Image, MAX_SIDE, Options, Outlines, RenderError,
