@@ -438,7 +438,8 @@ impl<'a> Walker<'a> {
     }
 
     /// Compiles a scoped rule, in document order, once: its errors are
-    /// reported whether or not it applies to the build, and the rules that
+    /// reported whether or not it applies to the build, its warnings that
+    /// something has no effect yet only when it does, and the rules that
     /// apply are kept for the walk.
     fn compile_scoped(&mut self, node: &SyntaxNode) {
         let Some(rule) = node.cast::<ast::ScopedRule<'_>>() else {
@@ -457,7 +458,8 @@ impl<'a> Walker<'a> {
         let file = self.file_of(node.span());
         let values = Values::new(self.compiler.values, file);
         self.order += 1;
-        let compiled = self.compiler.rule(
+        self.compiler.applies.set(applies);
+        let compiled = self.compiler.compile_rule(
             &values,
             rule.selectors(),
             rule.declarations(),
@@ -465,9 +467,11 @@ impl<'a> Walker<'a> {
             self.order,
             rule.span(),
         );
+        self.compiler.applies.set(true);
         if !applies {
             return;
         }
+        self.compiler.lint_rule(&compiled);
         for rule in &compiled.rules {
             self.scoped_needs.add(&rule.selector);
         }
@@ -528,9 +532,10 @@ impl<'a> Walker<'a> {
         ranked.into_iter().flatten().collect()
     }
 
-    /// A declaration of the field `key`: `override` or a hint. The span is
-    /// the element's, since instances do not keep the spans of their
-    /// arguments.
+    /// A declaration of the field `key`: `override` or a hint, with the
+    /// warning a stylesheet's declaration would give if no stage reads its
+    /// property yet. The span is the element's, since instances do not keep
+    /// the spans of their arguments.
     fn inline_decl(&self, key: &str, name: &str, value: &Value, span: Span) -> Option<Decl> {
         let prop = self.compiler.property_named(name, span)?;
         let property = self.cascade.properties.get(prop);
@@ -545,6 +550,8 @@ impl<'a> Walker<'a> {
             );
             return None;
         }
+        self.compiler
+            .lint_not_implemented(property, Some(&declared), true, span);
         Some(Decl {
             prop,
             value: DeclValue::Value(declared),
