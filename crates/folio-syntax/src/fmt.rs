@@ -3,9 +3,10 @@
 //!
 //! The formatter works on the lossless syntax tree and changes only the
 //! whitespace between tokens. Every other byte stays as written: comments,
-//! strings, raw text, equations, and the line breaks of prose. The rules are
-//! conservative, so a file written as SPEC's own examples are is already
-//! formatted:
+//! strings, raw text, equations, and the line breaks of prose. The style is
+//! decision D-54-1 (SPEC §12.1): stylesheets get a uniform layout, one
+//! declaration per line and no column alignment, while content keeps its
+//! lines:
 //!
 //! - Line ends are `\n`, lines carry no trailing whitespace (line comments
 //!   included; block comments, strings, raw text and equations keep their
@@ -25,15 +26,19 @@
 //!   that starts with `else`.
 //! - Other lines of markup keep their indentation, which is part of their
 //!   meaning (list items nest by it).
-//! - Within a line, a run of spaces becomes one space, except before a
-//!   comment and before the `{` of a rule, which keep the alignment they
-//!   were given. In code and stylesheets a space follows `,` (in the step
-//!   lists of selectors, `:step(1,3-4)`, it stays as written), `;` and the
-//!   `:` of a named argument, declaration, field or import, surrounds `=` in
-//!   a binding, `=>`, and the combinators `>` and `+` of selectors, and
-//!   separates the braces of a declaration block from what they hold; none goes before `,`, `;` or
-//!   the `:` of a named argument, after `(` or before `)`; a space or a
-//!   line break separates rules. Runs of whitespace that hold other
+//! - In a stylesheet, every declaration, token definition, import and rule
+//!   is on a line of its own, a declaration block's `{` ends a line and its
+//!   `}` starts one (an empty block is `{}`), and a blank line separates
+//!   top-level rules from what is around them, above the comments on the
+//!   lines just over a rule. A comment on the line of a token stays there.
+//! - Within a line, a run of spaces becomes one space, before comments
+//!   too: columns are not aligned. In code and stylesheets a space follows
+//!   `,` (in the step lists of selectors, `:step(1,3-4)`, it stays as
+//!   written), `;` and the `:` of a named argument, declaration, field or
+//!   import, surrounds `=` in a binding, `=>`, and the combinators `>` and
+//!   `+` of selectors, and separates the braces of a one-line block from
+//!   what they hold; none goes before `,`, `;` or the `:` of a named
+//!   argument, after `(` or before `)`. Runs of whitespace that hold other
 //!   characters than spaces, tabs and line breaks (a form feed, U+2028) are
 //!   kept as written.
 //!
@@ -491,6 +496,100 @@ impl Walk {
         }
     }
 
+    /// The line breaks that the layout of a stylesheet asks for in each gap
+    /// (SPEC §12.1, D-54-1): every declaration, rule and token definition on
+    /// a line of its own, the braces of a declaration block on the lines of
+    /// what they hold, and a blank line between top-level rules. Content
+    /// asks for none.
+    fn breaks(&self) -> Vec<u8> {
+        let mut need = vec![0u8; self.gaps.len()];
+        if self.markup {
+            return need;
+        }
+        let tokens = &self.tokens;
+        let block = |t: &Token, kind| t.kind == kind && is_rule_block(t.parent);
+        for (j, token) in tokens.iter().enumerate() {
+            let next = tokens.get(j + 1);
+            if block(token, SyntaxKind::LeftBrace)
+                && !next.is_some_and(|t| block(t, SyntaxKind::RightBrace))
+            {
+                need[j + 1] = 1;
+            }
+            if block(token, SyntaxKind::RightBrace) {
+                if j > 0 && !block(&tokens[j - 1], SyntaxKind::LeftBrace) {
+                    need[j] = 1;
+                }
+                if next
+                    .is_some_and(|t| !matches!(t.kind, SyntaxKind::Semicolon | SyntaxKind::Comma))
+                {
+                    need[j + 1] = 1;
+                }
+            }
+            if token.kind == SyntaxKind::Semicolon
+                && matches!(
+                    token.parent,
+                    SyntaxKind::Declaration | SyntaxKind::TokenDecl | SyntaxKind::StyleImport
+                )
+            {
+                need[j + 1] = 1;
+            }
+        }
+
+        // The top-level items, each with whether it holds a block.
+        let mut items: Vec<(usize, usize, bool)> = Vec::new();
+        let mut current: Option<(usize, bool)> = None;
+        let mut depth = 0usize;
+        for (j, token) in tokens.iter().enumerate() {
+            if depth == 0 && current.is_none() && !token.is_comment() {
+                current = Some((j, false));
+            }
+            if token.opens() {
+                if depth == 0
+                    && block(token, SyntaxKind::LeftBrace)
+                    && let Some((_, has_block)) = &mut current
+                {
+                    *has_block = true;
+                }
+                depth += 1;
+            } else if token.closes() {
+                depth = depth.saturating_sub(1);
+            }
+            let ends = token.kind == SyntaxKind::Semicolon || block(token, SyntaxKind::RightBrace);
+            if depth == 0
+                && ends
+                && let Some((start, has_block)) = current.take()
+            {
+                items.push((start, j, has_block));
+            }
+        }
+        if let Some((start, has_block)) = current {
+            items.push((start, tokens.len() - 1, has_block));
+        }
+        // A blank line between two top-level items when either is a rule,
+        // before the comments on the lines just above the second.
+        for pair in items.windows(2) {
+            let ((_, end, a), (start, _, b)) = (pair[0], pair[1]);
+            if !(a || b) {
+                continue;
+            }
+            let mut at = start;
+            while at > end + 1 {
+                let comment = at - 1;
+                let gap = |k: usize| {
+                    let range = self.gaps[k].range;
+                    count_newlines(&self.text[range.0..range.1])
+                };
+                if tokens[comment].is_comment() && gap(comment) > 0 && gap(at) < 2 {
+                    at = comment;
+                } else {
+                    break;
+                }
+            }
+            need[at] = 2;
+        }
+        need
+    }
+
     /// Whether the line that starts with token `i` opens a content block
     /// whose markup starts on that line and goes on below it. Moving
     /// anything on such a line would move its list markers against the
@@ -526,13 +625,25 @@ impl Walk {
         // Whether the current line opens markup that goes on below it, and
         // so stays as written.
         let mut frozen = false;
+        // The line breaks each gap must hold: 1 for a line break, 2 for a
+        // blank line.
+        let mut need = self.breaks();
 
         for (i, gap) in self.gaps.iter().enumerate() {
             let text = &self.text[gap.range.0..gap.range.1];
             let prev = i.checked_sub(1).map(|i| self.tokens[i]);
             let next = self.tokens.get(i).copied();
             let ascii = text.chars().all(|c| matches!(c, ' ' | '\t' | '\n' | '\r'));
-            let newlines = count_newlines(text);
+            let mut newlines = count_newlines(text);
+            if ascii && need[i] > 0 && prev.is_some() && next.is_some() {
+                if newlines == 0 && next.is_some_and(|t| t.is_comment()) {
+                    // A comment on the line stays there; the break goes
+                    // after it.
+                    need[i + 1] = need[i + 1].max(need[i]);
+                } else {
+                    newlines = newlines.max(usize::from(need[i]));
+                }
+            }
             if i == 0 || newlines > 0 {
                 frozen = next.is_some() && self.opens_markup(i);
             }
@@ -655,8 +766,8 @@ impl Walk {
 }
 
 /// The whitespace between two tokens of markup on one line.
-fn inline_markup(text: &str, next: Token) -> EcoString {
-    if next.is_comment() || text.is_empty() {
+fn inline_markup(text: &str, _next: Token) -> EcoString {
+    if text.is_empty() {
         text.into()
     } else {
         " ".into()
@@ -674,11 +785,8 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
         }
     };
 
-    // Around comments, brackets and braces space as around other tokens,
-    // but a comment keeps the alignment it was given.
-    if next.is_comment() && !text.is_empty() {
-        return text.into();
-    }
+    // Around comments, brackets and braces space as around other tokens;
+    // columns are not aligned (D-54-1).
     if next.is_comment() && prev.kind == K::LeftParen && prev.opens()
         || prev.is_comment() && next.kind == K::RightParen && next.closes()
     {
@@ -688,16 +796,7 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
         return " ".into();
     }
     if next.is_comment() {
-        // Comments keep the alignment they were given.
-        return if text.is_empty() {
-            " ".into()
-        } else {
-            text.into()
-        };
-    }
-    if next.kind == K::LeftBrace && is_rule_block(next.parent) && !text.is_empty() {
-        // Rules keep the alignment they were given (`mark   { .. }`).
-        return text.into();
+        return " ".into();
     }
 
     let separated = matches!(prev.parent, K::StepSpec | K::PseudoArgs | K::StepRange);
@@ -734,7 +833,11 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
     }
 
     // No space.
-    if next.kind == K::Comma
+    if prev.kind == K::LeftBrace
+        && is_rule_block(prev.parent)
+        && next.kind == K::RightBrace
+        && is_rule_block(next.parent)
+        || next.kind == K::Comma
         || next.kind == K::Semicolon && !separated
         || named_colon(next)
         || prev.kind == K::LeftParen && prev.opens()
@@ -864,21 +967,58 @@ mod tests {
 
     #[test]
     fn stylesheet_spacing() {
-        style("a{b:c;d :e}", "a { b: c; d: e }\n");
-        style("a>b+c   d,e{x:1 ;}", "a > b + c d, e { x: 1; }\n");
+        style("a{b:c;d :e}", "a {\n  b: c;\n  d: e\n}\n");
+        style("a>b+c   d,e{x:1 ;}", "a > b + c d, e {\n  x: 1;\n}\n");
         style("$accent:#1f5fa8;", "$accent: #1f5fa8;\n");
-        style("a { margin: 0 -1mm; }", "a { margin: 0 -1mm; }\n");
-        style("a:step(1,3-4) { b: c; }", "a:step(1,3-4) { b: c; }\n");
-        style("a:step( 1 , 2 ) { }", "a:step(1, 2) { }\n");
-        style("a[level=1] { }", "a[level=1] { }\n");
+        style("a { margin: 0 -1mm; }", "a {\n  margin: 0 -1mm;\n}\n");
+        style("a:step(1,3-4) { b: c; }", "a:step(1,3-4) {\n  b: c;\n}\n");
+        style("a:step( 1 , 2 ) { }", "a:step(1, 2) {}\n");
+        style("a[level=1] { }", "a[level=1] {}\n");
         style("a {}", "a {}\n");
+    }
+
+    #[test]
+    fn stylesheet_layout() {
+        // One declaration or definition per line.
+        style("$a: 1; $b: 2;", "$a: 1;\n$b: 2;\n");
+        style(
+            "@import \"a.fsty\"; $a: 1;",
+            "@import \"a.fsty\";\n$a: 1;\n",
+        );
+        // A blank line between top-level rules, above their comments.
+        style(
+            "$a: 1;\na { b: c; }\nd { e: f; }",
+            "$a: 1;\n\na {\n  b: c;\n}\n\nd {\n  e: f;\n}\n",
+        );
+        style("a {}\n// c\n// d\nb {}", "a {}\n\n// c\n// d\nb {}\n");
+        style("a {}   // t\nb {}", "a {} // t\n\nb {}\n");
+        // Nested rules: one per line, no blank line forced.
+        style(
+            "@target pdf { a { b: c; } d { e: f; } }",
+            "@target pdf {\n  a {\n    b: c;\n  }\n  d {\n    e: f;\n  }\n}\n",
+        );
+        // No column alignment.
+        style(
+            "mark   { a: b; }     // m\nanswer { c: d; }",
+            "mark {\n  a: b;\n} // m\n\nanswer {\n  c: d;\n}\n",
+        );
+        // A comment after `{` stays on its line.
+        style(
+            "render x {   // default\n  body: slot(s);\n}\n",
+            "render x { // default\n  body: slot(s);\n}\n",
+        );
+        // Template blocks are values, not declaration blocks.
+        style(
+            "a { t: if x { \": \" y } else { }; }",
+            "a {\n  t: if x { \": \" y } else { };\n}\n",
+        );
     }
 
     #[test]
     fn stylesheet_lines() {
         style(
             "\n\npage {\npage-size: A4;   \n\n\n\n    margin: 1mm;  // m\n}\n\n\n",
-            "page {\n  page-size: A4;\n\n  margin: 1mm;  // m\n}\n",
+            "page {\n  page-size: A4;\n\n  margin: 1mm; // m\n}\n",
         );
         style(
             "render x {\n header: row(\n a,\n  b(\nc),\n);\n}",
@@ -892,7 +1032,7 @@ mod tests {
             "question\nanswer {\nx: 1;\n}\n",
             "question\n  answer {\n    x: 1;\n  }\n",
         );
-        style("a{b:c}b{c:d}", "a { b: c } b { c: d }\n");
+        style("a{b:c}b{c:d}", "a {\n  b: c\n}\n\nb {\n  c: d\n}\n");
         style(
             "a {\n  x: 1\n    + f(\n2\n);\n}",
             "a {\n  x: 1\n    + f(\n      2\n    );\n}\n",
@@ -910,7 +1050,7 @@ mod tests {
             "= Title\n\nText more.\n",
         );
         markup("- a\n  - b\n    c\n", "- a\n  - b\n    c\n");
-        markup("Text  // note\n", "Text  // note\n");
+        markup("Text  // note\n", "Text // note\n");
         markup("Text // note  \t\n// more \n", "Text // note\n// more\n");
         markup("`a   b`  $x   y$\n", "`a   b` $x   y$\n");
         markup("Done", "Done");
@@ -950,11 +1090,11 @@ mod tests {
         markup("#import \"a.fol\"  :x\n", "#import \"a.fol\": x\n");
         markup("#if a [b]else[c]\n", "#if a [b] else [c]\n");
         markup("= Hi  \n/* the rest", "= Hi\n/* the rest");
-        style("a { b: c; } /* x", "a { b: c; } /* x");
-        style("a { } /* x /* y */", "a { } /* x /* y */");
-        style("a { } /*/", "a { } /*/");
-        style("a { } /* x /* y */ */", "a { } /* x /* y */ */\n");
-        style("a { b/* c */: c; }", "a { b /* c */: c; }\n");
+        style("a { b: c; } /* x", "a {\n  b: c;\n} /* x");
+        style("a { } /* x /* y */", "a {} /* x /* y */");
+        style("a { } /*/", "a {} /*/");
+        style("a { } /* x /* y */ */", "a {} /* x /* y */ */\n");
+        style("a { b/* c */: c; }", "a {\n  b /* c */: c;\n}\n");
         markup("#{\n[- x\n  - y]\n}\n", "#{\n[- x\n  - y]\n}\n");
         for frozen in [
             "#let x =  [- a\n           - b]\n",
@@ -969,15 +1109,18 @@ mod tests {
             "#{\nif a {b}else{c}\n}\n",
             "#{\n  if a { b } else { c }\n}\n",
         );
-        style("a {   // x\n}\n", "a {   // x\n}\n");
-        markup("#f(   // x\n  1)\n", "#f(   // x\n  1)\n");
+        style("a {   // x\n}\n", "a { // x\n}\n");
+        markup("#f(   // x\n  1)\n", "#f(// x\n  1)\n");
         markup("#f(/* c */ a)\n", "#f(/* c */ a)\n");
         markup("#f(// c\n  a)\n", "#f(// c\n  a)\n");
-        style("a{/* c */b:c}", "a { /* c */ b: c }\n");
-        style("a{b:c/* c */}", "a { b: c /* c */ }\n");
+        style("a{/* c */b:c}", "a { /* c */\n  b: c\n}\n");
+        style("a{b:c/* c */}", "a {\n  b: c /* c */\n}\n");
         markup("#let s = \"a\u{2028}b\"\n", "#let s = \"a\u{2028}b\"\n");
         markup("/* a\u{85}b */\n", "/* a\u{85}b */\n");
-        style("a { b: \"x\u{2029}y\"; }\n", "a { b: \"x\u{2029}y\"; }\n");
+        style(
+            "a { b: \"x\u{2029}y\"; }\n",
+            "a {\n  b: \"x\u{2029}y\";\n}\n",
+        );
         for touching in [
             "#x// c\n",
             "#f(x)// c\n",
