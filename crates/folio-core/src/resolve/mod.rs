@@ -171,6 +171,8 @@ pub struct Resolution {
 #[derive(Debug, Clone, Default)]
 struct Index {
     numbers: HashMap<Target, usize>,
+    /// The first number of each location, for an equation numbered by line.
+    first: HashMap<Location, usize>,
     markers: HashMap<Location, usize>,
     labels: HashMap<EcoString, usize>,
     references: HashMap<Location, usize>,
@@ -205,9 +207,7 @@ impl Resolution {
             if target.line.is_some() {
                 return None;
             }
-            self.numbers
-                .iter()
-                .position(|n| n.target.location == target.location)
+            self.index.first.get(&target.location).copied()
         })?;
         Some(&self.numbers[i])
     }
@@ -231,6 +231,7 @@ impl Resolution {
         let mut index = Index::default();
         for (i, n) in self.numbers.iter().enumerate() {
             index.numbers.entry(n.target).or_insert(i);
+            index.first.entry(n.target.location).or_insert(i);
         }
         for (i, m) in self.markers.iter().enumerate() {
             index.markers.entry(m.location).or_insert(i);
@@ -474,7 +475,7 @@ impl Walk<'_> {
             && let Some(Value::Label(label)) = element.field("target")
         {
             let supplement = match element.field("supplement") {
-                Some(Value::Content(content)) => Some(content.plain_text()),
+                Some(Value::Content(content)) => Some(content.plain_text().trim().into()),
                 _ => None,
             };
             self.refs.push(PendingRef {
@@ -605,7 +606,8 @@ impl Walk<'_> {
                 );
                 continue;
             }
-            self.counters.insert(name, Counter::default());
+            // A counter restarted `within` an element keeps its values.
+            self.counters.entry(name).or_default().values.clear();
         }
     }
 

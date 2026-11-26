@@ -3,13 +3,16 @@
 //!
 //! A pattern is text with counting symbols in it: `1` (1, 2, 3), `a` and `A`
 //! (a, b, …, z, aa), `i` and `I` (roman numerals) and `*` (*, †, ‡, §, ¶,
-//! ‖, then doubled). The first symbol formats the first value, the second
-//! the second, and the last symbol formats every value after; the text
-//! before a symbol separates its value from the one before, and the text
-//! after the last symbol ends the number. A value past the symbols is
-//! separated by the text before the last symbol, or by the ending when
-//! there is none: `"1."` formats the values 2 and 3 as `2.3.`, and `"1.a"`
-//! as `2.c`. A pattern without a counting symbol is shown as it is.
+//! ‖, then doubled). A letter is a symbol only where no other letter stands
+//! next to it, so words can surround the number (`"Task 1."`). The first
+//! symbol formats the first value, the second the second, and the last
+//! symbol formats every value after; the text before a symbol separates
+//! its value from the one before, and the text after the last symbol ends
+//! the number. A value past the symbols is separated by the text before
+//! the last symbol where there are two symbols or more, and by `.`
+//! otherwise: `"1."` formats the values 2 and 3 as `2.3.`, `"(1)"` as
+//! `(2.3)`, and `"1.a"` as `2.c`. A pattern without a counting symbol is
+//! shown as it is.
 
 use ecow::{EcoString, eco_format};
 
@@ -119,8 +122,14 @@ impl Pattern {
     pub fn parse(text: &str) -> Self {
         let mut pieces = Vec::new();
         let mut current = EcoString::new();
-        for c in text.chars() {
-            match Symbol::of(c) {
+        let chars: Vec<char> = text.chars().collect();
+        for (i, &c) in chars.iter().enumerate() {
+            let letter = |j: Option<usize>| {
+                j.and_then(|j| chars.get(j))
+                    .is_some_and(|c| c.is_alphabetic())
+            };
+            let in_word = c.is_alphabetic() && (letter(i.checked_sub(1)) || letter(Some(i + 1)));
+            match Symbol::of(c).filter(|_| !in_word) {
                 Some(symbol) => pieces.push((std::mem::take(&mut current), symbol)),
                 None => current.push(c),
             }
@@ -148,12 +157,17 @@ impl Pattern {
         let Some((last_prefix, last)) = self.pieces.last() else {
             return self.suffix.clone();
         };
+        let dot = EcoString::from(".");
+        let separator = if self.pieces.len() > 1 && !last_prefix.is_empty() {
+            last_prefix
+        } else {
+            &dot
+        };
         let mut out = EcoString::new();
         for (i, &n) in values.iter().enumerate() {
             let (prefix, symbol) = match self.pieces.get(i) {
                 Some((prefix, symbol)) => (prefix, *symbol),
-                None if last_prefix.is_empty() => (&self.suffix, *last),
-                None => (last_prefix, *last),
+                None => (separator, *last),
             };
             if i > 0 || !trimmed {
                 out.push_str(prefix);
@@ -185,6 +199,12 @@ mod tests {
         assert_eq!(format("1.", &[2, 3]), "2.3.");
         assert_eq!(format("1.1", &[2, 3, 4]), "2.3.4");
         assert_eq!(format("1.1", &[2]), "2");
+        assert_eq!(format("1", &[1, 2]), "1.2");
+        assert_eq!(format("(1)", &[2, 1]), "(2.1)");
+        assert_eq!(format("1)", &[2, 1]), "2.1)");
+        assert_eq!(format("I.", &[1, 2]), "I.II.");
+        assert_eq!(format("Task 1.", &[3]), "Task 3.");
+        assert_eq!(format("Question i", &[4]), "Question iv");
         assert_eq!(format("(a)", &[2]), "(b)");
         assert_eq!(format("1.a)", &[2, 3]), "2.c)");
         assert_eq!(format("i", &[4]), "iv");
@@ -205,6 +225,7 @@ mod tests {
         assert_eq!(trimmed("(a)", &[2]), "b");
         assert_eq!(trimmed("(1)", &[4]), "4");
         assert_eq!(trimmed("1.1", &[1, 2]), "1.2");
+        assert_eq!(trimmed("(1)", &[2, 1]), "2.1");
     }
 
     #[test]
