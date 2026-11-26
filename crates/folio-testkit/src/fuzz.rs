@@ -17,6 +17,7 @@
 //! | `compile` | content and declarations of the registry's properties | a whole build to pages and a PDF finishes without a panic, whatever the property values: huge, zero, negative or not finite |
 //! | `manifest` | a `folio.toml` | reading it finishes without a panic; a valid one compiles |
 //! | `lockfile` | a `folio.lock` | reading it finishes without a panic; a valid one compiles |
+//! | `tex` | the body of a LaTeX equation | reading it into the math tree finishes without a panic, and its errors point into the equation |
 //! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs, diagnostics and span maps of a world built afresh from the same texts |
 //!
 //! A target panics when a check fails; libFuzzer records the input.
@@ -47,6 +48,7 @@ pub const TARGETS: &[(&str, Body)] = &[
     ("compile", compile),
     ("manifest", manifest),
     ("lockfile", lockfile),
+    ("tex", tex),
 ];
 
 /// The regression inputs of a target: `fuzz/regressions/<target>/`.
@@ -649,6 +651,44 @@ pub fn document(data: &[u8]) {
     let _ = folio::document(&world, None);
 }
 
+/// Reads the body of a LaTeX equation (SPEC §8.1) in `$:tex …$`, and
+/// checks that every error of the build points into the file.
+pub fn tex(data: &[u8]) {
+    let Ok(body) = std::str::from_utf8(data) else {
+        return;
+    };
+    if body.contains('$') {
+        return;
+    }
+    let mut world = fuzz_world(BUILD_MANIFEST, None).expect("the fuzz manifest is valid");
+    world
+        .set_source("main.fol", &format!("$:tex {body}$"))
+        .expect("a valid path");
+    world.set_source("style.fsty", "").expect("a valid path");
+    let Ok(checked) = folio::check(&world, Target::Pdf, None) else {
+        return;
+    };
+    for diagnostic in checked.diagnostics.iter() {
+        if diagnostic.severity == folio::Severity::Error {
+            assert!(
+                folio::diag::locate(&world, diagnostic.span).is_some(),
+                "{diagnostic:?} points nowhere"
+            );
+        }
+    }
+}
+
+/// LaTeX formulas for the seed corpus of [`tex`].
+const TEX_SEEDS: &[&str] = &[
+    r"\frac{1}{2} m v^2",
+    r"\int_0^T P(t)\,\mathrm{d}t = \sum_{i=1}^{n} x_i^2",
+    r"\left( \frac{a}{b} \right)^2 \sqrt[3]{x} \vec{F} \hat{x}",
+    r"\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}",
+    r"|x| = \begin{cases} x & \text{if } x \geq 0 \\ -x & \text{otherwise} \end{cases}",
+    r"\begin{align} v^2 &= u^2 + 2as \label{eq:a} \\ s &= ut \end{align}",
+    r"\underbrace{a+b}_{n} \bigl( x \bigr] \{a\} \langle x \rangle \not= \fracc",
+];
+
 /// What [`compile`] puts declarations on: the elements of the core, and the
 /// page.
 pub const SELECTORS: &[&str] = &[
@@ -967,6 +1007,13 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
         ));
     }
     out.push(("manifest", "minimal.toml".into(), NESTING_MANIFEST.into()));
+    for (i, formula) in TEX_SEEDS.iter().enumerate() {
+        out.push((
+            "tex",
+            format!("formula-{i}.tex"),
+            formula.as_bytes().to_vec(),
+        ));
+    }
     out.push(("lockfile", "empty.lock".into(), b"version = 1\n".to_vec()));
     out.push((
         "lockfile",

@@ -116,23 +116,23 @@ impl Vm<'_> {
         else {
             return Ok(Formula::default());
         };
-        let formula =
-            math::tex::parse(body.leaf_text(), body.span(), MAX_NESTING).map_err(|error| {
-                let sub_range = SubRange::new(
-                    error.range.start,
-                    error.range.end.max(error.range.start + 1),
-                );
-                let message = if error.too_deep {
-                    eco_format!("math is nested more than {MAX_NESTING} deep")
-                } else {
-                    error.message
-                };
-                let mut eval_error = EvalError::new(body.span(), message).with_sub_range(sub_range);
-                for hint in error.hints {
-                    eval_error = eval_error.with_hint(hint);
-                }
-                Stop::from(eval_error)
-            })?;
+        let text = body.leaf_text();
+        let formula = math::tex::parse(text, body.span(), MAX_NESTING).map_err(|error| {
+            let message = if error.too_deep {
+                eco_format!("math is nested more than {MAX_NESTING} deep")
+            } else {
+                error.message
+            };
+            let mut eval_error = EvalError::new(body.span(), message)
+                .with_sub_range(tex_sub_range(text, error.range));
+            for hint in error.hints {
+                eval_error = eval_error.with_hint(hint);
+            }
+            Stop::from(eval_error)
+        })?;
+        if formula.depth() > MAX_NESTING {
+            return Err(nesting_exceeded(body.span(), "math is").into());
+        }
         let size = formula
             .lines()
             .iter()
@@ -818,6 +818,16 @@ impl Vm<'_> {
         out.extend(row.nodes().iter().cloned());
         Ok(())
     }
+}
+
+/// The part of a LaTeX formula an error is about: its range, or, for an
+/// empty range at the end of the formula, the character before it.
+fn tex_sub_range(text: &str, range: std::ops::Range<usize>) -> Option<SubRange> {
+    if range.start < range.end {
+        return SubRange::new(range.start, range.end);
+    }
+    let before = text[..range.start].chars().next_back()?;
+    SubRange::new(range.start - before.len_utf8(), range.start)
 }
 
 /// The quantity functions of SPEC §8.1, which #42 adds. Until then a call

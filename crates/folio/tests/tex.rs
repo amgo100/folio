@@ -403,7 +403,9 @@ fn errors_point_at_their_source() {
             "$:tex \\frac{1}{2$ $:tex x^2^3$ $:tex \\left( x$ $:tex (a & b)$ \
              $:tex \\begin{foo} x \\end{foo}$ $:tex \\binom{n}{k}$ $:tex \\sqrt$ \
              $:tex \\nonumber$ $:tex \\frac{a \\\\ b}{c}$ $:tex x \\label{a.b}$ \
-             $:tex \\begin{pmatrix} a $ $:tex x = \\begin{align} a \\end{align}$"
+             $:tex \\begin{pmatrix} a $ $:tex x = \\begin{align} a \\end{align}$ \
+             $:tex \\begin{align} a $ $:tex x \\label{a} y \\label{b}$ \
+             $:tex \\text{a \\alpha}$ $:tex a \\\\ b \\end{align}$"
         ),
         [
             error("unclosed brace", "{"),
@@ -424,6 +426,10 @@ fn errors_point_at_their_source() {
             error("`a.b` is not a valid label", "a.b"),
             error("missing `\\end{pmatrix}`", "\\begin{pmatrix}"),
             error("`align` can only hold a whole equation", "\\begin{align}"),
+            error("missing `\\end{align}`", "\\begin{align}"),
+            error("a line can have only one label", "\\label{b}"),
+            error("`\\alpha` cannot stand in text", "\\alpha"),
+            error("`\\end` without `\\begin`", "\\end"),
         ]
     );
 }

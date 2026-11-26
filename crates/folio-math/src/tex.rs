@@ -372,7 +372,10 @@ impl<'s> Parser<'s> {
             self.skip_env_args(&name)?;
             envs.push((name, range.start..name_range.end + 1));
         }
-        let lines = self.lines(envs.last().map(|(name, _)| name.as_str()))?;
+        let lines = self.lines(
+            envs.last()
+                .map(|(name, begin)| (name.as_str(), begin.clone())),
+        )?;
         for (name, begin) in envs.iter().rev().skip(1) {
             self.expect_end(name, begin.clone())?;
         }
@@ -403,7 +406,7 @@ impl<'s> Parser<'s> {
 
     /// Lines up to the end of the input or to `\end{env}`. A line break
     /// at the end makes no empty line, as in native math.
-    fn lines(&mut self, env: Option<&str>) -> TexResult<Vec<Line>> {
+    fn lines(&mut self, env: Option<(&str, Range<usize>)>) -> TexResult<Vec<Line>> {
         let mut lines = Vec::new();
         loop {
             self.label = None;
@@ -425,9 +428,9 @@ impl<'s> Parser<'s> {
                     self.line_break_args();
                     lines.push(line(nodes, label));
                     let (tok, range) = self.peek();
-                    match (tok, env) {
+                    match (tok, &env) {
                         (Tok::Eof, None) => return Ok(lines),
-                        (Tok::Cmd("end"), Some(env)) => {
+                        (Tok::Cmd("end"), Some((env, _))) => {
                             self.expect_end(env, range)?;
                             return Ok(lines);
                         }
@@ -435,9 +438,9 @@ impl<'s> Parser<'s> {
                     }
                 }
                 Tok::Eof => {
-                    if let Some(env) = env {
+                    if let Some((env, begin)) = env {
                         return Err(TexError::new(
-                            range,
+                            begin,
                             eco_format!("missing `\\end{{{env}}}`"),
                         ));
                     }
@@ -446,7 +449,7 @@ impl<'s> Parser<'s> {
                     }
                     return Ok(lines);
                 }
-                Tok::Cmd("end") if let Some(env) = env => {
+                Tok::Cmd("end") if let Some((env, _)) = &env => {
                     self.expect_end(env, range)?;
                     if !nodes.is_empty() || label.is_some() {
                         lines.push(line(nodes, label));
@@ -953,6 +956,7 @@ impl<'s> Parser<'s> {
                 self.leave();
                 Ok(Row::new(items.into_nodes()))
             }
+            Tok::Cmd("") => Err(TexError::new(range, "a backslash ends the formula")),
             Tok::Cmd(name) if command(name).is_none() => Err(unknown_command(name, range)),
             _ => Err(missing()),
         }
