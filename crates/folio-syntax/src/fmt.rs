@@ -18,8 +18,7 @@
 //!   closing a bracket, in markup too, takes the opener's indentation. The
 //!   later lines of an item that runs over several lines (a declaration, an
 //!   expression, a selector) are indented two spaces more, except a line
-//!   that starts with `else`; a bracket opened on such a line indents from
-//!   the item's first line.
+//!   that starts with `else`.
 //! - Other lines of markup keep their indentation, which is part of their
 //!   meaning (list items nest by it).
 //! - Within a line, a run of spaces becomes one space, except before a
@@ -29,7 +28,10 @@
 //!   argument, declaration or field, surrounds `=` in a binding, `=>`, and
 //!   the combinators `>` and `+` of selectors, and separates the braces of
 //!   a declaration block from what they hold; none goes before `,`, `;` or
-//!   the `:` of a named argument, after `(` or before `)`.
+//!   the `:` of a named argument, after `(` or before `)`; a space or a
+//!   line break separates rules. Runs of whitespace that hold other
+//!   characters than spaces, tabs and line breaks (a form feed, U+2028) are
+//!   kept as written.
 //!
 //! Formatting never changes what a file means: the result parses to the same
 //! tree apart from whitespace ([`equivalent`]), which [`format()`] checks
@@ -494,13 +496,10 @@ impl Walk {
     /// Decides every gap.
     fn run(self) -> Edits {
         let mut edits = Edits::new();
-        // The indentation of the current line, and that of the line that
-        // started its item when it continues one, which brackets opened on
-        // the line take.
+        // The indentation of the current line.
         let mut indent = EcoString::new();
-        let mut item_indent = EcoString::new();
         // The open brackets, each with the indentation of the line that
-        // opened it, or of the line that started its item.
+        // opened it.
         let mut open: Vec<EcoString> = Vec::new();
 
         for (i, gap) in self.gaps.iter().enumerate() {
@@ -511,12 +510,13 @@ impl Walk {
             let newlines = count_newlines(text);
 
             let new: Option<EcoString> = match (prev, next) {
-                // Whitespace other than spaces, tabs and line feeds is left
-                // as it is.
+                // The end of the file.
+                (Some(_), None) => Some("\n".into()),
+                // Other whitespace than spaces, tabs and line feeds, such as
+                // a form feed, is left as it is.
                 _ if !ascii => {
                     if newlines > 0 {
                         indent = trailing_indent(text).into();
-                        item_indent = indent.clone();
                     }
                     None
                 }
@@ -525,14 +525,11 @@ impl Walk {
                 (None, Some(_)) if gap.markup => {
                     let start = text.rfind(crate::is_newline).map_or(0, |at| at + 1);
                     indent = text[start..].into();
-                    item_indent = indent.clone();
                     Some(indent.clone())
                 }
-                (None, _) => Some(EcoString::new()),
-                // The end of the file.
-                (_, None) => Some("\n".into()),
+                (None, Some(_)) => Some(EcoString::new()),
+                (None, None) => Some(EcoString::new()),
                 (Some(_), Some(next)) if newlines > 0 => {
-                    let mut continued = false;
                     let new_indent: EcoString = if next.closes() && !open.is_empty() {
                         open.last().cloned().unwrap_or_default()
                     } else if gap.markup {
@@ -548,17 +545,12 @@ impl Walk {
                             // opened still is, which indents them already.
                             // `else` belongs with its `if`.
                             if gap.continues == Some(open.len()) && next.kind != SyntaxKind::Else {
-                                item_indent = base.clone();
-                                continued = true;
                                 base.push_str("  ");
                             }
                         }
                         base
                     };
                     indent = new_indent.clone();
-                    if !continued {
-                        item_indent = indent.clone();
-                    }
                     let mut new = EcoString::from(if newlines > 1 { "\n\n" } else { "\n" });
                     new.push_str(&new_indent);
                     Some(new)
@@ -589,7 +581,7 @@ impl Walk {
                 // Each bracket remembers the indentation of the line that
                 // opened it, so several opened on one line count once.
                 if next.opens() {
-                    open.push(item_indent.clone());
+                    open.push(indent.clone());
                 } else if next.closes() {
                     open.pop();
                 }
@@ -669,6 +661,7 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
 
     // One space.
     if matches!(prev.kind, K::Comma | K::Semicolon) && !separated && !next.closes()
+        || prev.kind == K::RightBrace && is_rule_block(prev.parent) && !next.closes()
         || named_colon(prev)
         || binding_eq(prev)
         || binding_eq(next)
@@ -776,7 +769,12 @@ mod tests {
         );
         style(
             "question\nanswer {\nx: 1;\n}\n",
-            "question\n  answer {\n  x: 1;\n}\n",
+            "question\n  answer {\n    x: 1;\n  }\n",
+        );
+        style("a{b:c}b{c:d}", "a { b: c } b { c: d }\n");
+        style(
+            "a {\n  x: 1\n    + f(\n2\n);\n}",
+            "a {\n  x: 1\n    + f(\n      2\n    );\n}\n",
         );
         style(
             "a {\n  trailer:\n  x y;\n}\n",
@@ -829,6 +827,10 @@ mod tests {
             "#{\n  if a {\n    x\n  }\n  else {\n    y\n  }\n}\n",
         );
         markup("#f((\n1))\n", "#f((\n  1))\n");
+        markup(
+            "#{\nlet x = a\n.map(y => {\ny\n})\n}\n",
+            "#{\n  let x = a\n    .map(y => {\n      y\n    })\n}\n",
+        );
         markup(
             "#{\n[\n  - a\n  - b\n]\n}\n",
             "#{\n  [\n  - a\n  - b\n  ]\n}\n",

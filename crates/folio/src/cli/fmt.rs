@@ -11,6 +11,7 @@
 //! `unformatted` and a fix whose edits format it. The exit status is 1 when
 //! there are errors, and with `--check` when a file is not formatted.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
@@ -88,10 +89,18 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
         .collect();
     paths.sort();
     let mut formatted = Vec::new();
+    // A file that links inside the project lead to is a source under each
+    // path; it is formatted, or reported, once.
+    let mut seen = HashSet::new();
     for path in paths {
         let Some(source) = world.source(&path) else {
             continue;
         };
+        if let Ok(file) = root.join(&path).canonicalize()
+            && !seen.insert(file)
+        {
+            continue;
+        }
         let id = source.id();
         let edits = match fmt::format(source.root()) {
             Ok(edits) => edits,

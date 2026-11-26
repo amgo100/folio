@@ -408,7 +408,8 @@ fn untidy(path: &str, text: &str) -> String {
         if line.trim_start().starts_with("```") {
             raw = !raw;
         }
-        if path.ends_with(".fsty") && !line.trim_start().starts_with("//") {
+        // Outside comments and strings.
+        if path.ends_with(".fsty") && !line.trim_start().starts_with("//") && !line.contains('"') {
             out.push_str(&line.replace("; ", ";   ").replace(": ", " :"));
         } else {
             out.push_str(line);
@@ -510,6 +511,33 @@ fn formatting_leaves_files_with_syntax_errors() {
     assert_eq!(read("part.fol"), broken);
     assert_eq!(read("main.fol"), "#include \"part.fol\"\n");
     assert_eq!(read("style.fsty"), "a { b: c }\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn formatting_formats_a_linked_file_once() {
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "#include \"parts/a.fol\"\n"),
+        ("parts/a.fol", "#f(x:1)\n"),
+    ]);
+    std::os::unix::fs::symlink("parts", dir.path().join("chapters")).unwrap();
+    std::os::unix::fs::symlink("a.fol", dir.path().join("parts/b.fol")).unwrap();
+    let output = folio(dir.path(), &["fmt", "--color", "never"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stderr(&output).matches("formatted").count(),
+        1,
+        "{}",
+        stderr(&output)
+    );
+    let text = fs::read_to_string(dir.path().join("parts/a.fol")).unwrap();
+    assert_eq!(text, "#f(x: 1)\n");
+    assert!(
+        fs::symlink_metadata(dir.path().join("parts/b.fol"))
+            .unwrap()
+            .is_symlink()
+    );
 }
 
 #[test]
