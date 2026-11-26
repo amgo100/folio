@@ -614,10 +614,19 @@ impl Ctx {
                 accent::layout_accent(self, &accent.base, accent.accent, accent.span, style, out)
             }
             Node::Vector(vector) => {
-                // A vector is set with an arrow over it, and a unit vector
-                // with a hat, until a stylesheet chooses (SPEC §8.1).
-                let mark = if vector.unit { '\u{302}' } else { '\u{20D7}' };
-                accent::layout_accent(self, &vector.base, mark, vector.span, style, out)
+                // A vector is set bold upright, and a unit vector with a
+                // hat over it too, until a stylesheet chooses (SPEC §8.1).
+                let bold = Style {
+                    alphabet: Some(Alphabet::Bold),
+                    ..style
+                };
+                if vector.unit {
+                    accent::layout_accent(self, &vector.base, '\u{302}', vector.span, bold, out)
+                } else {
+                    let fragments = self.layout_fragments(vector.base.nodes(), bold, false);
+                    let fragment = self.group(fragments, style, class);
+                    out.push(fragment);
+                }
             }
             Node::Decoration(decoration) => accent::layout_decoration(self, decoration, style, out),
             Node::Styled(styled) => {

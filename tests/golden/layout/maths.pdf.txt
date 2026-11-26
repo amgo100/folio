@@ -47,7 +47,7 @@ page 1 419.53 × 595.28, 15 line(s)
           text (215.49, 56.84) NewCMMath-Regular 10.50 w 4.92 1 glyph(s) "𝑠"
           text (220.41, 56.84) SourceSerif4-Regular 10.50 w 108.41 23 glyph(s) " for any motion along a"
           text (0.00, 78.06) SourceSerif4-Regular 10.50 w 185.46 41 glyph(s) "straight line with constant acceleration."
-        box (0.00, 122.95) 328.82 × 54.99 main.fol:7:1
+        box (0.00, 122.95) 328.82 × 54.99 main.fol:7:1 baselines 7.85..52.39
           text (135.14, 7.85) NewCMMath-Regular 10.50 w 5.21 1 glyph(s) "𝑣"
           text (143.27, 7.85) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
           text (154.35, 7.85) NewCMMath-Regular 10.50 w 6.01 1 glyph(s) "𝑢"
@@ -85,7 +85,7 @@ page 1 419.53 × 595.28, 15 line(s)
           text (192.99, 14.29) SourceSerif4-Regular 10.50 w 50.89 10 glyph(s) "Equation\u{a0}2"
           text (243.88, 14.29) SourceSerif4-Regular 10.50 w 84.94 17 glyph(s) ". Newton’s second"
           text (0.00, 35.51) SourceSerif4-Regular 10.50 w 115.12 26 glyph(s) "law in its general form is"
-        box (0.00, 232.38) 328.82 × 21.71 main.fol:13:1
+        box (0.00, 232.38) 328.82 × 21.71 main.fol:13:1 baselines 14.40..14.40
           text (117.35, 14.40) NewCMMath-Regular 10.50 w 8.16 1 glyph(s) "𝐹"
           text (128.42, 14.40) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
           text (140.56, 7.29) NewCMMath-Regular 10.50 w 5.84 1 glyph(s) "d"
@@ -164,10 +164,10 @@ page 1 419.53 × 595.28, 15 line(s)
           text (141.08, 35.70) SourceSerif4-Regular 10.50 w 187.74 41 glyph(s) ". For a set of point masses the potential"
           text (0.00, 57.11) SourceSerif4-Regular 10.50 w 39.54 8 glyph(s) "adds up:"
 page 2 419.53 × 595.28, 4 line(s)
-  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 26.86..232.01
-    box (0.00, 0.00) 328.82 × 232.01 main.fol:1:2 baselines 26.86..232.01
-      box (0.00, 0.00) 328.82 × 232.01 main.fol:17:1 baselines 26.86..232.01
-        box (0.00, 0.00) 328.82 × 26.86 main.fol:21:1
+  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 15.40..222.81
+    box (0.00, 0.00) 328.82 × 231.17 main.fol:1:2 baselines 15.40..222.81
+      box (0.00, 0.00) 328.82 × 231.17 main.fol:17:1 baselines 15.40..222.81
+        box (0.00, 0.00) 328.82 × 26.86 main.fol:21:1 baselines 15.40..15.40
           text (118.76, 15.40) NewCMMath-Regular 10.50 w 8.37 1 glyph(s) "𝑉"
           text (130.04, 15.40) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
           text (141.13, 15.40) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "−"
@@ -187,48 +187,46 @@ page 2 419.53 × 595.28, 4 line(s)
           text (206.09, 22.61) NewCMMath-Regular 10.50 w 2.92 1 glyph(s) "|"
           shape (177.26, 12.57) M(0.00, 0.00) L(31.75, 0.00) L(31.75, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:21:22
           text (315.40, 15.40) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "(5)"
-        box (0.00, 32.86) 328.82 × 69.51 main.fol:23:1 baselines 14.29..62.58
-          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 134.39 26 glyph(s) "The magnitude of a vector "
-          text (134.39, 14.29) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
-          text (142.23, 11.88) NewCMMath-Regular 10.50 w 0.00 1 glyph(s) "\u{20d7}"
-          text (142.70, 14.29) SourceSerif4-Regular 10.50 w 92.15 17 glyph(s) " with components "
-          text (234.85, 14.29) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
-          text (242.60, 16.88) NewCMMath-Regular 7.35 w 4.20 1 glyph(s) "𝑥"
-          text (247.39, 14.29) SourceSerif4-Regular 10.50 w 26.41 5 glyph(s) " and "
-          text (273.80, 14.29) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
-          text (281.55, 16.88) NewCMMath-Regular 7.35 w 3.81 1 glyph(s) "𝑦"
-          text (285.94, 14.29) SourceSerif4-Regular 10.50 w 16.48 4 glyph(s) " is "
-          text (302.42, 14.29) NewCMMath-Regular 10.50 w 3.50 1 glyph(s) "|"
-          text (305.92, 14.29) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
-          text (313.76, 11.88) NewCMMath-Regular 10.50 w 0.00 1 glyph(s) "\u{20d7}"
-          text (314.24, 14.29) NewCMMath-Regular 10.50 w 3.50 1 glyph(s) "|"
+        box (0.00, 32.86) 328.82 × 68.66 main.fol:23:1 baselines 14.29..61.73
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 135.18 26 glyph(s) "The magnitude of a vector "
+          text (135.18, 14.29) NewCMMath-Regular 10.50 w 7.94 1 glyph(s) "𝐄"
+          text (143.12, 14.29) SourceSerif4-Regular 10.50 w 92.62 17 glyph(s) " with components "
+          text (235.74, 14.29) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
+          text (243.49, 16.88) NewCMMath-Regular 7.35 w 4.20 1 glyph(s) "𝑥"
+          text (248.29, 14.29) SourceSerif4-Regular 10.50 w 26.72 5 glyph(s) " and "
+          text (275.01, 14.29) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
+          text (282.76, 16.88) NewCMMath-Regular 7.35 w 3.81 1 glyph(s) "𝑦"
+          text (287.15, 14.29) SourceSerif4-Regular 10.50 w 16.80 4 glyph(s) " is "
+          text (303.96, 14.29) NewCMMath-Regular 10.50 w 2.92 1 glyph(s) "|"
+          text (306.88, 14.29) NewCMMath-Regular 10.50 w 7.94 1 glyph(s) "𝐄"
+          text (314.81, 14.29) NewCMMath-Regular 10.50 w 2.92 1 glyph(s) "|"
           text (320.65, 14.29) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
-          text (0.00, 38.33) NewCMMath-Regular 10.50 w 10.50 1 glyph(s) "√"
-          shape (10.50, 28.36) M(0.00, 0.00) L(37.99, 0.00) L(37.99, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:23:86
-          text (10.50, 38.09) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
-          text (18.82, 35.06) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
-          text (18.25, 40.69) NewCMMath-Regular 7.35 w 4.20 1 glyph(s) "𝑥"
-          text (25.41, 38.09) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "+"
-          text (35.91, 38.09) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
-          text (44.23, 35.06) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
-          text (43.66, 40.69) NewCMMath-Regular 7.35 w 3.81 1 glyph(s) "𝑦"
-          text (48.49, 38.09) SourceSerif4-Regular 10.50 w 166.48 36 glyph(s) ", and its direction makes the angle "
-          text (214.97, 38.09) NewCMMath-Regular 10.50 w 5.07 1 glyph(s) "𝜃"
-          text (222.96, 38.09) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
-          text (234.04, 38.09) NewCMMath-Regular 10.50 w 29.27 6 glyph(s) "arctan"
-          text (263.32, 38.09) NewCMMath-Regular 10.50 w 6.27 1 glyph(s) "("
-          text (270.78, 31.95) NewCMMath-Regular 7.35 w 5.82 1 glyph(s) "𝐸"
-          text (276.20, 33.76) NewCMMath-Regular 5.25 w 2.72 1 glyph(s) "𝑦"
-          text (270.64, 41.72) NewCMMath-Regular 7.35 w 5.82 1 glyph(s) "𝐸"
-          text (276.06, 43.53) NewCMMath-Regular 5.25 w 3.00 1 glyph(s) "𝑥"
-          shape (270.64, 35.26) M(0.00, 0.00) L(8.84, 0.00) L(8.84, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:23:158
-          text (280.53, 38.09) NewCMMath-Regular 10.50 w 6.27 1 glyph(s) ")"
-          text (286.79, 38.09) SourceSerif4-Regular 10.50 w 42.02 9 glyph(s) " with the"
-          text (0.00, 62.58) NewCMMath-Regular 10.50 w 6.01 1 glyph(s) "𝑥"
-          text (6.01, 62.58) SourceSerif4-Regular 10.50 w 90.28 21 glyph(s) "-axis. A rotation by "
-          text (96.29, 62.58) NewCMMath-Regular 10.50 w 5.07 1 glyph(s) "𝜃"
-          text (101.36, 62.58) SourceSerif4-Regular 10.50 w 61.41 14 glyph(s) " is the matrix"
-        box (0.00, 108.37) 328.82 × 25.12 main.fol:25:1
+          text (0.00, 37.49) NewCMMath-Regular 10.50 w 10.50 1 glyph(s) "√"
+          shape (10.50, 27.51) M(0.00, 0.00) L(37.99, 0.00) L(37.99, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:23:86
+          text (10.50, 37.25) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
+          text (18.82, 34.21) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
+          text (18.25, 39.84) NewCMMath-Regular 7.35 w 4.20 1 glyph(s) "𝑥"
+          text (25.41, 37.25) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "+"
+          text (35.91, 37.25) NewCMMath-Regular 10.50 w 8.32 1 glyph(s) "𝐸"
+          text (44.23, 34.21) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
+          text (43.66, 39.84) NewCMMath-Regular 7.35 w 3.81 1 glyph(s) "𝑦"
+          text (48.49, 37.25) SourceSerif4-Regular 10.50 w 166.48 36 glyph(s) ", and its direction makes the angle "
+          text (214.97, 37.25) NewCMMath-Regular 10.50 w 5.07 1 glyph(s) "𝜃"
+          text (222.96, 37.25) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
+          text (234.04, 37.25) NewCMMath-Regular 10.50 w 29.27 6 glyph(s) "arctan"
+          text (263.32, 37.25) NewCMMath-Regular 10.50 w 6.27 1 glyph(s) "("
+          text (270.78, 31.10) NewCMMath-Regular 7.35 w 5.82 1 glyph(s) "𝐸"
+          text (276.20, 32.92) NewCMMath-Regular 5.25 w 2.72 1 glyph(s) "𝑦"
+          text (270.64, 40.87) NewCMMath-Regular 7.35 w 5.82 1 glyph(s) "𝐸"
+          text (276.06, 42.69) NewCMMath-Regular 5.25 w 3.00 1 glyph(s) "𝑥"
+          shape (270.64, 34.41) M(0.00, 0.00) L(8.84, 0.00) L(8.84, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:23:158
+          text (280.53, 37.25) NewCMMath-Regular 10.50 w 6.27 1 glyph(s) ")"
+          text (286.79, 37.25) SourceSerif4-Regular 10.50 w 42.02 9 glyph(s) " with the"
+          text (0.00, 61.73) NewCMMath-Regular 10.50 w 6.01 1 glyph(s) "𝑥"
+          text (6.01, 61.73) SourceSerif4-Regular 10.50 w 90.28 21 glyph(s) "-axis. A rotation by "
+          text (96.29, 61.73) NewCMMath-Regular 10.50 w 5.07 1 glyph(s) "𝜃"
+          text (101.36, 61.73) SourceSerif4-Regular 10.50 w 61.41 14 glyph(s) " is the matrix"
+        box (0.00, 107.52) 328.82 × 25.12 main.fol:25:1 baselines 15.18..15.18
           text (111.04, 15.18) NewCMMath-Regular 10.50 w 8.22 1 glyph(s) "𝑅"
           text (119.26, 15.18) NewCMMath-Regular 10.50 w 4.08 1 glyph(s) "("
           text (123.34, 15.18) NewCMMath-Regular 10.50 w 5.07 1 glyph(s) "𝜃"
@@ -246,11 +244,11 @@ page 2 419.53 × 595.28, 4 line(s)
           text (200.57, 21.46) NewCMMath-Regular 10.50 w 5.07 1 glyph(s) "𝜃"
           text (210.06, 15.18) NewCMMath-Regular 10.50 w 7.73 1 glyph(s) ")"
           text (315.40, 15.18) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "(6)"
-        box (0.00, 139.49) 328.82 × 21.22 main.fol:27:1 baselines 14.29..14.29
+        box (0.00, 138.64) 328.82 × 21.22 main.fol:27:1 baselines 14.29..14.29
           text (0.00, 14.29) SourceSerif4-Regular 10.50 w 219.73 48 glyph(s) "and the potential of a charged sphere of radius "
           text (219.73, 14.29) NewCMMath-Regular 10.50 w 8.22 1 glyph(s) "𝑅"
           text (227.95, 14.29) SourceSerif4-Regular 10.50 w 10.13 3 glyph(s) " is"
-        box (0.00, 166.71) 328.82 × 36.23 main.fol:29:1
+        box (0.00, 165.86) 328.82 × 36.23 main.fol:29:1 baselines 20.74..20.74
           text (111.99, 20.74) NewCMMath-Regular 10.50 w 8.37 1 glyph(s) "𝑉"
           text (120.36, 20.74) NewCMMath-Regular 10.50 w 4.08 1 glyph(s) "("
           text (124.44, 20.74) NewCMMath-Regular 10.50 w 4.87 1 glyph(s) "𝑟"
@@ -282,7 +280,7 @@ page 2 419.53 × 595.28, 4 line(s)
           text (197.52, 29.03) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "<"
           text (208.61, 29.03) NewCMMath-Regular 10.50 w 8.22 1 glyph(s) "𝑅"
           text (315.40, 20.74) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "(7)"
-        box (0.00, 208.93) 328.82 × 23.08 main.fol:31:1
+        box (0.00, 208.09) 328.82 × 23.08 main.fol:31:1 baselines 14.73..14.73
           text (124.97, 14.73) NewCMMath-Regular 10.50 w 14.67 3 glyph(s) "lim"
           text (122.70, 21.03) NewCMMath-Regular 7.35 w 4.41 1 glyph(s) "𝑛"
           text (127.11, 21.03) NewCMMath-Regular 7.35 w 7.35 1 glyph(s) "→"
