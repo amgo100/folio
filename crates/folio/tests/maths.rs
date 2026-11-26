@@ -1,0 +1,198 @@
+//! Maths through the whole pipeline (SPEC §8.2): inline formulas sized in
+//! their lines and broken only after relations and binary operators,
+//! displays as the content of their blocks with their numbers, and the
+//! characters the math font cannot set as warnings.
+
+use folio::{Abs, FragmentItem, Lines, Severity, Target, Text, World};
+
+/// The page is 100mm wide with 10mm margins: lines are 80mm wide.
+const PAGE: &str = "page { page-size: (100mm, 150mm); margin-inner: 10mm; margin-outer: 10mm; }\n";
+
+fn world(style: &str, text: &str) -> World {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en-GB\"\nstyles = [\"styles/main.fsty\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            &format!("{PAGE}doc {{ font: \"Source Serif 4\"; font-size: 10pt; }}\n{style}"),
+        )
+        .unwrap();
+    world.set_source("main.fol", text).unwrap();
+    world
+}
+
+fn lines(world: &World) -> Lines {
+    folio::lines(world, Target::Pdf, None).unwrap().unwrap()
+}
+
+fn text(world: &World) -> Text {
+    folio::text(world, Target::Pdf, None).unwrap().unwrap()
+}
+
+/// For each line of a paragraph, the chunks of formulas it holds, as
+/// (formula, chunk).
+fn chunks_by_line(world: &World, index: usize) -> Vec<Vec<(usize, usize)>> {
+    let text = text(world);
+    let paragraph = &text.paragraphs[index];
+    let layout = &lines(world).paragraphs[index];
+    layout
+        .lines
+        .iter()
+        .map(|line| {
+            paragraph
+                .objects
+                .iter()
+                .filter(|o| line.range.contains(&o.at))
+                .filter_map(|o| o.math.map(|m| (m.formula, m.chunk)))
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn an_inline_formula_breaks_only_after_relations_and_binary_operators() {
+    let world = world(
+        "",
+        "The sum is $a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p = q r s t u v w x$ here.\n",
+    );
+    let maths = lines(&world).maths;
+    let by_line = chunks_by_line(&world, 0);
+    assert!(by_line.len() > 1, "the formula is longer than a line");
+    // Every line that ends inside the formula ends after a chunk that may
+    // break, and the formula's chunks are in order across lines.
+    let laid = match &maths.formulas[0] {
+        Some(folio::layout::LaidMath::Inline(math)) => math.clone(),
+        other => panic!("an inline formula, not {other:?}"),
+    };
+    let mut seen = Vec::new();
+    for line in &by_line[..by_line.len() - 1] {
+        if let Some(&(_, chunk)) = line.last() {
+            seen.extend(line.iter().map(|&(_, c)| c));
+            if chunk + 1 < laid.chunks.len() {
+                assert!(laid.chunks[chunk].after.is_some());
+            }
+        }
+    }
+    seen.extend(by_line.last().unwrap().iter().map(|&(_, c)| c));
+    assert_eq!(seen, (0..laid.chunks.len()).collect::<Vec<_>>());
+    // `q r s t u v w x` is one chunk: a product does not break.
+    assert_eq!(laid.chunks.len(), 17);
+    let last = laid.chunks.last().unwrap();
+    assert!(last.after.is_none());
+    // Each break after `+` costs TeX's \binoppenalty, after `=` its
+    // \relpenalty.
+    assert_eq!(laid.chunks[0].after.unwrap().penalty, 700);
+    assert_eq!(laid.chunks[15].after.unwrap().penalty, 500);
+}
+
+#[test]
+fn a_formula_binds_to_the_text_it_touches() {
+    // At this width the formula and its hyphenated word would end a line;
+    // they stay together.
+    let world = world(
+        "",
+        "The quantities measured along the direction of motion are on the $x$-axis and the rest on $y$, \
+         the vertical.\n",
+    );
+    let text = text(&world);
+    let paragraph = &text.paragraphs[0];
+    let s = paragraph.shaped.text();
+    for line in &lines(&world).paragraphs[0].lines {
+        let start = &s[line.range.start..];
+        assert!(
+            !start.starts_with('-'),
+            "a line starts with the hyphen after a formula"
+        );
+        assert!(
+            !start.starts_with(','),
+            "a line starts with the comma after a formula"
+        );
+    }
+}
+
+#[test]
+fn a_display_is_its_block_with_its_numbers() {
+    let world = world(
+        "math { numbering: \"(1)\"; }\n",
+        "Text.\n\n$ E = m c^2 $\n\n$ v &= u + a t <eq:v> \\\n s &= u t <eq:s> $\n",
+    );
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(
+        compiled
+            .diagnostics
+            .iter()
+            .all(|d| d.severity != Severity::Error),
+        "{:?}",
+        compiled.diagnostics
+    );
+    let pages = folio::pages(&world, Target::Pdf, None).unwrap().unwrap();
+    let mut texts = Vec::new();
+    collect_texts(&pages.pages[0].fragment, &mut texts);
+    for number in ["(1)", "(2)", "(3)"] {
+        assert!(texts.iter().any(|t| t == number), "{number} in {texts:?}");
+    }
+    // The formulas' letters are set in their math alphabet.
+    assert!(texts.iter().any(|t| t == "𝐸"), "{texts:?}");
+}
+
+fn collect_texts(fragment: &folio::Fragment, out: &mut Vec<String>) {
+    for (_, item) in fragment.items.iter() {
+        match item {
+            FragmentItem::Group(group) => collect_texts(group, out),
+            FragmentItem::Text(run) => out.push(run.text.to_string()),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn a_character_the_math_font_cannot_set_is_a_warning() {
+    let world = world("", "A symbol $x ☃ y$ here.\n");
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    let warning = compiled
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("has no glyph"))
+        .expect("a warning");
+    assert_eq!(warning.severity, Severity::Warning);
+    assert_eq!(
+        warning.message,
+        "the math font New Computer Modern Math has no glyph for `☃`, so it is left out"
+    );
+}
+
+#[test]
+fn an_inline_formula_is_as_tall_as_its_line_needs() {
+    let world = world("", "A fraction $1/2$ and a letter $x$.\n");
+    let maths = lines(&world).maths;
+    let size = |i: usize| match &maths.formulas[i] {
+        Some(folio::layout::LaidMath::Inline(math)) => math.chunks[0].ascent,
+        _ => Abs::zero(),
+    };
+    assert!(size(0) > size(1));
+}
+
+#[test]
+fn a_formula_s_glyphs_lead_back_to_their_nodes() {
+    let world = world("", "Speed $v = alpha t$ here.\n\n$ sqrt(x) $\n");
+    let pages = folio::pages(&world, Target::Pdf, None).unwrap().unwrap();
+    let mut found = Vec::new();
+    for placed in folio::span_map::glyphs(&pages.pages[0].fragment) {
+        let text = placed.text();
+        if ["𝑣", "𝛼", "√", "𝑥"].contains(&text) {
+            let location = folio::span_map::locate_glyph(&world, placed.glyph).unwrap();
+            let source = world.source(&location.path).unwrap();
+            found.push((text.to_string(), source.text()[location.bytes].to_string()));
+        }
+    }
+    assert_eq!(
+        found,
+        [
+            ("𝑣".into(), "v".into()),
+            ("𝛼".into(), "alpha".into()),
+            ("√".into(), "sqrt(x)".into()),
+            ("𝑥".into(), "x".into()),
+        ]
+    );
+}
