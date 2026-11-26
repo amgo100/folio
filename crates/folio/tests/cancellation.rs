@@ -102,8 +102,8 @@ fn stages(source: &str) -> Vec<(&'static str, Duration, Duration)> {
     let text = time(&|| drop(folio::text(&world, Target::Pdf, None).unwrap().unwrap()));
     let lines = time(&|| drop(folio::lines(&world, Target::Pdf, None).unwrap().unwrap()));
     let pages = time(&|| drop(folio::pages(&world, Target::Pdf, None).unwrap().unwrap()));
-    // The checks run before `emit` does.
-    time(&|| drop(folio::check(&world, Target::Pdf, None).unwrap()));
+    // The PDF writer's check walks every page, before `emit` runs.
+    let check = time(&|| drop(folio::check(&world, Target::Pdf, None).unwrap()));
     let emit = time(&|| {
         let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
         assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
@@ -112,6 +112,12 @@ fn stages(source: &str) -> Vec<(&'static str, Duration, Duration)> {
         ("text", text, styles + text / 2),
         ("lines", lines, styles + text + lines / 2),
         ("pages", pages, styles + text + lines + pages / 2),
+        // It starts before the stages it calls.
+        (
+            "pdf_check",
+            check,
+            styles + text + lines + pages + check / 2,
+        ),
         ("emit", emit, emit / 2),
     ]
 }

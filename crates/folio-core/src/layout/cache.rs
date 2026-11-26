@@ -176,8 +176,9 @@ impl Cache {
     /// and each result is put in its paragraph's place, so the lines do
     /// not depend on how the work was scheduled (SPEC §2.4). `check` may
     /// unwind, as a database query that its revision has cancelled does
-    /// (SPEC §2.3): the paragraphs not yet broken are then dropped, and
-    /// those broken are kept in the cache for the next call.
+    /// (SPEC §2.3): the paragraphs whose lines it has not yet been handed
+    /// are then dropped, and those it has are kept in the cache for the
+    /// next call.
     ///
     /// # Panics
     ///

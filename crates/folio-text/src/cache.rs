@@ -131,8 +131,9 @@ impl Cache {
     /// `check` on the caller's thread after each paragraph it shapes.
     ///
     /// `check` may unwind, as a database query that its revision has
-    /// cancelled does (SPEC §2.3): the paragraphs not yet shaped are then
-    /// dropped, and those shaped are kept in the cache for the next call.
+    /// cancelled does (SPEC §2.3): the paragraphs whose shapes it has not
+    /// yet been handed are then dropped, and those it has are kept in the
+    /// cache for the next call.
     ///
     /// # Panics
     ///
