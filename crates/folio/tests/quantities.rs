@@ -224,3 +224,55 @@ fn decimal_marker_by_language_and_stylesheet() {
     );
     assert_eq!(markers(main, "math { decimal-marker: comma; }"), [',', ',']);
 }
+
+/// The `math-style` of each formula's vectors, or `None` for a formula
+/// without vectors.
+fn vector_styles(main: &str, sheet: &str) -> Vec<Option<String>> {
+    let world = world(main, sheet);
+    assert!(errors_in(&world).is_empty());
+    let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
+    math_nodes(&styled)
+        .into_iter()
+        .map(|node| {
+            let vectors = node.vector_style()?;
+            assert_eq!(vectors.location, node.location);
+            Some(match styled.value(vectors, "math-style") {
+                Some(value) => format!("{value:?}"),
+                None => "none".into(),
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn stylesheets_choose_bold_or_arrowed_vectors() {
+    let main = "$vec(F) = m vec(a)$ $x^2$\n\n#emph[$hat(i)$ and $1/2 vec(v)^2$]";
+    let auto = || Some("Auto".to_string());
+    let kw = |word: &str| Some(format!("Keyword({word:?})"));
+    assert_eq!(vector_styles(main, ""), [auto(), None, auto(), auto()]);
+    assert_eq!(
+        vector_styles(main, "math.vector { math-style: arrow; }"),
+        [kw("arrow"), None, kw("arrow"), kw("arrow")]
+    );
+    // Per part of the document, and inherited from the formula.
+    assert_eq!(
+        vector_styles(
+            main,
+            "math.vector { math-style: arrow; } emph math.vector { math-style: bold-italic; }"
+        ),
+        [kw("arrow"), None, kw("bold-italic"), kw("bold-italic")]
+    );
+    assert_eq!(
+        vector_styles(main, "emph { math-style: arrow; }"),
+        [auto(), None, kw("arrow"), kw("arrow")]
+    );
+    // The class styles the vectors, not the formula.
+    let world = world(main, "math.vector { math-style: arrow; }");
+    let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
+    for node in math_nodes(&styled) {
+        assert_eq!(
+            styled.value(node, "math-style"),
+            Some(&folio_component::Value::Auto)
+        );
+    }
+}

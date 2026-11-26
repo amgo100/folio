@@ -103,6 +103,12 @@ impl Formula {
         self.depth
     }
 
+    /// Whether any line holds a [`Node::Vector`], at any depth. Cached in
+    /// the rows, so this takes time in the number of lines only.
+    pub fn has_vector(&self) -> bool {
+        self.lines.iter().any(|line| line.row.has_vector())
+    }
+
     /// A compact description of the tree, for snapshot tests and debugging.
     /// Lines are separated by ` \ `, as in the source:
     /// `[v, ^[2], rel(=), u] <eq:suvat> \ [..]`.
@@ -162,6 +168,7 @@ pub struct Row {
     depth: u32,
     size: u64,
     hash: u64,
+    has_vector: bool,
 }
 
 impl Row {
@@ -177,6 +184,9 @@ impl Row {
         let size = nodes.iter().fold(nodes.len() as u64, |size, node| {
             size.saturating_add(node.size())
         });
+        let has_vector = nodes.iter().any(|node| {
+            matches!(node, Node::Vector(_)) || node.rows().into_iter().any(Row::has_vector)
+        });
         let mut hasher = DefaultHasher::new();
         nodes.hash(&mut hasher);
         Self {
@@ -184,6 +194,7 @@ impl Row {
             depth,
             size,
             hash: hasher.finish(),
+            has_vector,
         }
     }
 
@@ -208,6 +219,12 @@ impl Row {
     /// walking the whole tree costs.
     pub fn size(&self) -> u64 {
         self.size
+    }
+
+    /// Whether the row or a row inside it holds a [`Node::Vector`]. Cached,
+    /// so this takes constant time.
+    pub fn has_vector(&self) -> bool {
+        self.has_vector
     }
 
     /// The cell boundaries of a line: the row split at its top-level
@@ -980,5 +997,20 @@ mod tests {
         let row = Row::new([ident("a"), Node::AlignPoint(Span::detached()), ident("b")]);
         assert_eq!(row.cells().len(), 2);
         assert_eq!(row.repr(), "[a, &, b]");
+    }
+
+    #[test]
+    fn rows_know_whether_they_hold_a_vector() {
+        let vector = Node::Vector(Arc::new(Vector {
+            base: Row::new([ident("F")]),
+            unit: false,
+            span: Span::detached(),
+        }));
+        let plain = Row::new([ident("x")]);
+        assert!(!plain.has_vector());
+        let nested = Row::new([frac(Row::new([vector]), plain.clone())]);
+        assert!(nested.has_vector());
+        assert!(Formula::row(nested, Span::detached()).has_vector());
+        assert!(!Formula::row(plain, Span::detached()).has_vector());
     }
 }
