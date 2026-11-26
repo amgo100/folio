@@ -887,8 +887,9 @@ impl<'a> Links<'a> {
     /// source and the run has not shown all its link's text, or if it
     /// shows no new bytes; else it starts a run of the source's next link.
     /// So two links of one source that meet, as references of a loop can
-    /// at a line break, stay two, in either direction of text. `None` if it
-    /// goes nowhere.
+    /// at a line break, stay two. Glyphs are taken in the order drawn, so
+    /// in right-to-left text a link of a loop hyphenated across lines can
+    /// take the next link's destination. `None` if it goes nowhere.
     fn glyph(&mut self, source: SourceRef, bytes: usize) -> Option<usize> {
         if let Some((last, run, left)) = &mut self.current
             && *last == source
@@ -908,8 +909,15 @@ impl<'a> Links<'a> {
         };
         let link = links[(*drawn).min(links.len() - 1)];
         *drawn += 1;
-        // A link without text runs until a glyph of another source.
-        let text = match self.navigation.links[link].text.len() {
+        // Objects show no glyphs. A link without text runs until a glyph
+        // of another source.
+        let shows = self.navigation.links[link]
+            .text
+            .chars()
+            .filter(|&c| c != '\u{FFFC}')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let text = match shows {
             0 => usize::MAX,
             n => n,
         };
@@ -936,7 +944,7 @@ impl<'a> Links<'a> {
         // Areas of one line touch and overlap, whatever the extents of
         // their fonts.
         if let Some(last) = areas.last_mut()
-            && (last.right() - area.left()).abs() < 0.01
+            && (last.right() - area.left()).abs() < 0.5
             && area.top() < last.bottom()
             && last.top() < area.bottom()
             && let Some(joined) = Rect::from_ltrb(
