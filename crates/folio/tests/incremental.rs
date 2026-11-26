@@ -167,7 +167,13 @@ fn an_edit_that_forces_a_full_reparse_reuses_calls_of_unchanged_closures() {
             .text()
             .find(needle)
             .unwrap();
-        world.edit_source("main.fol", at..at, with).unwrap();
+        let reparsed = world.edit_source("main.fol", at..at, with).unwrap();
+        let len = world.source("main.fol").unwrap().text().len();
+        assert_eq!(
+            reparsed,
+            0..len,
+            "{with:?} before {needle:?}: a full reparse"
+        );
         folio::compile(&world, Target::Pdf, None).unwrap();
         let counts = counts.lock().unwrap();
         // The edit reached the output.

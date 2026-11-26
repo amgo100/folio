@@ -24,12 +24,18 @@ pub(crate) fn reparse(
     replacement_len: usize,
 ) -> Range<usize> {
     let style = root.kind() == SyntaxKind::Stylesheet;
+    // A failed attempt can leave the tree half changed: children put in
+    // whose numbering then failed, with their ancestors' lengths not updated.
+    // A full reparse starts from the tree as it was. The clone is cheap: it
+    // shares every subtree.
+    let old = root.clone();
     try_reparse(text, replaced, replacement_len, None, root, 0, style).unwrap_or_else(|| {
         let new = if style {
             parse_stylesheet(text)
         } else {
             parse(text)
         };
+        *root = old;
         replace_root(root, new);
         0..text.len()
     })
