@@ -128,8 +128,8 @@ fn finite(value: f64, what: &str) -> Result<f64, EcoString> {
 
 /// The longest length a property value may have, in points: 1,000,000pt,
 /// about 350 m (SPEC §5.1). It is far beyond any page, so no realistic
-/// document reaches it, and it leaves DOCX and PPTX room beyond PDF's page
-/// limit; within it, nothing layout computes from lengths, products of two
+/// document reaches it, and wider than PDF's page limit, so it does not
+/// tie the other targets to PDF's; within it, nothing layout computes from lengths, products of two
 /// included, can overflow.
 const MAX_LENGTH: f64 = 1_000_000.0;
 
@@ -141,7 +141,7 @@ fn bounded(pt: f64) -> Result<f64, EcoString> {
         Ok(pt)
     } else {
         Err(eco_format!(
-            "this length is longer than {MAX_LENGTH}pt (about 350 m), the longest a length may be"
+            "this length is beyond ±{MAX_LENGTH}pt (about 350 m), the limit of a length"
         ))
     }
 }
@@ -724,8 +724,7 @@ mod tests {
                 Value::Length(Abs::pt(pt))
             );
         }
-        let error =
-            "this length is longer than 1000000pt (about 350 m), the longest a length may be";
+        let error = "this length is beyond ±1000000pt (about 350 m), the limit of a length";
         for pt in [MAX_LENGTH + 1.0, -MAX_LENGTH - 1.0, 1e300, -1e300] {
             assert_eq!(compute(&length(pt, 0.0), size).unwrap_err(), error);
         }
