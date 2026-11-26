@@ -230,10 +230,11 @@ pub type OutputsHook = Arc<dyn Fn(&Outputs) + Send + Sync>;
 pub struct Outputs {
     /// The revision they were compiled from.
     pub revision: u64,
-    /// Each build the manifest declares, in its order. A build that an
-    /// edit cancelled is left out: the next quiet second compiles the
-    /// next revision.
-    pub outputs: Vec<Output>,
+    /// Each build the manifest declares, in its order, with the project
+    /// path the manifest writes its output to, if any. When an edit
+    /// cancels any of them, none is handed over: the next revision is
+    /// compiled once the project is quiet again.
+    pub outputs: Vec<(Output, Option<String>)>,
     /// The files their diagnostics point into.
     pub files: Arc<dyn Files + Send + Sync>,
 }

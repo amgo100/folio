@@ -549,12 +549,22 @@ impl Engine {
             .name("folio-preview-write".into())
             .spawn(move || {
                 let builds = handle.builds();
+                let manifest = handle.manifest().clone();
                 let outputs = folio::compile_builds(&handle, builds);
                 drop(handle);
                 if outputs.iter().any(|o| o.result.is_err()) {
                     // An edit overtook it; its revision is written instead.
                     return;
                 }
+                let outputs = outputs
+                    .into_iter()
+                    .map(|o| {
+                        let path = manifest
+                            .output_path(o.variant.as_ref(), o.target)
+                            .map(String::from);
+                        (o, path)
+                    })
+                    .collect();
                 hook(&Outputs {
                     revision,
                     outputs,

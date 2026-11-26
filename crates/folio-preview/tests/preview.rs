@@ -401,7 +401,9 @@ fn outputs_are_written_once_the_project_is_quiet() {
                 let pdfs = outputs
                     .outputs
                     .iter()
-                    .filter(|o| o.result.as_ref().is_ok_and(|c| c.output.is_some()))
+                    .filter(|(o, path)| {
+                        path.is_some() && o.result.as_ref().is_ok_and(|c| c.output.is_some())
+                    })
                     .count();
                 sink.lock().unwrap().push((outputs.revision, pdfs));
             })

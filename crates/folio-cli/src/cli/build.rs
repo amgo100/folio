@@ -284,7 +284,7 @@ fn build_name_text(variant: Option<&str>, target: &str) -> String {
 
 /// What [`write`] did with a build's output.
 #[derive(Debug, Eq, PartialEq)]
-enum Written {
+pub(super) enum Written {
     /// It wrote the file at this path.
     File(String),
     /// The build has errors, so it did not write the file at this path.
@@ -299,7 +299,11 @@ enum Written {
 /// then renamed over the output. Symbolic links to directories are followed
 /// only inside the project (SPEC §12.1), and an output whose directory lies
 /// outside it is refused; a link at the output itself is replaced.
-fn write(root: &Path, path: Option<&str>, compiled: &Compiled) -> Result<Written, String> {
+pub(super) fn write(
+    root: &Path,
+    path: Option<&str>,
+    compiled: &Compiled,
+) -> Result<Written, String> {
     let (Some(path), Some(bytes)) = (path, &compiled.output) else {
         return Ok(Written::Nothing);
     };

@@ -1,5 +1,6 @@
 //! The commands of SPEC §12.1 and their arguments. `folio build`, `folio
-//! check`, `folio lsp` and `folio toolchain install` are implemented; the other
+//! check`, `folio watch`, `folio lsp` and `folio toolchain install` are
+//! implemented; the other
 //! commands, and the flags of `folio build` and `folio check` for later
 //! features, are parsed and rejected as not yet supported.
 
@@ -8,6 +9,7 @@ mod check;
 mod lsp;
 mod project;
 mod toolchain;
+mod watch;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -40,8 +42,8 @@ enum Command {
     Build(BuildArgs),
     /// Create a project from a template or package (not yet supported)
     New(Later),
-    /// Rebuild incrementally and serve the live preview (not yet supported)
-    Watch(Later),
+    /// Rebuild incrementally and serve the live preview
+    Watch(watch::WatchArgs),
     /// Run the live presentation with presenter view (not yet supported)
     Present(Later),
     /// Report diagnostics without writing output: every variant and target
@@ -65,9 +67,12 @@ impl Command {
     /// The command's name, for a command that is not supported yet.
     fn later(&self) -> Option<&'static str> {
         Some(match self {
-            Self::Build(_) | Self::Check(_) | Self::Lsp(_) | Self::Toolchain(_) => return None,
+            Self::Build(_)
+            | Self::Check(_)
+            | Self::Watch(_)
+            | Self::Lsp(_)
+            | Self::Toolchain(_) => return None,
             Self::New(_) => "new",
-            Self::Watch(_) => "watch",
             Self::Present(_) => "present",
             Self::Fmt(_) => "fmt",
             Self::Promote(_) => "promote",
@@ -267,6 +272,7 @@ pub(crate) fn run() -> ExitCode {
     match cli.command {
         Command::Build(args) => build::build(&args.project),
         Command::Check(args) => check::check(&args.project),
+        Command::Watch(args) => watch::watch(&args),
         Command::Lsp(args) => lsp::lsp(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         _ => unreachable!("every other command is rejected above"),
@@ -364,7 +370,15 @@ mod tests {
 
     #[test]
     fn later_commands_take_any_arguments() {
-        let cli = Cli::try_parse_from(["folio", "watch"]);
-        assert_eq!(cli.unwrap().command.later(), Some("watch"));
+        let cli = Cli::try_parse_from(["folio", "present", "--anything"]);
+        assert_eq!(cli.unwrap().command.later(), Some("present"));
+    }
+
+    #[test]
+    fn watch_flags() {
+        let cli = Cli::try_parse_from(["folio", "watch", "--variant", "exam", "--port", "8080"]);
+        assert!(matches!(cli.unwrap().command, Command::Watch(_)));
+        assert!(Cli::try_parse_from(["folio", "watch", "--port", "70000"]).is_err());
+        assert!(Cli::try_parse_from(["folio", "watch", "--target", "pdf"]).is_err());
     }
 }
