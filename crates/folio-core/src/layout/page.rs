@@ -606,36 +606,46 @@ fn report_page_size(
 /// Reports what a page relaxed or could not fit.
 fn report(db: &dyn Db, out: &PageOut) {
     for constraint in &out.relaxed {
-        let (span, message, hint) = match *constraint {
+        let (span, code, message, hint) = match *constraint {
             Constraint::Widow(span) => (
                 span,
+                "widow",
                 "a page break leaves fewer lines of this paragraph at the top of a page \
                  than `widows` asks for",
                 "no better break was found; reword the text or allow fewer lines with `widows`",
             ),
             Constraint::Orphan(span) => (
                 span,
+                "orphan",
                 "a page break leaves fewer lines of this paragraph at the foot of a page \
                  than `orphans` asks for",
                 "no better break was found; reword the text or allow fewer lines with `orphans`",
             ),
             Constraint::KeepWithNext(span) => (
                 span,
+                "keep-with-next",
                 "a page break separates this block from the next despite `keep-with-next`",
                 "the blocks kept together do not fit on one page",
             ),
             Constraint::KeepTogether(span) => (
                 span,
+                "keep-together",
                 "a page break falls inside this block despite `keep-together`",
                 "the block does not fit on one page",
             ),
             Constraint::Unbreakable(span) => (
                 span,
+                "unbreakable",
                 "a page break falls inside this block despite `breakable: false`",
                 "the block does not fit on one page",
             ),
         };
-        diag::report(db, Diagnostic::warning(span, message).with_hint(hint));
+        diag::report(
+            db,
+            Diagnostic::warning(span, message)
+                .with_code(code)
+                .with_hint(hint),
+        );
     }
     if let Some((span, by)) = out.overflow {
         diag::report(
@@ -648,6 +658,7 @@ fn report(db: &dyn Db, out: &PageOut) {
                     by.to_pt()
                 ),
             )
+            .with_code("page-overflow")
             .with_hint("make it smaller, or the page's margins"),
         );
     }

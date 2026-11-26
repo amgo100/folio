@@ -1,0 +1,27 @@
+A Pneumonoultramicroscopicsilicovolcanoconiosis case.
+
+#heading(class: "ragged")[Ragged]
+
+Stretched spaces in incomprehensibilities.
+
+#heading(class: "widow")[Widow]
+
+The widow paragraph has many words so that it runs over several lines of the small page and must be broken across a page.
+
+#heading(class: "orphan")[Orphan]
+
+The orphan paragraph has many words so that it runs over several lines of the small page and must be broken across a page.
+
+#heading(class: "kept")[Kept]
+
+The kept section has many words so that it runs over several lines of the small page and must be broken across a page.
+
+#heading(class: "whole")[Whole]
+
+The whole section has many words so that it runs over several lines of the small page and must be broken across a page.
+
+#heading(class: "next")[Next]
+
+#figure[Tall]
+
+See @nowhere.

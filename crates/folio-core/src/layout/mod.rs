@@ -281,6 +281,7 @@ fn report_lines(
                         line.overflow.to_pt()
                     ),
                 )
+                .with_code("overfull-line")
                 .with_hint(
                     "there is no break that fits; allow hyphenation with \
                      `hyphenate: true`, or reword the text",
@@ -298,10 +299,12 @@ fn report_lines(
             };
             diag::report(
                 db,
-                Diagnostic::warning(line_span(db, project, paragraph, line), message).with_hint(
-                    "allow hyphenation with `hyphenate: true`, set `justify: false`, \
-                     or reword the text",
-                ),
+                Diagnostic::warning(line_span(db, project, paragraph, line), message)
+                    .with_code("underfull-line")
+                    .with_hint(
+                        "allow hyphenation with `hyphenate: true`, set `justify: false`, \
+                         or reword the text",
+                    ),
             );
         }
     }

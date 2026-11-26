@@ -229,3 +229,47 @@ fn equal_paragraphs_stay_apart() {
         "{looped:?} {written:?}"
     );
 }
+
+/// Each kind of layout diagnostic (SPEC §7.9) is reported once on the
+/// fixture in `tests/check/layout`, with its code, at the source it is
+/// about: a line at the text it ends with, a paragraph at its text, a
+/// section at its heading, what does not fit at its content.
+#[test]
+fn layout_diagnostics_have_codes_and_spans() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/check/layout");
+    let world = project(&dir);
+    let checked = folio::check(&world, Target::Pdf, None).unwrap();
+    let source = world.source("main.fol").unwrap();
+    let at = |code: &str| -> String {
+        let found: Vec<_> = checked
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(code))
+            .collect();
+        assert_eq!(found.len(), 1, "{code}: {:?}", checked.diagnostics);
+        assert_eq!(found[0].severity, folio::Severity::Warning);
+        let location = folio::diag::locate(&world, found[0].span).unwrap();
+        source.text()[location.bytes].to_string()
+    };
+    assert_eq!(
+        at("overfull-line"),
+        "Pneumonoultramicroscopicsilicovolcanoconiosis"
+    );
+    assert_eq!(at("underfull-line"), "Stretched spaces");
+    assert!(at("widow").starts_with("The widow paragraph"));
+    assert!(at("orphan").starts_with("The orphan paragraph"));
+    assert_eq!(at("keep-together"), "heading(class: \"kept\")[Kept]");
+    assert_eq!(at("unbreakable"), "heading(class: \"whole\")[Whole]");
+    assert_eq!(at("keep-with-next"), "heading(class: \"next\")[Next]");
+    assert_eq!(at("page-overflow"), "Tall");
+    // A reference to a label no element has is a warning at the
+    // reference, without a code yet.
+    assert!(checked.diagnostics.iter().any(|d| {
+        d.message.contains("no element has the label")
+            && folio::diag::locate(&world, d.span)
+                .is_some_and(|l| &source.text()[l.bytes] == "@nowhere")
+    }));
+    // Compiling reports the same.
+    let compiled = folio::compile(&project(&dir), Target::Pdf, None).unwrap();
+    assert_eq!(checked.diagnostics, compiled.diagnostics);
+}
