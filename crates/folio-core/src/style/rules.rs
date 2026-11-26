@@ -563,24 +563,11 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Compiles a rule, as [`Self::compile_rule`], without the warnings of
-    /// [`Self::lint_rule`]: for a scoped rule in content, whose caller lints
-    /// it once it applies (not yet done: #243).
-    pub(super) fn rule<'s>(
-        &self,
-        values: &Values<'_>,
-        selectors: ast::SelectorList<'s>,
-        declarations: impl Iterator<Item = ast::Declaration<'s>>,
-        origin: Origin,
-        order: u32,
-        span: Span,
-    ) -> Compiled {
-        self.compile_rule(values, selectors, declarations, origin, order, span)
-    }
-
     /// Compiles a rule: one rule per selector, sharing the declarations.
-    /// A selector with an error is left out, after it is reported.
-    fn compile_rule<'s>(
+    /// A selector with an error is left out, after it is reported. The
+    /// warnings that a declaration has no effect are [`Self::lint_rule`]'s,
+    /// which the caller runs once it knows that the rule applies.
+    pub(super) fn compile_rule<'s>(
         &self,
         values: &Values<'_>,
         selectors: ast::SelectorList<'s>,
@@ -617,9 +604,9 @@ impl<'a> Compiler<'a> {
     }
 
     /// Warns about the declarations of a compiled rule that set a property
-    /// no stage reads yet. The cascade calls it only for a rule that applies
-    /// to the build: one that another variant or target has has no effect
-    /// here anyway. Nothing is reported for a rule whose selectors were all
+    /// no stage reads yet. The cascade and the scoped rules in content call
+    /// it only for a rule that applies to the build: one that another
+    /// variant or target has has no effect here anyway. Nothing is reported for a rule whose selectors were all
     /// ignored. Its selectors share the declarations.
     pub(super) fn lint_rule(&self, compiled: &Compiled) {
         let first = compiled
@@ -635,7 +622,7 @@ impl<'a> Compiler<'a> {
                 DeclValue::Value(value) => Some(value),
                 DeclValue::Template(_) => None,
             };
-            self.lint_not_implemented(property, value, decl.span);
+            self.lint_not_implemented(property, value, false, decl.span);
         }
     }
 
@@ -683,8 +670,20 @@ impl<'a> Compiler<'a> {
     }
 
     /// Warns that a declaration sets a property no stage reads yet, so it
-    /// has no effect.
-    fn lint_not_implemented(&self, property: &Property, value: Option<&Declared>, span: Span) {
+    /// has no effect: in a stylesheet, a scoped rule or an element's own
+    /// fields alike. `content` says whether the value comes from content,
+    /// which writes keywords as strings (see [`coerce`]).
+    pub(super) fn lint_not_implemented(
+        &self,
+        property: &Property,
+        value: Option<&Declared>,
+        content: bool,
+        span: Span,
+    ) {
+        // Most properties are never reported: skip computing their values.
+        if not_implemented(property, None).is_none() {
+            return;
+        }
         // The value as plain data, compared with the initial one. It is
         // computed at two font sizes: a value in ems that equals the
         // initial value at one size is not initial at the other.
@@ -692,7 +691,7 @@ impl<'a> Compiler<'a> {
             value.map(|v| {
                 compute(v, folio_component::Abs::pt(size))
                     .ok()
-                    .map(|v| coerce(v, &property.ty, false))
+                    .map(|v| coerce(v, &property.ty, content))
             })
         };
         let (computed, other) = (at(10.0), at(13.0));
