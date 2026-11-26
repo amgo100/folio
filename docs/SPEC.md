@@ -72,6 +72,7 @@ Folio is for documents whose structure matters and whose outputs must stay consi
 | Region | A named area of a page master into which content flows |
 | Flow | The sequence of blocks that the page builder distributes over regions |
 | Fragment | A positioned box produced by layout; pages and slides are fragments |
+| Object | Content that is not text, such as inline maths, an image or a display, which its own stage lays out and layout places by its size: in a line, like a glyph with a width, ascent, descent and baseline shift, or as the content of a block (§7.2). It stands in its paragraph's text as an object character, and layout outputs it as an object fragment |
 | Flow state | Everything the page builder carries from one page to the next (§2.3) |
 | Display list | The drawing commands for one fragment, used by the preview, the editor and the live renderer |
 | Span map | The mapping from glyphs and boxes in a fragment back to source positions |

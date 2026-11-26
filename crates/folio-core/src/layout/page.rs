@@ -210,8 +210,9 @@ struct PageOut {
     /// and the line of its paragraph.
     lines: EcoVec<(usize, usize)>,
     /// The paragraphs that start on the page and were broken at a width
-    /// other than the one the flow was built for, each a leaf counted from
-    /// the page's first: their lines' diagnostics are the page's to report.
+    /// other than the one the flow was built for, or with sized objects,
+    /// each a leaf counted from the page's first: their lines' diagnostics
+    /// are the page's to report.
     rebroken: EcoVec<(usize, Arc<ParagraphLayout>)>,
     /// The constraints the break after the page goes against.
     relaxed: EcoVec<Constraint>,
@@ -675,7 +676,8 @@ struct Placed {
     line: Option<(Arc<ParagraphInfo>, usize)>,
     /// The sized content of a block, for a block object.
     object: Option<Arc<BlockObject>>,
-    /// Whether the paragraph was broken at a width other than the flow's.
+    /// Whether the paragraph was broken at a width other than the flow's,
+    /// or with sized objects: other breaks than [`lines`] reported.
     rebroken: bool,
 }
 
@@ -757,6 +759,9 @@ impl<'a> Run<'a> {
             Leaf::Paragraph(info) => {
                 let body = page.master.body.size.width;
                 let (paragraph, rebroken) = info.at_width(body, width, page.caches);
+                // A paragraph with sized objects was broken again with them,
+                // so its lines are not those that `lines` reported.
+                let rebroken = rebroken || !paragraph.objects.is_empty();
                 if paragraph.layout.lines.is_empty() {
                     self.leaves.push(empty(&item.before));
                     return;

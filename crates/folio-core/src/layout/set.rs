@@ -335,14 +335,17 @@ impl Runs<'_> {
 
     /// Places the object whose character is at byte `at` of the
     /// paragraph's text at `pen`, if it has a size, and returns the pen
-    /// after it and its tracking.
+    /// after it and its tracking. Called only for paragraphs with sized
+    /// objects, which list every object.
     fn object(&mut self, info: &ParagraphInfo, at: usize, tracking: Abs, pen: Abs) -> Abs {
         let Ok(i) = info.objects.binary_search_by_key(&at, |o| o.at) else {
             return pen;
         };
         let object = &info.objects[i];
+        // An object without a size takes no space but its tracking, as the
+        // paragraph builder measured it.
         let Some(m) = object.metrics else {
-            return pen;
+            return pen + tracking;
         };
         self.flush();
         let top = self.baseline - m.shift - m.ascent;

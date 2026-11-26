@@ -309,12 +309,19 @@ fn hex(color: Color) -> String {
 }
 
 /// The document of the object golden file ([`boxes`]): inline maths and a
-/// reference, which stand for objects in a paragraph's text, and a figure
-/// with no content, a block that holds no paragraphs.
+/// reference, which stand for objects in a paragraph's text, a figure with
+/// no content, a block that holds no paragraphs, and a note's anchor, an
+/// object left without a size beside a sized one.
 pub const BOXES: &str = "#doc(title: [Boxes])\n\n= Boxes\n\nA line with a tall box $x$ in \
 it, and a raised one, see @fig:box, after it. The rest of the paragraph runs on so that it \
 takes a second line and a third, which shows that only the line with the tall box is taller \
-than the others.\n\n#figure[] <fig:box>\n\nA paragraph after the block box.\n";
+than the others.\n\n#figure[] <fig:box>\n\nA note's anchor#sidenote[A note.] has no size and a \
+sized box $y$ follows it; the justified line ends where its space does.\n";
+
+/// The stylesheet of [`BOXES`]: a note's anchor takes tracking, which an
+/// object without a size takes as its only space, and paragraphs are
+/// justified.
+pub const BOXES_STYLE: &str = "sidenote { tracking: 2pt; }\nparagraph { justify: true; }\n";
 
 /// The size of the tall test box: inline maths in [`BOXES`].
 pub const TALL: ObjectMetrics = ObjectMetrics {
@@ -342,9 +349,12 @@ pub const BLOCK: Size = Size::new(Abs::pt(120.0), Abs::pt(60.0));
 /// document leaves them without a size.
 pub fn boxes() -> (World, Pages) {
     let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
-                    lang = \"en-GB\"\n";
+                    lang = \"en-GB\"\nstyles = [\"styles/boxes.fsty\"]\n";
     let mut world = World::new(manifest).expect("a valid manifest");
     world.set_source("main.fol", BOXES).expect("a source");
+    world
+        .set_source("styles/boxes.fsty", BOXES_STYLE)
+        .expect("a stylesheet");
     let built = |what: &str| format!("the box document has {what}");
     let text = folio::text(&world, Target::Pdf, None)
         .expect("nothing cancels the build")
