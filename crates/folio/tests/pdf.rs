@@ -7,10 +7,17 @@
 //! document's PDF there, with the text a reader should extract from it, for
 //! `tests/pdf/corpus.py` to check with veraPDF and `pdftotext`.
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use folio::{Diagnostic, Name, Severity, Target, World};
+use folio::{
+    Diagnostic, Fragment, FragmentItem, Name, Severity, SourceRef, Target, Text, TextBlock,
+    TextFlow, World,
+};
+
+/// An element instance: its source and instance number.
+type Location = (SourceRef, u32);
 
 /// The corpus directory.
 fn corpus() -> PathBuf {
@@ -75,24 +82,106 @@ fn pdf_variants(world: &World) -> Vec<Option<Name>> {
         .collect()
 }
 
-/// The text of a build's paragraphs as a reader should extract it: in
-/// order, one paragraph per line, without the objects that layout does
-/// not draw yet.
+/// The text of a build as a reader should extract it: in order, one
+/// paragraph or display formula per line, without the objects that layout
+/// does not draw yet. A formula's text is the text of the glyphs drawn for
+/// it, in the order they are drawn: each inline chunk at its object
+/// character, a display's lines and their numbers as one line.
 fn expected_text(world: &World, variant: Option<&Name>) -> String {
     let text = folio::text(world, Target::Pdf, variant).unwrap().unwrap();
-    let mut out = String::new();
-    for paragraph in text.paragraphs.iter() {
-        let line: String = paragraph
-            .shaped
-            .text()
-            .chars()
-            .filter(|&c| c != '\u{FFFC}')
-            .map(|c| if c == '\u{2028}' { ' ' } else { c })
-            .collect();
-        out.push_str(line.trim());
-        out.push('\n');
+    let pages = folio::pages(world, Target::Pdf, variant).unwrap().unwrap();
+    let maths: HashSet<Location> = text
+        .maths
+        .iter()
+        .map(|m| (m.location.source, m.location.instance))
+        .collect();
+    // The text of each box of a formula, by the formula, in drawing order.
+    let mut drawn: HashMap<Location, Vec<String>> = HashMap::new();
+    for page in pages.pages.iter() {
+        collect_maths(&page.fragment, &maths, &mut drawn);
     }
+    let mut out = String::new();
+    write_block(&text, &text.root, &drawn, &mut out);
     out
+}
+
+/// The text of the boxes of formulas in `fragment`, by formula.
+fn collect_maths(
+    fragment: &Fragment,
+    maths: &HashSet<Location>,
+    drawn: &mut HashMap<Location, Vec<String>>,
+) {
+    for (_, item) in fragment.items.iter() {
+        if let FragmentItem::Group(group) = item {
+            let location = (group.location().source, group.location().instance);
+            if maths.contains(&location) {
+                let mut text = String::new();
+                runs(group, &mut text);
+                drawn.entry(location).or_default().push(text);
+            } else {
+                collect_maths(group, maths, drawn);
+            }
+        }
+    }
+}
+
+/// The text of the glyph runs in `fragment`, in drawing order.
+fn runs(fragment: &Fragment, out: &mut String) {
+    for (_, item) in fragment.items.iter() {
+        match item {
+            FragmentItem::Text(run) => out.push_str(&run.text),
+            FragmentItem::Group(group) => runs(group, out),
+            _ => {}
+        }
+    }
+}
+
+fn write_block(
+    text: &Text,
+    block: &TextBlock,
+    drawn: &HashMap<Location, Vec<String>>,
+    out: &mut String,
+) {
+    let location = (block.location.source, block.location.instance);
+    if let Some(boxes) = drawn.get(&location)
+        && text
+            .maths
+            .iter()
+            .any(|m| m.display && m.location == block.location)
+    {
+        out.push_str(&boxes.concat());
+        out.push('\n');
+        return;
+    }
+    for child in block.children.iter() {
+        match child {
+            TextFlow::Block(child) => write_block(text, child, drawn, out),
+            TextFlow::Paragraph(index) => {
+                let paragraph = &text.paragraphs[*index];
+                let mut line = String::new();
+                let mut objects = paragraph.objects.iter();
+                for c in paragraph.shaped.text().chars() {
+                    match c {
+                        '\u{FFFC}' => {
+                            let chunk = objects
+                                .next()
+                                .and_then(|o| {
+                                    Some(((o.location.source, o.location.instance), o.math?.chunk))
+                                })
+                                .and_then(|(at, chunk)| drawn.get(&at)?.get(chunk));
+                            if let Some(chunk) = chunk {
+                                line.push_str(chunk);
+                            }
+                        }
+                        '\u{2028}' => line.push(' '),
+                        c => line.push(c),
+                    }
+                }
+                out.push_str(line.trim());
+                out.push('\n');
+            }
+        }
+    }
 }
 
 /// Every corpus document, in each variant it builds as PDF, is a PDF/UA-1

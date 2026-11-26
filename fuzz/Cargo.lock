@@ -473,7 +473,10 @@ name = "folio-math"
 version = "0.0.0"
 dependencies = [
  "ecow",
+ "folio-component",
  "folio-syntax",
+ "folio-text",
+ "skrifa 0.50.0",
  "unicode-math-class",
 ]
 

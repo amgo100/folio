@@ -4,14 +4,12 @@
 //!
 //! The generator grows as features land. Until then, an item whose feature
 //! does not exist is a stand-in of about its size made of what does:
-//!
-//! - display equations (math, M1): a short paragraph that states the
-//!   equation in words;
-//! - tables (M2): a term list, one term per row.
+//! tables (M2) are a term list, one term per row. Display equations are
+//! numbered formulas, and running text holds inline ones.
 //!
 //! Figures are real figures with a caption; their bodies are text until
 //! graphics land (M4). When a feature lands, replace its stand-in in
-//! `Generator::equation` or `Generator::table` and re-tune
+//! `Generator::table` and re-tune
 //! [`CHARS_PER_PAGE`] so that the page count stays on target
 //! (`tests/refdoc.rs` checks it).
 
@@ -67,7 +65,7 @@ pub const CHARS_PER_PAGE: usize = 2650;
 
 /// The characters of running text that an item displaces from its page.
 const FIGURE_CHARS: usize = 900;
-const EQUATION_CHARS: usize = 300;
+const EQUATION_CHARS: usize = 380;
 const TABLE_CHARS: usize = 700;
 
 /// The project's manifest: one document, built as PDF.
@@ -90,6 +88,7 @@ heading[level=2] { font-size: 13pt; }
 heading[level=3] { font-size: 11pt; }
 figure { space-before: 8pt; space-after: 8pt; }
 terms-item { space-before: 2pt; }
+math { numbering: \"(1)\"; space-before: 6pt; space-after: 6pt; }
 ";
 
 /// The variants of [`generate_variants`]'s project, as the exam and mark
@@ -230,6 +229,12 @@ impl Rng {
         items[self.range(0..items.len())]
     }
 }
+
+/// The symbols of equations.
+const SYMBOLS: &[&str] = &[
+    "a", "b", "c", "m", "v", "u", "t", "x", "y", "F", "E", "P", "k", "alpha", "omega", "theta",
+    "lambda",
+];
 
 const NOUNS: &[&str] = &[
     "pendulum",
@@ -448,9 +453,17 @@ impl Generator {
         if self.rng.range(0..2) == 0 {
             let _ = write!(s, " {}", self.rng.pick(CLAUSES));
         }
-        if self.rng.range(0..4) == 0 {
-            let value = self.rng.range(1..999);
-            let _ = write!(s, ", and its value is {}.{} units", value / 10, value % 10);
+        match self.rng.range(0..6) {
+            0 => {
+                let value = self.rng.range(1..999);
+                let _ = write!(s, ", and its value is {}.{} units", value / 10, value % 10);
+            }
+            1 => {
+                let [a, b] = [self.rng.pick(SYMBOLS), self.rng.pick(SYMBOLS)];
+                let n = self.rng.range(2..10);
+                let _ = write!(s, ", so that ${a} = {n} {b}^2$");
+            }
+            _ => {}
         }
         s.push('.');
         s
@@ -494,18 +507,25 @@ impl Generator {
         );
     }
 
-    /// A display equation's stand-in until math lands (M1): the equation
-    /// in words, as a paragraph of its own.
+    /// A display equation, of one of a few shapes: a fraction, squares, a
+    /// sum, an integral, a root.
     fn equation(&mut self) {
         self.equation += 1;
-        let a = self.rng.pick(NOUNS);
-        let b = self.rng.pick(NOUNS);
-        let c = self.rng.pick(NOUNS);
-        let _ = writeln!(
-            self.out,
-            "Equation {}: {a} equals {b} times {c} over two.\n",
-            self.equation
-        );
+        let [a, b, c, d] = [
+            self.rng.pick(SYMBOLS),
+            self.rng.pick(SYMBOLS),
+            self.rng.pick(SYMBOLS),
+            self.rng.pick(SYMBOLS),
+        ];
+        let n = self.rng.range(2..10);
+        let formula = match self.rng.range(0..5) {
+            0 => format!("{a} = ({b} + {c}) / {n}"),
+            1 => format!("{a}^2 = {b}^2 + {n} {c} {d}"),
+            2 => format!("{a}({b}) = sum_(i=1)^{n} {c}_i {b}^i"),
+            3 => format!("{a} = integral_0^{b} {c}({d}) dif {d}"),
+            _ => format!("{a} = sqrt({b}^2 + {c}^2) / ({n} {d})"),
+        };
+        let _ = writeln!(self.out, "$ {formula} $\n");
     }
 
     /// A table's stand-in until tables land (M2): a term list, a row per

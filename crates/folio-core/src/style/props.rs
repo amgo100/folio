@@ -46,7 +46,7 @@ impl GroupId {
     pub const SLIDES: Self = Self(10);
     /// `export-name`, `export-as`, `docx-*`, `pptx-*`.
     pub const EXPORT: Self = Self(11);
-    /// `math-style`, `decimal-marker`.
+    /// `math-font`, `math-style`, `decimal-marker`.
     pub const MATH: Self = Self(12);
 
     /// The number of built-in groups.
@@ -273,7 +273,6 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
         "placement" | "side" | "float-order" | "wrap" | "wrap-gap" | "wrap-shape" => {
             "placing floats and notes other than in the flow"
         }
-        "math-style" | "decimal-marker" => "math layout",
         _ => return None,
     })
 }
@@ -647,6 +646,16 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     // section or the whole document can set them.
     group = GroupId::MATH;
     let mut prop = |name: &str, ty, initial, effect| add(name, ty, initial, effect, group, true);
+    // The families formulas are set in (SPEC §8.2), the first available
+    // first; New Computer Modern Math, which is bundled, by default.
+    prop(
+        "math-font",
+        list(Str),
+        Value::Array(EcoVec::from([Value::Str(
+            "New Computer Modern Math".into(),
+        )])),
+        Layout,
+    );
     // How a vector is set: `math.vector { math-style: bold-upright; }`.
     // `auto` is bold upright; `arrow` an italic letter under an arrow. A
     // unit vector takes its vector's style with a hat in place of the

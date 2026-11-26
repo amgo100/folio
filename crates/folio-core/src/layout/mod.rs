@@ -67,6 +67,7 @@ mod cache;
 mod flow;
 pub mod linebreak;
 mod master;
+mod math;
 mod page;
 mod paragraph;
 mod set;
@@ -83,13 +84,16 @@ use folio_syntax::{DiagSpan, SubRange};
 pub use self::cache::{Cache, Stats};
 pub use self::flow::{KEEP, UNBREAKABLE, WIDOW};
 pub use self::master::{BlockBox, BreakBefore, PageMaster, Sides};
+use self::math::maths;
+pub use self::math::{Display, LaidMath, MATH_FONT, Maths, Number};
+pub(crate) use self::math::{math_face, math_settings};
 pub use self::page::{
     FILL, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject, pages,
     paginate,
 };
 pub use self::paragraph::{
-    Align, Line, LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle,
-    SegmentMetrics, layout_paragraph, object_offsets,
+    Align, Line, LineSlot, ObjectBreak, ObjectMetrics, ParagraphInput, ParagraphLayout,
+    ParagraphStyle, SegmentMetrics, layout_paragraph, object_offsets,
 };
 
 /// The objects the [`Regions::object`] hook sizes, here so that the test
@@ -123,6 +127,10 @@ pub struct Lines {
     /// whose content it is, and where that starts from the left of the
     /// body. A line's `x` is relative to its slot.
     pub slots: EcoVec<LineSlot>,
+    /// The build's formulas laid out ([`Maths`]): the paragraphs were
+    /// broken with their inline formulas' sizes, and the page builder
+    /// draws them and sizes the blocks of displays.
+    pub maths: Maths,
 }
 
 /// The paragraphs of a build broken into lines of the body's width, or
@@ -134,10 +142,12 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let styled = step_styled(db, build)?;
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
+    let maths = maths(db, build).unwrap_or_default();
 
     let width = PageMaster::of(&styled.page, props).body.size.width;
-    let slots: EcoVec<LineSlot> =
-        flow::slots(&text.root, props, width, text.paragraphs.len()).into();
+    let (slots, display_widths) =
+        flow::slots(&text.root, props, width, text.paragraphs.len(), &text.maths);
+    let slots: EcoVec<LineSlot> = slots.into();
     // The paragraph builder places lines relative to their slots.
     let widths: Vec<[LineSlot; 1]> = slots
         .iter()
@@ -152,7 +162,11 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let inputs: Vec<ParagraphInput<'_>> = text
         .paragraphs
         .iter()
-        .map(|p| input_with(p, props, &mut metrics))
+        .map(|p| {
+            let mut input = input_with(p, props, &mut metrics);
+            input.objects = maths.metrics(&p.objects);
+            input
+        })
         .collect();
     let jobs: Vec<(ParagraphInput<'_>, &[LineSlot])> = inputs
         .into_iter()
@@ -169,10 +183,32 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     for (paragraph, layout) in text.paragraphs.iter().zip(&paragraphs) {
         report_lines(db, build.project(db), paragraph, layout);
     }
+    // A display wider than its block is an overfull line (SPEC §7.9).
+    for (i, content) in display_widths {
+        let Some(display) = maths.display(i) else {
+            continue;
+        };
+        let overflow = math::display_overflow(display, content);
+        if overflow.to_pt() > 0.1 {
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    text.maths[i].span,
+                    eco_format!(
+                        "this display is overfull: {:.1}pt wider than its space",
+                        overflow.to_pt()
+                    ),
+                )
+                .with_code(codes::OVERFULL_LINE)
+                .with_hint("break it into lines with `\\`, or align its lines at `&`"),
+            );
+        }
+    }
     Some(Lines {
         width,
         paragraphs,
         slots,
+        maths,
     })
 }
 

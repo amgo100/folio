@@ -67,6 +67,25 @@ pub struct ObjectMetrics {
     /// How far its baseline is raised above the line's (negative lowers
     /// it).
     pub shift: Abs,
+    /// Where the object and the next are chunks of one inline formula
+    /// (SPEC §8.2): what breaking the line between them costs, and the
+    /// space at the end of this chunk that a line ending there drops.
+    /// Without it, a line breaks around the object as its text allows.
+    pub after: Option<ObjectBreak>,
+    /// Whether it binds to the text it touches, as a word does: a line
+    /// breaks before or after it only at a space, or after a dash before
+    /// it. Inline maths binds; an object without a size does not.
+    pub binds: bool,
+}
+
+/// A place where a line may break between two chunks of an inline formula.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub struct ObjectBreak {
+    /// The cost of the break: TeX's `\relpenalty` after a relation,
+    /// `\binoppenalty` after a binary operator.
+    pub penalty: i32,
+    /// The space at the end of the chunk before it.
+    pub space: Abs,
 }
 
 impl ObjectMetrics {
@@ -356,6 +375,63 @@ impl Prepared {
                 protrude_end,
                 protrude_start,
             });
+        }
+
+        // An object that binds to the text it touches keeps it on its line.
+        let len_obj = folio_text::OBJECT.len_utf8();
+        candidates.retain(|c| {
+            let o = c.offset;
+            if c.kind != BreakKind::Normal || o >= len {
+                return true;
+            }
+            let after_object = offsets
+                .binary_search(&(o - len_obj.min(o)))
+                .ok()
+                .and_then(|i| input.objects.get(i))
+                .is_some_and(|m| m.binds);
+            let before_object = offsets
+                .binary_search(&o)
+                .ok()
+                .and_then(|i| input.objects.get(i))
+                .is_some_and(|m| m.binds);
+            let prev = text[..o].chars().next_back();
+            let next = text[o..].chars().next();
+            let spaced_after = next.is_some_and(char::is_whitespace);
+            let spaced_before = prev.is_some_and(|c| c.is_whitespace() || is_dash(c));
+            !(after_object && !spaced_after || before_object && !spaced_before)
+        });
+
+        // Between the chunks of an inline formula a line breaks where math
+        // layout allows, at its cost, and drops the space the chunk before
+        // ends with (SPEC §8.2).
+        for (i, &at) in offsets.iter().enumerate() {
+            let Some(after) = input.objects.get(i).and_then(|m| m.after) else {
+                continue;
+            };
+            let offset = at + folio_text::OBJECT.len_utf8();
+            if offset >= len {
+                continue;
+            }
+            let space = after.space.to_pt();
+            let mut end = totals[offset];
+            end.width -= space;
+            let candidate = Candidate {
+                offset,
+                kind: BreakKind::Normal,
+                penalty: f64::from(after.penalty),
+                flagged: false,
+                content_end: offset,
+                end,
+                start: totals[offset],
+                end_extra: 0.0,
+                start_extra: 0.0,
+                protrude_end: 0.0,
+                protrude_start: 0.0,
+            };
+            match candidates.binary_search_by_key(&offset, |c| c.offset) {
+                Ok(i) => candidates[i] = candidate,
+                Err(i) => candidates.insert(i, candidate),
+            }
         }
 
         Self {

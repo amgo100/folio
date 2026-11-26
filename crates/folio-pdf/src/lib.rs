@@ -344,7 +344,8 @@ pub struct Tag {
     /// [`Location::UNKNOWN_INSTANCE`] matches a box of any instance.
     pub instance: u32,
     /// The node's text where the writer needs it whole: a heading's, for
-    /// its structure element's title and its bookmark.
+    /// its structure element's title and its bookmark; a formula's
+    /// source, for its alternate description.
     pub text: Option<EcoString>,
     /// The nodes it holds, in document order.
     pub children: Vec<Tag>,
@@ -392,6 +393,10 @@ pub enum Role {
     Note,
     /// A block of code (`Code`).
     Code,
+    /// A formula, inline or a display (`Formula`), with its
+    /// [`Tag::text`] as its alternate description, which PDF/UA-1 asks
+    /// for (§7.7).
+    Formula,
     /// Anything else (`Div`): an element without a standard meaning, such
     /// as most components' elements.
     Group,

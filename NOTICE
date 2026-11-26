@@ -21,7 +21,14 @@ from another release.
   `typst-utils` v0.15.1. The stylesheet modules `src/parser/style.rs` and
   `src/ast/style.rs` are Folio's own. Typst's `package.rs` and `path.rs` were
   not imported.
-* `crates/folio-math`: adapted from Typst's math layout (planned for M1).
+* `crates/folio-math`: its layout module, `src/layout/`, is adapted from
+  Typst's math layout, imported from v0.15.1: the files of
+  `crates/typst-layout/src/math/` (fragments and glyph stretching, scripts,
+  fractions, radicals, fenced delimiters, accents and lines, tables and
+  runs) and the classes, spacing and style rules of
+  `crates/typst-library/src/math/ir/` (`process.rs`, `resolve.rs`), adapted
+  to Folio's math tree. `alphabet.rs` is Folio's own; the rest of the crate
+  (the tree, the symbols and the LaTeX reader) is Folio's own too.
 
 The upstream NOTICE file, which these derived works must carry, is reproduced
 in third_party/typst/NOTICE. Both files are taken from Typst v0.15.1.

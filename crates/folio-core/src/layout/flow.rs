@@ -40,14 +40,17 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::EcoVec;
-use folio_component::{Abs, Color, Em, Location, Paint, Size, SourceRef, Value};
+use folio_component::{
+    Abs, Color, Em, FragmentItem, Location, Paint, Point, Size, SourceRef, Value,
+};
 
 use crate::span_map::source_ref;
 use folio_syntax::Span;
 use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
-use super::master::{BlockBox, BreakBefore};
+use super::master::{BlockBox, BreakBefore, length};
+use super::math::{Display, Maths, display_content};
 use super::page::{SizeBlock, SizeObject};
 use super::paragraph::{
     LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
@@ -68,36 +71,61 @@ pub const KEEP: f64 = 10_000.0;
 pub const UNBREAKABLE: f64 = 100_000.0;
 
 /// The width and offset of every paragraph's lines: the content width of
-/// the block whose content it is, from the left of the body.
+/// the block whose content it is, from the left of the body; and the
+/// content width of the block of each display, by its index in
+/// [`Text::maths`](crate::text::Text::maths). One walk of the blocks gives
+/// both.
 pub(super) fn slots(
     root: &TextBlock,
     props: &Properties,
     width: Abs,
     count: usize,
-) -> Vec<LineSlot> {
-    fn walk(block: &TextBlock, boxed: &BlockBox, props: &Properties, out: &mut [LineSlot]) {
+    maths: &[crate::text::TextMath],
+) -> (Vec<LineSlot>, Vec<(usize, Abs)>) {
+    struct Walk<'a> {
+        props: &'a Properties,
+        displays: HashMap<Location, usize>,
+        slots: Vec<LineSlot>,
+        widths: Vec<(usize, Abs)>,
+    }
+    fn walk(block: &TextBlock, boxed: &BlockBox, w: &mut Walk<'_>) {
         let (offset, width) = boxed.content();
+        if block.part.is_none()
+            && let Some(&i) = w.displays.get(&block.location)
+        {
+            w.widths.push((i, width));
+        }
         for child in &block.children {
             match child {
                 TextFlow::Paragraph(i) => {
-                    if let Some(slot) = out.get_mut(*i) {
+                    if let Some(slot) = w.slots.get_mut(*i) {
                         *slot = LineSlot { offset, width };
                     }
                 }
-                TextFlow::Block(b) => walk(b, &boxed.child(&b.style, props, b.span), props, out),
+                TextFlow::Block(b) => walk(b, &boxed.child(&b.style, w.props, b.span), w),
             }
         }
     }
-    let mut out = vec![
-        LineSlot {
-            offset: Abs::zero(),
-            width,
-        };
-        count
-    ];
+    let mut w = Walk {
+        props,
+        displays: maths
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.display)
+            .map(|(i, m)| (m.location, i))
+            .collect(),
+        slots: vec![
+            LineSlot {
+                offset: Abs::zero(),
+                width,
+            };
+            count
+        ],
+        widths: Vec::new(),
+    };
     let root_box = BlockBox::of(&root.style, props, root.span, Abs::zero(), width);
-    walk(root, &root_box, props, &mut out);
-    out
+    walk(root, &root_box, &mut w);
+    (w.slots, w.widths)
 }
 
 /// A paragraph broken into lines, with what breaking it at another width
@@ -131,6 +159,10 @@ pub(super) struct ParagraphInfo {
     /// Its objects, in the order of the text, when any has a size; else
     /// none, and its objects are drawn as nothing.
     pub objects: EcoVec<InlineObject>,
+    /// Whether the test hook of [`Regions::object`](super::Regions::object)
+    /// sized its objects, so that its lines are not those [`lines`](super::lines)
+    /// broke.
+    pub hooked: bool,
 }
 
 /// An object of a paragraph: where it is, the element instance it stands
@@ -143,6 +175,9 @@ pub(super) struct InlineObject {
     pub location: Location,
     /// Its size; `None` for an object whose content is not laid out yet.
     pub metrics: Option<ObjectMetrics>,
+    /// What it draws, from the start of its baseline: a chunk of an inline
+    /// formula. `None` for an object drawn as its box.
+    pub content: Option<EcoVec<(Point, FragmentItem)>>,
 }
 
 /// The sizes of a paragraph's objects as the paragraph builder reads them:
@@ -163,6 +198,43 @@ pub(super) struct BlockObject {
     pub size: Size,
     /// The element instance it is the content of.
     pub location: Location,
+    /// What it draws, from its top-left corner: a display. `None` for a
+    /// box drawn as such.
+    pub content: Option<EcoVec<(Point, FragmentItem)>>,
+    /// The baselines of its first and last lines, from its top; `None` for
+    /// a box, whose baseline is its bottom.
+    pub baselines: Option<(Abs, Abs)>,
+    /// For a display, what lays it out again in a region of another width.
+    pub display: Option<DisplayAt>,
+}
+
+/// A display as a block object: the display, its font size, and the width
+/// of the content of its block in a region of the body's width.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct DisplayAt {
+    pub display: Arc<Display>,
+    pub size: Abs,
+    pub width: Abs,
+}
+
+impl BlockObject {
+    /// The object in a region `width` wide, for one laid out for the
+    /// body's width `body`: a display is centred, and its numbers placed,
+    /// in its block's content at that width.
+    pub(super) fn at_width(object: &Arc<Self>, body: Abs, width: Abs) -> Arc<Self> {
+        match &object.display {
+            Some(at) if width != body => {
+                let content = display_content(&at.display, at.width + (width - body), at.size);
+                Arc::new(Self {
+                    size: content.size,
+                    content: Some(content.items),
+                    baselines: Some(content.baselines),
+                    ..(**object).clone()
+                })
+            }
+            _ => object.clone(),
+        }
+    }
 }
 
 /// How a segment of a paragraph is set.
@@ -518,8 +590,16 @@ impl Flow {
         sizes: Sizes<'_>,
     ) -> Self {
         let Caches { cache, shared, now } = caches;
+        let displays = text
+            .maths
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.display)
+            .map(|(i, m)| (m.location, i))
+            .collect();
         let mut builder = Builder {
             sizes,
+            displays,
             text,
             cache,
             shared,
@@ -726,16 +806,22 @@ enum Event {
 
 /// Test hooks that size objects (SPEC §7.2): until maths and images are
 /// laid out, nothing else does.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone)]
 pub(super) struct Sizes<'a> {
     /// The size of an inline object, by the element it stands for.
     pub inline: Option<&'a SizeObject<'a>>,
     /// The size of the content of a block that holds no paragraphs.
     pub block: Option<&'a SizeBlock<'a>>,
+    /// The build's formulas laid out, which size inline formulas and
+    /// displays where the hooks do not.
+    pub maths: &'a Maths,
 }
 
 struct Builder<'a> {
     sizes: Sizes<'a>,
+    /// The displays of the build, by the location of their element, as
+    /// indices into [`Text::maths`].
+    displays: HashMap<Location, usize>,
     text: &'a Text,
     cache: &'a Cache,
     shared: &'a Shared,
@@ -777,13 +863,43 @@ impl Builder<'_> {
                 Some(size) => Leaf::Box(Arc::new(BlockObject {
                     size,
                     location: block.location,
+                    content: None,
+                    baselines: None,
+                    display: None,
                 })),
-                None => Leaf::Empty,
+                None => match self.display(block, &boxed) {
+                    Some(object) => Leaf::Box(Arc::new(object)),
+                    None => Leaf::Empty,
+                },
             };
             self.leaf(leaf, Origin::Empty);
         }
         self.stack.pop();
         self.pending.push(Event::Close(boxed));
+    }
+
+    /// The content of the block of a display, as wide as the block's
+    /// content box.
+    fn display(&self, block: &TextBlock, boxed: &BlockBox) -> Option<BlockObject> {
+        if block.part.is_some() {
+            return None;
+        }
+        let index = *self.displays.get(&block.location)?;
+        let display = self.sizes.maths.display(index)?;
+        let size = length(&block.style, self.props, "font-size");
+        let width = boxed.content().1;
+        let content = display_content(display, width, size);
+        Some(BlockObject {
+            size: content.size,
+            location: block.location,
+            content: Some(content.items),
+            baselines: Some(content.baselines),
+            display: Some(DisplayAt {
+                display: display.clone(),
+                size,
+                width,
+            }),
+        })
     }
 
     fn paragraph(&mut self, index: usize) {
@@ -796,20 +912,32 @@ impl Builder<'_> {
         let mut input = input_with(paragraph, self.props, &mut self.metrics);
         let style = paragraph_style(&paragraph.style, self.props);
         let mut objects: EcoVec<InlineObject> = EcoVec::new();
-        if let Some(size) = self.sizes.inline
-            && paragraph.objects.iter().any(|o| size(o).is_some())
-        {
+        let maths = self.sizes.maths;
+        let hooked = self
+            .sizes
+            .inline
+            .is_some_and(|size| paragraph.objects.iter().any(|o| size(o).is_some()));
+        if hooked || paragraph.objects.iter().any(|o| o.math.is_some()) {
             objects = paragraph
                 .objects
                 .iter()
-                .map(|o| InlineObject {
-                    at: o.at,
-                    location: o.location,
-                    metrics: size(o),
+                .map(|o| {
+                    let hook = self.sizes.inline.and_then(|size| size(o));
+                    let math = maths.object(o);
+                    InlineObject {
+                        at: o.at,
+                        location: o.location,
+                        metrics: hook.or(math.as_ref().map(|(m, _)| *m)),
+                        content: if hook.is_some() {
+                            None
+                        } else {
+                            math.map(|(_, items)| items.clone())
+                        },
+                    }
                 })
                 .collect();
         }
-        let layout = if objects.is_empty() {
+        let layout = if !hooked {
             layout
         } else {
             // Sized objects change the breaks the paragraph had without.
@@ -855,6 +983,7 @@ impl Builder<'_> {
                 sources: paragraph.sources.clone(),
                 span: paragraph.span,
                 objects,
+                hooked,
             },
             self.now,
         );
