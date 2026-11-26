@@ -76,7 +76,8 @@ pub(crate) struct Last {
     /// output.
     pub output: Option<Bytes>,
     /// Whether its last check said that compiling it writes a file, as
-    /// [`Checked::writes`](crate::Checked::writes); `None` before a check.
+    /// [`Checked::writes`](crate::Checked::writes), or its last compilation
+    /// wrote one; `None` before either.
     pub writes: Option<bool>,
 }
 

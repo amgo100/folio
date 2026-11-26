@@ -53,8 +53,7 @@ fn document() -> String {
 
 /// Starts compiling `source` in a fresh world on another thread; once
 /// `query` has run for `delay`, edits the world and returns how long the
-/// edit waited for the compilation to stop, and the time the compilation
-/// took when it was not cancelled.
+/// edit waited for the compilation to stop.
 fn wait(source: &str, query: &str, delay: Duration) -> Duration {
     let (started_tx, started_rx) = mpsc::channel();
     let started_tx = Mutex::new(started_tx);
@@ -98,7 +97,8 @@ fn stages(source: &str) -> Vec<(&'static str, Duration, Duration)> {
         f();
         start.elapsed()
     };
-    time(&|| drop(folio::styles(&world, Target::Pdf, None).unwrap().unwrap()));
+    // Evaluation and styling run inside `text`, before its own work.
+    let styles = time(&|| drop(folio::styles(&world, Target::Pdf, None).unwrap().unwrap()));
     let text = time(&|| drop(folio::text(&world, Target::Pdf, None).unwrap().unwrap()));
     let lines = time(&|| drop(folio::lines(&world, Target::Pdf, None).unwrap().unwrap()));
     let pages = time(&|| drop(folio::pages(&world, Target::Pdf, None).unwrap().unwrap()));
@@ -107,9 +107,10 @@ fn stages(source: &str) -> Vec<(&'static str, Duration, Duration)> {
         assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
     });
     vec![
-        ("text", text, text / 2),
-        ("lines", lines, text + lines / 2),
-        ("pages", pages, text + lines + pages / 2),
+        ("text", text, styles + text / 2),
+        ("lines", lines, styles + text + lines / 2),
+        ("pages", pages, styles + text + lines + pages / 2),
+        // The checks run before `emit` does, and take little of its time.
         ("emit", emit, emit / 2),
     ]
 }

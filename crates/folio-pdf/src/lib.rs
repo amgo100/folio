@@ -259,6 +259,16 @@ pub struct Preflight {
 /// a document it expects to pass is still found, by writing it under the
 /// validator, and costs a second writing.
 pub fn preflight(document: &Document<'_>) -> Preflight {
+    preflight_with(document, &mut || {})
+}
+
+/// Checks a document as [`preflight()`] does, calling `check` before each
+/// page it walks.
+///
+/// `check` may unwind, as a database query that its revision has
+/// cancelled does (SPEC §2.3), to stop checking a document that an edit
+/// has made stale.
+pub fn preflight_with(document: &Document<'_>, check: &mut dyn FnMut()) -> Preflight {
     // The tagger needs the ids of marked content, which only a surface
     // gives: they come from one page of a document that is never written.
     let settings = SerializeSettings {
@@ -273,6 +283,7 @@ pub fn preflight(document: &Document<'_>) -> Preflight {
         let mut kpage = scratch.start_page_with(PageSettings::new(size));
         let mut surface = kpage.surface();
         for (index, page) in document.pages.iter().enumerate() {
+            check();
             writer.tagger.start_page(index);
             writer.page(&mut surface, page);
         }

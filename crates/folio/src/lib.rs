@@ -110,6 +110,7 @@ pub fn compile(
                 if compiled.output.is_some() {
                     last.output = compiled.output.clone();
                 }
+                last.writes = Some(compiled.output.is_some());
             });
             Ok(compiled)
         }
@@ -546,7 +547,9 @@ fn panic_message(payload: &(dyn Any + Send)) -> EcoString {
 /// that its last compilation or check that did not panic read, and then
 /// every other source and file of the world, since the build that panicked
 /// may have read more (SPEC §12.2). The kind of a file that the build is
-/// not known to have read is told by its extension.
+/// not known to have read is told by its extension. A file that the build
+/// that panicked named but the world lacks is not listed: a watcher that
+/// needs it watches the project's directory.
 fn watched(
     world: &World,
     mut sources: EcoVec<ProjectPath>,
