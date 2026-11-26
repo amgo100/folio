@@ -22,9 +22,12 @@ folio-pdf = { path = "crates/folio-pdf" }
 folio-render = { path = "crates/folio-render" }
 folio-testkit = { path = "crates/folio-testkit" }
 folio = { path = "crates/folio" }
+folio-lsp = { path = "crates/folio-lsp" }
 # The command line (SPEC §12.1).
 clap = { version = "4.6.10", features = ["derive"] }
 codespan-reporting = "0.13.1"
+# The language server's channels, shared with `lsp-server` (SPEC §12.3).
+crossbeam-channel = "0.5.15"
 ecow = "0.2.6"
 # Verifies the signatures of compiler releases (SPEC §14.3). No default
 # features: verification needs neither key generation nor zeroising.
@@ -47,6 +50,10 @@ indexmap = "2.14.2"
 # The scripting layer's `calc` functions: a portable maths library, so that
 # they give the same bits on every platform (SPEC §2.4).
 libm = "0.2.16"
+# The language server (SPEC §12.3): the protocol's transport and types,
+# synchronous, without an async runtime.
+lsp-server = "0.10.0"
+lsp-types = "0.97.0"
 # PDF output (SPEC §11.1): tagging, PDF/UA, PDF/A and font subsetting. No
 # default features: Folio shapes text itself and has no images yet.
 krilla = { version = "0.8.2", default-features = false }

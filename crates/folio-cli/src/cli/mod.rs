@@ -1,10 +1,11 @@
 //! The commands of SPEC §12.1 and their arguments. `folio build`, `folio
-//! check` and `folio toolchain install` are implemented; the other
+//! check`, `folio lsp` and `folio toolchain install` are implemented; the other
 //! commands, and the flags of `folio build` and `folio check` for later
 //! features, are parsed and rejected as not yet supported.
 
 mod build;
 mod check;
+mod lsp;
 mod project;
 mod toolchain;
 
@@ -54,6 +55,8 @@ enum Command {
     Query(Later),
     /// List the available components (not yet supported)
     Components(Later),
+    /// Run the language server over standard input and output
+    Lsp(lsp::LspArgs),
     /// Manage the compiler versions that projects pin
     Toolchain(toolchain::ToolchainArgs),
 }
@@ -62,7 +65,7 @@ impl Command {
     /// The command's name, for a command that is not supported yet.
     fn later(&self) -> Option<&'static str> {
         Some(match self {
-            Self::Build(_) | Self::Check(_) | Self::Toolchain(_) => return None,
+            Self::Build(_) | Self::Check(_) | Self::Lsp(_) | Self::Toolchain(_) => return None,
             Self::New(_) => "new",
             Self::Watch(_) => "watch",
             Self::Present(_) => "present",
@@ -264,6 +267,7 @@ pub(crate) fn run() -> ExitCode {
     match cli.command {
         Command::Build(args) => build::build(&args.project),
         Command::Check(args) => check::check(&args.project),
+        Command::Lsp(args) => lsp::lsp(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         _ => unreachable!("every other command is rejected above"),
     }
