@@ -283,7 +283,7 @@ impl ParagraphInfo {
                 .iter()
                 .map(|o| match &o.image {
                     Some(image) => {
-                        let laid = laid_image(image, o.location, slot.width);
+                        let laid = laid_image(image, o.location, slot.width, self.indent);
                         InlineObject {
                             metrics: Some(laid.metrics),
                             content: Some(laid.items),

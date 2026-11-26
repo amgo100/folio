@@ -149,8 +149,14 @@ fn webp_rgba(bytes: &[u8]) -> Option<Rgba> {
 fn gif_rgba(bytes: &[u8]) -> Option<Rgba> {
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
+    options.set_memory_limit(gif::MemoryLimit::Bytes(
+        std::num::NonZeroU64::new(MAX_PIXELS * 4).expect("not zero"),
+    ));
     let mut decoder = options.read_info(std::io::Cursor::new(bytes)).ok()?;
     let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
+    if !fits(width, height) {
+        return None;
+    }
     let frame = decoder.read_next_frame().ok()??;
     // The first frame, on a transparent canvas of the image's size.
     let mut data = vec![0; width as usize * height as usize * 4];
@@ -307,7 +313,17 @@ fn svg_options() -> usvg::Options<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::base64;
+    use super::{base64, gif_rgba};
+
+    /// A GIF whose screen is 65535 × 65535 is not decoded, rather than
+    /// sizing an allocation of 17 GB.
+    #[test]
+    fn a_huge_gif_screen_is_refused() {
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00]);
+        gif.extend_from_slice(b",\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0;");
+        assert!(gif_rgba(&gif).is_none());
+    }
 
     #[test]
     fn base64_pads() {

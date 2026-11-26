@@ -47,6 +47,10 @@ pub fn load_image(db: &dyn Db, file: DataFile) -> Result<LoadedImage, EcoString>
 /// more memory than the machine has.
 pub const MAX_PIXELS: u64 = 8_192 * 8_192;
 
+/// The longest side of an image's natural size, in points: the most any
+/// length may be (SPEC §5.1), so that layout and the PDF stay in range.
+pub const MAX_SIDE: f64 = 1_000_000.0;
+
 /// The image in a file's bytes, as [`load_image`] reads it. A raster image
 /// is decoded once here, so that a file the PDF writer and the renderer
 /// could not decode is reported by every build, `folio check` included.
@@ -97,6 +101,12 @@ pub fn read_image(bytes: Arc<[u8]>) -> Result<LoadedImage, EcoString> {
     };
     if !(width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite()) {
         return Err(broken(&"it has no size"));
+    }
+    if width > MAX_SIDE || height > MAX_SIDE {
+        return Err(eco_format!(
+            "this {} image is too large: {width:.0} × {height:.0} pt, more than the {MAX_SIDE:.0} pt Folio lays out",
+            format.name()
+        ));
     }
     Ok(LoadedImage {
         image: Image::new(bytes, format),
@@ -169,6 +179,9 @@ fn decodes(format: ImageFormat, bytes: &[u8]) -> Result<(), String> {
         ImageFormat::Gif => {
             let mut options = gif::DecodeOptions::new();
             options.set_color_output(gif::ColorOutput::RGBA);
+            options.set_memory_limit(gif::MemoryLimit::Bytes(
+                std::num::NonZeroU64::new(MAX_PIXELS * 4).expect("not zero"),
+            ));
             let mut decoder = options
                 .read_info(Cursor::new(bytes))
                 .map_err(|e| e.to_string())?;

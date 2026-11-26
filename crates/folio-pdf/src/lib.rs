@@ -55,8 +55,8 @@ use std::sync::Arc;
 
 use ecow::EcoString;
 use folio_component::{
-    Abs, FillRule, FontId, Fragment, FragmentItem, GlyphRun, ImageBox, ImageFormat, LineCap,
-    LineJoin, Location, Paint, PathItem, Point, Shape, SourceRef,
+    Abs, FillRule, FontId, Fragment, FragmentItem, GlyphRun, ImageBox, LineCap, LineJoin, Location,
+    Paint, PathItem, Point, Shape, SourceRef,
 };
 use folio_fonts::Font;
 use krilla::annotation::{Annotation, LinkAnnotation, Target};
@@ -503,6 +503,9 @@ pub fn preflight_with(document: &Document<'_>, check: &mut dyn FnMut()) -> Prefl
     };
     let mut scratch = krilla::Document::new_with(settings);
     let mut writer = Writer::new(document, true);
+    // PDF figures are prepared as the file is expected to be written: a
+    // title lets it claim PDF/UA-1, which converts them.
+    writer.ua = document.info.title.is_some();
     {
         let size = Size::from_wh(1.0, 1.0).expect("a page of one point is valid");
         let mut kpage = scratch.start_page_with(PageSettings::new(size));
@@ -857,8 +860,8 @@ struct Writer<'a> {
     /// Whether the file claims PDF/UA-1, which does not allow PDF figures
     /// to be embedded as they are.
     ua: bool,
-    /// Each image prepared, by its content and format.
-    images: HashMap<(u64, ImageFormat), Result<image::Drawable, EcoString>>,
+    /// Each image prepared, with the warning drawing it gives.
+    images: HashMap<folio_component::Image, image::Prepared>,
 }
 
 /// The links of a document as the pages draw them: which link each run of
@@ -1244,30 +1247,33 @@ impl Writer<'_> {
     fn image(&mut self, surface: &mut Surface<'_>, image: &ImageBox, at: Point, node: usize) {
         self.tagger.advance();
         let id = surface.start_tagged(ContentTag::Other);
-        if self.dry.is_none() {
-            let key = (image.image.content_hash(), image.image.format());
-            let embed = !self.ua;
-            let prepared = self
-                .images
-                .entry(key)
-                .or_insert_with(|| image::prepare(&image.image, embed))
-                .clone();
-            match prepared {
-                Ok(drawable) => {
-                    if let Some(size) = Size::from_wh(pt(image.size.width), pt(image.size.height)) {
-                        image::draw(surface, &drawable, pt(at.x), pt(at.y), size);
-                    }
+        // The check prepares images too, so that it foresees their
+        // warnings; it expects the claim of PDF/UA-1 a title allows.
+        let embed = !self.ua;
+        let prepared = self
+            .images
+            .entry(image.image.clone())
+            .or_insert_with(|| image::prepare(&image.image, embed))
+            .clone();
+        let warning = match prepared {
+            Ok((drawable, note)) => {
+                if self.dry.is_none()
+                    && let Some(size) = Size::from_wh(pt(image.size.width), pt(image.size.height))
+                {
+                    image::draw(surface, &drawable, pt(at.x), pt(at.y), size);
                 }
-                Err(message) => {
-                    let warning = Warning {
-                        source: image.location.source,
-                        message: eco(format!("{message}, so it is left out")),
-                        hint: None,
-                    };
-                    if !self.warnings.contains(&warning) {
-                        self.warnings.push(warning);
-                    }
-                }
+                note.map(|message| (message, None))
+            }
+            Err(message) => Some((eco(format!("{message}, so it is left out")), None)),
+        };
+        if let Some((message, hint)) = warning {
+            let warning = Warning {
+                source: image.location.source,
+                message,
+                hint,
+            };
+            if !self.warnings.contains(&warning) {
+                self.warnings.push(warning);
             }
         }
         surface.end_tagged();

@@ -26,6 +26,10 @@ pub(crate) enum Drawable {
     Pdf(PdfDocument),
 }
 
+/// An image prepared, with the warning drawing it gives, or why it cannot
+/// be drawn.
+pub(crate) type Prepared = Result<(Drawable, Option<EcoString>), EcoString>;
+
 /// Bytes shared with krilla and hayro, which take an `Arc` of something
 /// sized.
 struct Shared(Arc<[u8]>);
@@ -43,8 +47,10 @@ fn data(image: &Image) -> Data {
 
 /// The image ready to draw, or why it cannot be: a file broken in a way
 /// that reading its size did not show. `embed` says whether a PDF figure
-/// may be embedded as it is; else it is converted to vector paths.
-pub(crate) fn prepare(image: &Image, embed: bool) -> Result<Drawable, EcoString> {
+/// may be embedded as it is; else it is converted to vector paths. A PDF
+/// figure of a version newer than the output's (PDF 1.7) is converted too,
+/// with a warning, the second value (SPEC §11.1).
+pub(crate) fn prepare(image: &Image, embed: bool) -> Prepared {
     let broken = |why: &dyn std::fmt::Display| -> EcoString {
         eco_format!(
             "this {} image cannot be drawn: {why}",
@@ -61,17 +67,28 @@ pub(crate) fn prepare(image: &Image, embed: bool) -> Result<Drawable, EcoString>
         ImageFormat::Svg | ImageFormat::Pdf => None,
     };
     if let Some(raster) = raster {
-        return raster.map(Drawable::Raster).map_err(|e| broken(&e));
+        return raster
+            .map(|r| (Drawable::Raster(r), None))
+            .map_err(|e| broken(&e));
     }
     if image.format() == ImageFormat::Svg {
-        return svg(image.bytes()).map_err(|e| broken(&e));
+        return svg(image.bytes())
+            .map(|d| (d, None))
+            .map_err(|e| broken(&e));
     }
     let pdf = Pdf::new(Arc::new(Shared(image.bytes().clone())))
         .map_err(|e| broken(&format_args!("{e:?}")))?;
     let pdf = Arc::new(pdf);
-    if embed {
-        return Ok(Drawable::Pdf(PdfDocument::new(pdf)));
+    let newer = pdf.version() > hayro_svg::hayro_syntax::PdfVersion::Pdf17;
+    if embed && !newer {
+        return Ok((Drawable::Pdf(PdfDocument::new(pdf)), None));
     }
+    let note = (embed && newer).then(|| {
+        EcoString::from(
+            "this PDF image is of a newer PDF version than the output (1.7), \
+             so it is converted to vector paths and its text to outlines",
+        )
+    });
     let Some(page) = pdf.pages().first() else {
         return Err(broken(&"it has no pages"));
     };
@@ -81,7 +98,9 @@ pub(crate) fn prepare(image: &Image, embed: bool) -> Result<Drawable, EcoString>
         &hayro_svg::hayro_interpret::InterpreterSettings::default(),
         &hayro_svg::SvgRenderSettings::default(),
     );
-    svg(converted.as_bytes()).map_err(|e| broken(&e))
+    svg(converted.as_bytes())
+        .map(|d| (d, note))
+        .map_err(|e| broken(&e))
 }
 
 /// An SVG drawing parsed. Text in it is not set: no fonts are given to

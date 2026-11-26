@@ -47,8 +47,8 @@ impl Fonts for Vec<FontBytes<'_>> {
 pub struct Outlines {
     fonts: HashMap<FontId, Option<f32>>,
     glyphs: HashMap<(FontId, u16), Option<sk::Path>>,
-    /// Each image decoded, by its content and format.
-    images: HashMap<(u64, folio_component::ImageFormat), Option<crate::image::Decoded>>,
+    /// Each image decoded, by the image, whose equality compares bytes.
+    images: HashMap<folio_component::Image, Option<crate::image::Decoded>>,
 }
 
 impl Outlines {
@@ -255,7 +255,7 @@ pub fn render(
                 let image = &item.image;
                 let decoded = outlines
                     .images
-                    .entry((image.content_hash(), image.format()))
+                    .entry(image.clone())
                     .or_insert_with(|| crate::image::decode(image));
                 if let Some(decoded) = decoded {
                     let r = item.rect;

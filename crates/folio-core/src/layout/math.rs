@@ -28,6 +28,7 @@ use super::{Cache, length};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
+use crate::image::MAX_SIDE;
 use crate::pipeline::{resolution, step_styled};
 use crate::resolve::{Resolution, Target};
 use crate::span_map::source_ref;
@@ -257,8 +258,8 @@ pub(super) fn sized(object: &TextObject) -> bool {
 /// paragraphs, which are as wide as the content of their blocks in the
 /// default master's body (SPEC §7.2): as wide as `width` asks, a length or
 /// a part of the lines' width, with the height that keeps the image's
-/// shape; with `width: auto`, at its natural size, narrowed to the lines'
-/// width where it is wider. `None` when the document could not be styled.
+/// shape; with `width: auto`, at its natural size, narrowed to the width
+/// the paragraph's first line leaves where it is wider. `None` when the document could not be styled.
 fn images(db: &dyn Db, build: Build<'_>, collected: &crate::text::Collected) -> Option<Images> {
     let mut images = HashMap::new();
     if !collected
@@ -279,13 +280,17 @@ fn images(db: &dyn Db, build: Build<'_>, collected: &crate::text::Collected) -> 
         &collected.maths,
     );
     for (paragraph, slot) in collected.paragraphs.iter().zip(&slots) {
+        if !paragraph.objects.iter().any(|o| o.image.is_some()) {
+            continue;
+        }
+        let indent = super::paragraph_style(&paragraph.style, props).indent;
         for object in &paragraph.objects {
             let Some(image) = &object.image else {
                 continue;
             };
             images.insert(
                 object.location,
-                laid_image(image, object.location, slot.width),
+                laid_image(image, object.location, slot.width, indent),
             );
         }
     }
@@ -293,9 +298,14 @@ fn images(db: &dyn Db, build: Build<'_>, collected: &crate::text::Collected) -> 
 }
 
 /// An image of the element instance at `location` sized in lines `line`
-/// wide.
-pub(super) fn laid_image(image: &TextImage, location: Location, line: Abs) -> LaidImage {
-    let size = image_size(image, line);
+/// wide, in a paragraph whose first line is indented by `indent`.
+pub(super) fn laid_image(
+    image: &TextImage,
+    location: Location,
+    line: Abs,
+    indent: Abs,
+) -> LaidImage {
+    let size = image_size(image, line, indent);
     let metrics = ObjectMetrics {
         width: size.width,
         ascent: size.height,
@@ -314,22 +324,27 @@ pub(super) fn laid_image(image: &TextImage, location: Location, line: Abs) -> La
 }
 
 /// The size of an image in lines `line` wide, as [`images`] gives it.
-pub(super) fn image_size(image: &TextImage, line: Abs) -> Size {
+/// `indent` is the indent of their paragraph's first line: `width: auto`
+/// narrows an image to the width that line leaves, so that it fits on any
+/// line. Both sides are at most [`MAX_SIDE`].
+pub(super) fn image_size(image: &TextImage, line: Abs, indent: Abs) -> Size {
+    let max = Abs::pt(MAX_SIDE);
     let natural = image.loaded.size;
     let line = line.max(Abs::zero());
     let width = match &image.width {
         Value::Length(length) => *length,
         Value::Ratio(ratio) => line * ratio.get(),
         Value::Number(number) => line * number.get(),
-        _ => natural.width.min(line),
+        _ => natural.width.min(line - indent.max(Abs::zero())),
     }
-    .max(Abs::zero());
+    .max(Abs::zero())
+    .min(max);
     let height = if natural.width > Abs::zero() {
         natural.height * (width.to_pt() / natural.width.to_pt())
     } else {
         natural.height
     };
-    Size::new(width, height)
+    Size::new(width, height.max(Abs::zero()).min(max))
 }
 
 /// The face of a `math-font` chain (SPEC §8.2): the first family the

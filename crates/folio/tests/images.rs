@@ -343,3 +343,73 @@ fn images_in_a_narrower_region() {
     );
     assert!(close(sizes[1].0, narrow / 2.0), "{sizes:?}");
 }
+
+/// A PDF figure of a newer version than the output's (PDF 2.0 in a PDF 1.7
+/// file) is converted to vector paths with a warning, rather than failing
+/// the build, and the check foresees the warning.
+#[test]
+fn a_newer_pdf_figure_is_converted() {
+    let mut world = world(false, "#image(\"new.pdf\", alt: \"A field\")\n");
+    let newer = [b"%PDF-2.0".as_slice(), &PDF[8..]].concat();
+    world.set_file("new.pdf", newer).unwrap();
+    let (pdf, diagnostics) = compile(&world);
+    let warning = diagnostics
+        .iter()
+        .find(|d| d.message.contains("newer PDF version"))
+        .unwrap_or_else(|| panic!("a warning: {diagnostics:#?}"));
+    assert_eq!(warning.severity, Severity::Warning);
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.starts_with("%PDF-1.7"));
+    let checked = folio::check(&world, Target::Pdf, None).unwrap();
+    assert!(
+        checked
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("newer PDF version")),
+        "the check foresees it"
+    );
+}
+
+/// An image whose natural size is past the longest length Folio lays out
+/// is an error at the image.
+#[test]
+fn an_image_too_large_to_lay_out() {
+    let mut world = world(true, "#image(\"huge.svg\", alt: \"h\")\n");
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="1e30"/>"#;
+    world.set_file("huge.svg", svg.to_vec()).unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(
+        compiled
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error && d.message.contains("too large")),
+        "{:#?}",
+        compiled.diagnostics
+    );
+}
+
+/// With `width: auto`, an image in a paragraph whose first line is
+/// indented is narrowed to the width that line leaves, so it never makes
+/// that line overfull.
+#[test]
+fn auto_width_leaves_room_for_the_indent() {
+    let mut world = world(true, "#image(\"wide.svg\", alt: \"w\")\n");
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500"/>"#;
+    world.set_file("wide.svg", svg.to_vec()).unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            &format!(
+                "{PAGE}doc {{ font: \"Source Serif 4\"; font-size: 10pt; }}\nparagraph {{ indent: 20pt; }}\n"
+            ),
+        )
+        .unwrap();
+    let line = 80.0 / 25.4 * 72.0;
+    let sizes = images(&world);
+    assert!((sizes[0].1 - (line - 20.0)).abs() < 0.02, "{sizes:?}");
+    let (_, diagnostics) = compile(&world);
+    assert!(
+        !diagnostics.iter().any(|d| d.message.contains("overfull")),
+        "{diagnostics:#?}"
+    );
+}
