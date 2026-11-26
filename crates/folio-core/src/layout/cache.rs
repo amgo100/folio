@@ -194,8 +194,8 @@ impl Cache {
         // The paragraphs to break, each once, with where their lines go.
         let mut misses: Vec<Job> = Vec::new();
         let mut targets: Vec<Vec<usize>> = Vec::new();
-        // The keys are made and hashed before the cache is locked, which
-        // the builds compiling in parallel share.
+        // The keys are made before the cache is locked, which the builds
+        // compiling in parallel share.
         let keys: Vec<Key> = paragraphs
             .iter()
             .map(|(input, slots)| Key::new(input, slots))
