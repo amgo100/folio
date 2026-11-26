@@ -6,7 +6,7 @@
 //! closure, makes elements with the same span. The document model gives
 //! every element of the document tree a [`Location`] instead: its span and
 //! a number that tells apart the instances made from that span, counted in
-//! the order the model builds the tree, as Typst's locator
+//! document order once the tree is built, as Typst's locator
 //! disambiguates repeated spans. An instance keeps its location across an
 //! edit that leaves its span and the instances made before it from the same
 //! span alone: inserting a paragraph elsewhere changes no other location.
@@ -60,9 +60,10 @@ pub(crate) struct Locator {
 }
 
 impl Locator {
-    /// The bits of an instance number that count; the two above them say
-    /// what made the element.
-    const COUNT: u32 = (1 << 30) - 1;
+    /// The most an instance number counts to, in the bits below the two
+    /// that say what made the element: one short of all of them, so that
+    /// none is [`Location::UNKNOWN_INSTANCE`].
+    const COUNT: u32 = (1 << 30) - 2;
 
     /// The location of the next instance that `made` makes from `span`.
     /// Elements without a span are counted from `1`, so that none of them
@@ -113,6 +114,14 @@ impl<'a> StyledChildren<'a> {
 
     /// The styled node of a child element, or `None` if it has none.
     pub fn element(&mut self, element: &Element) -> Option<&'a StyledNode> {
+        // Parts may come between the elements of the body.
+        while self
+            .nodes
+            .get(self.at)
+            .is_some_and(|node| matches!(node.name, NodeName::Part(_)))
+        {
+            self.at += 1;
+        }
         let next = self.nodes.get(self.at).is_some_and(|node| {
             node.location == element.location && matches!(node.name, NodeName::Element(_))
         });

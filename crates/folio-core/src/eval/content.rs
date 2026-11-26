@@ -120,6 +120,19 @@ impl Content {
         }
     }
 
+    /// Its elements at the top level, to change. Only their locations may
+    /// be changed, since the content caches its depth.
+    pub(crate) fn elements_mut(&mut self) -> impl Iterator<Item = &mut Element> {
+        self.changed();
+        self.nodes
+            .make_mut()
+            .iter_mut()
+            .filter_map(|node| match node {
+                Node::Element(element) => Some(element),
+                _ => None,
+            })
+    }
+
     /// The text of the content without markup, as a test or a lint reads
     /// it: text and the bodies of elements, with spaces and breaks as one
     /// space.

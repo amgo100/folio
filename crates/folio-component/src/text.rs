@@ -67,6 +67,12 @@ impl Location {
         source: SourceRef::DETACHED,
         instance: 0,
     };
+
+    /// The instance of a box whose maker knew only its node's
+    /// [`SourceRef`], not which instance of it the box is
+    /// ([`crate::Fragment::with_source`]). The core issues no location
+    /// with it.
+    pub const UNKNOWN_INSTANCE: u32 = u32::MAX;
 }
 
 /// A run of glyphs in one font, size and paint, on one baseline.

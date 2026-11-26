@@ -49,20 +49,16 @@ impl Document {
 
 /// The document tree of a variant (`None` for a project without variants),
 /// or `None` when the document could not be evaluated. Reports misplaced
-/// `#doc` calls, labels used twice and references to labels that no
-/// element has.
+/// `#doc` calls and labels used twice.
 #[salsa::tracked(returns(ref))]
 pub fn document(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<Document> {
     let content = evaluate(db, project, variant).as_ref()?;
     let entry = project.manifest(db).project.entry.v.clone();
     let span = source_file(db, project, entry)
         .map_or(Span::detached(), |file| file.source(db).root().span());
-    let mut model = Model {
-        db,
-        project,
-        locator: Locator::default(),
-    };
-    let root = model.root(content, span);
+    let mut model = Model { db, project };
+    let mut root = model.root(content, span);
+    locate(&mut Locator::default(), &mut root);
     check_labels(db, &root);
     Some(Document { root })
 }
@@ -70,9 +66,6 @@ pub fn document(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<
 struct Model<'a> {
     db: &'a dyn Db,
     project: Project,
-    /// Gives each element of the tree its location, in the order the tree
-    /// is built.
-    locator: Locator,
 }
 
 impl Model<'_> {
@@ -110,7 +103,6 @@ impl Model<'_> {
             span,
             location: Location::DETACHED,
         });
-        root.location = self.locator.locate(root.span, Made::Evaluated);
         root.fields.remove(BODY);
         let body = self.blocks(&rest);
         root.fields.insert(BODY.into(), Value::Content(body));
@@ -134,9 +126,7 @@ impl Model<'_> {
             );
         }
         let mut element = element.clone();
-        element.location = self.locator.locate(element.span, Made::Evaluated);
         let Some(schema) = schema(self.db, self.project, &element.name) else {
-            self.locate_fields(&mut element);
             return element;
         };
         match &schema.body {
@@ -226,7 +216,7 @@ impl Model<'_> {
         let mut blocks = Blocks::default();
         for node in content.nodes() {
             match node {
-                Node::Parbreak(_) => blocks.end_paragraph(&mut self.locator),
+                Node::Parbreak(_) => blocks.end_paragraph(),
                 Node::Space(_) if blocks.run.is_empty() => {}
                 Node::Rule(_) => blocks.rules.push(node.clone()),
                 Node::Slot(slot) => self.misplaced(slot),
@@ -235,52 +225,18 @@ impl Model<'_> {
                     // A float written in a paragraph's text stays there as
                     // its anchor (SPEC §7.5, §7.7).
                     let anchor = element.kind == ElementKind::Float && !blocks.run.is_empty();
-                    let locator = &mut self.locator;
                     if let Some(list) = list_of(&element.name) {
-                        blocks.item(list, element, locator);
+                        blocks.item(list, element);
                     } else if is_block(element.kind) && !anchor {
-                        blocks.block(Node::Element(element), locator);
+                        blocks.block(Node::Element(element));
                     } else {
-                        blocks.inline(Node::Element(element), locator);
+                        blocks.inline(Node::Element(element));
                     }
                 }
-                other => blocks.inline(other.clone(), &mut self.locator),
+                other => blocks.inline(other.clone()),
             }
         }
-        blocks.finish(&mut self.locator)
-    }
-
-    /// Gives the elements in the content fields of an element without a
-    /// schema their locations, which the walks of later stages pair by.
-    fn locate_fields(&mut self, element: &mut Element) {
-        let keys: Vec<_> = element
-            .fields
-            .iter()
-            .filter(|(_, value)| matches!(value, Value::Content(_)))
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in keys {
-            if let Some(Value::Content(content)) = element.fields.get(key.as_str()) {
-                let content = self.locate_content(content);
-                element.fields.insert(key, Value::Content(content));
-            }
-        }
-    }
-
-    fn locate_content(&mut self, content: &Content) -> Content {
-        content
-            .nodes()
-            .iter()
-            .map(|node| match node {
-                Node::Element(element) => {
-                    let mut element = element.clone();
-                    element.location = self.locator.locate(element.span, Made::Evaluated);
-                    self.locate_fields(&mut element);
-                    Node::Element(element)
-                }
-                other => other.clone(),
-            })
-            .collect()
+        blocks.finish()
     }
 
     fn misplaced(&mut self, slot: &crate::eval::Slot) {
@@ -313,35 +269,35 @@ struct Blocks {
 }
 
 impl Blocks {
-    fn inline(&mut self, node: Node, locator: &mut Locator) {
-        self.end_list(locator);
+    fn inline(&mut self, node: Node) {
+        self.end_list();
         if matches!(node, Node::Space(_)) && matches!(self.run.last(), Some(Node::Space(_))) {
             return;
         }
         self.run.push(node);
     }
 
-    fn block(&mut self, node: Node, locator: &mut Locator) {
-        self.end_paragraph(locator);
-        self.end_list(locator);
+    fn block(&mut self, node: Node) {
+        self.end_paragraph();
+        self.end_list();
         self.out.push(node);
     }
 
     /// Adds a list item, to the list being built if it is of the same kind:
     /// spaces and paragraph breaks between items do not end a list.
-    fn item(&mut self, list: &'static str, item: Element, locator: &mut Locator) {
-        self.end_paragraph(locator);
+    fn item(&mut self, list: &'static str, item: Element) {
+        self.end_paragraph();
         match &mut self.list {
             Some((name, items, _)) if *name == list => items.push(Node::Element(item)),
             _ => {
-                self.end_list(locator);
+                self.end_list();
                 let span = item.span;
                 self.list = Some((list, vec![Node::Element(item)], span));
             }
         }
     }
 
-    fn end_paragraph(&mut self, locator: &mut Locator) {
+    fn end_paragraph(&mut self) {
         while matches!(self.run.last(), Some(Node::Space(_))) {
             self.run.pop();
         }
@@ -354,41 +310,36 @@ impl Blocks {
             "paragraph",
             [(BODY, Value::Content(run.into_iter().collect()))],
             span,
-            locator.locate(span, Made::Paragraph),
         )));
     }
 
-    fn end_list(&mut self, locator: &mut Locator) {
+    fn end_list(&mut self) {
         if let Some((name, items, span)) = self.list.take() {
             self.out.push(Node::Element(made(
                 name,
                 [(BODY, Value::Content(items.into_iter().collect()))],
                 span,
-                locator.locate(span, Made::List),
             )));
         }
     }
 
-    fn finish(mut self, locator: &mut Locator) -> Content {
-        self.end_paragraph(locator);
-        self.end_list(locator);
+    fn finish(mut self) -> Content {
+        self.end_paragraph();
+        self.end_list();
         let mut out = self.rules;
-        out.extend(sections(self.out, locator));
+        out.extend(sections(self.out));
         out.into_iter().collect()
     }
 }
 
 /// Opens a section at each heading, holding it and the blocks after it up
-/// to the next heading of the same or a higher level. A section is located
-/// when its heading opens it, in document order.
-fn sections(blocks: Vec<Node>, locator: &mut Locator) -> Vec<Node> {
-    /// An open section: its level, content, span and location.
-    type Open = (i64, Vec<Node>, Span, Location);
+/// to the next heading of the same or a higher level.
+fn sections(blocks: Vec<Node>) -> Vec<Node> {
     let mut top = Vec::new();
-    // The open sections, outermost first.
-    let mut open: Vec<Open> = Vec::new();
-    let close = |open: &mut Vec<Open>, top: &mut Vec<Node>| {
-        let (level, content, span, location) = open.pop().expect("a section is open");
+    // The open sections, outermost first: level, content, span.
+    let mut open: Vec<(i64, Vec<Node>, Span)> = Vec::new();
+    let close = |open: &mut Vec<(i64, Vec<Node>, Span)>, top: &mut Vec<Node>| {
+        let (level, content, span) = open.pop().expect("a section is open");
         let section = Node::Element(made(
             "section",
             [
@@ -396,10 +347,9 @@ fn sections(blocks: Vec<Node>, locator: &mut Locator) -> Vec<Node> {
                 (BODY, Value::Content(content.into_iter().collect())),
             ],
             span,
-            location,
         ));
         match open.last_mut() {
-            Some((_, parent, ..)) => parent.push(section),
+            Some((_, parent, _)) => parent.push(section),
             None => top.push(section),
         }
     };
@@ -412,16 +362,15 @@ fn sections(blocks: Vec<Node>, locator: &mut Locator) -> Vec<Node> {
                 Some(Value::Int(level)) => *level,
                 _ => 1,
             };
-            while open.last().is_some_and(|(l, ..)| *l >= level) {
+            while open.last().is_some_and(|(l, _, _)| *l >= level) {
                 close(&mut open, &mut top);
             }
             let span = element.span;
-            let location = locator.locate(span, Made::Section);
-            open.push((level, vec![node], span, location));
+            open.push((level, vec![node], span));
             continue;
         }
         match open.last_mut() {
-            Some((_, content, ..)) => content.push(node),
+            Some((_, content, _)) => content.push(node),
             None => top.push(node),
         }
     }
@@ -432,20 +381,56 @@ fn sections(blocks: Vec<Node>, locator: &mut Locator) -> Vec<Node> {
 }
 
 /// An element that the document model makes: `paragraph`, `section` and
-/// the lists. Its span is that of its first node or its heading.
-fn made<'f>(
-    name: &str,
-    fields: impl IntoIterator<Item = (&'f str, Value)>,
-    span: Span,
-    location: Location,
-) -> Element {
+/// the lists.
+fn made<'f>(name: &str, fields: impl IntoIterator<Item = (&'f str, Value)>, span: Span) -> Element {
     Element {
         name: QualifiedName::unqualified(Name::new(name).expect("built-in names are identifiers")),
         kind: ElementKind::Block,
         fields: fields.into_iter().map(|(k, v)| (k.into(), v)).collect(),
         label: None,
         span,
-        location,
+        location: Location::DETACHED,
+    }
+}
+
+/// Gives an element and every element in its content fields their
+/// locations, in document order: an element before the elements of its
+/// fields, and those in the order of the fields.
+fn locate(locator: &mut Locator, element: &mut Element) {
+    element.location = locator.locate(element.span, made_by(&element.name));
+    let keys: Vec<EcoString> = element
+        .fields
+        .iter()
+        .filter(|(_, value)| matches!(value, Value::Content(_)))
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in keys {
+        element.fields.update(&key, false, |value| {
+            if let Value::Content(content) = value
+                && content
+                    .nodes()
+                    .iter()
+                    .any(|n| matches!(n, Node::Element(_)))
+            {
+                for child in content.elements_mut() {
+                    locate(locator, child);
+                }
+            }
+        });
+    }
+}
+
+/// What makes the elements of a name: the document model for its
+/// paragraphs, lists and sections, else evaluation.
+fn made_by(name: &QualifiedName) -> Made {
+    if name.namespace.is_some() {
+        return Made::Evaluated;
+    }
+    match name.name.as_str() {
+        "paragraph" => Made::Paragraph,
+        "list" | "enum" | "terms" => Made::List,
+        "section" => Made::Section,
+        _ => Made::Evaluated,
     }
 }
 
@@ -481,80 +466,40 @@ fn node_span(node: &Node) -> Option<Span> {
 }
 
 /// Reports labels that more than one element has: a reference to one could
-/// not say which it means; and references to a label that no element has.
+/// not say which it means.
 fn check_labels(db: &dyn Db, root: &Element) {
-    struct Walk<'a> {
-        db: &'a dyn Db,
-        seen: BTreeMap<EcoString, Span>,
-        /// The references, with the label each names, in document order.
-        refs: Vec<(&'a EcoString, Span)>,
-    }
-    impl<'a> Walk<'a> {
-        fn element(&mut self, element: &'a Element) {
-            if let Some(label) = &element.label {
-                if let Some(first) = self.seen.get(label) {
-                    diag::report(
-                        self.db,
-                        Diagnostic::error(
-                            element.span,
-                            eco_format!("label `<{label}>` is used twice"),
-                        )
+    fn walk(db: &dyn Db, element: &Element, seen: &mut BTreeMap<EcoString, Span>) {
+        if let Some(label) = &element.label {
+            if let Some(first) = seen.get(label) {
+                diag::report(
+                    db,
+                    Diagnostic::error(element.span, eco_format!("label `<{label}>` is used twice"))
                         .with_related(*first, "it is first used here")
                         .with_hint("a label names one element, so references can find it"),
-                    );
-                } else {
-                    self.seen.insert(label.clone(), element.span);
-                }
-            }
-            if element.name.namespace.is_none()
-                && element.name.name.as_str() == "ref"
-                && let Some(Value::Label(target)) = element.field("target")
-            {
-                self.refs.push((target, element.span));
-            }
-            for (_, value) in element.fields.iter() {
-                self.value(value);
+                );
+            } else {
+                seen.insert(label.clone(), element.span);
             }
         }
-        fn value(&mut self, value: &'a Value) {
-            match value {
-                Value::Content(content) => {
-                    for node in content.nodes() {
-                        if let Node::Element(element) = node {
-                            self.element(element);
-                        }
+        for (_, value) in element.fields.iter() {
+            walk_value(db, value, seen);
+        }
+    }
+    fn walk_value(db: &dyn Db, value: &Value, seen: &mut BTreeMap<EcoString, Span>) {
+        match value {
+            Value::Content(content) => {
+                for node in content.nodes() {
+                    if let Node::Element(element) = node {
+                        walk(db, element, seen);
                     }
                 }
-                Value::Array(items) => items.iter().for_each(|v| self.value(v)),
-                Value::Dict(dict) => dict.iter().for_each(|(_, v)| self.value(v)),
-                _ => {}
             }
+            Value::Array(items) => items.iter().for_each(|v| walk_value(db, v, seen)),
+            Value::Dict(dict) => dict.iter().for_each(|(_, v)| walk_value(db, v, seen)),
+            _ => {}
         }
     }
-    let mut walk = Walk {
-        db,
-        seen: BTreeMap::new(),
-        refs: Vec::new(),
-    };
-    walk.element(root);
-    let labels: Vec<&str> = walk.seen.keys().map(EcoString::as_str).collect();
-    for (target, span) in walk.refs {
-        if walk.seen.contains_key(target) {
-            continue;
-        }
-        let diagnostic = Diagnostic::warning(
-            span,
-            eco_format!(
-                "no element has the label `<{target}>`, so the reference has nothing to refer to"
-            ),
-        );
-        let diagnostic = match crate::project::suggest(target, &labels) {
-            Some(close) => diagnostic.with_hint(eco_format!("did you mean `<{close}>`?")),
-            None => diagnostic
-                .with_hint("label the element the reference means, such as `= Forces <forces>`"),
-        };
-        diag::report(db, diagnostic);
-    }
+    walk(db, root, &mut BTreeMap::new());
 }
 
 /// Writes an element and the blocks it holds, indented by `depth`.
