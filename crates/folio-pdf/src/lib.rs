@@ -883,8 +883,13 @@ impl<'a> Links<'a> {
             *left = left.saturating_sub(bytes);
             return *run;
         }
+        if self.sources.is_empty() {
+            return None;
+        }
         let Some((links, drawn)) = self.sources.get_mut(&source) else {
-            self.current = None;
+            // Glyphs of a source of no link go nowhere until another
+            // source's.
+            self.current = Some((source, None, usize::MAX));
             return None;
         };
         let link = links[(*drawn).min(links.len() - 1)];
