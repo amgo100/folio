@@ -123,12 +123,20 @@ fn info(title: Option<&str>) -> Info {
     }
 }
 
+/// No destinations, links or page labels.
+static NO_NAVIGATION: Navigation = Navigation {
+    destinations: Vec::new(),
+    links: Vec::new(),
+    page_labels: Vec::new(),
+};
+
 fn document<'a>(pages: &'a [Fragment], structure: &'a Tag) -> Document<'a> {
     Document {
         pages: pages.iter().collect(),
         fonts: &Fonts,
         structure,
         info: info(Some("Forces and motion")),
+        navigation: &NO_NAVIGATION,
     }
 }
 
@@ -717,4 +725,237 @@ fn objects_are_empty_frames() {
     let artifacts = |pdf: &str| pdf.matches("/Artifact<</Type/Layout>>BDC").count();
     let before = text(&write(&document(&plain, &structure)).unwrap().bytes);
     assert_eq!(artifacts(&pdf), artifacts(&before) + 1);
+}
+
+/// A glyph run of pieces of text, each from its own node, a glyph per
+/// character.
+fn mixed(pieces: &[(&str, u64)]) -> FragmentItem {
+    let mut text = String::new();
+    let mut glyphs = Vec::new();
+    for (piece, source) in pieces {
+        for (i, c) in piece.char_indices() {
+            let start = (text.len() + i) as u32;
+            glyphs.push(Glyph {
+                id: c as u16,
+                x_advance: Em::new(0.5),
+                x_offset: Em::new(0.0),
+                y_offset: Em::new(0.0),
+                range: start..start + c.len_utf8() as u32,
+                source: (SourceRef(*source), 0..u32::MAX),
+            });
+        }
+        text.push_str(piece);
+    }
+    FragmentItem::Text(GlyphRun {
+        font: FontId(0),
+        size: Abs::pt(10.0),
+        fill: Paint::Solid(Color::BLACK),
+        text: text.into(),
+        glyphs: glyphs.into(),
+    })
+}
+
+/// A section (node 2) with the heading `Forces` and a paragraph (node 3)
+/// whose lines are `lines`.
+fn linked(lines: Vec<FragmentItem>) -> (Vec<Fragment>, Tag) {
+    let structure = tag(
+        Role::Document,
+        1,
+        vec![tag(
+            Role::Section,
+            2,
+            vec![heading(2, "Forces"), tag(Role::Paragraph, 3, vec![])],
+        )],
+    );
+    let pages = vec![page(vec![boxed(
+        1,
+        vec![boxed(
+            2,
+            vec![boxed(2, vec![run("Forces", 2)]), boxed(3, lines)],
+        )],
+    )])];
+    (pages, structure)
+}
+
+/// A destination `sec:forces` at the section (node 2), and the links of
+/// reference node 30.
+fn navigation(links: Vec<Option<&str>>) -> Navigation {
+    Navigation {
+        destinations: vec![Destination {
+            name: "sec:forces".into(),
+            location: Location {
+                source: SourceRef(2),
+                instance: Location::UNKNOWN_INSTANCE,
+            },
+        }],
+        links: links
+            .into_iter()
+            .map(|destination| Link {
+                source: SourceRef(30),
+                destination: destination.map(Into::into),
+                text: "Section 1".into(),
+            })
+            .collect(),
+        page_labels: Vec::new(),
+    }
+}
+
+/// A reference is a link annotation over its text, to the named
+/// destination of its label, tagged as a `Link` element that holds the
+/// annotation and the text, so the PDF still claims PDF/UA-1.
+#[test]
+fn references_link_to_named_destinations() {
+    let (pages, structure) = linked(vec![mixed(&[
+        ("See ", 3),
+        ("Section\u{a0}1", 30),
+        (" now.", 3),
+    ])]);
+    let navigation = navigation(vec![Some("sec:forces")]);
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    assert!(written.warnings.is_empty(), "{:?}", written.warnings);
+    let pdf = text(&written.bytes);
+    assert_eq!(pdf.matches("/Subtype/Link").count(), 1);
+    assert!(pdf.contains("/Dest(sec:forces)"), "{pdf}");
+    assert!(pdf.contains("/Dests<</Names[(sec:forces)"), "{pdf}");
+    assert!(pdf.contains("/Contents(Section 1)"));
+    assert!(pdf.contains("/S/Link"));
+    let (tree, _) = tagged(&document);
+    assert_eq!(
+        tree,
+        "Section\n  H1 Forces\n    ·\n  P\n    ··\n    Link\n      ··\n"
+    );
+}
+
+/// A reference broken across lines is one link with an area on each
+/// line; a reference that does not resolve, and one to a label whose
+/// element is not on the pages, is text that goes nowhere.
+#[test]
+fn links_across_lines_and_links_that_go_nowhere() {
+    let (pages, structure) = linked(vec![
+        mixed(&[("See Sec", 3), ("tion", 30)]),
+        mixed(&[("\u{a0}1", 30), (" and ", 3), ("??", 30)]),
+    ]);
+    let navigation = navigation(vec![Some("sec:forces"), None]);
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    let pdf = text(&written.bytes);
+    assert_eq!(pdf.matches("/Subtype/Link").count(), 1);
+    assert!(pdf.contains("/QuadPoints["));
+    let (tree, _) = tagged(&document);
+    assert_eq!(
+        tree,
+        // `See Sec`, then ` and ??`, which goes nowhere, in one piece.
+        "Section\n  H1 Forces\n    ·\n  P\n    ··\n    Link\n      ···\n"
+    );
+
+    let mut lost = navigation.clone();
+    lost.destinations[0].location.source = SourceRef(99);
+    let document = Document {
+        navigation: &lost,
+        ..document
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    let pdf = text(&written.bytes);
+    assert!(!pdf.contains("/Subtype/Link"));
+    assert!(!pdf.contains("/Dests"));
+}
+
+/// Every label has a named destination, whether or not a link goes to it.
+#[test]
+fn labels_without_references_have_destinations() {
+    let (pages, structure) = linked(vec![run("Text.", 3)]);
+    let navigation = navigation(vec![]);
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    let pdf = text(&written.bytes);
+    assert!(pdf.contains("/Dests<</Names[(sec:forces)"), "{pdf}");
+    assert!(!pdf.contains("/Subtype/Link"));
+}
+
+/// Page labels as viewers show them, for front matter, the body, the
+/// steps of a slide past `z`, and sample pages.
+#[test]
+fn page_labels_read_as_folio_writes_them() {
+    let label = |prefix: &str, numbering, number| PageLabel {
+        prefix: prefix.into(),
+        numbering,
+        number,
+    };
+    use PageNumbering::*;
+    assert_eq!(label("", Some(LowerRoman), 4).text(), "iv");
+    assert_eq!(label("", Some(UpperRoman), 1994).text(), "MCMXCIV");
+    assert_eq!(label("", Some(Arabic), 12).text(), "12");
+    assert_eq!(label("4", Some(LowerAlpha), 1).text(), "4a");
+    assert_eq!(label("4", Some(LowerAlpha), 26).text(), "4z");
+    assert_eq!(label("4", Some(LowerAlpha), 27).text(), "4aa");
+    assert_eq!(label("4", Some(LowerAlpha), 28).text(), "4ab");
+    assert_eq!(label("4", Some(LowerAlpha), 702).text(), "4zz");
+    assert_eq!(label("4", Some(LowerAlpha), 703).text(), "4aaa");
+    assert_eq!(label("", Some(UpperAlpha), 27).text(), "AA");
+    assert_eq!(label("4-s", Some(Arabic), 2).text(), "4-s2");
+    assert_eq!(label("4", None, 7).text(), "4");
+    assert_eq!(label("A-", Some(Arabic), 0).text(), "A-");
+}
+
+/// Page labels are written where they differ from the plain numbers, as
+/// ranges of the number tree; plain numbers write none.
+#[test]
+fn writes_page_labels_that_differ_from_plain_numbers() {
+    let one = one_page();
+    let pages = vec![one.clone(), one.clone(), one.clone(), one.clone(), one];
+    let structure = structure();
+    let plain = Navigation {
+        page_labels: (1..=5).map(PageLabel::arabic).collect(),
+        ..Navigation::default()
+    };
+    let document = Document {
+        navigation: &plain,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    assert!(!text(&written.bytes).contains("/PageLabels"));
+
+    let roman = |number| PageLabel {
+        prefix: "".into(),
+        numbering: Some(PageNumbering::LowerRoman),
+        number,
+    };
+    let step = |number| PageLabel {
+        prefix: "1".into(),
+        numbering: Some(PageNumbering::LowerAlpha),
+        number,
+    };
+    let labelled = Navigation {
+        page_labels: vec![roman(1), roman(2), PageLabel::arabic(1), step(1), step(27)],
+        ..Navigation::default()
+    };
+    let document = Document {
+        navigation: &labelled,
+        ..document
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    let pdf = text(&written.bytes);
+    assert!(pdf.contains("/PageLabels"), "{pdf}");
+    // i, ii; 1; 1a; then 1aa as a prefix alone, which PDF's letters
+    // cannot write.
+    assert!(pdf.contains("/Nums[0 "), "{pdf}");
+    assert!(pdf.contains("/S/r/St 1"), "{pdf}");
+    assert!(pdf.contains("/S/D/St 1"), "{pdf}");
+    assert!(pdf.contains("/S/a/P(1)/St 1"), "{pdf}");
+    assert!(pdf.contains("/P(1aa)"), "{pdf}");
 }
