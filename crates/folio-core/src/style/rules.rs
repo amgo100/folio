@@ -605,9 +605,10 @@ impl<'a> Compiler<'a> {
 
     /// Warns about the declarations of a compiled rule that set a property
     /// no stage reads yet. The cascade and the scoped rules in content call
-    /// it only for a rule that applies to the build: one that another
-    /// variant or target has has no effect here anyway. Nothing is reported for a rule whose selectors were all
-    /// ignored. Its selectors share the declarations.
+    /// it only for a rule that applies to the build: a rule of another
+    /// variant or target has no effect here anyway. Nothing is reported
+    /// for a rule whose selectors were all ignored. Its selectors share
+    /// the declarations.
     pub(super) fn lint_rule(&self, compiled: &Compiled) {
         let first = compiled
             .rules
