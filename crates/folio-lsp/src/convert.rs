@@ -193,6 +193,9 @@ fn percent_decode(text: &str) -> Option<String> {
     while i < bytes.len() {
         if bytes[i] == b'%' {
             let hex = text.get(i + 1..i + 3)?;
+            if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
             out.push(u8::from_str_radix(hex, 16).ok()?);
             i += 3;
         } else {
@@ -348,6 +351,8 @@ mod tests {
         assert_eq!(uri_to_path(&uri).unwrap(), path);
         let other = lsp::Uri::from_str("untitled:Untitled-1").unwrap();
         assert_eq!(uri_to_path(&other), None);
+        assert_eq!(percent_decode("/a%2B5").as_deref(), Some("/a+5"));
+        assert_eq!(percent_decode("/a%+5"), None);
         let remote = lsp::Uri::from_str("file://server/share/a.fol").unwrap();
         assert_eq!(uri_to_path(&remote), None);
     }

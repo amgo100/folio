@@ -68,8 +68,10 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
         published: BTreeMap::new(),
         noticed: None,
         request_id: 0,
+        watch: Watch::No,
+        shut_down: false,
     };
-    server.watch_files(&params);
+    server.watch = watch_support(&params);
     if let Some(root) = server.initial_root(&params) {
         server.open_project(root);
     }
@@ -149,6 +151,38 @@ struct Server<'a> {
     /// The compiler pin the server last gave notice of.
     noticed: Option<String>,
     request_id: i32,
+    /// Whether the client can be asked to report changes on disk, and how.
+    watch: Watch,
+    /// Whether the client asked the server to shut down.
+    shut_down: bool,
+}
+
+/// How the client can be asked to report changes to files.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Watch {
+    /// It cannot.
+    No,
+    /// With patterns relative to its workspace folders.
+    Workspace,
+    /// With patterns relative to a directory, the project's.
+    Relative,
+}
+
+/// How the client can be asked to report changes to files.
+fn watch_support(params: &lsp::InitializeParams) -> Watch {
+    let Some(caps) = params
+        .capabilities
+        .workspace
+        .as_ref()
+        .and_then(|w| w.did_change_watched_files.as_ref())
+    else {
+        return Watch::No;
+    };
+    match (caps.dynamic_registration, caps.relative_pattern_support) {
+        (Some(true), Some(true)) => Watch::Relative,
+        (Some(true), _) => Watch::Workspace,
+        _ => Watch::No,
+    }
 }
 
 impl Server<'_> {
@@ -164,13 +198,19 @@ impl Server<'_> {
                     match message {
                         Message::Request(request) => {
                             if self.connection.handle_shutdown(&request)? {
+                                self.shut_down = true;
                                 return Ok(());
                             }
                             self.request(request);
                         }
                         Message::Notification(notification) => {
                             if notification.method == note::Exit::METHOD {
-                                return Ok(());
+                                // The protocol asks for a failure when the
+                                // client exits without shutting down.
+                                return match self.shut_down {
+                                    true => Ok(()),
+                                    false => Err(Error("the client exited without shutting the server down".into())),
+                                };
                             }
                             self.notification(notification);
                         }
@@ -217,22 +257,24 @@ impl Server<'_> {
         ));
     }
 
-    /// Asks the client to report changes to every file, when it can be
-    /// asked: the loader reads the files it names again.
-    fn watch_files(&mut self, params: &lsp::InitializeParams) {
-        let dynamic = params
-            .capabilities
-            .workspace
-            .as_ref()
-            .and_then(|w| w.did_change_watched_files.as_ref())
-            .and_then(|w| w.dynamic_registration)
-            .unwrap_or(false);
-        if !dynamic {
-            return;
-        }
+    /// Asks the client to report changes to every file of the project in
+    /// `root`, when it can be asked: the loader reads the files it names
+    /// again.
+    fn watch_files(&mut self, root: &Path) {
+        let glob_pattern = match self.watch {
+            Watch::No => return,
+            Watch::Workspace => lsp::GlobPattern::String("**/*".into()),
+            Watch::Relative => match convert::path_to_uri(root) {
+                Some(base) => lsp::GlobPattern::Relative(lsp::RelativePattern {
+                    base_uri: lsp::OneOf::Right(base),
+                    pattern: "**/*".into(),
+                }),
+                None => lsp::GlobPattern::String("**/*".into()),
+            },
+        };
         let options = lsp::DidChangeWatchedFilesRegistrationOptions {
             watchers: vec![lsp::FileSystemWatcher {
-                glob_pattern: lsp::GlobPattern::String("**/*".into()),
+                glob_pattern,
                 kind: None,
             }],
         };
@@ -271,6 +313,8 @@ impl Server<'_> {
 
     /// Loads the project in `root`.
     fn open_project(&mut self, root: PathBuf) {
+        // Paths from the client and the URIs of diagnostics are absolute.
+        let root = std::path::absolute(&root).unwrap_or(root);
         let cache = FontCache::default_dir().map(FontCache::new);
         let loader = match Loader::new(&root) {
             Ok(loader) => loader.with_font_cache(cache),
@@ -280,6 +324,7 @@ impl Server<'_> {
             }
         };
         let canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
+        let watched = root.clone();
         self.project = Some(Project {
             root,
             canonical,
@@ -287,6 +332,7 @@ impl Server<'_> {
             world: None,
             errors: None,
         });
+        self.watch_files(&watched);
         self.load_world();
     }
 
@@ -519,7 +565,13 @@ impl Server<'_> {
             return;
         };
         self.docs.remove(&path);
-        // The file is what the disk has again.
+        // The file is what the disk has again, if the project has it there:
+        // the loader leaves out hidden files and outputs.
+        if let Some(world) = self.world_mut()
+            && world.remove_source(&path)
+        {
+            self.edited();
+        }
         if let Some(project) = &self.project {
             let file = project.root.join(&path);
             self.disk_changed(vec![file]);
@@ -548,12 +600,16 @@ impl Server<'_> {
                 .is_some_and(|rel| rel == loader::MANIFEST || rel == loader::LOCKFILE)
         });
         let Some(world) = &mut project.world else {
-            // The manifest or lockfile kept the project from loading.
-            if names_project_file {
-                self.load_world();
-            }
+            // The project could not be loaded: try again.
+            self.load_world();
             return;
         };
+        // Both are read again, so that the errors are those of both.
+        let mut paths = paths;
+        if names_project_file {
+            paths.push(project.root.join(loader::MANIFEST));
+            paths.push(project.root.join(loader::LOCKFILE));
+        }
         let mut warnings = Vec::new();
         let update = match project.loader.update(world, &paths, &mut warnings) {
             Ok(update) => update,
@@ -717,7 +773,7 @@ impl Server<'_> {
             published.insert(path, uri);
         }
         for (path, uri) in std::mem::take(&mut self.published) {
-            if !published.contains_key(&path) {
+            if published.get(&path) != Some(&uri) {
                 self.notify::<note::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
                     uri,
                     diagnostics: Vec::new(),

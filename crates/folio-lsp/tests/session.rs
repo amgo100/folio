@@ -425,3 +425,13 @@ fn manifest_errors_are_shown_until_fixed() {
     assert_eq!(client.diagnostics(&main).unwrap().len(), 1);
     client.shut_down();
 }
+
+#[test]
+fn exiting_without_shutting_down_is_a_failure() {
+    let dir = project(&manifest(folio::VERSION), VALID);
+    let mut client = Client::start(dir.path(), |_| {});
+    client.settle();
+    client.notify("exit", Value::Null);
+    let result = client.server.take().unwrap().join().unwrap();
+    assert!(result.is_err());
+}
