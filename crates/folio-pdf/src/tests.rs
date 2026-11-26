@@ -962,15 +962,15 @@ fn writes_page_labels_that_differ_from_plain_numbers() {
 
 /// Two references of one source that meet, as those of a loop can where
 /// the space between them is dropped at a line break, stay two links: a
-/// run of the source's glyphs ends where it has shown its link's text.
+/// run of the source's glyphs ends where it has shown its link's text and
+/// the next link's text starts.
 #[test]
 fn references_that_meet_stay_apart() {
     let (pages, structure) = linked(vec![
         mixed(&[("See ", 3), ("Section\u{a0}1", 30)]),
         mixed(&[("Section\u{a0}1", 30), ("Section\u{a0}1", 30)]),
     ]);
-    let mut navigation = navigation(vec![Some("sec:forces"), None, Some("sec:forces")]);
-    navigation.links[2].text = "".into();
+    let navigation = navigation(vec![Some("sec:forces"), None, Some("sec:forces")]);
     let document = Document {
         navigation: &navigation,
         ..document(&pages, &structure)
@@ -978,16 +978,76 @@ fn references_that_meet_stay_apart() {
     let written = write(&document).unwrap();
     assert!(written.pdf_ua, "{:?}", written.warnings);
     let pdf = text(&written.bytes);
-    // The second goes nowhere; the third, whose text has no words, is
-    // described by its destination's name.
+    // The second goes nowhere.
     assert_eq!(pdf.matches("/Subtype/Link").count(), 2, "{pdf}");
-    assert_eq!(pdf.matches("/Contents(Section 1)").count(), 1);
-    assert_eq!(pdf.matches("/Contents(sec:forces)").count(), 1);
+    assert_eq!(pdf.matches("/Contents(Section 1)").count(), 2);
     let (tree, _) = tagged(&document);
     assert_eq!(
         tree,
         "Section\n  H1 Forces\n    ·\n  P\n    ··\n    Link\n      ··\n    Link\n      ··\n"
     );
+}
+
+/// A link drawn by several glyph runs on a line, as where a digit falls
+/// back to another font, has one annotation there. The glyphs of a
+/// cluster count its bytes once, and a hyphen that a break inserts counts
+/// none, so neither ends the link early.
+#[test]
+fn a_link_has_an_annotation_per_line() {
+    // `Sec` and `tion` on one line in two runs, with a hyphen inserted
+    // after them; `1` on the next line, its glyph drawn as two of one
+    // cluster.
+    let FragmentItem::Text(first) = mixed(&[("Sec", 30)]) else {
+        unreachable!()
+    };
+    let FragmentItem::Text(mut hyphen) = mixed(&[("tion-", 30)]) else {
+        unreachable!()
+    };
+    hyphen.glyphs.make_mut()[4].source.1 = 0..0;
+    let FragmentItem::Text(mut last) = mixed(&[("\u{a0}1", 30)]) else {
+        unreachable!()
+    };
+    let cluster = last.glyphs[1].clone();
+    last.glyphs.push(cluster);
+    let mut line = Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(12.0)));
+    line.push(Point::zero(), FragmentItem::Text(first));
+    line.push(
+        Point::new(Abs::pt(15.0), Abs::zero()),
+        FragmentItem::Text(hyphen),
+    );
+    let (pages, structure) = linked(vec![FragmentItem::Group(line), FragmentItem::Text(last)]);
+    let navigation = navigation(vec![Some("sec:forces"), Some("sec:forces")]);
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    let pdf = text(&written.bytes);
+    assert_eq!(pdf.matches("/Subtype/Link").count(), 2, "{pdf}");
+    let (tree, _) = tagged(&document);
+    assert_eq!(
+        tree,
+        "Section\n  H1 Forces\n    ·\n  P\n    Link\n      ·····\n"
+    );
+}
+
+/// A link whose text has no words is described by its destination's
+/// name, as PDF/UA-1 requires a description.
+#[test]
+fn links_without_words_are_described_by_their_label() {
+    // The glyphs show spaces; the text also has an object character,
+    // which is no word either.
+    let (pages, structure) = linked(vec![mixed(&[("See ", 3), (" \u{a0}", 30)])]);
+    let mut navigation = navigation(vec![Some("sec:forces")]);
+    navigation.links[0].text = " \u{fffc}".into();
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    assert!(text(&written.bytes).contains("/Contents(sec:forces)"));
 }
 
 /// Text from no node is no link's, and no destination is at it.

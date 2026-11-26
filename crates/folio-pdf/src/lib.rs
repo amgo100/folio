@@ -772,7 +772,11 @@ fn link_annotation(
     ));
     // PDF/UA-1 requires a description: the text with plain spaces, for
     // screen readers, or the label where the text has nothing to read.
-    let words: Vec<&str> = link.text.split_whitespace().collect();
+    let words: Vec<&str> = link
+        .text
+        .split(|c: char| c.is_whitespace() || c == '\u{FFFC}')
+        .filter(|w| !w.is_empty())
+        .collect();
     let alt = if words.is_empty() {
         name.to_string()
     } else {
@@ -875,18 +879,29 @@ impl<'a> Links<'a> {
         }
     }
 
-    /// The run of links a glyph of `source` that shows `bytes` bytes of
-    /// text, drawn next, is in: the run of the glyph before if that has the
-    /// same source and its link's text is not all shown yet, else a new
-    /// one; `None` if it goes nowhere. So two links of one source that
-    /// meet, as references of a loop can at a line break, stay two.
-    fn glyph(&mut self, source: SourceRef, bytes: usize) -> Option<usize> {
+    /// The run of links a glyph of `source` drawn next is in. It shows
+    /// `bytes` new bytes of its run's text (none for a hyphen that a break
+    /// inserts, or for the second glyph of a cluster), starting with
+    /// `shown`. A glyph is in the run of the glyph before if that has the
+    /// same source, unless the run has shown all its link's text and the
+    /// glyph starts the text of the source's next link: so two links of
+    /// one source that meet, as references of a loop can at a line break,
+    /// stay two, and a link whose glyphs count more bytes than its text
+    /// (a repeated hyphen) stays one. `None` if it goes nowhere.
+    fn glyph(&mut self, source: SourceRef, bytes: usize, shown: &str) -> Option<usize> {
         if let Some((last, run, left)) = &mut self.current
             && *last == source
-            && *left > 0
         {
-            *left = left.saturating_sub(bytes);
-            return *run;
+            let starts_again = *left == 0
+                && !shown.is_empty()
+                && self.sources.get(&source).is_some_and(|(links, drawn)| {
+                    let next = links[(*drawn).min(links.len() - 1)];
+                    self.navigation.links[next].text.starts_with(shown)
+                });
+            if !starts_again {
+                *left = left.saturating_sub(bytes);
+                return *run;
+            }
         }
         if self.sources.is_empty() {
             return None;
@@ -916,11 +931,24 @@ impl<'a> Links<'a> {
         run
     }
 
-    /// Adds an area of the page to run `run`.
+    /// Adds an area of the page to run `run`, joined to the run's last
+    /// area where it continues it on the same line, so that a link has an
+    /// annotation for each line however many glyph runs draw it.
     fn area(&mut self, run: usize, area: Rect) {
-        match self.areas.iter_mut().find(|(r, _)| *r == run) {
-            Some((_, areas)) => areas.push(area),
-            None => self.areas.push((run, vec![area])),
+        let Some((_, areas)) = self.areas.iter_mut().find(|(r, _)| *r == run) else {
+            self.areas.push((run, vec![area]));
+            return;
+        };
+        if let Some(last) = areas.last_mut()
+            && (last.top() - area.top()).abs() < 0.01
+            && (last.bottom() - area.bottom()).abs() < 0.01
+            && (last.right() - area.left()).abs() < 0.01
+            && let Some(joined) =
+                Rect::from_ltrb(last.left(), last.top(), area.right(), last.bottom())
+        {
+            *last = joined;
+        } else {
+            areas.push(area);
         }
     }
 }
@@ -1202,8 +1230,14 @@ impl Writer<'_> {
         if !linked && !run.glyphs.is_empty() {
             pieces.push((0..run.glyphs.len(), None));
         }
+        let mut cluster = None;
         for (i, g) in run.glyphs.iter().enumerate().filter(|_| linked) {
-            let link = self.links.glyph(g.source.0, g.range.len());
+            // A cluster's bytes count once; an inserted hyphen's not at all.
+            let new = cluster != Some(&g.range) && !g.source.1.is_empty();
+            cluster = Some(&g.range);
+            let shown = run.text.get(usize_range(&g.range)).unwrap_or_default();
+            let bytes = if new { shown.len() } else { 0 };
+            let link = self.links.glyph(g.source.0, bytes, shown);
             match pieces.last_mut() {
                 Some((range, last)) if *last == link => range.end = i + 1,
                 _ => pieces.push((i..i + 1, link)),
