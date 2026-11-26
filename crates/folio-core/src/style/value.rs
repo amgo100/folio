@@ -113,11 +113,10 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
 }
 
 /// A number of a property value, if it is finite: an infinite length or
-/// number, such as `1e308pt * 10` or a huge `em` length at a large font
-/// size, would reach layout and the PDF writer (SPEC §14.2). A
-/// declaration whose value is not finite is an error where the stylesheet
-/// declares it; one that only overflows at an element's font size is left
-/// out there, as a value that does not fit its property is.
+/// number, such as `1e308pt * 10`, would reach layout and the PDF writer
+/// (SPEC §14.2). A declaration whose value is not finite is an error where
+/// the stylesheet declares it. Lengths are also [`bounded`], which is what
+/// leaves out a value that is too long only at an element's font size.
 fn finite(value: f64, what: &str) -> Result<f64, EcoString> {
     if value.is_finite() {
         Ok(value)

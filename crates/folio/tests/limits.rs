@@ -164,6 +164,12 @@ fn an_em_length_longer_than_the_limit_at_a_font_size_is_left_out() {
         styled.value(heading, "space-before"),
         styled_without.value(heading_without, "space-before")
     );
+    // The base stylesheet's `1.2em` is too long there as well, so both fall
+    // back to the initial value.
+    assert_eq!(
+        styled.value(heading, "space-before"),
+        Some(&Value::Length(Abs::zero()))
+    );
     let pages = folio::pages(&world, Target::Pdf, None).unwrap().unwrap();
     for page in &pages.pages {
         let mut stack = vec![&page.fragment];
