@@ -548,6 +548,83 @@ fn watches_with_the_pinned_version() {
         format!("{}\nwatch\n--port\n0\n--help\n", folio::VERSION)
     );
     assert!(!dir.path().join("out").exists());
+
+    // A pinned binary that cannot run is reported as such, as for `folio
+    // build`.
+    use std::os::unix::fs::PermissionsExt;
+    let binary = toolchains.binary(&Version::new(77, 0, 0));
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o644)).unwrap();
+    let dir = project("77.0.0", "");
+    let output = folio(dir.path(), cache.path(), &["watch"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("cannot run Folio 77.0.0"), "{text}");
+    assert!(!text.contains("has no `folio watch`"), "{text}");
+}
+
+/// Once the pin changes while `folio watch` runs, it writes no outputs and
+/// says so.
+#[test]
+fn watch_stops_writing_when_the_pin_changes() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    struct Running(std::process::Child);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let cache = tempfile::tempdir().unwrap();
+    let dir = project(folio::VERSION, "");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_folio"))
+        .args(["watch"])
+        .current_dir(dir.path())
+        .env("FOLIO_CACHE_DIR", cache.path())
+        .env_remove("FOLIO_DISPATCHED_BY")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let _running = Running(child);
+    let (send, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            if send.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let wait_for = |what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match lines.recv_timeout(left) {
+                Ok(line) if line.contains(what) => return,
+                Ok(_) => {}
+                Err(_) => panic!("no line with {what:?}"),
+            }
+        }
+    };
+    let pdf = dir.path().join("out/main.pdf");
+    wait_for("wrote");
+    assert!(pdf.is_file());
+    fs::remove_dir_all(dir.path().join("out")).unwrap();
+
+    let manifest = fs::read_to_string(dir.path().join("folio.toml")).unwrap();
+    fs::write(
+        dir.path().join("folio.toml"),
+        manifest.replace(folio::VERSION, "99.0.0"),
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.fol"), "= Forces and motion\n").unwrap();
+    wait_for("the project now pins compiler 99.0.0");
+    assert!(!pdf.exists());
 }
 
 #[test]

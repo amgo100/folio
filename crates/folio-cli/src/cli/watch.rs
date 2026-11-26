@@ -14,12 +14,14 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clap::Args;
 use folio::diag::TextFiles;
 use folio::{Date, Diagnostic, Manifest, World};
 use folio_preview::{Event, Options, Outputs, Preview};
+use semver::Version;
 
 use super::build::{Written, error, print, write};
 use super::{Color, FAILURE, parse_date, project, toolchain};
@@ -74,9 +76,10 @@ pub(crate) fn watch(args: &WatchArgs) -> ExitCode {
         Err(message) => return fail(message),
     };
     let current = args.compiler.is_some();
-    if pin_failed(&root, current, color, false) {
+    let Ok(pin) = check_pin(&root, current, color) else {
         return ExitCode::from(FAILURE);
-    }
+    };
+    let stopped = AtomicBool::new(false);
 
     let shown: Arc<Mutex<Option<Shown>>> = Arc::default();
     let mut options = Options::new(&root)
@@ -86,10 +89,14 @@ pub(crate) fn watch(args: &WatchArgs) -> ExitCode {
         .on_outputs({
             let root = root.clone();
             move |outputs| {
-                // A pin changed since the command started is not this
-                // version's to write for.
-                if !pin_failed(&root, current, color, true) {
-                    write_outputs(&root, outputs, color);
+                // Once the pin changes, this version no longer writes what
+                // `folio build` would.
+                if !current && !stopped.load(Ordering::Relaxed) {
+                    if pin_changed(&root, pin.as_ref(), color) {
+                        stopped.store(true, Ordering::Relaxed);
+                    } else {
+                        write_outputs(&root, outputs, color);
+                    }
                 }
             }
         });
@@ -110,34 +117,62 @@ pub(crate) fn watch(args: &WatchArgs) -> ExitCode {
 
 /// Checks the compiler version that the manifest pins, as `folio build`
 /// does when it runs the build itself (`toolchain::check`), and prints the
-/// result. Returns whether it is an error: another pin without `--compiler
+/// result. It is an error, `Err`, for another pin without `--compiler
 /// current`, which `folio` hands to the pinned version when it is
-/// installed. A manifest without a valid pin passes; the preview reports
-/// it. `writing` prints only errors, with a hint for a pin changed while
-/// the command runs.
-fn pin_failed(root: &Path, current: bool, color: bool, writing: bool) -> bool {
+/// installed. Otherwise returns the pin, or `None` for a manifest without a
+/// valid one, which the preview reports.
+fn check_pin(root: &Path, current: bool, color: bool) -> Result<Option<Version>, ()> {
+    let Ok(text) = std::fs::read_to_string(root.join(project::MANIFEST)) else {
+        return Ok(None);
+    };
+    let Some(pin) = Manifest::compiler_pin(&text, World::MANIFEST) else {
+        return Ok(None);
+    };
+    if let Some(diagnostic) = toolchain::check_version(&pin, current) {
+        let failed = diagnostic.is_error();
+        let mut files = TextFiles::new();
+        files.insert(World::MANIFEST, project::MANIFEST, text);
+        print(&files, &[diagnostic], color);
+        if failed {
+            return Err(());
+        }
+    }
+    Ok(Some(pin.v))
+}
+
+/// Whether the manifest on disk pins another compiler version than it did
+/// when the command started (or, without a valid pin then, another than this
+/// version); if so, prints an error that the outputs are no longer written.
+/// A manifest without a valid pin has not changed it: the preview keeps the
+/// last valid manifest and reports the new one's errors.
+fn pin_changed(root: &Path, started: Option<&Version>, color: bool) -> bool {
     let Ok(text) = std::fs::read_to_string(root.join(project::MANIFEST)) else {
         return false;
     };
     let Some(pin) = Manifest::compiler_pin(&text, World::MANIFEST) else {
         return false;
     };
-    let Some(mut diagnostic) = toolchain::check_version(&pin, current) else {
-        return false;
+    let unchanged = match started {
+        Some(started) => *started == pin.v,
+        None => pin.v.to_string() == folio::VERSION,
     };
-    let failed = diagnostic.is_error();
-    if writing {
-        if !failed {
-            return false;
-        }
-        diagnostic = diagnostic.with_hint(
-            "the outputs are not written; restart `folio watch` to run the pinned version",
-        );
+    if unchanged {
+        return false;
     }
+    let error = Diagnostic::error(
+        pin.span,
+        format!(
+            "the project now pins compiler {}, but this is Folio {}: the outputs are no \
+         longer written",
+            pin.v,
+            folio::VERSION
+        ),
+    )
+    .with_hint("restart `folio watch` to preview and write them with the pinned version");
     let mut files = TextFiles::new();
     files.insert(World::MANIFEST, project::MANIFEST, text);
-    print(&files, &[diagnostic], color);
-    failed
+    print(&files, &[error], color);
+    true
 }
 
 /// What the terminal last showed of a revision: its diagnostics and

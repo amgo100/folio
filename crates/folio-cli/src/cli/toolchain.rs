@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
 use folio::diag::TextFiles;
@@ -227,7 +228,11 @@ fn dispatch_to_pin(
         files.insert(World::MANIFEST, MANIFEST, manifest.to_owned());
         print(&files, &[unfixed(pin.span, &pin.v, &floor)], color);
     }
-    if args.first().is_some_and(|command| command == "watch") && !has_watch(&binary) {
+    let watch = args.first().is_some_and(|command| command == "watch");
+    if watch && let Err(why) = has_watch(&binary) {
+        if let Some(why) = why {
+            return Some(cannot_run(&binary, &pin.v, &why, color));
+        }
         let mut files = TextFiles::new();
         files.insert(World::MANIFEST, MANIFEST, manifest.to_owned());
         let error = Diagnostic::error(
@@ -251,18 +256,35 @@ fn dispatch_to_pin(
     Some(run(command, &binary, &pin.v, color))
 }
 
-/// Whether a compiler binary has `folio watch`. Versions before it either
-/// lack the command or parse it with any arguments and reject it as not yet
-/// supported, so only one that has it shows the help of `watch --port 0`.
-fn has_watch(binary: &Path) -> bool {
-    Command::new(binary)
+/// Whether a compiler binary has `folio watch`: `Ok` when it has, `Err(None)`
+/// when it has not, and `Err(Some(_))` when it cannot be run or does not
+/// answer within ten seconds. Versions before the command either lack it or
+/// parse it with any arguments and reject it as not yet supported, so only
+/// one that has it shows the help of `watch --port 0`.
+fn has_watch(binary: &Path) -> Result<(), Option<std::io::Error>> {
+    let mut child = Command::new(binary)
         .args(["watch", "--port", "0", "--help"])
         .env(DISPATCHED, folio::VERSION)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .spawn()
+        .map_err(Some)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait().map_err(Some)? {
+            Some(status) if status.success() => return Ok(()),
+            Some(_) => return Err(None),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Some(std::io::Error::other(
+                    "it did not answer `folio watch --help` within ten seconds",
+                )));
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
 }
 
 /// Runs the pinned version in place of this process, where the platform
