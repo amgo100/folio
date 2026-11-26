@@ -962,8 +962,7 @@ fn writes_page_labels_that_differ_from_plain_numbers() {
 
 /// Two references of one source that meet, as those of a loop can where
 /// the space between them is dropped at a line break, stay two links: a
-/// run of the source's glyphs ends where it has shown its link's text and
-/// the next link's text starts.
+/// run of the source's glyphs ends where it has shown its link's text.
 #[test]
 fn references_that_meet_stay_apart() {
     let (pages, structure) = linked(vec![
@@ -1048,6 +1047,33 @@ fn links_without_words_are_described_by_their_label() {
     let written = write(&document).unwrap();
     assert!(written.pdf_ua, "{:?}", written.warnings);
     assert!(text(&written.bytes).contains("/Contents(sec:forces)"));
+}
+
+/// A link without text runs until a glyph of another source.
+#[test]
+fn links_without_text_run_to_another_source() {
+    let (pages, structure) = linked(vec![mixed(&[
+        ("See ", 3),
+        ("Section\u{a0}1", 30),
+        (" and ", 3),
+        ("Section\u{a0}1", 30),
+    ])]);
+    let mut navigation = navigation(vec![Some("sec:forces"), Some("sec:forces")]);
+    navigation.links[0].text = "".into();
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    assert!(written.pdf_ua, "{:?}", written.warnings);
+    let pdf = text(&written.bytes);
+    assert_eq!(pdf.matches("/Subtype/Link").count(), 2, "{pdf}");
+    assert_eq!(pdf.matches("/Contents(sec:forces)").count(), 1);
+    let (tree, _) = tagged(&document);
+    assert_eq!(
+        tree,
+        "Section\n  H1 Forces\n    ·\n  P\n    ··\n    Link\n      ··\n    Link\n      ··\n"
+    );
 }
 
 /// Text from no node is no link's, and no destination is at it.

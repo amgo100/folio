@@ -174,7 +174,8 @@ pub struct Link {
     /// order of the source's links.
     pub destination: Option<EcoString>,
     /// The text it shows (`Figure 3`): where a run of its source's glyphs
-    /// ends, by the bytes of text they show, and its alternative
+    /// ends, when they have shown as many bytes, counting a cluster once
+    /// and a hyphen that line breaking adds not at all; and its alternative
     /// description, which PDF/UA requires, with plain spaces (or its
     /// destination's name, where it has no words).
     pub text: EcoString,
@@ -880,28 +881,21 @@ impl<'a> Links<'a> {
     }
 
     /// The run of links a glyph of `source` drawn next is in. It shows
-    /// `bytes` new bytes of its run's text (none for a hyphen that a break
-    /// inserts, or for the second glyph of a cluster), starting with
-    /// `shown`. A glyph is in the run of the glyph before if that has the
-    /// same source, unless the run has shown all its link's text and the
-    /// glyph starts the text of the source's next link: so two links of
-    /// one source that meet, as references of a loop can at a line break,
-    /// stay two, and a link whose glyphs count more bytes than its text
-    /// (a repeated hyphen) stays one. `None` if it goes nowhere.
-    fn glyph(&mut self, source: SourceRef, bytes: usize, shown: &str) -> Option<usize> {
+    /// `bytes` new bytes of its link's text: none for the second glyph of
+    /// a cluster, or for a hyphen that a break inserts or a line repeats.
+    /// A glyph is in the run of the glyph before if that has the same
+    /// source and the run has not shown all its link's text, or if it
+    /// shows no new bytes; else it starts a run of the source's next link.
+    /// So two links of one source that meet, as references of a loop can
+    /// at a line break, stay two, in either direction of text. `None` if it
+    /// goes nowhere.
+    fn glyph(&mut self, source: SourceRef, bytes: usize) -> Option<usize> {
         if let Some((last, run, left)) = &mut self.current
             && *last == source
+            && (*left > 0 || bytes == 0)
         {
-            let starts_again = *left == 0
-                && !shown.is_empty()
-                && self.sources.get(&source).is_some_and(|(links, drawn)| {
-                    let next = links[(*drawn).min(links.len() - 1)];
-                    self.navigation.links[next].text.starts_with(shown)
-                });
-            if !starts_again {
-                *left = left.saturating_sub(bytes);
-                return *run;
-            }
+            *left = left.saturating_sub(bytes);
+            return *run;
         }
         if self.sources.is_empty() {
             return None;
@@ -939,12 +933,18 @@ impl<'a> Links<'a> {
             self.areas.push((run, vec![area]));
             return;
         };
+        // Areas of one line touch and overlap, whatever the extents of
+        // their fonts.
         if let Some(last) = areas.last_mut()
-            && (last.top() - area.top()).abs() < 0.01
-            && (last.bottom() - area.bottom()).abs() < 0.01
             && (last.right() - area.left()).abs() < 0.01
-            && let Some(joined) =
-                Rect::from_ltrb(last.left(), last.top(), area.right(), last.bottom())
+            && area.top() < last.bottom()
+            && last.top() < area.bottom()
+            && let Some(joined) = Rect::from_ltrb(
+                last.left(),
+                last.top().min(area.top()),
+                area.right(),
+                last.bottom().max(area.bottom()),
+            )
         {
             *last = joined;
         } else {
@@ -1232,12 +1232,12 @@ impl Writer<'_> {
         }
         let mut cluster = None;
         for (i, g) in run.glyphs.iter().enumerate().filter(|_| linked) {
-            // A cluster's bytes count once; an inserted hyphen's not at all.
-            let new = cluster != Some(&g.range) && !g.source.1.is_empty();
+            // A cluster's bytes count once; an inserted or a repeated
+            // hyphen's not at all.
+            let new = cluster != Some(&g.range) && !g.source.1.is_empty() && !repeated;
             cluster = Some(&g.range);
-            let shown = run.text.get(usize_range(&g.range)).unwrap_or_default();
-            let bytes = if new { shown.len() } else { 0 };
-            let link = self.links.glyph(g.source.0, bytes, shown);
+            let bytes = if new { g.range.len() } else { 0 };
+            let link = self.links.glyph(g.source.0, bytes);
             match pieces.last_mut() {
                 Some((range, last)) if *last == link => range.end = i + 1,
                 _ => pieces.push((i..i + 1, link)),
