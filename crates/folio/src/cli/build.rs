@@ -20,7 +20,7 @@ use folio_syntax::DiagSpan;
 use serde::Serialize;
 
 use super::project::{self, LOCKFILE, MANIFEST};
-use super::{DiagnosticsFormat, FAILURE, ProjectArgs, toolchain};
+use super::{Color, DiagnosticsFormat, FAILURE, ProjectArgs, toolchain};
 
 /// What a command does with the builds it chooses.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -426,7 +426,7 @@ fn outside(walked: &str) -> io::Error {
 /// file's canonical directory once that is checked to be in the project at
 /// `root`: this narrows, but does not close, the window in which another
 /// process could swap a directory on the way for a link out of the project.
-fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(super) fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     let pid = std::process::id();
     let (temporary, mut out) = loop {
@@ -468,7 +468,7 @@ fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
 /// to standard error, as it goes, with source excerpts; or, with
 /// `--diagnostics json`, as one JSON document written when the command
 /// ends (`docs/diagnostics-json.md`).
-struct Report {
+pub(super) struct Report {
     color: bool,
     /// The document being collected, with `--diagnostics json`.
     json: Option<Document>,
@@ -531,17 +531,27 @@ impl Report {
     const VERSION: u32 = 1;
 
     fn new(args: &ProjectArgs) -> Self {
+        Self::with(args.color, args.diagnostics)
+    }
+
+    /// A report coloured as `color` says, in `format`.
+    pub(super) fn with(color: Color, format: DiagnosticsFormat) -> Self {
         Self {
-            color: args.color.enabled(),
-            json: (args.diagnostics == DiagnosticsFormat::Json).then(|| Document {
+            color: color.enabled(),
+            json: (format == DiagnosticsFormat::Json).then(|| Document {
                 version: Self::VERSION,
                 ..Document::default()
             }),
         }
     }
 
+    /// Whether the report is the JSON document.
+    pub(super) fn is_json(&self) -> bool {
+        self.json.is_some()
+    }
+
     /// Reports diagnostics, with their spans resolved against `files`.
-    fn diagnostics(&mut self, files: &dyn Files, diagnostics: &[Diagnostic]) {
+    pub(super) fn diagnostics(&mut self, files: &dyn Files, diagnostics: &[Diagnostic]) {
         match &mut self.json {
             Some(document) => document
                 .diagnostics
@@ -567,7 +577,7 @@ impl Report {
     }
 
     /// Ends the report: writes the JSON document, if there is one.
-    fn finish(self) {
+    pub(super) fn finish(self) {
         if let Some(document) = self.json {
             let json = serde_json::to_string_pretty(&document).expect("the report serialises");
             eprintln!("{json}");

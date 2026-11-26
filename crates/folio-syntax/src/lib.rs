@@ -72,6 +72,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ast;
+pub mod fmt;
 
 mod file;
 mod highlight;

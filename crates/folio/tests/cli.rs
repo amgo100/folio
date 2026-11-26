@@ -2,7 +2,8 @@
 //! the outputs the determinism check recorded, prints diagnostics with
 //! source excerpts, exits with an error when a build has errors, and
 //! rejects what is not supported yet; `folio check` reports the same
-//! diagnostics and writes nothing.
+//! diagnostics and writes nothing; `folio fmt` formats a project's sources
+//! without changing what they mean.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -176,7 +177,7 @@ fn rejects_what_is_not_supported_yet() {
         &["check", "--leaks"],
         &["check", "--layout"],
         &["check", "--report", "overrides"],
-        &["fmt"],
+        &["promote"],
     ] {
         let output = folio(dir.path(), args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");
@@ -380,4 +381,133 @@ fn checks_report_outputs_that_cannot_be_written() {
     let check = folio(dir.path(), &["check"]);
     assert!(check.status.success(), "{}", stderr(&check));
     assert!(!dir.path().join("a").exists());
+}
+
+/// The `.fol` and `.fsty` files under `dir`, by path relative to it.
+fn sources(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+    let mut entries: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+        if entry.file_type().unwrap().is_dir() {
+            sources(&entry.path(), &format!("{name}/"), out);
+        } else if name.ends_with(".fol") || name.ends_with(".fsty") {
+            out.push((name, fs::read_to_string(entry.path()).unwrap()));
+        }
+    }
+}
+
+/// Changes whitespace in a source without changing what it means: trailing
+/// spaces, blank lines, `\r\n` line ends, and spacing in stylesheets; raw
+/// text keeps its whitespace and line ends.
+fn untidy(path: &str, text: &str) -> String {
+    let mut out = String::new();
+    let mut raw = false;
+    for line in text.lines() {
+        // Raw text keeps its whitespace.
+        if line.trim_start().starts_with("```") {
+            raw = !raw;
+        }
+        if path.ends_with(".fsty") && !line.trim_start().starts_with("//") {
+            out.push_str(&line.replace("; ", ";   ").replace(": ", " :"));
+        } else {
+            out.push_str(line);
+        }
+        out.push_str(match (raw, line.is_empty()) {
+            (true, _) => "\n",
+            (false, true) => "  \r\n\n",
+            (false, false) => "  \r\n",
+        });
+    }
+    out
+}
+
+#[test]
+fn formats_the_corpus_without_changing_its_outputs() {
+    for name in ["exam", "notes", "polish"] {
+        let tidy = tempfile::tempdir().unwrap();
+        let messy = tempfile::tempdir().unwrap();
+        copy_dir(&corpus().join(name), tidy.path());
+        copy_dir(&corpus().join(name), messy.path());
+        let mut files = Vec::new();
+        sources(messy.path(), "", &mut files);
+        for (path, text) in &files {
+            fs::write(messy.path().join(path), untidy(path, text)).unwrap();
+        }
+
+        // `--check` reports every untidy file, with the edits that tidy it,
+        // and changes nothing.
+        let output = folio(messy.path(), &["fmt", "--check", "--diagnostics", "json"]);
+        assert_eq!(output.status.code(), Some(1), "{name}: {}", stderr(&output));
+        let document = json(&output);
+        let diagnostics = document["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), files.len(), "{name}: {document:#}");
+        for diagnostic in diagnostics {
+            assert_eq!(diagnostic["code"], "unformatted");
+            assert!(
+                !diagnostic["fixes"][0]["edits"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        for (path, text) in &files {
+            let now = fs::read_to_string(messy.path().join(path)).unwrap();
+            assert_eq!(now, untidy(path, text), "{name}/{path} changed");
+        }
+
+        // Formatting gives what formatting the corpus gives, and the same
+        // outputs.
+        for dir in [tidy.path(), messy.path()] {
+            let output = folio(dir, &["fmt"]);
+            assert!(output.status.success(), "{name}: {}", stderr(&output));
+            let output = folio(dir, &["fmt", "--check"]);
+            assert!(output.status.success(), "{name}: {}", stderr(&output));
+            assert!(stderr(&output).is_empty(), "{name}: {}", stderr(&output));
+        }
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        sources(tidy.path(), "", &mut a);
+        sources(messy.path(), "", &mut b);
+        assert_eq!(a, b, "{name}");
+
+        let built = |dir: &Path| {
+            let output = folio(dir, &["build", "--diagnostics", "json"]);
+            assert!(output.status.success(), "{name}: {}", stderr(&output));
+            let mut digests = Vec::new();
+            for build in json(&output)["builds"].as_array().unwrap() {
+                if build["status"] == "written"
+                    && let Some(path) = build["path"].as_str()
+                {
+                    let bytes = fs::read(dir.join(path)).unwrap();
+                    digests.push((path.to_owned(), Sha256::digest(bytes).to_vec()));
+                }
+            }
+            digests
+        };
+        let original = tempfile::tempdir().unwrap();
+        copy_dir(&corpus().join(name), original.path());
+        assert_eq!(built(messy.path()), built(original.path()), "{name}");
+    }
+}
+
+#[test]
+fn formatting_leaves_files_with_syntax_errors() {
+    let broken = "= Forces\n#box(  \n";
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "#include \"part.fol\"   \n"),
+        ("part.fol", broken),
+        ("style.fsty", "a{b:c}"),
+    ]);
+    let output = folio(dir.path(), &["fmt", "--color", "never"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(text.contains("part.fol:2:5"), "{text}");
+    assert!(text.contains("leaves part.fol as it is"), "{text}");
+    assert!(text.contains("formatted main.fol"), "{text}");
+    assert!(text.contains("formatted style.fsty"), "{text}");
+    let read = |path| fs::read_to_string(dir.path().join(path)).unwrap();
+    assert_eq!(read("part.fol"), broken);
+    assert_eq!(read("main.fol"), "#include \"part.fol\"\n");
+    assert_eq!(read("style.fsty"), "a { b: c }\n");
 }
