@@ -509,7 +509,7 @@ fn formatting_leaves_files_with_syntax_errors() {
     let read = |path| fs::read_to_string(dir.path().join(path)).unwrap();
     assert_eq!(read("part.fol"), broken);
     assert_eq!(read("main.fol"), "#include \"part.fol\"\n");
-    assert_eq!(read("style.fsty"), "a { b: c }\n");
+    assert_eq!(read("style.fsty"), "a {\n  b: c\n}\n");
 }
 
 #[cfg(unix)]
@@ -576,7 +576,7 @@ fn formatting_keeps_byte_order_marks_and_permissions() {
         .collect();
     assert_eq!(unformatted.len(), 1, "{document:#}");
     assert!(unformatted[0]["fixes"].as_array().unwrap().is_empty());
-    assert_eq!(read("style.fsty"), "a { b: c }\n");
+    assert_eq!(read("style.fsty"), "a {\n  b: c\n}\n");
     assert_eq!(read("locked.fsty"), "a{b:c}");
     #[cfg(unix)]
     {
