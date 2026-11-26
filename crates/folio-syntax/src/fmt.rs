@@ -26,9 +26,10 @@
 //!   meaning (list items nest by it).
 //! - Within a line, a run of spaces becomes one space, except before a
 //!   comment and before the `{` of a rule, which keep the alignment they
-//!   were given. In code and stylesheets a space follows `,` (except in the
-//!   step lists of selectors, `:step(1,3-4)`), `;` and the `:` of a named
-//!   argument, declaration or field, surrounds `=` in a binding, `=>`, and
+//!   were given. In code and stylesheets a space follows `,` (in the step
+//!   lists of selectors, `:step(1,3-4)`, it stays as written), `;` and the
+//!   `:` of a named argument, declaration, field or import, surrounds `=` in
+//!   a binding, `=>`, and
 //!   the combinators `>` and `+` of selectors, and separates the braces of
 //!   a declaration block from what they hold; none goes before `,`, `;` or
 //!   the `:` of a named argument, after `(` or before `)`; a space or a
@@ -706,6 +707,7 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
                 t.parent,
                 K::Named
                     | K::Keyed
+                    | K::ModuleImport
                     | K::Declaration
                     | K::TokenDecl
                     | K::SchemaField
@@ -944,6 +946,7 @@ mod tests {
         markup("#{x}\n", "#{ x }\n");
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
+        markup("#import \"a.fol\"  :x\n", "#import \"a.fol\": x\n");
         markup("= Hi  \n/* the rest", "= Hi\n/* the rest");
         style("a { b: c; } /* x", "a { b: c; } /* x");
         style("a { } /* x /* y */", "a { } /* x /* y */");

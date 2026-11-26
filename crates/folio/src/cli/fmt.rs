@@ -115,10 +115,15 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
             Ok(edits) => edits,
             Err(FormatError::Syntax) => {
                 let (errors, _) = source.root().errors_and_warnings();
-                diagnostics.extend(errors.into_iter().map(|e| {
-                    Diagnostic::from(e).with_hint(format!(
-                        "`folio fmt` leaves {path} as it is until it parses"
-                    ))
+                // The first error says what becomes of the file.
+                diagnostics.extend(errors.into_iter().enumerate().map(|(n, e)| {
+                    let error = Diagnostic::from(e);
+                    match n {
+                        0 => error.with_hint(format!(
+                            "`folio fmt` leaves {path} as it is until it parses"
+                        )),
+                        _ => error,
+                    }
                 }));
                 continue;
             }
