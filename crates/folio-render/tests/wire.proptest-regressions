@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d2c1974c9eb875b8f6b113aca9e106d79847a83c23fb02175e7e1df8fe8b3997 # shrinks to list = DisplayList { width: 0.0, height: 0.0, span: Span { source: SourceRef(0), instance: 0 }, items: [Item { command: Glyphs(Glyphs { origin: Point { x: 0.0, y: 0.0 }, font: FontId(0), size: 0.0, fill: Color { r: 0, g: 0, b: 0, a: 0 }, text: "", glyphs: [GlyphItem { id: 0, advance: 0.0, dx: 0.0, dy: -0.0, text: 0..0, source: (SourceRef(0), 0..0) }] }), span: Span { source: SourceRef(0), instance: 0 } }] }

@@ -9,7 +9,7 @@ from the scripts in `scripts/`.
 | Path | What it holds |
 | --- | --- |
 | `tests/corpus/<project>/` | The test corpus: whole projects (`folio.toml`, content, stylesheets), each covering features a real document uses. Every build of every project goes through the golden, PDF, determinism and command-line tests. |
-| `tests/golden/layout/` | Layout golden files: `<project>-<variant>.<target>.txt` for each corpus build that goes through layout, a text dump of its pages and fragments. Page images join them when the rasteriser lands (M1). |
+| `tests/golden/layout/` | Layout golden files: `<project>-<variant>.<target>.txt` for each corpus build that goes through layout, a text dump of its pages and fragments, and `<project>-<variant>.<target>-<page>.png` for each of its pages, drawn by `folio-render`; `boxes.pdf.*` for a document with fixed-size object boxes. |
 | `crates/folio-testkit/` | The test infrastructure as a crate: corpus loading, golden-file checks and dumps, the fuzz harnesses, the reference document generator, the benchmarks. |
 | `crates/folio-testkit/benches/compile.rs` | The instruction-count benchmarks of the regression gate. |
 | `crates/folio/tests/determinism/digests.txt` | The SHA-256 digests of the corpus outputs (SPEC §2.4). |
@@ -22,7 +22,7 @@ from the scripts in `scripts/`.
 
 | When | Command | What it checks |
 | --- | --- | --- |
-| Before every push | `scripts/check.sh` | Build, every test (golden files, fuzz regressions and seeds on stable, determinism, PDF/UA-1), clippy, rustfmt, rustdoc, MSRV, cargo-deny for both workspaces. |
+| Before every push | `scripts/check.sh` | Build, every test (golden files, fuzz regressions and seeds on stable, determinism, PDF/UA-1), clippy, rustfmt, rustdoc, the wasm32 build of `folio-render`, MSRV, cargo-deny for both workspaces. |
 | Before pushing a branch, and after each merge to main | `scripts/bench.sh` | The regression gate: instruction counts of the benchmarks against where the branch started; fails above 3%. Needs Valgrind and `gungraun-runner`. |
 | On a schedule (nightly or weekly) | `scripts/fuzz.sh [seconds]` | The fuzz smoke job: each target for 60 s by default. Needs nightly Rust and `cargo-fuzz`. |
 | Nightly, on the reference machine | `scripts/bench.sh --wall` | Wall-clock times of the M0 exit check (gated: 200 ms) and of the reference document against the targets of SPEC §14.1 (reported). |
@@ -34,17 +34,18 @@ failures.
 
 ## Golden files
 
-Expected output lives in files and is compared exactly. After a change
+Expected output lives in files and is compared exactly, except page
+images, which are compared within a tolerance (below). After a change
 meant to alter output, run
 
 ```bash
 scripts/bless.sh
 ```
 
-which rewrites every golden file (layout dumps, shaped paragraphs and the
-determinism digests), removes layout files whose build is gone, and prints
-what changed. Review that diff before committing it: a difference nobody
-meant is a bug. `FOLIO_BLESS=1` on a single golden test does the same for
+which rewrites every golden file (layout dumps, page images, shaped
+paragraphs and the determinism digests), removes layout files whose build
+or page is gone, and prints what changed. Review that diff, and the
+changed images, before committing it: a difference nobody meant is a bug. `FOLIO_BLESS=1` on a single golden test does the same for
 that test.
 
 A layout dump lists each page, then every fragment, glyph run and shape on
@@ -53,6 +54,17 @@ it and lengths in points rounded to hundredths. A fragment names the source
 it is the box of (`main.fol:12:1`), a run its font by PostScript name,
 size, width, glyph count and text. So a diff reads as "this paragraph moved
 3 pt down" or "this line now breaks after a different word".
+
+A page image is what `folio-render` draws of a page's display list, at
+72 dpi on white, as PNG: what a reader sees, so it catches what the
+renderer gets wrong and what a dump cannot show. The renderer uses scalar
+float code whose results IEEE 754 fixes, so a page should give the same
+pixels on every machine; the golden test still allows each channel of a
+pixel to differ by 2 levels of 255 (`golden::TOLERANCE`), and fails on
+anything more. Blessing rewrites an image only when a pixel changed. On a
+failure the test writes the image it got to `target/golden/<name>.png` and
+says how many pixels differ. The same test also sends every page's
+display list through the wire format and back.
 
 ## Adding a corpus document
 
@@ -80,6 +92,7 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | `compile` | A whole build of content with a stylesheet generated from the property registry (each three bytes a selector, a property and a value of its type, among them huge, zero, negative and non-finite lengths and numbers, and page sizes past PDF's limits) goes through pages and the PDF writer without a panic. |
 | `manifest` | Reading a `folio.toml` finishes without a panic, and every build of a valid one compiles a small document. |
 | `lockfile` | Reading a `folio.lock` beside a fixed manifest finishes without a panic, and a valid one compiles. |
+| `wire` | Decoding a display list message of `folio-render`'s wire format finishes without a panic, and what decodes encodes to a message that decodes to the same. |
 
 The `differential` harness also runs as a property test on stable:
 `cargo test -p folio-testkit --test differential` checks 12 random

@@ -19,6 +19,7 @@ folio-core = { path = "crates/folio-core" }
 folio-fonts = { path = "crates/folio-fonts" }
 folio-text = { path = "crates/folio-text" }
 folio-pdf = { path = "crates/folio-pdf" }
+folio-render = { path = "crates/folio-render" }
 folio-testkit = { path = "crates/folio-testkit" }
 folio = { path = "crates/folio" }
 # The command line (SPEC §12.1).
@@ -61,6 +62,12 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 # Font parsing (fontations): maintained, and shared with the shaper and PDF
 # writer of SPEC §2.2.
 skrifa = "0.50.0"
+# Rasterisation of display lists (SPEC §12.2). No default features: `simd`
+# is off so that every platform draws the same pixels from the same scalar
+# float code (SPEC §2.4), and PNG goes through `png` directly.
+tiny-skia = { version = "0.12.0", default-features = false, features = ["std"] }
+# PNG output of rendered pages and the page-image goldens (SPEC §14.2).
+png = "0.18.1"
 # Font files are locked by their SHA-256 hash (SPEC §2.4).
 sha2 = "0.11.1"
 # Grows the evaluator's stack on deep recursion (SPEC §14.3).
