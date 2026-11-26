@@ -67,6 +67,37 @@ pub struct Text {
     /// every part of one (a content field other than the body). Layout
     /// draws their boxes and keeps their constraints (SPEC §7.1).
     pub root: TextBlock,
+    /// The formulas, inline and display, in document order: what math
+    /// layout sets (SPEC §8.2).
+    pub maths: EcoVec<TextMath>,
+}
+
+/// A formula of a build, as math layout reads it: an inline formula, which
+/// stands in its paragraph as the objects of its chunks
+/// ([`TextObject::math`]), or a display, the content of its element's
+/// block.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TextMath {
+    /// The formula.
+    pub formula: folio_math::Formula,
+    /// The computed style of its `math` element.
+    pub style: ComputedStyle,
+    /// The element.
+    pub span: Span,
+    /// The element instance.
+    pub location: Location,
+    /// Whether it is a display.
+    pub display: bool,
+}
+
+/// The part of an inline formula an object character stands for.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct MathChunk {
+    /// The formula, as an index into [`Text::maths`].
+    pub formula: usize,
+    /// Which of its chunks, between which a line may break
+    /// ([`folio_math::layout::inline_chunks`]).
+    pub chunk: usize,
 }
 
 /// A block of the document and what it holds, in document order: the
@@ -142,6 +173,8 @@ pub struct TextObject {
     pub span: Span,
     /// The element instance.
     pub location: Location,
+    /// For a chunk of an inline formula, which.
+    pub math: Option<MathChunk>,
 }
 
 /// The style and face of a segment of a paragraph.
@@ -223,6 +256,7 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
     Some(Text {
         paragraphs,
         root: collected.root.clone(),
+        maths: collected.maths.clone(),
     })
 }
 
@@ -233,6 +267,8 @@ pub struct Collected {
     pub paragraphs: EcoVec<CollectedParagraph>,
     /// The blocks that hold them, as [`Text::root`].
     pub root: TextBlock,
+    /// The formulas, as [`Text::maths`].
+    pub maths: EcoVec<TextMath>,
 }
 
 /// A paragraph of a build, split into segments set in their fonts, before
@@ -290,6 +326,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         owner: Span::detached(),
         resolution,
         markers: Vec::new(),
+        maths: Vec::new(),
     };
     collector.element(&doc.root, &styled.root);
 
@@ -297,6 +334,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
     Some(Collected {
         paragraphs: collector.pending.into_iter().collect(),
         root,
+        maths: collector.maths.into_iter().collect(),
     })
 }
 
@@ -335,6 +373,8 @@ struct Collector<'a> {
     resolution: &'a Resolution,
     /// The markers waiting for the next paragraph, outermost first.
     markers: Vec<Pending>,
+    /// The formulas, in document order.
+    maths: Vec<TextMath>,
 }
 
 /// A marker waiting for the paragraph it starts.
@@ -451,7 +491,11 @@ impl Collector<'_> {
                 .iter()
                 .any(|(_, value)| matches!(value, eval::Value::Content(_)))
         {
-            // Display maths and images are reported as such.
+            // A display is laid out by math layout, as its block's
+            // content; images are reported as such.
+            if self.formula(element, node, true).is_some() {
+                return;
+            }
             if ["math", "image"]
                 .iter()
                 .any(|name| is_builtin(&element.name, name))
@@ -646,22 +690,52 @@ impl Collector<'_> {
             self.owner = owner;
             return;
         }
-        // Inline math, an image: an object layout sizes.
+        // Inline math: an object for each of its chunks, between which a
+        // line may break, which math layout sizes.
+        if let Some(formula) = self.formula(element, node, false) {
+            let chunks = folio_math::layout::inline_chunks(&self.maths[formula].formula);
+            for chunk in 0..chunks {
+                out.object_of(
+                    style,
+                    element,
+                    node.location,
+                    Some(MathChunk { formula, chunk }),
+                );
+            }
+            return;
+        }
+        // An image: an object layout will size.
         self.not_laid_out(element);
         out.object(style, element, node.location);
     }
 
+    /// Records the formula of a `math` element, and returns its index in
+    /// [`Text::maths`]; `None` for an element that is no formula.
+    fn formula(&mut self, element: &Element, node: &StyledNode, display: bool) -> Option<usize> {
+        if !is_builtin(&element.name, "math") {
+            return None;
+        }
+        let Some(eval::Value::Math(formula)) = element.field("tree") else {
+            return None;
+        };
+        self.maths.push(TextMath {
+            formula: formula.clone(),
+            style: node.style.clone(),
+            span: element.span,
+            location: node.location,
+            display,
+        });
+        Some(self.maths.len() - 1)
+    }
+
     /// Warns, once per build and element, that layout does not draw an
     /// element yet, so the output leaves it out (SPEC §7.9). Each warning
-    /// goes with the work that lays its element out: maths with
-    /// `folio-math` (#43), images with figures and images (#47), and the
-    /// boxes of other content with #214.
+    /// goes with the work that lays its element out: images with figures
+    /// and images (#47), and the boxes of other content with #214.
     fn not_laid_out(&mut self, element: &Element) {
         let name = &element.name;
         let builtin = |text: &str| is_builtin(name, text);
-        let message = if builtin("math") {
-            EcoString::from("maths is not laid out yet, so the output leaves it out")
-        } else if builtin("image") {
+        let message = if builtin("image") {
             EcoString::from("images are not laid out yet, so the output leaves them out")
         } else {
             eco_format!("`{name}` is not laid out yet, so the output leaves it out")
@@ -933,6 +1007,17 @@ impl Builder {
     /// Appends an object in a style, standing for the instance `location`
     /// of `element`.
     fn object(&mut self, style: &ComputedStyle, element: &Element, location: Location) {
+        self.object_of(style, element, location, None);
+    }
+
+    /// An object character for an element, or for a chunk of its formula.
+    fn object_of(
+        &mut self,
+        style: &ComputedStyle,
+        element: &Element,
+        location: Location,
+        math: Option<MathChunk>,
+    ) {
         self.flush_quote(Some(OBJECT));
         let start = self.text.len();
         self.text.push(OBJECT);
@@ -941,6 +1026,7 @@ impl Builder {
             element: element.name.clone(),
             span: element.span,
             location,
+            math,
         });
         self.extend(start..self.text.len(), style, true, element.span);
     }

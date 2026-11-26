@@ -45,14 +45,23 @@ pub(crate) fn layout_accent(
     out: &mut Vec<MathFragment>,
 ) {
     let top = !is_bottom(accent);
-    // The base of an accent above is cramped.
-    let base_style = if top { style.cramp() } else { style };
+    // The base of an accent above is cramped, and its `i` and `j` lose
+    // their dots.
+    let base_style = if top {
+        Style {
+            dotless: true,
+            ..style.cramp()
+        }
+    } else {
+        style
+    };
     let base = ctx.layout_row(base, base_style, MathClass::Normal);
     let size = base.font_size().unwrap_or_else(|| ctx.font_size(style));
     // A tall base takes the flattened form of the accent.
     let flat = ctx.font.constant(Constant::FlattenedAccentBaseHeight) * size;
     let mut features = style.features();
     features.flac = top && base.ascent() > flat;
+    features.dtls = false;
     let stretch = Stretch {
         axis: Axis::X,
         target: base.width(),

@@ -31,7 +31,7 @@ pub(crate) fn layout_matrix(
     style: Style,
     out: &mut Vec<MathFragment>,
 ) {
-    let table = layout_table(ctx, &matrix.rows, style, (COL_GAP, ROW_GAP), true);
+    let table = layout_table(ctx, &matrix.rows, style, (COL_GAP, ROW_GAP), Kind::Matrix);
     fence(
         ctx,
         table,
@@ -52,7 +52,7 @@ pub(crate) fn layout_cases(
     out: &mut Vec<MathFragment>,
 ) {
     let rows: Vec<Vec<Row>> = cases.cases.iter().map(|case| vec![case.clone()]).collect();
-    let table = layout_table(ctx, &rows, style, (0.0, ROW_GAP), false);
+    let table = layout_table(ctx, &rows, style, (0.0, ROW_GAP), Kind::Cases);
     fence(ctx, table, Some('{'), None, style, cases.span, out);
 }
 
@@ -78,17 +78,29 @@ struct Cell {
     height: (f64, f64),
 }
 
+/// What a table is.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum Kind {
+    Matrix,
+    Cases,
+}
+
+/// The space between the parts of a case, in ems: a quad, as TeX's `cases`
+/// sets its columns.
+const CASES_GAP: f64 = 1.0;
+
 /// Lays out rows of cells in the style of a denominator, `gap` apart
 /// (columns, rows, in ems). A matrix centres the rows of each column, and
 /// alternates its cells' alignment at their alignment points; cases start
-/// every part at its point.
+/// every part at its point, a quad after the part before.
 fn layout_table(
     ctx: &mut Ctx,
     rows: &[Vec<Row>],
     style: Style,
     gap: (f64, f64),
-    matrix: bool,
+    kind: Kind,
 ) -> MathFragment {
+    let matrix = kind == Kind::Matrix;
     let size = ctx.font_size(style);
     let nrows = rows.len();
     let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
@@ -109,10 +121,17 @@ fn layout_table(
     let mut heights = vec![(0.0f64, 0.0f64); nrows];
     for (r, row) in rows.iter().enumerate() {
         for c in 0..ncols {
-            let columns = match row.get(c) {
+            let mut columns = match row.get(c) {
                 Some(cell) => ctx.layout_aligned(cell.nodes(), cell_style),
                 None => vec![Vec::new()],
             };
+            if kind == Kind::Cases {
+                let quad = CASES_GAP * size;
+                let parts = columns.len();
+                for part in columns.iter_mut().take(parts.saturating_sub(1)) {
+                    part.push(MathFragment::Space(quad));
+                }
+            }
             let height = measure_row(&columns);
             heights[r].0 = heights[r].0.max(height.0.max(paren_ascent));
             heights[r].1 = heights[r].1.max(height.1.max(paren_descent));

@@ -44,21 +44,15 @@ fn warning(message: &str, at: &str) -> (Severity, String, String) {
 }
 
 #[test]
-fn a_reference_and_maths_are_reported() {
+fn a_reference_is_reported_and_maths_is_laid_out() {
     let world = world("", "See @nowhere and $x^2$ here.\n");
     let compiled = compile(&world, Target::Pdf);
     assert_eq!(
         located(&world, &compiled),
-        [
-            warning(
-                "no element has the label `<nowhere>`, so the reference has nothing to refer to",
-                "@nowhere"
-            ),
-            warning(
-                "maths is not laid out yet, so the output leaves it out",
-                "$x^2$"
-            ),
-        ]
+        [warning(
+            "no element has the label `<nowhere>`, so the reference has nothing to refer to",
+            "@nowhere"
+        )]
     );
     assert!(compiled.output.is_some());
 }
@@ -128,10 +122,6 @@ fn lists_the_warnings_for_what_is_not_supported() {
         warning(&not_implemented("placement"), "placement: top;"),
         warning(&not_implemented("template"), "template: \"bold\";"),
         // Once per build and kind, at the first.
-        warning(
-            "maths is not laid out yet, so the output leaves it out",
-            "$x$",
-        ),
         warning(
             "images are not laid out yet, so the output leaves them out",
             "image(\"ball.png\")",
@@ -213,7 +203,8 @@ fn a_render_block_is_reported_in_a_laid_out_build() {
 
 #[test]
 fn display_maths_and_page_rules_of_other_targets() {
-    // Display maths is maths, and a rule for another target does not warn.
+    // Display and inline maths are laid out, and a rule for another target
+    // does not warn.
     let world = world(
         "@target docx { page:first { margin-top: 1cm; } }\n",
         "Text.\n\n$ x^2 $\n\nMore $y$.\n",
@@ -223,10 +214,7 @@ fn display_maths_and_page_rules_of_other_targets() {
         .iter()
         .map(|d| d.message.to_string())
         .collect();
-    assert_eq!(
-        messages,
-        ["maths is not laid out yet, so the output leaves it out"]
-    );
+    assert!(messages.is_empty(), "{messages:?}");
 }
 
 #[test]

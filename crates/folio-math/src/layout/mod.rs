@@ -261,12 +261,13 @@ pub fn layout_display(
 }
 
 /// Lays out text in the math font, upright, at the size of the text around
-/// formulas: an equation's number. `None` when the font cannot set it.
+/// formulas: an equation's number, with its width, ascent and descent.
+/// `None` when the font cannot set it.
 pub fn layout_text(
     text: &str,
     options: &MathOptions,
     source: SourceRef,
-) -> Option<(Abs, Abs, EcoVec<(Point, FragmentItem)>)> {
+) -> Option<(Abs, Abs, Abs, EcoVec<(Point, FragmentItem)>)> {
     let ctx = Ctx::new(options);
     let style = Style::new(MathSize::Text);
     let glyph = GlyphFragment::new(
@@ -281,7 +282,12 @@ pub fn layout_text(
     let frame = glyph.into_frame();
     let mut items = EcoVec::new();
     ctx.flatten(&frame, 0.0, -frame.baseline, &|_| source, &mut items);
-    Some((Abs::pt(frame.width), Abs::pt(frame.baseline), items))
+    Some((
+        Abs::pt(frame.width),
+        Abs::pt(frame.baseline),
+        Abs::pt(frame.descent()),
+        items,
+    ))
 }
 
 /// The style a part of a formula is set in.
@@ -291,6 +297,8 @@ pub(crate) struct Style {
     pub cramped: bool,
     /// The alphabet of a styled body, if any.
     pub alphabet: Option<Alphabet>,
+    /// Whether `i` and `j` take their dotless forms, under an accent.
+    pub dotless: bool,
 }
 
 impl Style {
@@ -299,6 +307,7 @@ impl Style {
             size,
             cramped: false,
             alphabet: None,
+            dotless: false,
         }
     }
 
@@ -350,6 +359,7 @@ impl Style {
                 MathSize::ScriptScript => 2,
                 _ => 0,
             },
+            dtls: self.dotless,
             ..Features::default()
         }
     }

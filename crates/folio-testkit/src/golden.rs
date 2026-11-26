@@ -490,6 +490,7 @@ pub const TALL: ObjectMetrics = ObjectMetrics {
     ascent: Abs::pt(24.0),
     descent: Abs::pt(8.0),
     shift: Abs::zero(),
+    after: None,
 };
 
 /// The size of the raised test box: the second inline maths of [`BOXES`],
@@ -499,6 +500,7 @@ pub const RAISED: ObjectMetrics = ObjectMetrics {
     ascent: Abs::pt(6.0),
     descent: Abs::pt(2.0),
     shift: Abs::pt(5.0),
+    after: None,
 };
 
 /// Where the raised test box stands in its paragraph's text: after "A line
@@ -511,9 +513,10 @@ pub const BLOCK: Size = Size::new(Abs::pt(120.0), Abs::pt(60.0));
 
 /// The world of [`BOXES`], and its pages with fixed-size test boxes for
 /// its objects and its empty figure, through the page builder's test hooks
-/// ([`folio::layout::Regions`]). Until maths and images are laid out
-/// (#43, #47), nothing else sizes objects: a normal build of the same
-/// document leaves them without a size.
+/// ([`folio::layout::Regions`]). The hooks stand in for the sizes math
+/// layout gives the formulas, so that the golden file tests the page
+/// builder's handling of object sizes on its own; until images are laid
+/// out (#47), nothing else sizes the empty figure.
 pub fn boxes() -> (World, Pages) {
     let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
                     lang = \"en-GB\"\nstyles = [\"styles/boxes.fsty\"]\n";

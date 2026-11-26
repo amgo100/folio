@@ -348,6 +348,15 @@ impl Runs<'_> {
             return pen + tracking;
         };
         self.flush();
+        // A chunk of a formula draws its glyphs and rules.
+        if let Some(items) = &object.content {
+            let baseline = self.baseline - m.shift;
+            for (pos, item) in items {
+                self.out
+                    .push((Point::new(pen + pos.x, baseline + pos.y), item.clone()));
+            }
+            return pen + m.width + tracking;
+        }
         let top = self.baseline - m.shift - m.ascent;
         self.out.push((
             Point::new(pen, top),

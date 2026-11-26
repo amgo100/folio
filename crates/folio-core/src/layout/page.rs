@@ -384,6 +384,7 @@ fn build_pages(
         Sizes {
             inline: regions.object,
             block: regions.block,
+            maths: &lines.maths,
         },
     );
     let paragraph = |item: usize| match flow.origins[item] {
@@ -771,9 +772,10 @@ impl<'a> Run<'a> {
             Leaf::Paragraph(info) => {
                 let body = page.master.body.size.width;
                 let (paragraph, rebroken) = info.at_width(body, width, page.caches);
-                // A paragraph with sized objects was broken again with them,
-                // so its lines are not those that `lines` reported.
-                let rebroken = rebroken || !paragraph.objects.is_empty();
+                // A paragraph whose objects the test hook sized was broken
+                // again with them, so its lines are not those that `lines`
+                // reported.
+                let rebroken = rebroken || paragraph.hooked;
                 if paragraph.layout.lines.is_empty() {
                     self.leaves.push(empty(&item.before));
                     return;
@@ -1082,14 +1084,22 @@ fn assemble(run: &Run<'_>, end: usize, first: bool) -> Fragment {
             let x = stack
                 .last()
                 .map_or(Abs::zero(), |(block, _)| block.content().0);
-            asm.add(
-                Point::new(x, y),
-                FragmentItem::Object(ObjectBox {
-                    size: object.size,
-                    baseline: object.size.height,
-                    location: object.location,
-                }),
-            );
+            match &object.content {
+                // A display draws its glyphs and rules.
+                Some(items) => {
+                    for (pos, item) in items {
+                        asm.add(Point::new(x + pos.x, y + pos.y), item.clone());
+                    }
+                }
+                None => asm.add(
+                    Point::new(x, y),
+                    FragmentItem::Object(ObjectBox {
+                        size: object.size,
+                        baseline: object.size.height,
+                        location: object.location,
+                    }),
+                ),
+            }
             asm.baseline(y + object.size.height);
         }
         y += leaf.height();

@@ -67,6 +67,7 @@ mod cache;
 mod flow;
 pub mod linebreak;
 mod master;
+mod math;
 mod page;
 mod paragraph;
 mod set;
@@ -83,13 +84,15 @@ use folio_syntax::{DiagSpan, SubRange};
 pub use self::cache::{Cache, Stats};
 pub use self::flow::{KEEP, UNBREAKABLE, WIDOW};
 pub use self::master::{BlockBox, BreakBefore, PageMaster, Sides};
+use self::math::maths;
+pub use self::math::{Display, LaidMath, MATH_FONT, Maths, Number};
 pub use self::page::{
     FILL, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject, pages,
     paginate,
 };
 pub use self::paragraph::{
-    Align, Line, LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle,
-    SegmentMetrics, layout_paragraph, object_offsets,
+    Align, Line, LineSlot, ObjectBreak, ObjectMetrics, ParagraphInput, ParagraphLayout,
+    ParagraphStyle, SegmentMetrics, layout_paragraph, object_offsets,
 };
 
 /// The objects the [`Regions::object`] hook sizes, here so that the test
@@ -123,6 +126,10 @@ pub struct Lines {
     /// whose content it is, and where that starts from the left of the
     /// body. A line's `x` is relative to its slot.
     pub slots: EcoVec<LineSlot>,
+    /// The build's formulas laid out ([`maths()`]): the paragraphs were
+    /// broken with their inline formulas' sizes, and the page builder
+    /// draws them and sizes the blocks of displays.
+    pub maths: Maths,
 }
 
 /// The paragraphs of a build broken into lines of the body's width, or
@@ -134,6 +141,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let styled = step_styled(db, build)?;
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
+    let maths = maths(db, build).unwrap_or_default();
 
     let width = PageMaster::of(&styled.page, props).body.size.width;
     let slots: EcoVec<LineSlot> =
@@ -152,7 +160,11 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let inputs: Vec<ParagraphInput<'_>> = text
         .paragraphs
         .iter()
-        .map(|p| input_with(p, props, &mut metrics))
+        .map(|p| {
+            let mut input = input_with(p, props, &mut metrics);
+            input.objects = maths.metrics(&p.objects);
+            input
+        })
         .collect();
     let jobs: Vec<(ParagraphInput<'_>, &[LineSlot])> = inputs
         .into_iter()
@@ -173,6 +185,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         width,
         paragraphs,
         slots,
+        maths,
     })
 }
 

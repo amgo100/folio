@@ -67,6 +67,21 @@ pub struct ObjectMetrics {
     /// How far its baseline is raised above the line's (negative lowers
     /// it).
     pub shift: Abs,
+    /// Where the object and the next are chunks of one inline formula
+    /// (SPEC §8.2): what breaking the line between them costs, and the
+    /// space at the end of this chunk that a line ending there drops.
+    /// Without it, a line breaks around the object as its text allows.
+    pub after: Option<ObjectBreak>,
+}
+
+/// A place where a line may break between two chunks of an inline formula.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub struct ObjectBreak {
+    /// The cost of the break: TeX's `\relpenalty` after a relation,
+    /// `\binoppenalty` after a binary operator.
+    pub penalty: i32,
+    /// The space at the end of the chunk before it.
+    pub space: Abs,
 }
 
 impl ObjectMetrics {
@@ -356,6 +371,39 @@ impl Prepared {
                 protrude_end,
                 protrude_start,
             });
+        }
+
+        // Between the chunks of an inline formula a line breaks where math
+        // layout allows, at its cost, and drops the space the chunk before
+        // ends with (SPEC §8.2).
+        for (i, &at) in offsets.iter().enumerate() {
+            let Some(after) = input.objects.get(i).and_then(|m| m.after) else {
+                continue;
+            };
+            let offset = at + folio_text::OBJECT.len_utf8();
+            if offset >= len {
+                continue;
+            }
+            let space = after.space.to_pt();
+            let mut end = totals[offset];
+            end.width -= space;
+            let candidate = Candidate {
+                offset,
+                kind: BreakKind::Normal,
+                penalty: f64::from(after.penalty),
+                flagged: false,
+                content_end: offset,
+                end,
+                start: totals[offset],
+                end_extra: 0.0,
+                start_extra: 0.0,
+                protrude_end: 0.0,
+                protrude_start: 0.0,
+            };
+            match candidates.binary_search_by_key(&offset, |c| c.offset) {
+                Ok(i) => candidates[i] = candidate,
+                Err(i) => candidates.insert(i, candidate),
+            }
         }
 
         Self {

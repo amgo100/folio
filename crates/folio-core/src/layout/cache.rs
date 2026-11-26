@@ -11,7 +11,10 @@ use std::time::Instant;
 
 use ecow::EcoVec;
 use folio_component::Abs;
-use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind, Shaped};
+use folio_fonts::Font;
+use folio_math::Formula;
+use folio_math::layout::{DisplayMath, InlineMath, MathFont, MathOptions};
+use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind, Shaped, TextFont};
 
 use super::flow::Fx;
 use super::paragraph::{
@@ -51,6 +54,28 @@ pub struct Cache {
     /// They are forgotten like paragraphs, so that the fonts they hold can
     /// be dropped by the text cache too.
     hyphens: Mutex<HashMap<HyphenKey, (Hyphen, u64)>>,
+    /// Formulas laid out (SPEC §8.2), by their tree and what they are set
+    /// with, forgotten like paragraphs.
+    maths: Mutex<HashMap<MathKey, (CachedMath, u64)>>,
+    /// The math fonts, by their face, each read once.
+    math_fonts: Mutex<HashMap<(usize, Font), (MathFont, u64)>>,
+}
+
+/// A formula and what it is set with.
+#[derive(Clone, Eq, PartialEq, Hash)]
+struct MathKey {
+    formula: Formula,
+    options: MathOptions,
+    display: bool,
+}
+
+/// A formula laid out.
+#[derive(Debug, Clone)]
+pub(super) enum CachedMath {
+    /// Inline, in chunks.
+    Inline(Arc<InlineMath>),
+    /// A display.
+    Display(Arc<DisplayMath>),
 }
 
 /// A hyphen in a font, with features and a language.
@@ -291,6 +316,8 @@ impl Cache {
         {
             lock(&self.entries).retain(|_, entry| entry.used + MAX_AGE >= now);
             lock(&self.hyphens).retain(|_, (_, used)| *used + MAX_AGE >= now);
+            lock(&self.maths).retain(|_, (_, used)| *used + MAX_AGE >= now);
+            lock(&self.math_fonts).retain(|_, (_, used)| *used + MAX_AGE >= now);
         }
         out.into_iter()
             .map(|layout| layout.expect("every paragraph is broken"))
@@ -309,6 +336,48 @@ impl Cache {
         let glyphs = hyphen_glyphs(segment, c);
         lock(&self.hyphens).insert(key, (glyphs.clone(), now));
         glyphs
+    }
+
+    /// A formula laid out by `lay_out`, once per world for its tree and
+    /// options.
+    pub(super) fn math(
+        &self,
+        formula: &Formula,
+        options: &MathOptions,
+        display: bool,
+        lay_out: impl FnOnce() -> CachedMath,
+    ) -> CachedMath {
+        let now = self.clock.load(Ordering::Relaxed);
+        let key = MathKey {
+            formula: formula.clone(),
+            options: options.clone(),
+            display,
+        };
+        if let Some((found, used)) = lock(&self.maths).get_mut(&key) {
+            *used = now;
+            return found.clone();
+        }
+        let laid = lay_out();
+        lock(&self.maths)
+            .entry(key)
+            .or_insert((laid, now))
+            .0
+            .clone()
+    }
+
+    /// The math font of face `face` of a build, which is `font`, shaped
+    /// through `text`; read once per world.
+    pub(super) fn math_font(&self, face: usize, font: &Font, text: TextFont) -> Option<MathFont> {
+        let now = self.clock.load(Ordering::Relaxed);
+        let key = (face, font.clone());
+        if let Some((found, used)) = lock(&self.math_fonts).get_mut(&key) {
+            *used = now;
+            return Some(found.clone());
+        }
+        let data: folio_math::layout::FontBytes = Arc::new(font.data().clone());
+        let math = MathFont::new(data, font.index(), text, super::math::font_id(face))?;
+        lock(&self.math_fonts).insert(key, (math.clone(), now));
+        Some(math)
     }
 
     /// How often the cache had a paragraph's lines since it was made.
@@ -389,6 +458,7 @@ mod tests {
                 ascent: Abs::pt(ascent),
                 descent: Abs::pt(3.0),
                 shift: Abs::zero(),
+                after: None,
             }]),
         };
         let slots = [LineSlot {

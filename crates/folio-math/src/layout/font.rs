@@ -12,7 +12,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use ecow::{EcoString, EcoVec};
+use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::FontId;
 use folio_text::{Feature, ItemKind, Paragraph, Segment, SegmentKind, TextFont};
 use skrifa::raw::tables::math::{Math, MathConstant, MathKernCorner, StretchAxis};
@@ -537,10 +537,22 @@ impl MathFont {
                 value: 1,
             });
         }
+        // A combining mark alone is shaped after a no-break space, so that
+        // the shaper takes it for a cluster of its own and draws no dotted
+        // circle; only the mark's glyph is kept, at its own advance.
+        let mark = {
+            let mut chars = text.chars();
+            matches!((chars.next(), chars.next()), (Some(c), None) if is_mark(c))
+        };
+        let shaped_text: EcoString = if mark {
+            eco_format!("\u{A0}{text}")
+        } else {
+            text.into()
+        };
         let paragraph = Paragraph {
-            text: text.into(),
+            text: shaped_text.clone(),
             segments: EcoVec::from([Segment {
-                range: 0..text.len(),
+                range: 0..shaped_text.len(),
                 kind: SegmentKind::Text {
                     font: Some(self.0.text.clone()),
                     features: list,
@@ -560,12 +572,27 @@ impl MathFont {
                 return None;
             };
             let upem = f64::from((*units_per_em).max(1));
-            for g in glyphs {
+            for (i, g) in glyphs.iter().enumerate() {
                 if g.id == 0 {
                     return None;
                 }
+                let id = u16::try_from(g.id).ok()?;
+                if mark {
+                    // The space comes first.
+                    if i == 0 {
+                        continue;
+                    }
+                    out.push(Shaped {
+                        id,
+                        cluster: 0,
+                        advance: self.glyph(id).advance,
+                        x_offset: 0.0,
+                        y_offset: 0.0,
+                    });
+                    continue;
+                }
                 out.push(Shaped {
-                    id: u16::try_from(g.id).ok()?,
+                    id,
                     cluster: g.cluster,
                     advance: f64::from(g.x_advance) / upem,
                     x_offset: f64::from(g.x_offset) / upem,
@@ -634,6 +661,19 @@ impl Debug for MathFont {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "MathFont({})", self.0.id.0)
     }
+}
+
+/// Whether a character is a combining mark, which shapers attach to the
+/// character before it.
+fn is_mark(c: char) -> bool {
+    matches!(
+        c,
+        '\u{300}'..='\u{36F}'
+            | '\u{1AB0}'..='\u{1AFF}'
+            | '\u{1DC0}'..='\u{1DFF}'
+            | '\u{20D0}'..='\u{20FF}'
+            | '\u{FE20}'..='\u{FE2F}'
+    )
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
