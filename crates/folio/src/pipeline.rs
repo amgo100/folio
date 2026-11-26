@@ -267,6 +267,7 @@ fn document_span(db: &dyn Db, build: Build<'_>, root: Span) -> DiagSpan {
 pub(crate) fn structure(block: &TextBlock, text: &Text) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
     let mut tag = Tag::new(role, source_ref(block.span));
+    tag.instance = block.location.instance;
     if role == Role::Heading {
         tag.text = block_text(block, text);
     }
