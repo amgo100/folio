@@ -88,7 +88,7 @@ impl Logged {
 /// their shaping (memoised apart per paragraph); the check of the fonts the
 /// collected text is set in; line and page breaking, which read the text;
 /// and Emit, which reads the pages.
-const EVAL: &str = "eval_file evaluate document styles select sequence resolve step_style \
+const EVAL: &str = "eval_file evaluate document styles select sequence resolve_counters resolve step_style \
                     check_fonts collect_text text lines pages pdf_input pdf_check emit";
 
 /// A set of query names; an item may hold several, separated by spaces.
