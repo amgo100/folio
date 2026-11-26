@@ -24,11 +24,11 @@ use super::{Cache, length};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
-use crate::pipeline::{resolution, step_styled};
+use crate::pipeline::resolution;
 use crate::resolve::{Resolution, Target};
 use crate::span_map::source_ref;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{TextMath, TextObject, collect_text};
+use crate::text::{MathSettings, TextMath, TextObject, collect_text};
 
 /// The family formulas are set in, until a stylesheet property chooses it
 /// (SPEC §8.2). It is bundled, so every build has it.
@@ -132,7 +132,6 @@ impl Maths {
 /// the layout cache.
 pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
     let collected = collect_text(db, build).as_ref()?;
-    let styled = step_styled(db, build)?;
     let resolution = resolution(db, build)?;
     let fonts = fonts(db, build.project(db));
     if collected.maths.is_empty() {
@@ -156,7 +155,12 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
         .iter()
         .map(|m| {
             db.unwind_if_revision_cancelled();
-            let options = options(&font, &m.style, &styled.properties);
+            let options = MathOptions {
+                font: font.clone(),
+                size: m.settings.size,
+                fill: m.settings.fill.clone(),
+                leading: m.settings.leading,
+            };
             let (laid, unset) = lay_out(db.layout_cache(), m, &options, resolution);
             for text in unset {
                 diag::report(
@@ -203,13 +207,12 @@ fn math_font(db: &dyn Db, fonts: &Fonts) -> Option<MathFont> {
 }
 
 /// What a formula is set with, from the computed style of its element.
-fn options(font: &MathFont, style: &ComputedStyle, props: &Properties) -> MathOptions {
+pub(crate) fn math_settings(style: &ComputedStyle, props: &Properties) -> MathSettings {
     let fill = match style.value(props, props.builtin("color")) {
         Some(Value::Color(color)) => Paint::Solid(*color),
         _ => Paint::Solid(Color::BLACK),
     };
-    MathOptions {
-        font: font.clone(),
+    MathSettings {
         size: length(style, props, "font-size"),
         fill,
         leading: length(style, props, "leading"),

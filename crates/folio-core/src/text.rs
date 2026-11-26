@@ -80,14 +80,28 @@ pub struct Text {
 pub struct TextMath {
     /// The formula.
     pub formula: folio_math::Formula,
-    /// The computed style of its `math` element.
-    pub style: ComputedStyle,
+    /// What its `math` element's computed style gives it: the font size,
+    /// paint and leading it is set with. Only these, rather than the whole
+    /// style, so that comparing a build's formulas across an edit is
+    /// cheap.
+    pub settings: MathSettings,
     /// The element.
     pub span: Span,
     /// The element instance.
     pub location: Location,
     /// Whether it is a display.
     pub display: bool,
+}
+
+/// What a formula is set with, from its element's style.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct MathSettings {
+    /// The font size: `font-size`.
+    pub size: folio_component::Abs,
+    /// The paint of its glyphs and rules: `color`.
+    pub fill: folio_component::Paint,
+    /// The space between its lines: `leading`.
+    pub leading: folio_component::Abs,
 }
 
 /// The part of an inline formula an object character stands for.
@@ -720,7 +734,7 @@ impl Collector<'_> {
         };
         self.maths.push(TextMath {
             formula: formula.clone(),
-            style: node.style.clone(),
+            settings: crate::layout::math_settings(&node.style, self.props),
             span: element.span,
             location: node.location,
             display,
