@@ -9,7 +9,7 @@
 //!
 //! - Line ends are `\n`, lines carry no trailing whitespace (line comments
 //!   included; block comments, strings, raw text and equations keep their
-//!   bytes), and there is at most one blank line in a row. A stylesheet
+//!   bytes, line ends included), and there is at most one blank line in a row. A stylesheet
 //!   starts with its first token and ends with one newline. Content keeps
 //!   the kind of whitespace it starts and ends with (none, a space, a
 //!   paragraph break), since an included file puts it into the text around
@@ -746,7 +746,7 @@ fn inline_code(text: &str, prev: Token, next: Token) -> EcoString {
     // One space.
     if matches!(prev.kind, K::Comma | K::Semicolon) && !separated && !next.closes()
         || prev.kind == K::RightBrace && is_rule_block(prev.parent) && !next.closes()
-        || prev.kind == K::RightBrace && next.kind == K::Else
+        || matches!(prev.kind, K::RightBrace | K::RightBracket) && next.kind == K::Else
         || prev.kind == K::Else
         || named_colon(prev)
         || binding_eq(prev)
@@ -947,6 +947,7 @@ mod tests {
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
         markup("#import \"a.fol\"  :x\n", "#import \"a.fol\": x\n");
+        markup("#if a [b]else[c]\n", "#if a [b] else [c]\n");
         markup("= Hi  \n/* the rest", "= Hi\n/* the rest");
         style("a { b: c; } /* x", "a { b: c; } /* x");
         style("a { } /* x /* y */", "a { } /* x /* y */");
