@@ -235,8 +235,9 @@ impl Properties {
 /// declaration sets it to `value` (`None` for a render template): the
 /// feature, for a warning that the declaration has no effect (SPEC §7.9).
 /// Its initial value, and `placement: here`, which is where layout puts
-/// every float, ask for nothing. Each entry goes with the work that reads
-/// the property: numbering and references with counters (#44), `display`
+/// every float, ask for nothing, nor does `marker-position: inside`, which
+/// is where the text stage sets every marker. Each entry goes with the work
+/// that reads the property: hanging markers with layout, `display`
 /// with variants and visibility (SPEC §6.3), `template` with render
 /// templates (§5.3), and the others with pages and running elements
 /// (§7.1, §7.8), the baseline grid (§7.3), tables (§7.4), floats (§7.5),
@@ -250,16 +251,16 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
     if let Some(value) = value
         && (*value == property.initial
             || (property.name.name.as_str() == "placement"
-                && matches!(value, Value::Keyword(k) if k.as_str() == "here")))
+                && matches!(value, Value::Keyword(k) if k.as_str() == "here"))
+            || (property.name.name.as_str() == "marker-position"
+                && matches!(value, Value::Keyword(k) if k.as_str() == "inside")))
     {
         return None;
     }
     Some(match property.name.name.as_str() {
         "display" | "show-only" => "showing and hiding content",
-        "numbering" | "counter-reset" | "marker" | "marker-position" => {
-            "numbering, counters and list markers"
-        }
-        "ref-format" => "references",
+        // Markers are set inside the first line until layout hangs them.
+        "marker-position" => "hanging markers",
         "width" => "block widths",
         "trailer" => "block trailers",
         "column-tracks" => "tables",
@@ -454,10 +455,38 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
         Value::None,
         Layout,
     );
+    // The counters to restart, by name: `figure`, `"exam.question"`. A
+    // qualified name is not a keyword, so the Resolve stage checks the
+    // names (SPEC §4.5).
     prop("counter-reset", Any, Value::None, Layout);
-    prop("marker", Template, Value::Auto, Layout);
-    prop("marker-position", Any, Value::Auto, Layout);
-    prop("ref-format", Template, Value::Auto, Layout);
+    // `auto`: the element's number, or a figure's word and number; `none`;
+    // or a string set in its place, such as "•".
+    prop(
+        "marker",
+        any_of([Auto, PropertyType::None, Str]),
+        Value::Auto,
+        Layout,
+    );
+    // `inside` sets the marker in the first line; `hanging 8mm` hangs it
+    // before the text (not laid out yet).
+    prop(
+        "marker-position",
+        any_of([
+            Auto,
+            kw(&["inside", "hanging"]),
+            list(any_of([kw(&["hanging"]), Length])),
+        ]),
+        Value::Auto,
+        Layout,
+    );
+    // `auto`: the reference word and the number (`Figure 2.1`); `number`:
+    // the number alone.
+    prop(
+        "ref-format",
+        any_of([Auto, kw(&["number"])]),
+        Value::Auto,
+        Layout,
+    );
 
     group = GroupId::VISIBILITY;
     let mut prop =

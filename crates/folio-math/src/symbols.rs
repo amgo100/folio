@@ -1,4 +1,5 @@
-//! Named symbols of native math (SPEC §8.1): `alpha`, `sum`, `arrow.r`.
+//! Named symbols of native math (SPEC §8.1): `alpha`, `sum`, `arrow.r`;
+//! and the named operators: `sin`, `lim`.
 //!
 //! A name is a base and modifiers separated by dots, as in `arrow.r.long`.
 //! The modifiers may be written in any order: `arrow.long.r` is the same
@@ -236,6 +237,58 @@ pub fn is_symbol_base(name: &str) -> bool {
     SYMBOLS
         .iter()
         .any(|&(entry, _)| entry.split('.').next() == Some(name))
+}
+
+/// The named operators of math, set upright, with whether their
+/// attachments are limits that go below and above them in display style.
+const OPERATORS: &[(&str, bool)] = &[
+    ("arccos", false),
+    ("arcsin", false),
+    ("arctan", false),
+    ("arg", false),
+    ("cos", false),
+    ("cosh", false),
+    ("cot", false),
+    ("coth", false),
+    ("csc", false),
+    ("deg", false),
+    ("det", true),
+    ("dim", false),
+    ("exp", false),
+    ("gcd", true),
+    ("hom", false),
+    ("inf", true),
+    ("ker", false),
+    ("lg", false),
+    ("lim", true),
+    ("liminf", true),
+    ("limsup", true),
+    ("ln", false),
+    ("log", false),
+    ("max", true),
+    ("min", true),
+    ("mod", false),
+    ("Pr", true),
+    ("sec", false),
+    ("sin", false),
+    ("sinh", false),
+    ("sup", true),
+    ("tan", false),
+    ("tanh", false),
+];
+
+/// Whether a name is a named operator (`sin`, `lim`), and if so whether its
+/// attachments are limits.
+pub fn operator(name: &str) -> Option<bool> {
+    OPERATORS
+        .iter()
+        .find(|&&(entry, _)| entry == name)
+        .map(|&(_, limits)| limits)
+}
+
+/// The names of the named operators.
+pub(crate) fn operator_names() -> impl Iterator<Item = &'static str> {
+    OPERATORS.iter().map(|&(name, _)| name)
 }
 
 #[cfg(test)]
