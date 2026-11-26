@@ -19,6 +19,12 @@ use crate::{Error, Event, Hook, Options, Outcome};
 /// Messages to log, with their kinds.
 type Messages = Vec<(lsp::MessageType, String)>;
 
+/// The command that starts the preview and answers its address.
+const PREVIEW_COMMAND: &str = "folio.preview";
+
+/// The notification that shows the editor's cursor in the preview.
+const REVEAL: &str = "folio/reveal";
+
 /// Runs the server on a connection until the client shuts it down or goes
 /// away: answers `initialize`, then handles messages. The caller joins the
 /// connection's I/O threads after.
@@ -43,6 +49,10 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
                 ..lsp::TextDocumentSyncOptions::default()
             },
         )),
+        execute_command_provider: Some(lsp::ExecuteCommandOptions {
+            commands: vec![PREVIEW_COMMAND.into()],
+            ..lsp::ExecuteCommandOptions::default()
+        }),
         ..lsp::ServerCapabilities::default()
     };
     let result = lsp::InitializeResult {
@@ -56,6 +66,13 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
     connection.initialize_finish(id, result)?;
 
     let (results_tx, results_rx) = crossbeam_channel::unbounded();
+    let (clicks_tx, clicks_rx) = crossbeam_channel::unbounded();
+    let show_document = params
+        .capabilities
+        .window
+        .as_ref()
+        .and_then(|w| w.show_document.as_ref())
+        .is_some_and(|s| s.support);
     let mut server = Server {
         connection,
         encoding,
@@ -72,6 +89,9 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
         folders: Vec::new(),
         shut_down: false,
         retry: false,
+        preview: None,
+        clicks: clicks_tx,
+        show_document,
     };
     server.watch = watch_support(&params);
     #[allow(deprecated)]
@@ -87,7 +107,10 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
     if let Some(root) = server.initial_root(&params) {
         server.open_project(root);
     }
-    server.main_loop(&results_rx)
+    let result = server.main_loop(&results_rx, &clicks_rx);
+    // The preview's threads stop before the connection goes.
+    server.preview = None;
+    result
 }
 
 /// A file the client has open: its text is the editor's buffer, which may
@@ -173,6 +196,12 @@ struct Server<'a> {
     /// Whether a check could not be started, to be tried again at the
     /// next message.
     retry: bool,
+    /// The browser preview, once the client has started it.
+    preview: Option<folio_preview::Preview>,
+    /// Where the preview sends clicks on its pages.
+    clicks: Sender<folio_preview::Source>,
+    /// Whether the client can be asked to show a document.
+    show_document: bool,
 }
 
 /// How the client can be asked to report changes to files.
@@ -204,7 +233,11 @@ fn watch_support(params: &lsp::InitializeParams) -> Watch {
 }
 
 impl Server<'_> {
-    fn main_loop(&mut self, results: &Receiver<Done>) -> Result<(), Error> {
+    fn main_loop(
+        &mut self,
+        results: &Receiver<Done>,
+        clicks: &Receiver<folio_preview::Source>,
+    ) -> Result<(), Error> {
         loop {
             // Edits that arrived together are applied before checking.
             if self.dirty && self.connection.receiver.is_empty() {
@@ -255,6 +288,11 @@ impl Server<'_> {
                         self.done(done);
                     }
                 }
+                recv(clicks) -> source => {
+                    if let Ok(source) = source && !self.shut_down {
+                        self.show_source(&source);
+                    }
+                }
             }
         }
     }
@@ -282,11 +320,146 @@ impl Server<'_> {
         self.notify::<note::LogMessage>(lsp::LogMessageParams { typ, message });
     }
 
-    fn request(&self, request: Request) {
+    fn request(&mut self, request: Request) {
+        if request.method == req::ExecuteCommand::METHOD {
+            let id = request.id.clone();
+            let response =
+                match request.extract::<lsp::ExecuteCommandParams>(req::ExecuteCommand::METHOD) {
+                    Ok((_, params)) if params.command == PREVIEW_COMMAND => {
+                        match self.start_preview(params.arguments.first()) {
+                            Ok(url) => Response::new_ok(id, serde_json::json!({ "url": url })),
+                            Err(message) => {
+                                Response::new_err(id, ErrorCode::RequestFailed as i32, message)
+                            }
+                        }
+                    }
+                    Ok((_, params)) => Response::new_err(
+                        id,
+                        ErrorCode::InvalidParams as i32,
+                        format!("there is no command `{}`", params.command),
+                    ),
+                    Err(e) => Response::new_err(id, ErrorCode::InvalidParams as i32, e.to_string()),
+                };
+            self.send(response);
+            return;
+        }
         self.send(Response::new_err(
             request.id,
             ErrorCode::MethodNotFound as i32,
             format!("`{}` is not supported", request.method),
+        ));
+    }
+
+    /// Starts the preview of the project, unless it runs already, and
+    /// answers its address.
+    fn start_preview(&mut self, argument: Option<&serde_json::Value>) -> Result<String, String> {
+        if let Some(preview) = &self.preview {
+            return Ok(preview.url());
+        }
+        let Some(project) = &self.project else {
+            return Err("no Folio project is open: open a folder that holds `folio.toml`".into());
+        };
+        let mut options = folio_preview::Options::new(&project.root)
+            .system_fonts(self.options.system_fonts.unwrap_or(true));
+        if let Some(variant) = argument
+            .and_then(|a| a.get("variant"))
+            .and_then(|v| v.as_str())
+        {
+            options = options.variant(variant);
+        }
+        let clicks = self.clicks.clone();
+        options = options.on_event(move |event| {
+            if let folio_preview::Event::Clicked(source) = event {
+                let _ = clicks.send(source.clone());
+            }
+        });
+        let preview = folio_preview::Preview::start(options)
+            .map_err(|e| format!("cannot start the preview: {e}"))?;
+        let url = preview.url();
+        self.log(
+            lsp::MessageType::INFO,
+            format!(
+                "Folio: the preview of {} is running",
+                project.root.display()
+            ),
+        );
+        self.preview = Some(preview);
+        Ok(url)
+    }
+
+    /// Shows the editor's cursor in the preview (`folio/reveal`).
+    fn reveal(&mut self, params: lsp::TextDocumentPositionParams) {
+        if self.preview.is_none() {
+            return;
+        }
+        let Some(path) = self.source_path(&params.text_document.uri) else {
+            return;
+        };
+        let Some(project) = &self.project else {
+            return;
+        };
+        // The preview shows the file on disk.
+        let file = path
+            .split('/')
+            .fold(project.root.clone(), |dir, part| dir.join(part));
+        let Ok(text) = std::fs::read_to_string(file) else {
+            return;
+        };
+        let at = LineIndex::new(&text).offset(params.position, self.encoding);
+        let Some(preview) = &self.preview else {
+            return;
+        };
+        let areas = preview.reveal(&path, at..at);
+        self.emit(Event::Revealed {
+            path,
+            bytes: at..at,
+            areas,
+        });
+    }
+
+    /// Asks the editor to show the source a click in the preview found.
+    fn show_source(&mut self, source: &folio_preview::Source) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let location = &source.location;
+        // Project paths separate with `/` on every system.
+        let file = location
+            .path
+            .split('/')
+            .fold(project.root.clone(), |dir, part| dir.join(part));
+        let Some(uri) = convert::path_to_uri(&file) else {
+            return;
+        };
+        // The preview's places are in the file on disk.
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            return;
+        };
+        let range = LineIndex::new(&text).range(location.bytes.clone(), self.encoding);
+        self.emit(Event::ShowSource {
+            uri: uri.as_str().to_owned(),
+            range,
+        });
+        if !self.show_document {
+            self.log(
+                lsp::MessageType::INFO,
+                format!(
+                    "Folio: the preview shows {}:{}:{}",
+                    location.path, location.start.line, location.start.column
+                ),
+            );
+            return;
+        }
+        self.request_id += 1;
+        self.send(Request::new(
+            self.request_id.into(),
+            req::ShowDocument::METHOD.into(),
+            lsp::ShowDocumentParams {
+                uri,
+                external: Some(false),
+                take_focus: Some(true),
+                selection: Some(range),
+            },
         ));
     }
 
@@ -511,6 +684,12 @@ impl Server<'_> {
                     && let Some(path) = convert::uri_to_path(&params.text_document.uri)
                 {
                     self.disk_changed(vec![path]);
+                }
+            }
+            REVEAL => {
+                if let Ok(params) = notification.extract::<lsp::TextDocumentPositionParams>(REVEAL)
+                {
+                    self.reveal(params);
                 }
             }
             note::DidChangeWatchedFiles::METHOD => {

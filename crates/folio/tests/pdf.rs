@@ -263,3 +263,60 @@ fn loop_made_sections_are_tagged_apart() {
         );
     }
 }
+
+/// A document with references, for the navigation tests: labelled
+/// sections, a reference to each, one in a loop, and one to a label no
+/// element has.
+const NAVIGATION: &str = "#doc(title: [Forces])
+
+= Forces <sec:forces>
+
+A ball falls. See @sec:energy for what it loses.
+
+= Energy <sec:energy>
+
+Compare @sec:forces with this section.
+
+#for i in range(2) [As in @sec:forces, again. ]
+
+Nothing has @sec:missing.
+";
+
+/// References are links to the named destinations of their labels, tagged
+/// as `Link` elements, and the PDF still claims PDF/UA-1. With
+/// `FOLIO_PDF_OUT` set, the PDF goes there too, for `tests/pdf/corpus.py`
+/// to check with veraPDF.
+#[test]
+fn references_are_links() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n";
+    let mut world = World::new(manifest).unwrap();
+    world.set_source("main.fol", NAVIGATION).unwrap();
+    let (pdf, diagnostics) = build(&world);
+    let problems: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| !d.message.contains("sec:missing"))
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("<pdfuaid:part>1</pdfuaid:part>"), "PDF/UA-1");
+    // Four references resolve, two of them made by the loop; the one to
+    // a missing label goes nowhere.
+    assert_eq!(text.matches("/Subtype/Link").count(), 4, "{text}");
+    assert_eq!(text.matches("/S/Link").count(), 4);
+    assert_eq!(text.matches("/Dest(sec:forces)").count(), 3);
+    assert_eq!(text.matches("/Dest(sec:energy)").count(), 1);
+    // The alternative description is the reference's text.
+    assert_eq!(text.matches("/Contents(Section 1)").count(), 3);
+    assert_eq!(text.matches("/Contents(Section 2)").count(), 1);
+    assert!(
+        text.contains("/Dests<</Names[(sec:energy)") && text.contains("(sec:forces)"),
+        "a name tree of the labels, in order"
+    );
+    // Plain page numbers need no labels.
+    assert!(!text.contains("/PageLabels"));
+    if let Some(out) = std::env::var_os("FOLIO_PDF_OUT").map(PathBuf::from) {
+        fs::create_dir_all(&out).unwrap();
+        fs::write(out.join("navigation.pdf"), &pdf).unwrap();
+        fs::write(out.join("navigation.txt"), expected_text(&world, None)).unwrap();
+    }
+}

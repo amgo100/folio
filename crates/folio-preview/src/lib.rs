@@ -37,15 +37,16 @@
 //!
 //! # Protocol
 //!
-//! Version [`PROTOCOL`] of the protocol, for the viewer (#51) and other
+//! Version [`PROTOCOL`] of the protocol, for the viewer and other
 //! clients. Every path takes `?token=<token>`.
 //!
 //! | Path | What it serves |
 //! | --- | --- |
-//! | `/` | A minimal viewer, with `/viewer.js` and `/viewer.css`: the pages as PNG images and the diagnostics, refreshed over the websocket |
+//! | `/` | The viewer, with `/viewer.js` and `/viewer.css`: it draws the display lists on canvases, with the diagnostics, and syncs with the source |
 //! | `/ws` | The websocket |
 //! | `/page/<n>.png` | Page `n` (from 0) of the current revision, rendered by `folio-render` at 96 dpi |
 //! | `/font/<n>` | The bytes of the font file that glyph runs name as font `n`, with the font's index in it in the `X-Font-Index` header |
+//! | `/glyphs/<n>?size=<px>&g=<id>.<sub>,..` | Glyphs of font `n` rasterised at `px` pixels to the em (at most 2048), for a client that draws display lists itself (SPEC §12.4); see below |
 //!
 //! On the websocket, the server sends, for every revision the client has
 //! not seen:
@@ -53,13 +54,23 @@
 //! 1. a text message, a JSON object `{"type": "update", "protocol": 1,
 //!    "revision": r, "variant": v | null, "target": "pdf", "pages": n,
 //!    "lists": [..], "spans": [..], "banner": text | null, "diagnostics":
-//!    [..]}`: `pages` is how many pages the document has now (pages the
+//!    [..], "overlays": [..], "fonts": g}`: `pages` is how many pages the document has now (pages the
 //!    client had beyond it are gone), `lists` the indices of the pages
 //!    whose display lists follow, `spans` those whose span maps follow,
 //!    `banner` why the pages shown are not of this revision, if they are
 //!    not, and `diagnostics` the diagnostics of the previewed build,
 //!    resolved as `folio check --diagnostics json` writes them
-//!    (`docs/diagnostics-json.md`);
+//!    (`docs/diagnostics-json.md`), and `overlays` where on the pages the
+//!    diagnostics point, as `{"diagnostic": i, "page": n, "rects": [[x, y,
+//!    w, h], ..]}` with `i` an index into `diagnostics` and the rectangles
+//!    in points from the page's top-left corner, for the first hundred
+//!    diagnostics, and `fonts` a number that changes whenever the font ids
+//!    of glyph runs may name other fonts, when a client drops the glyphs it
+//!    has. The pages are sent before they are indexed: the overlays follow
+//!    in a second `update` of the same revision, which sends no pages, and
+//!    until then reveals find nothing (clicks work at once). While neither
+//!    the pages nor the diagnostics change, the first `update` keeps the
+//!    overlays of the revision before;
 //! 2. one binary message per page in `lists` and `spans`, in that order:
 //!    the page's index as four bytes, little-endian, then a message of
 //!    `folio-render`'s wire format ([`folio_render::wire`]), a whole
@@ -69,9 +80,39 @@
 //!
 //! A new connection receives every page. Pages that the client says are
 //! visible come first: it sends `{"type": "visible", "pages": [..]}`
-//! whenever that changes. Other messages from the client are ignored, so
-//! that later versions can add some. Fonts reach a client that draws
-//! display lists itself through `/font/<n>`.
+//! whenever that changes.
+//!
+//! Source sync (SPEC §12.2): a client sends `{"type": "click", "revision":
+//! r, "page": n, "x": x, "y": y}` for a click at a point of a page, in
+//! points from its top-left corner, and the server answers that client
+//! with `{"type": "source", "revision": r, "location": l | null}`, where
+//! `l` is a location as in `docs/diagnostics-json.md` (`path`, `bytes`,
+//! `start`, `end`): the characters of the topmost glyph at the point, or
+//! the whole node of the topmost other item, such as an element's box.
+//! The click is also an [`Event::Clicked`], which the language server
+//! turns into a jump in the editor. `null` answers a point that shows no
+//! source, a revision that is not the current one, and pages kept from an
+//! earlier revision under a banner, whose source has changed since. The other way,
+//! [`Preview::reveal`] sends every client `{"type": "reveal", "revision":
+//! r, "areas": [{"page": n, "rect": [x, y, w, h]}, ..]}`, the areas of the
+//! pages that show a place in a file, for the client to scroll to and
+//! mark.
+//!
+//! Messages from the client of a type the server does not know are
+//! ignored, and a client ignores messages and fields it does not know:
+//! later versions may add both without a new protocol version.
+//!
+//! Fonts reach a client that draws display lists itself as bitmaps through
+//! `/glyphs/<n>`, or as files through `/font/<n>`. `/glyphs/` takes the
+//! glyph ids, each with the quarter pixel (`0` to `3`) its origin is placed
+//! at right of a pixel's edge, at most 4096 of them, and answers with
+//! their count as four bytes and each glyph as its id (two bytes), its
+//! quarter pixel and a zero byte, the bitmap's left and top offsets from
+//! the glyph's origin in pixels (four bytes each, signed, `y` down), its
+//! width and height (four bytes each), and its coverage, a byte per pixel
+//! row by row; all little-endian. A glyph with no outline has a width and
+//! height of zero. An answer holds at most 32 MiB of coverage: the glyphs
+//! past it are left out, and the count says how many it holds.
 
 #![forbid(unsafe_code)]
 
@@ -270,6 +311,26 @@ pub enum Event {
         /// Its revision.
         revision: u64,
     },
+    /// The pages of a revision were indexed after they were sent: from now
+    /// on [`Preview::reveal`] finds places on them, and the diagnostics are
+    /// marked on them. Clicks find their sources from the start.
+    Indexed {
+        /// The revision.
+        revision: u64,
+    },
+    /// A client clicked on a page, which shows this source: what an editor
+    /// jumps to (SPEC §12.2). Called on the server's thread.
+    Clicked(Source),
+}
+
+/// A place in the project's sources that a page shows ([`Event::Clicked`]).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct Source {
+    /// The revision the client was shown.
+    pub revision: u64,
+    /// The place: its project path, bytes, lines and columns.
+    pub location: folio::diag::Location,
 }
 
 /// A revision as it was sent ([`Event::Updated`]).
@@ -322,6 +383,8 @@ pub struct Preview {
     addr: SocketAddr,
     token: Arc<str>,
     engine: engine::Handle,
+    published: tokio::sync::watch::Receiver<Arc<engine::Published>>,
+    broadcast: tokio::sync::broadcast::Sender<Arc<str>>,
     server: Option<server::Handle>,
     _watcher: Option<watch::Watcher>,
     threads: Vec<JoinHandle<()>>,
@@ -345,8 +408,15 @@ impl Preview {
             true => Some(watch::Watcher::start(&root, engine.clone())?),
             false => None,
         };
-        let (server, addr, server_thread) =
-            server::start(options.port, token.clone(), pending.published.clone())?;
+        let (broadcast, _) = tokio::sync::broadcast::channel(16);
+        let published = pending.published.clone();
+        let (server, addr, server_thread) = server::start(
+            options.port,
+            token.clone(),
+            published.clone(),
+            broadcast.clone(),
+            options.on_event.clone(),
+        )?;
         let engine_thread = match pending.spawn() {
             Ok(thread) => thread,
             Err(e) => {
@@ -359,6 +429,8 @@ impl Preview {
             addr,
             token,
             engine,
+            published,
+            broadcast,
             server: Some(server),
             _watcher: watcher,
             // The engine's first: `wait` joins it before the server's.
@@ -390,6 +462,45 @@ impl Preview {
                 .map(|p| p.as_ref().to_path_buf())
                 .collect(),
         );
+    }
+
+    /// Shows clients where the pages show the bytes `bytes` of the file at
+    /// `path` (a project path, such as `main.fol`): they scroll to the
+    /// first area and mark them all, as when an editor's cursor moves
+    /// (SPEC §12.2). An empty range is a cursor. Returns how many areas
+    /// were found; with none, clients are not told. Nothing is found while
+    /// the pages shown are of an earlier revision, or until the current
+    /// one is indexed ([`Event::Indexed`]).
+    ///
+    /// The places are those of the files the pages were laid out from,
+    /// which are the files on disk: in an editor buffer with unsaved
+    /// changes, the same bytes may be elsewhere.
+    pub fn reveal(&self, path: &str, bytes: std::ops::Range<usize>) -> usize {
+        let published = self.published.borrow().clone();
+        let Some(index) = published
+            .layout
+            .as_ref()
+            .filter(|layout| layout.revision == published.revision)
+            .and_then(|layout| layout.index.as_ref())
+        else {
+            return 0;
+        };
+        let found = engine::rects(&index.find(path, bytes));
+        if found.is_empty() {
+            return 0;
+        }
+        let areas: Vec<_> = found
+            .iter()
+            .map(|(page, rect)| serde_json::json!({ "page": page, "rect": rect }))
+            .collect();
+        let message = serde_json::json!({
+            "type": "reveal",
+            "revision": published.revision,
+            "areas": areas,
+        });
+        // No client is no error.
+        let _ = self.broadcast.send(message.to_string().into());
+        found.len()
     }
 
     /// Serves until the process ends. Returns only when the engine fails,

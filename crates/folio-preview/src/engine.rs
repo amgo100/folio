@@ -8,6 +8,7 @@
 //! cancelled check drops its handle at once (SPEC §2.3).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -16,6 +17,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use ecow::EcoString;
 use folio::diag::{Files, TextFiles};
 use folio::loader::{self, LoadError, Loader, ProjectErrors};
+use folio::span_map;
 use folio::{
     BuildMode, Diagnostic, FileId, FontCache, Name, PROJECT_FONT_DIR, Pages, Source, Target, World,
 };
@@ -38,6 +40,8 @@ enum Input {
     Paths(Vec<PathBuf>),
     /// A check finished.
     Done(Box<Done>),
+    /// The pages of a check that finished were indexed.
+    Indexed(Box<Indexed>),
     /// Outputs were written.
     Written(u64),
     /// Stop.
@@ -62,7 +66,7 @@ impl Handle {
 
 /// What the clients are sent: the pages of the last revision that could be
 /// laid out, with the diagnostics of the last revision checked.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Published {
     /// The revision.
     pub(crate) revision: u64,
@@ -78,6 +82,69 @@ pub(crate) struct Published {
     pub(crate) diagnostics: Arc<Vec<folio::diag::Resolved>>,
     /// The fonts that the pages' glyph runs name, by id.
     pub(crate) fonts: Arc<FontTable>,
+    /// A number that changes whenever the font ids may name other faces
+    /// or other bytes, so that clients drop the glyphs they have.
+    pub(crate) font_generation: u64,
+    /// Where the pages' sources are, for source sync, when the pages are
+    /// those of this revision.
+    pub(crate) layout: Option<Arc<Layout>>,
+    /// The areas of the pages that the diagnostics point at, once the
+    /// pages are indexed.
+    pub(crate) overlays: Arc<Vec<Overlay>>,
+}
+
+/// The sources of the pages a client is shown: the files they were made
+/// from and where on the pages each place in them is.
+pub(crate) struct Layout {
+    /// The revision the pages were laid out in.
+    pub(crate) revision: u64,
+    /// The files their spans resolve against.
+    pub(crate) files: Arc<dyn Files + Send + Sync>,
+    /// Where on the pages each place in the files is: indexed after the
+    /// pages are sent, so that they never wait for it.
+    pub(crate) index: Option<span_map::Index>,
+}
+
+impl std::fmt::Debug for Layout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layout")
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The areas on one page that a diagnostic points at.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct Overlay {
+    /// The diagnostic's index in the update's `diagnostics`.
+    pub(crate) diagnostic: usize,
+    /// The page.
+    pub(crate) page: usize,
+    /// The areas, as `[x, y, width, height]` in points from the page's
+    /// top-left corner.
+    pub(crate) rects: Vec<[f32; 4]>,
+}
+
+/// The most diagnostics that overlays are drawn for, in their order.
+const MAX_OVERLAYS: usize = 100;
+
+/// The areas a diagnostic's location covers, by page.
+pub(crate) fn rects(found: &[span_map::Found]) -> Vec<(usize, [f32; 4])> {
+    found
+        .iter()
+        .map(|f| {
+            let pt = |abs: folio_component::Abs| abs.to_pt() as f32;
+            (
+                f.page,
+                [
+                    pt(f.pos.x),
+                    pt(f.pos.y),
+                    pt(f.size.width),
+                    pt(f.size.height),
+                ],
+            )
+        })
+        .collect()
 }
 
 /// A page as the clients are sent it.
@@ -120,6 +187,12 @@ impl FontTable {
         }
     }
 
+    /// Whether two tables name the same faces by the same ids.
+    fn same_faces(&self, other: &Self) -> bool {
+        self.faces.len() == other.faces.len()
+            && self.faces.iter().zip(&other.faces).all(|(a, b)| a.0 == b.0)
+    }
+
     /// The font with an id, read on first use.
     pub(crate) fn get(&self, id: usize) -> Option<&folio_fonts::Font> {
         let (face, read) = self.faces.get(id)?;
@@ -157,6 +230,16 @@ struct Frame {
     diagnostics: Vec<Diagnostic>,
     files: Arc<dyn Files + Send + Sync>,
     fonts: Arc<FontTable>,
+    /// Whether the font ids may name other faces or bytes than before.
+    fonts_changed: bool,
+}
+
+/// The index of a checked revision's pages ([`Layout::index`]), with the
+/// areas its diagnostics point at.
+struct Indexed {
+    revision: u64,
+    index: span_map::Index,
+    overlays: Vec<Overlay>,
 }
 
 /// The builds to preview, and how.
@@ -218,6 +301,7 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         idle_at: None,
         written: 0,
         ids: 0,
+        current: Arc::new(AtomicU64::new(0)),
     };
     Ok(Pending {
         handle: Handle(tx),
@@ -282,6 +366,9 @@ struct Engine {
     written: u64,
     /// The last number given to a page entry ([`PageEntry::id`]).
     ids: u64,
+    /// The revision checked next, which check threads read to leave out
+    /// work an edit has made stale.
+    current: Arc<AtomicU64>,
 }
 
 impl Engine {
@@ -326,6 +413,7 @@ impl Engine {
         match input {
             Input::Paths(_) => unreachable!("handled by the caller"),
             Input::Done(done) => self.done(*done),
+            Input::Indexed(indexed) => self.indexed(*indexed),
             Input::Written(revision) => {
                 self.settings.emit(Event::Written { revision });
             }
@@ -453,6 +541,7 @@ impl Engine {
     /// Marks the world as changed: a new revision, checked next.
     fn edited(&mut self) {
         self.revision += 1;
+        self.current.store(self.revision, Ordering::Relaxed);
         self.dirty = true;
         self.idle_at = None;
         self.settings.emit(Event::Edited {
@@ -488,6 +577,7 @@ impl Engine {
                 diagnostics,
                 files,
                 fonts: self.publish.borrow().fonts.clone(),
+                fonts_changed: false,
             };
             let _ = tx.send(Input::Done(Box::new(Done {
                 revision,
@@ -500,6 +590,7 @@ impl Engine {
         let build = choose(world, self.settings.variant.as_deref());
         let before = if self.redraw { None } else { self.last.clone() };
         let published = self.publish.borrow().clone();
+        let current = self.current.clone();
         let spawned = thread::Builder::new()
             .name("folio-preview-check".into())
             .spawn(move || {
@@ -517,7 +608,19 @@ impl Engine {
                 );
                 // The next edit waits for every handle to go.
                 drop(handle);
+                let later = frame.as_ref().and_then(|frame| {
+                    let pages = frame.pages.clone()?;
+                    Some((pages, frame.files.clone(), frame.diagnostics.clone()))
+                });
                 let _ = tx.send(Input::Done(Box::new(Done { revision, frame })));
+                // The pages go first; source sync and overlays follow,
+                // unless an edit has made them stale.
+                if let Some((pages, files, diagnostics)) = later
+                    && current.load(Ordering::Relaxed) == revision
+                {
+                    let indexed = index(revision, &pages, &*files, &diagnostics);
+                    let _ = tx.send(Input::Indexed(Box::new(indexed)));
+                }
             });
         if spawned.is_err() {
             // Checked again with the next change.
@@ -568,6 +671,27 @@ impl Engine {
             .map(|d| folio::diag::resolve(&*frame.files, d))
             .collect();
         let count = pages.len();
+        // Pages kept from an earlier revision are not synced with the
+        // source, which has changed since.
+        let layout = frame.pages.as_ref().map(|_| {
+            Arc::new(Layout {
+                revision,
+                files: frame.files.clone(),
+                index: None,
+            })
+        });
+        let font_generation = old.font_generation + u64::from(frame.fonts_changed);
+        // The marks stay, rather than blink, while the pages are indexed,
+        // when neither the pages nor the diagnostics changed.
+        let unchanged = frame.pages.is_some()
+            && count == old.pages.len()
+            && lists.is_empty()
+            && spans.is_empty()
+            && *old.diagnostics == resolved;
+        let overlays = match unchanged {
+            true => old.overlays.clone(),
+            false => Arc::new(Vec::new()),
+        };
         self.publish.send_replace(Arc::new(Published {
             revision,
             variant: frame.variant,
@@ -580,6 +704,9 @@ impl Engine {
             } else {
                 old.fonts.clone()
             },
+            font_generation,
+            layout,
+            overlays,
         }));
         self.settings.emit(Event::Updated(Arc::new(Update {
             revision,
@@ -593,6 +720,32 @@ impl Engine {
         if self.world.is_some() && self.written < revision && self.settings.on_outputs.is_some() {
             self.idle_at = Some(Instant::now() + self.settings.idle);
         }
+    }
+
+    /// Adds the index of the pages and the overlays to the revision sent,
+    /// if it is still the current one.
+    fn indexed(&mut self, indexed: Indexed) {
+        let published = self.publish.borrow().clone();
+        let current = indexed.revision == self.revision
+            && published.revision == indexed.revision
+            && published
+                .layout
+                .as_ref()
+                .is_some_and(|layout| layout.revision == indexed.revision);
+        let Some(layout) = published.layout.as_ref().filter(|_| current) else {
+            return;
+        };
+        let mut next = (*published).clone();
+        next.layout = Some(Arc::new(Layout {
+            revision: layout.revision,
+            files: layout.files.clone(),
+            index: Some(indexed.index),
+        }));
+        next.overlays = Arc::new(indexed.overlays);
+        self.publish.send_replace(Arc::new(next));
+        self.settings.emit(Event::Indexed {
+            revision: indexed.revision,
+        });
     }
 
     /// Compiles every build on a thread of its own and hands them to the
@@ -683,6 +836,7 @@ fn check(
                 diagnostics,
                 files,
                 fonts: published.fonts.clone(),
+                fonts_changed: false,
             });
         }
     };
@@ -712,6 +866,7 @@ fn check(
             diagnostics,
             files,
             fonts: published.fonts.clone(),
+            fonts_changed: false,
         });
     };
     let fonts = Arc::new(FontTable::new(&folio::fonts(world).ok()?));
@@ -726,6 +881,7 @@ fn check(
     for index in remapped {
         lists.push((index, entry(&pages, index), true));
     }
+    let fonts_changed = before.is_none() || !fonts.same_faces(&published.fonts);
     Some(Frame {
         variant: name,
         target: target.as_str(),
@@ -737,7 +893,47 @@ fn check(
         diagnostics,
         files,
         fonts,
+        fonts_changed,
     })
+}
+
+/// Indexes the pages of a check, and finds where its diagnostics point.
+fn index(revision: u64, pages: &Pages, files: &dyn Files, diagnostics: &[Diagnostic]) -> Indexed {
+    let fragments: Vec<_> = pages.pages.iter().map(|page| &page.fragment).collect();
+    let index = span_map::Index::new(files, &fragments);
+    let overlays = overlays(&index, files, diagnostics);
+    Indexed {
+        revision,
+        index,
+        overlays,
+    }
+}
+
+/// The areas of the pages that diagnostics point at.
+fn overlays(
+    index: &span_map::Index,
+    files: &dyn Files,
+    diagnostics: &[Diagnostic],
+) -> Vec<Overlay> {
+    let mut out = Vec::new();
+    for (i, diagnostic) in diagnostics.iter().enumerate().take(MAX_OVERLAYS) {
+        let Some(location) = folio::diag::locate(files, diagnostic.span) else {
+            continue;
+        };
+        let mut by_page: Vec<Overlay> = Vec::new();
+        for (page, rect) in rects(&index.find(&location.path, location.bytes)) {
+            match by_page.last_mut() {
+                Some(last) if last.page == page => last.rects.push(rect),
+                _ => by_page.push(Overlay {
+                    diagnostic: i,
+                    page,
+                    rects: vec![rect],
+                }),
+            }
+        }
+        out.extend(by_page);
+    }
+    out
 }
 
 /// A page's display list, encoded, without its numbers, which the engine

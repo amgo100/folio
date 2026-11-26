@@ -640,10 +640,12 @@ version = "0.0.0"
 dependencies = [
  "crossbeam-channel",
  "folio",
+ "folio-preview",
  "lsp-server",
  "lsp-types",
  "serde_json",
  "tempfile",
+ "tokio-tungstenite",
 ]
 
 [[package]]
