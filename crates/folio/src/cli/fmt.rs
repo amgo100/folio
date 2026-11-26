@@ -3,12 +3,16 @@
 //!
 //! It reads the project's files as `folio build` does, so it formats the
 //! sources that a build reads, and rewrites each one that formatting
-//! changes, through a temporary file. A file with syntax errors is left as
-//! it is and its errors are reported. With `--check`, no file changes:
+//! changes, through a temporary file that takes the file's permissions and
+//! keeps its byte order mark; a read-only file is an error. Like `folio
+//! build`, it runs the compiler version that `folio.toml` pins (SPEC §2.4).
+//! A file with syntax errors is left as it is and its errors are reported. With `--check`, no file changes:
 //! each file that is not formatted is reported as an error with the code
 //! `unformatted` and a fix whose edits format it. The exit status is 1 when
 //! there are errors, and with `--check` when a file is not formatted.
 
+use std::fs;
+use std::io::Read as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -17,10 +21,10 @@ use folio::{Diagnostic, Fix, World};
 use folio_syntax::DiagSpan;
 use folio_syntax::fmt::{self, FormatError};
 
-use super::FAILURE;
 use super::FmtArgs;
 use super::build::{Report, error, replace};
 use super::project;
+use super::{FAILURE, toolchain};
 
 /// The code of the error that `--check` reports for a file that is not
 /// formatted.
@@ -60,7 +64,17 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
         }
         Err(e) => return fail(e.to_string()),
     };
-    let mut diagnostics = Vec::new();
+    // The pinned compiler formats, as it builds (SPEC §2.4); a project
+    // that pins another version was handed to it before the arguments were
+    // parsed (`toolchain::dispatch`).
+    let mut diagnostics: Vec<Diagnostic> =
+        toolchain::check(world.manifest(), args.compiler.is_some())
+            .into_iter()
+            .collect();
+    if diagnostics.iter().any(Diagnostic::is_error) {
+        report.diagnostics(&world, &diagnostics);
+        return true;
+    }
     if let Err(e) = loader.load(&mut world, &mut diagnostics) {
         return fail(e.to_string());
     }
@@ -138,12 +152,31 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
     diagnostics.iter().any(Diagnostic::is_error)
 }
 
+/// The byte order mark, which the loader leaves out of a source's text.
+const BOM: &str = "\u{FEFF}";
+
 /// Replaces the file at `path`, or the file a link there leads to, with
-/// `text`, through a temporary file beside it.
+/// `text`, through a temporary file beside it that takes the file's
+/// permissions. Keeps a byte order mark the file starts with; refuses a
+/// read-only file.
 fn write(root: &Path, path: &Path, text: &str) -> Result<(), String> {
     let file = path.canonicalize().map_err(|e| e.to_string())?;
     if !file.starts_with(root) {
         return Err("it leads out of the project".into());
     }
-    replace(root, &file, text.as_bytes()).map_err(|e| e.to_string())
+    let permissions = fs::metadata(&file)
+        .map_err(|e| e.to_string())?
+        .permissions();
+    if permissions.readonly() {
+        return Err("it is read-only".into());
+    }
+    let mut start = [0; BOM.len()];
+    let bom = fs::File::open(&file)
+        .and_then(|mut f| f.read_exact(&mut start))
+        .is_ok_and(|()| start == BOM.as_bytes());
+    let bytes = match bom {
+        true => format!("{BOM}{text}"),
+        false => text.to_owned(),
+    };
+    replace(root, &file, bytes.as_bytes(), Some(permissions)).map_err(|e| e.to_string())
 }

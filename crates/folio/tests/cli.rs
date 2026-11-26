@@ -511,3 +511,39 @@ fn formatting_leaves_files_with_syntax_errors() {
     assert_eq!(read("main.fol"), "#include \"part.fol\"\n");
     assert_eq!(read("style.fsty"), "a { b: c }\n");
 }
+
+#[test]
+fn formatting_keeps_byte_order_marks_and_permissions() {
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "\u{FEFF}= Forces  \n"),
+        ("style.fsty", "a{b:c}"),
+        ("locked.fsty", "a{b:c}"),
+    ]);
+    let path = |name: &str| dir.path().join(name);
+    let mut locked = fs::metadata(path("locked.fsty")).unwrap().permissions();
+    locked.set_readonly(true);
+    fs::set_permissions(path("locked.fsty"), locked).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path("style.fsty"), fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let output = folio(dir.path(), &["fmt", "--color", "never"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains("cannot write locked.fsty: it is read-only"));
+    let read = |name: &str| fs::read_to_string(path(name)).unwrap();
+    assert_eq!(read("main.fol"), "\u{FEFF}= Forces\n");
+    assert_eq!(read("style.fsty"), "a { b: c }\n");
+    assert_eq!(read("locked.fsty"), "a{b:c}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path("style.fsty"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+}

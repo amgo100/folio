@@ -208,6 +208,11 @@ pub(crate) struct FmtArgs {
     #[arg(long, value_name = "DIR")]
     pub(crate) root: Option<PathBuf>,
 
+    /// Use this compiler instead of the version folio.toml pins; `current`
+    /// is the running one
+    #[arg(long, value_name = "VERSION", value_parser = ["current"])]
+    pub(crate) compiler: Option<String>,
+
     /// When to colour diagnostics
     #[arg(long, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
     pub(crate) color: Color,
@@ -401,7 +406,17 @@ mod tests {
         let args = parse(&[]).unwrap();
         assert!(!args.check);
         assert_eq!(args.diagnostics, DiagnosticsFormat::Human);
-        let args = parse(&["--check", "--root", "dir", "--diagnostics", "json"]).unwrap();
+        let args = parse(&[
+            "--check",
+            "--root",
+            "dir",
+            "--diagnostics",
+            "json",
+            "--compiler",
+            "current",
+        ])
+        .unwrap();
+        assert_eq!(args.compiler.as_deref(), Some("current"));
         assert!(args.check);
         assert_eq!(args.root.as_deref(), Some(std::path::Path::new("dir")));
         assert_eq!(args.diagnostics, DiagnosticsFormat::Json);

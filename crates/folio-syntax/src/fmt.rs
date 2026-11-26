@@ -7,17 +7,19 @@
 //! conservative, so a file written as SPEC's own examples are is already
 //! formatted:
 //!
-//! - Line ends are `\n`, lines carry no trailing whitespace (comments
-//!   included), there is at most one blank line in a row, the file starts
-//!   with its first token and ends with one newline.
+//! - Line ends are `\n`, lines carry no trailing whitespace (line comments
+//!   included; block comments, strings and raw text keep their bytes),
+//!   there is at most one blank line in a row, and a file that is not empty
+//!   starts with its first token, or in markup with its indentation, and
+//!   ends with one newline.
 //! - Lines of code and stylesheets are indented by two spaces for each
 //!   bracket (`{`, `(`, `[`) opened on an earlier line and still open, from
-//!   the indentation of the line that opened it; a line that closes the
-//!   bracket gets the opener's indentation, and the continuation of an item
+//!   the indentation of the line that opened it; a line that starts by
+//!   closing a bracket, in markup too, gets the opener's indentation, and the continuation of an item
 //!   that runs over several lines (a declaration, an expression) two more
 //!   spaces. Several brackets opened on one line count once.
-//! - Lines of markup keep their indentation, which is part of their meaning
-//!   (list items nest by it).
+//! - Other lines of markup keep their indentation, which is part of their
+//!   meaning (list items nest by it).
 //! - Within a line, a run of spaces becomes one space, except before a
 //!   comment and before the `{` of a rule, which keep the alignment they
 //!   were given. In code and stylesheets a space follows `,`, `;` and the
@@ -27,7 +29,7 @@
 //!   the `:` of a named argument, after `(` or before `)`.
 //!
 //! Formatting never changes what a file means: the result parses to the same
-//! tree apart from whitespace ([`equivalent`]), which [`format`] checks
+//! tree apart from whitespace ([`equivalent`]), which [`format()`] checks
 //! before it answers. A file with syntax errors is left as it is.
 //!
 //! The formatter answers with [`Edits`], replacements of byte ranges of the
@@ -235,6 +237,13 @@ fn shape(node: &SyntaxNode, parent: Option<SyntaxKind>, root: bool, out: &mut Ve
         out.push(Step::Leaf(kind, text.into()));
         return;
     }
+    if node.is_empty() {
+        // An inner node without children, such as the code of `{}`, or a
+        // file without text.
+        out.push(Step::Enter(kind));
+        out.push(Step::Exit);
+        return;
+    }
     if node.children().len() == 0 || is_opaque(kind) {
         out.push(Step::Leaf(kind, node.full_text()));
         return;
@@ -426,6 +435,10 @@ impl Walk {
 
     /// Collects the tokens and gaps of `node`, which starts at `offset`.
     fn walk(&mut self, node: &SyntaxNode, parent: SyntaxKind, offset: usize) {
+        if node.is_empty() {
+            // Nothing to separate, such as the empty code of `{}`.
+            return;
+        }
         let kind = node.kind();
         let end = offset + node.len();
         if is_space(kind) {
@@ -500,12 +513,20 @@ impl Walk {
                     }
                     None
                 }
-                // The start of the file.
+                // The start of the file: markup keeps the indentation of
+                // its first line.
+                (None, Some(_)) if gap.markup => {
+                    let start = text.rfind(crate::is_newline).map_or(0, |at| at + 1);
+                    indent = text[start..].into();
+                    Some(indent.clone())
+                }
                 (None, _) => Some(EcoString::new()),
                 // The end of the file.
                 (_, None) => Some("\n".into()),
                 (Some(_), Some(next)) if newlines > 0 => {
-                    let new_indent: EcoString = if gap.markup {
+                    let new_indent: EcoString = if next.closes() && !open.is_empty() {
+                        open.last().cloned().unwrap_or_default()
+                    } else if gap.markup {
                         trailing_indent(text).into()
                     } else {
                         let mut base = open.last().cloned().unwrap_or_default();
@@ -756,6 +777,12 @@ mod tests {
         markup("Text // note  \t\n// more \n", "Text // note\n// more\n");
         markup("`a   b`  $x   y$\n", "`a   b` $x   y$\n");
         markup("Done", "Done\n");
+        markup("  - a\n  - b\n", "  - a\n  - b\n");
+        markup("\n\n  - a\n", "  - a\n");
+        markup("", "");
+        markup("  \n", "");
+        style("", "");
+        style("\n", "");
     }
 
     #[test]
@@ -773,10 +800,16 @@ mod tests {
             "#let y = {\n  let z = x\n    .at(0)\n  z\n}\n",
         );
         markup(
-            "  #question[\n    #answer(\n  lines: 4,\n    )\n  ]\n",
-            "#question[\n    #answer(\n      lines: 4,\n    )\n  ]\n",
+            "#question[\n    #answer(\n  lines: 4,\n    )\n  ]\n",
+            "#question[\n    #answer(\n      lines: 4,\n    )\n]\n",
         );
         markup("#{x}\n", "#{ x }\n");
+        markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
+        markup("#{\n}\n", "#{\n}\n");
+        markup(
+            "#{\n[\n  - a\n  - b\n]\n}\n",
+            "#{\n  [\n  - a\n  - b\n  ]\n}\n",
+        );
     }
 
     #[test]

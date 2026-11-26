@@ -314,7 +314,7 @@ fn write(root: &Path, path: Option<&str>, compiled: &Compiled) -> Result<Written
     }
     let message = |e: io::Error| format!("cannot write `{path}`: {e}");
     let (root, file) = resolve(root, &path, true).map_err(message)?;
-    replace(&root, &file, bytes).map_err(message)?;
+    replace(&root, &file, bytes, None).map_err(message)?;
     Ok(Written::File(path))
 }
 
@@ -426,7 +426,14 @@ fn outside(walked: &str) -> io::Error {
 /// file's canonical directory once that is checked to be in the project at
 /// `root`: this narrows, but does not close, the window in which another
 /// process could swap a directory on the way for a link out of the project.
-pub(super) fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
+/// The new file takes `permissions`, if given, and else the defaults of a
+/// new file.
+pub(super) fn replace(
+    root: &Path,
+    file: &Path,
+    bytes: &[u8],
+    permissions: Option<fs::Permissions>,
+) -> io::Result<()> {
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     let pid = std::process::id();
     let (temporary, mut out) = loop {
@@ -447,6 +454,10 @@ pub(super) fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> 
     let mut placed = temporary.clone();
     let result = out
         .write_all(bytes)
+        .and_then(|()| match permissions {
+            Some(permissions) => out.set_permissions(permissions),
+            None => Ok(()),
+        })
         .and_then(|()| out.sync_all())
         .and_then(|()| {
             drop(out);
