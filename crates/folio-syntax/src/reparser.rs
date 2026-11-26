@@ -225,6 +225,14 @@ fn expand_and_reparse_markup(
         // `  #f()` leaves a stale `f()` call in the tree.)
         if end > 0 && end < children.len() && children[end - 1].kind() == SyntaxKind::Hash {
             end += 1;
+            // Nor before the empty errors that expression ended with, such
+            // as a missing semicolon: the reparse makes them again.
+            while end < children.len()
+                && children[end].kind().is_error()
+                && children[end].is_empty()
+            {
+                end += 1;
+            }
         }
 
         // Synthesize what `at_start` and `nesting` would be at the start of the
@@ -621,6 +629,9 @@ mod tests {
         // marker after it is still at the start of a line.
         test("*.\n\n=\nsei", Edit::At(7), "", Incr("=\nsei"));
         test("_a\n\n= b\nc~d~e", Edit::At(9), "x", Incr("= b\ncx~d"));
+        // The empty error an embedded expression ends with is reparsed with
+        // it, not made twice.
+        test("\n#element a}", Edit::At(0), "", Incr("\n#element a"));
     }
 
     /// Test incremental reparsing of code and content blocks.
