@@ -1391,44 +1391,6 @@ const MATH_FUNCS: &[(&str, MathFunc)] = {
     ]
 };
 
-/// The named operators: upright names, and whether their attachments are
-/// limits.
-const MATH_OPERATORS: &[(&str, bool)] = &[
-    ("arccos", false),
-    ("arcsin", false),
-    ("arctan", false),
-    ("arg", false),
-    ("cos", false),
-    ("cosh", false),
-    ("cot", false),
-    ("coth", false),
-    ("csc", false),
-    ("deg", false),
-    ("det", true),
-    ("dim", false),
-    ("exp", false),
-    ("gcd", true),
-    ("hom", false),
-    ("inf", true),
-    ("ker", false),
-    ("lg", false),
-    ("lim", true),
-    ("liminf", true),
-    ("limsup", true),
-    ("ln", false),
-    ("log", false),
-    ("max", true),
-    ("min", true),
-    ("mod", false),
-    ("Pr", true),
-    ("sec", false),
-    ("sin", false),
-    ("sinh", false),
-    ("sup", true),
-    ("tan", false),
-    ("tanh", false),
-];
-
 /// What a name means in an equation (SPEC §8.1). A name that is both a
 /// function and a symbol, such as `dot`, is the function where it is
 /// `called` and the symbol elsewhere.
@@ -1445,7 +1407,7 @@ pub(crate) fn math_item(name: &str, called: bool) -> Option<MathItem> {
     if name == "dif" {
         return Some(MathItem::Differential);
     }
-    if let Some(&(_, limits)) = MATH_OPERATORS.iter().find(|&&(n, _)| n == name) {
+    if let Some(limits) = folio_math::operator(name) {
         return Some(MathItem::Operator { limits });
     }
     if let Some(c) = folio_math::symbol(name) {

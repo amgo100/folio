@@ -22,12 +22,12 @@ use std::sync::Arc;
 use ecow::{EcoString, eco_format};
 use folio_component::{Name, QualifiedName};
 use folio_math::{self as math, Atom, Formula, Line, MathClass, Row};
-use folio_syntax::Span;
 use folio_syntax::ast::{self, AstNode, MathTextKind};
+use folio_syntax::{Span, SubRange, SyntaxKind};
 
 use super::MAX_NESTING;
 use super::content::{Content, Node};
-use super::error::{EvalError, EvalResult, bail};
+use super::error::{EvalError, EvalResult, Stop, bail};
 use super::library::{MathFunc, MathItem, math_item};
 use super::ops::a_type;
 use super::value::{Arg, Args, Value};
@@ -97,6 +97,50 @@ impl Vm<'_> {
         Ok(Formula::new(lines))
     }
 
+    /// Reads a LaTeX equation's body into a formula (SPEC §8.1). Its nodes
+    /// have the span of the body, and its errors point at the part of the
+    /// body they are about.
+    pub(super) fn tex_formula(
+        &mut self,
+        eq: ast::TexEquation<'_>,
+        span: Span,
+    ) -> EvalResult<Formula> {
+        if eq.mode() != "tex" {
+            // The lexer reports an unknown mode.
+            return Err(Stop::Reported);
+        }
+        let Some(body) = eq
+            .to_untyped()
+            .children()
+            .find(|node| node.kind() == SyntaxKind::TexText)
+        else {
+            return Ok(Formula::default());
+        };
+        let formula =
+            math::tex::parse(body.leaf_text(), body.span(), MAX_NESTING).map_err(|error| {
+                let sub_range = SubRange::new(
+                    error.range.start,
+                    error.range.end.max(error.range.start + 1),
+                );
+                let message = if error.too_deep {
+                    eco_format!("math is nested more than {MAX_NESTING} deep")
+                } else {
+                    error.message
+                };
+                let mut eval_error = EvalError::new(body.span(), message).with_sub_range(sub_range);
+                for hint in error.hints {
+                    eval_error = eval_error.with_hint(hint);
+                }
+                Stop::from(eval_error)
+            })?;
+        let size = formula
+            .lines()
+            .iter()
+            .fold(0u64, |size, line| size.saturating_add(line.row.size()));
+        self.alloc(size.saturating_mul(NODE), span)?;
+        Ok(formula)
+    }
+
     /// An inline or display `math` element holding a formula.
     pub(super) fn math_content(
         &mut self,
@@ -153,28 +197,30 @@ impl Vm<'_> {
                     class: MathClass::Normal,
                     span,
                 }),
-                MathTextKind::Grapheme(grapheme) => atom(grapheme.clone(), span),
+                MathTextKind::Grapheme(grapheme) => math::Node::grapheme(grapheme.clone(), span),
             }),
             ast::Expr::MathIdent(ident) => self.math_name(ident.get(), level, span, out)?,
             ast::Expr::MathFieldAccess(access) => {
                 let name = access.to_untyped().full_text();
                 match folio_math::symbol(&name) {
-                    Some(c) => out.push(symbol(c, span)),
+                    Some(c) => out.push(math::Node::symbol(c, span)),
                     None if matches!(math_item(&name, true), Some(MathItem::Func(_))) => {
                         return Err(not_called(&name, span).into());
                     }
                     None => return Err(unknown_symbol(&name, span).into()),
                 }
             }
-            ast::Expr::MathShorthand(shorthand) => out.push(symbol(shorthand.get(), span)),
-            ast::Expr::Escape(escape) => out.push(atom(escape.get().into(), span)),
+            ast::Expr::MathShorthand(shorthand) => {
+                out.push(math::Node::symbol(shorthand.get(), span))
+            }
+            ast::Expr::Escape(escape) => out.push(math::Node::grapheme(escape.get().into(), span)),
             ast::Expr::Str(text) => out.push(math::Node::Text(Atom {
                 text: text.get(),
                 class: MathClass::Normal,
                 span,
             })),
             ast::Expr::MathPrimes(primes) => {
-                out.push(symbol_text(primes_text(primes.count()), span));
+                out.push(math::Node::symbol_text(primes_text(primes.count()), span));
             }
             ast::Expr::MathAlignPoint(_) => {
                 if level == Level::Nested {
@@ -213,7 +259,7 @@ impl Vm<'_> {
                     None => None,
                 };
                 let primes = attach.primes().map_or(0, |p| p.count());
-                out.push(attached(base, sub, sup, primes, span));
+                out.push(math::Node::attach(base, sub, sup, primes, span));
             }
             ast::Expr::MathFrac(frac) => {
                 let num = self.math_row(frac.num(), Level::Nested)?;
@@ -261,7 +307,7 @@ impl Vm<'_> {
             return self.place_in_math(value, level, span, out);
         }
         match math_item(name, false) {
-            Some(MathItem::Symbol(c)) => out.push(symbol(c, span)),
+            Some(MathItem::Symbol(c)) => out.push(math::Node::symbol(c, span)),
             Some(MathItem::Operator { limits }) => out.push(math::Node::Operator(math::Operator {
                 name: name.clone(),
                 limits,
@@ -355,7 +401,7 @@ impl Vm<'_> {
                         class: MathClass::Normal,
                         span: arg.name().span(),
                     }));
-                    body.push(symbol(':', arg.span()));
+                    body.push(math::Node::symbol(':', arg.span()));
                     self.math_expr(arg.expr(), Level::Nested, &mut body)?;
                 }
                 ast::MathArgItem::Arg(arg) => {
@@ -365,7 +411,7 @@ impl Vm<'_> {
                     )
                 }
                 ast::MathArgItem::Comma(c, node) | ast::MathArgItem::Semicolon(c, node) => {
-                    body.push(symbol(c, node.span()))
+                    body.push(math::Node::symbol(c, node.span()))
                 }
                 ast::MathArgItem::Space(_)
                 | ast::MathArgItem::LeftParen(..)
@@ -676,7 +722,7 @@ impl Vm<'_> {
             Value::None => {}
             Value::Int(n) => number(&n.to_string(), span, out),
             Value::Float(f) => float(f.get(), span, out)?,
-            Value::Str(text) => out.push(text_atom(text, span)),
+            Value::Str(text) => out.push(math::Node::text(text, span)),
             Value::Math(formula) => self.splice(&formula, level, span, out)?,
             Value::Content(content) => {
                 // Runs of text and spaces become one text each.
@@ -699,7 +745,7 @@ impl Vm<'_> {
                         _ => {}
                     }
                     if let Some((text, at)) = run.take() {
-                        out.push(text_atom(text.trim_end().into(), at));
+                        out.push(math::Node::text(text.trim_end().into(), at));
                     }
                     match node {
                         Node::Element(element)
@@ -708,16 +754,10 @@ impl Vm<'_> {
                                     Name::new("math").expect("a valid name"),
                                 ) =>
                         {
-                            match (element.field("tree"), element.field("tex")) {
-                                (Some(Value::Math(formula)), _) => {
-                                    self.splice(formula, level, span, out)?
-                                }
-                                (_, Some(Value::Str(_))) => {
-                                    bail!(span, "LaTeX math cannot be placed in native math yet")
-                                }
-                                // Markup makes every `math` element with
-                                // one of the two; scripts cannot call it.
-                                _ => {}
+                            // Markup makes every `math` element with a
+                            // tree; scripts cannot call it.
+                            if let Some(Value::Math(formula)) = element.field("tree") {
+                                self.splice(formula, level, span, out)?
                             }
                         }
                         _ => {
@@ -733,7 +773,7 @@ impl Vm<'_> {
                 if let Some((text, at)) = run {
                     let text = text.trim_end();
                     if !text.is_empty() {
-                        out.push(text_atom(text.into(), at));
+                        out.push(math::Node::text(text.into(), at));
                     }
                 }
             }
@@ -809,84 +849,11 @@ fn is_math(expr: ast::Expr<'_>) -> bool {
     )
 }
 
-/// A base with attachments, or an n-ary operator with its limits when the
-/// base is one.
-fn attached(
-    base: Row,
-    sub: Option<Row>,
-    sup: Option<Row>,
-    primes: usize,
-    span: Span,
-) -> math::Node {
-    if primes == 0
-        && let [math::Node::Nary(nary)] = base.nodes()
-        && nary.sub.is_none()
-        && nary.sup.is_none()
-    {
-        return math::Node::Nary(Arc::new(math::Nary {
-            op: nary.op,
-            sub,
-            sup,
-            span,
-        }));
-    }
-    math::Node::Attach(Arc::new(math::Attach {
-        base,
-        sub,
-        sup,
-        primes: u8::try_from(primes).unwrap_or(u8::MAX),
-        span,
-    }))
-}
-
-/// The node of a grapheme written in an equation: a letter, a symbol or a
-/// large operator.
-fn atom(text: EcoString, span: Span) -> math::Node {
-    let mut chars = text.chars();
-    match (chars.next(), chars.next()) {
-        (Some(c), None) => symbol(c, span),
-        (Some(c), Some(_)) if c.is_alphabetic() => math::Node::Ident(Atom {
-            text,
-            class: MathClass::Alphabetic,
-            span,
-        }),
-        _ => symbol_text(text, span),
-    }
-}
-
-/// The node of a character: a letter is a variable, a large operator an
-/// n-ary operator without limits, anything else a symbol of its class.
-fn symbol(c: char, span: Span) -> math::Node {
-    let class = math::class(c);
-    if c.is_alphabetic() || class == MathClass::Alphabetic {
-        return math::Node::Ident(Atom {
-            text: c.into(),
-            class: MathClass::Alphabetic,
-            span,
-        });
-    }
-    if class == MathClass::Large {
-        return math::Node::Nary(Arc::new(math::Nary {
-            op: c,
-            sub: None,
-            sup: None,
-            span,
-        }));
-    }
-    symbol_text(c.into(), span)
-}
-
-/// A symbol of the class of its first character.
-fn symbol_text(text: EcoString, span: Span) -> math::Node {
-    let class = text.chars().next().map_or(MathClass::Normal, math::class);
-    math::Node::Symbol(Atom { text, class, span })
-}
-
 /// A number, with a minus sign before it when it is negative.
 fn number(text: &str, span: Span, out: &mut Vec<math::Node>) {
     let digits = match text.strip_prefix('-') {
         Some(digits) => {
-            out.push(symbol('−', span));
+            out.push(math::Node::symbol('−', span));
             digits
         }
         None => text,
@@ -984,15 +951,6 @@ fn misplaced_align_point(span: Span) -> EvalError {
     )
 }
 
-/// Upright text.
-fn text_atom(text: EcoString, span: Span) -> math::Node {
-    math::Node::Text(Atom {
-        text,
-        class: MathClass::Normal,
-        span,
-    })
-}
-
 /// A float as it is set: its digits, or a mantissa times a power of ten
 /// for one that Rust writes with an exponent (`6.02e23`), or infinity.
 fn float(value: f64, span: Span, out: &mut Vec<math::Node>) -> EvalResult<()> {
@@ -1001,9 +959,9 @@ fn float(value: f64, span: Span, out: &mut Vec<math::Node>) -> EvalResult<()> {
     }
     if value.is_infinite() {
         if value < 0.0 {
-            out.push(symbol('−', span));
+            out.push(math::Node::symbol('−', span));
         }
-        out.push(symbol('∞', span));
+        out.push(math::Node::symbol('∞', span));
         return Ok(());
     }
     let text = format!("{value:?}");
@@ -1012,7 +970,7 @@ fn float(value: f64, span: Span, out: &mut Vec<math::Node>) -> EvalResult<()> {
         return Ok(());
     };
     number(mantissa, span, out);
-    out.push(symbol('×', span));
+    out.push(math::Node::symbol('×', span));
     let mut power = Vec::new();
     number(exponent, span, &mut power);
     out.push(math::Node::Attach(Arc::new(math::Attach {

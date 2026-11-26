@@ -546,18 +546,11 @@ impl<'a> Vm<'a> {
                 let formula = self.formula(eq.body(), span)?;
                 self.math_content(formula, eq.block(), span)?
             }
-            // LaTeX input is kept as source until it is read into the same
-            // tree (#41).
+            // LaTeX input is read into the same tree (SPEC §8.1).
             ast::Expr::TexEquation(eq) => {
                 self.step(span)?;
-                self.builtin(
-                    "math",
-                    [
-                        ("block", Value::Bool(eq.block())),
-                        ("tex", Value::Str(eq.body().into())),
-                    ],
-                    span,
-                )?
+                let formula = self.tex_formula(eq, span)?;
+                self.math_content(formula, eq.block(), span)?
             }
             _ => {
                 // Code is not evaluated around its syntax errors, which
