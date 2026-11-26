@@ -1,0 +1,105 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 297.64 × 419.53, 3 page(s)
+page 1 297.64 × 419.53, 11 line(s)
+  box (34.02, 34.02) 229.61 × 351.50 main.fol:1:2 baselines 23.52..290.97
+    box (0.00, 0.00) 229.61 × 294.16 main.fol:1:2 baselines 23.52..290.97
+      box (0.00, 0.00) 229.61 × 32.28 main.fol:1:2 baselines 23.52..23.52 keep penalty 10000
+        text (0.00, 23.52) NewCM10-Bold 17.60 w 154.25 17 glyph(s) "Projectile motion"
+      box (0.00, 50.76) 229.61 × 243.40 main.fol:3:1 baselines 21.02..240.21
+        box (0.00, 0.00) 229.61 × 29.14 main.fol:3:1 baselines 21.02..21.02 keep penalty 10000
+          text (0.00, 21.02) NewCM10-Bold 15.40 w 134.97 17 glyph(s) "Projectile motion"
+        box (0.00, 36.84) 229.61 × 90.95 main.fol:5:1 baselines 15.97..84.18
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 229.61 47 glyph(s) "A ball is thrown horizontally from the top of a"
+          text (0.00, 38.71) NewCM10-Regular 11.00 w 20.47 5 glyph(s) "cliff."
+          text (20.47, 38.71) NewCM10-Regular 11.00 w 5.50 1 glyph(s) "1"
+          text (25.97, 38.71) NewCM10-Regular 11.00 w 203.64 45 glyph(s) " Its horizontal velocity stays the same while"
+          box (0.00, 223.70) 229.61 × 15.59 main.fol:5:56 baselines 12.40..12.40
+            box (0.00, 0.00) 229.61 × 15.59 main.fol:5:65 baselines 12.40..12.40
+              text (0.00, 12.40) NewCM10-Regular 11.00 w 11.00 2 glyph(s) "1\u{a0}"
+              text (11.00, 12.40) NewCM10-Regular 8.80 w 149.10 40 glyph(s) "Air resistance is negligible throughout."
+          text (0.00, 61.45) NewCM10-Regular 11.00 w 209.94 45 glyph(s) "its vertical velocity grows at a steady rate,"
+          text (209.94, 61.45) NewCM10-Regular 11.00 w 5.50 1 glyph(s) "2"
+          text (215.44, 61.45) NewCM10-Regular 11.00 w 14.16 3 glyph(s) " so"
+          box (0.00, 248.31) 229.61 × 15.59 main.fol:5:198 baselines 12.40..12.40
+            box (0.00, 0.00) 229.61 × 15.59 main.fol:5:207 baselines 12.40..12.40
+              text (0.00, 12.40) NewCM10-Regular 11.00 w 11.00 2 glyph(s) "2\u{a0}"
+              text (11.00, 12.40) NewCM10-Regular 8.80 w 110.77 31 glyph(s) "The acceleration of free fall, "
+              box (121.77, 8.51) 16.15 × 5.69 main.fol:5:238
+                text (0.00, 3.89) NewCMMath-Regular 8.80 w 4.42 1 glyph(s) "𝑔"
+                text (6.86, 3.89) NewCMMath-Regular 8.80 w 6.85 1 glyph(s) "="
+              box (137.93, 5.10) 43.68 × 7.49 main.fol:5:238
+                text (0.00, 7.30) NewCMMath-Regular 8.80 w 15.65 4 glyph(s) "9.81"
+                text (20.05, 7.30) NewCMMath-Regular 8.80 w 7.40 1 glyph(s) "m"
+                text (31.85, 7.30) NewCMMath-Regular 8.80 w 3.47 1 glyph(s) "s"
+                text (35.31, 4.10) NewCMMath-Regular 6.16 w 4.79 1 glyph(s) "−"
+                text (40.11, 4.10) NewCMMath-Regular 6.16 w 3.08 1 glyph(s) "2"
+              text (181.61, 12.40) NewCM10-Regular 8.80 w 2.45 1 glyph(s) "."
+          text (0.00, 84.18) NewCM10-Regular 11.00 w 106.19 23 glyph(s) "its path is a parabola."
+        box (0.00, 133.29) 229.61 × 110.11 main.fol:7:1 baselines 15.97..106.92
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 229.61 44 glyph(s) "The time of flight depends only on the height"
+          text (0.00, 38.71) NewCM10-Regular 11.00 w 229.61 46 glyph(s) "of the cliff and not on the speed of the throw."
+          text (0.00, 61.45) NewCM10-Regular 11.00 w 229.61 46 glyph(s) "A faster ball lands further away, but it lands"
+          text (0.00, 84.18) NewCM10-Regular 11.00 w 229.61 44 glyph(s) "at the same moment as a slower one thrown at"
+          text (0.00, 106.92) NewCM10-Regular 11.00 w 229.61 48 glyph(s) "the same time, because both fall the same height"
+    shape (0.00, 308.30) M(0.00, 0.00) L(76.54, 0.00) stroke #000000ff 0.50 Butt Miter
+page 2 297.64 × 419.53, 6 line(s)
+  box (34.02, 34.02) 229.61 × 351.50 main.fol:1:2 baselines 12.40..131.58
+    box (0.00, 0.00) 229.61 × 134.77 main.fol:1:2 baselines 12.40..131.58
+      box (0.00, 0.00) 229.61 × 134.77 main.fol:3:1 baselines 12.40..131.58
+        box (0.00, 0.00) 229.61 × 87.37 main.fol:7:1 baselines 12.40..80.61
+          text (0.00, 12.40) NewCM10-Regular 11.00 w 229.61 51 glyph(s) "from rest in the vertical direction. This surprises"
+          text (0.00, 35.13) NewCM10-Regular 11.00 w 229.61 43 glyph(s) "many students when they first meet it, and a"
+          text (0.00, 57.87) NewCM10-Regular 11.00 w 229.61 44 glyph(s) "simple demonstration with two coins shows it"
+          text (0.00, 80.61) NewCM10-Regular 11.00 w 21.69 5 glyph(s) "well."
+        box (0.00, 92.87) 229.61 × 41.90 main.fol:9:1 baselines 15.97..38.71
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 229.61 47 glyph(s) "The range is the horizontal speed multiplied by"
+          text (0.00, 38.71) NewCM10-Regular 11.00 w 87.02 18 glyph(s) "the time of flight."
+          text (87.02, 38.71) NewCM10-Regular 11.00 w 5.50 1 glyph(s) "1"
+          text (92.52, 38.71) NewCM10-Regular 11.00 w 137.08 27 glyph(s) " A ball thrown at twice the"
+          box (0.00, 61.14) 229.61 × 197.48 main.fol:9:69 baselines 12.40..194.93
+            box (0.00, 0.00) 229.61 × 197.48 main.fol:9:78 baselines 12.40..194.93
+              text (0.00, 12.40) NewCM10-Regular 11.00 w 11.45 2 glyph(s) "1\u{a0}"
+              text (11.45, 12.40) NewCM10-Regular 8.80 w 218.16 57 glyph(s) "This holds only while the ground below the cliff is level."
+              text (0.00, 31.22) NewCM10-Regular 8.80 w 229.61 62 glyph(s) "On a slope the ball lands earlier or later, and the range must"
+              text (0.00, 49.41) NewCM10-Regular 8.80 w 229.61 55 glyph(s) "be found from where the path meets the ground. The same"
+              text (0.00, 67.60) NewCM10-Regular 8.80 w 229.61 61 glyph(s) "method works for a ball thrown at an angle, once its velocity"
+              text (0.00, 85.79) NewCM10-Regular 8.80 w 229.61 58 glyph(s) "has been resolved into horizontal and vertical components,"
+              text (0.00, 103.98) NewCM10-Regular 8.80 w 226.68 58 glyph(s) "each of which is treated on its own as before. A worked ex"
+              text (226.68, 103.98) NewCM10-Regular 8.80 w 2.93 1 glyph(s) "-"
+              text (0.00, 122.17) NewCM10-Regular 8.80 w 229.61 60 glyph(s) "ample follows in the next lesson, with a table of results to"
+              text (0.00, 140.36) NewCM10-Regular 8.80 w 226.68 57 glyph(s) "compare with the experiment, and a short set of exam ques"
+              text (226.68, 140.36) NewCM10-Regular 8.80 w 2.93 1 glyph(s) "-"
+              text (0.00, 158.55) NewCM10-Regular 8.80 w 229.61 59 glyph(s) "tions. The questions start with a ball thrown from a table,"
+              text (0.00, 176.74) NewCM10-Regular 8.80 w 229.61 59 glyph(s) "which is easy to film with a phone held at the side, and end"
+              text (0.00, 194.93) NewCM10-Regular 8.80 w 229.61 58 glyph(s) "with a ball thrown up a slope, which needs both components"
+    shape (0.00, 151.01) M(0.00, 0.00) L(76.54, 0.00) stroke #000000ff 0.50 Butt Miter
+page 3 297.64 × 419.53, 5 line(s)
+  box (34.02, 34.02) 229.61 × 351.50 main.fol:1:2 baselines 12.40..129.05
+    box (0.00, 0.00) 229.61 × 132.24 main.fol:1:2 baselines 12.40..129.05
+      box (0.00, 0.00) 229.61 × 132.24 main.fol:3:1 baselines 12.40..129.05
+        box (0.00, 0.00) 229.61 × 19.16 main.fol:9:1 baselines 12.40..12.40
+          text (0.00, 12.40) NewCM10-Regular 11.00 w 196.48 43 glyph(s) "speed travels twice as far before it lands."
+        box (0.00, 35.00) 229.61 × 97.24 main.fol:11:1 baselines 18.53..94.05
+          box (0.00, 0.00) 229.61 × 26.00 main.fol:11:1 baselines 18.53..18.53 keep penalty 10000
+            text (0.00, 18.53) NewCM10-Bold 13.20 w 64.92 9 glyph(s) "Questions"
+          box (0.00, 32.60) 229.61 × 64.64 main.fol:13:1 baselines 15.97..61.45
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 229.61 46 glyph(s) "Find the time of flight of a ball thrown from a"
+            text (0.00, 38.71) NewCM10-Regular 11.00 w 70.51 15 glyph(s) "cliff 20 m high."
+            text (70.51, 38.71) NewCM10-Regular 11.00 w 5.50 1 glyph(s) "1"
+            text (76.01, 38.71) NewCM10-Regular 11.00 w 153.60 31 glyph(s) " Then find how far from the foot"
+            box (0.00, 268.31) 229.61 × 15.59 main.fol:13:66 baselines 12.40..12.40
+              box (0.00, 0.00) 229.61 × 15.59 main.fol:13:75 baselines 12.40..12.40
+                text (0.00, 12.40) NewCM10-Regular 11.00 w 11.00 2 glyph(s) "1\u{a0}"
+                text (11.00, 12.40) NewCM10-Regular 8.80 w 166.50 42 glyph(s) "Give your answer to two significant figures."
+            text (0.00, 61.45) NewCM10-Regular 11.00 w 186.01 42 glyph(s) "of the cliff it lands when it is thrown at "
+            box (186.01, 52.32) 40.54 × 9.36 main.fol:13:196
+              text (0.00, 9.12) NewCMMath-Regular 11.00 w 5.50 1 glyph(s) "5"
+              text (11.00, 9.12) NewCMMath-Regular 11.00 w 9.25 1 glyph(s) "m"
+              text (25.75, 9.12) NewCMMath-Regular 11.00 w 4.33 1 glyph(s) "s"
+              text (30.08, 5.13) NewCMMath-Regular 7.70 w 5.99 1 glyph(s) "−"
+              text (36.08, 5.13) NewCMMath-Regular 7.70 w 3.85 1 glyph(s) "1"
+            text (226.55, 61.45) NewCM10-Regular 11.00 w 3.06 1 glyph(s) "."
+    shape (0.00, 311.42) M(0.00, 0.00) L(76.54, 0.00) stroke #000000ff 0.50 Butt Miter
+    box (0.00, 314.42) 229.61 × 12.47 main.fol:9:69 baselines 9.92..9.92
+      box (0.00, 0.00) 229.61 × 12.47 main.fol:9:78 baselines 9.92..9.92
+        text (0.00, 9.92) NewCM10-Regular 8.80 w 210.31 55 glyph(s) "at once. Bring a calculator, a ruler and squared paper."
