@@ -7,9 +7,14 @@
 //!   elements in it (`emph`, `strong`, `raw`, a component's inline
 //!   elements), each in its own style. A space is U+0020, a forced line
 //!   break U+2028, and an element without text (inline math, an image, a
-//!   reference, a note's or float's anchor) the object character, which
-//!   layout sizes. The blocks of notes and floats anchored in a paragraph
-//!   are paragraphs of their own.
+//!   note's or float's anchor) the object character, which layout sizes.
+//!   The blocks of notes and floats anchored in a paragraph are paragraphs
+//!   of their own.
+//! - **Generated text** (SPEC §4.5): a reference is the text the Resolve
+//!   stage gave it (`Figure 2`), and an element's marker (its number, a
+//!   list item's bullet, a figure's word and number) starts its first
+//!   paragraph, or its caption, in the element's style
+//!   ([`crate::resolve`]). Both stand for the whole node in the span map.
 //! - **Quotation marks**: a quote in markup becomes its language's mark,
 //!   opening or closing by the characters around it ([`Lang::quotes`]).
 //! - **Fonts**: each run of one style is set in its `font` chain, split by
@@ -42,7 +47,8 @@ use crate::eval::{self, Content, Element, Node};
 use crate::fonts::{Fonts, Request, fonts};
 use crate::locate::StyledChildren;
 use crate::model::document;
-use crate::pipeline::step_styled;
+use crate::pipeline::{resolution, step_styled};
+use crate::resolve::{Resolution, UNRESOLVED};
 use crate::style::{
     Child, ComputedStyle, Properties, StyledNode, content_elements, styled_children,
 };
@@ -262,6 +268,7 @@ pub struct CollectedParagraph {
 pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
     let project = build.project(db);
     let styled = step_styled(db, build)?;
+    let resolution = resolution(db, build)?;
     let doc = document(db, project, build.variant(db).clone()).as_ref()?;
     let fonts = fonts(db, project);
     let default_lang =
@@ -281,6 +288,8 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         blocks: Vec::new(),
         root: None,
         owner: Span::detached(),
+        resolution,
+        markers: Vec::new(),
     };
     collector.element(&doc.root, &styled.root);
 
@@ -322,6 +331,17 @@ struct Collector<'a> {
     /// The innermost element being collected that the document model did
     /// not make: the source of text that records no node of its own.
     owner: Span,
+    /// What the Resolve stage generated.
+    resolution: &'a Resolution,
+    /// The markers waiting for the next paragraph, outermost first.
+    markers: Vec<Pending>,
+}
+
+/// A marker waiting for the paragraph it starts.
+struct Pending {
+    text: EcoString,
+    style: ComputedStyle,
+    span: Span,
 }
 
 /// A paragraph's text as it is collected.
@@ -381,7 +401,20 @@ impl Collector<'_> {
     fn element(&mut self, element: &Element, node: &StyledNode) {
         self.open(&node.style, element, None);
         let owner = self.own(element);
+        // A marker that no paragraph of the element takes is dropped with
+        // it.
+        let markers = self.markers.len();
+        if let Some(marker) = self.resolution.marker(element.location)
+            && marker.part.is_none()
+        {
+            self.markers.push(Pending {
+                text: marker.text.clone(),
+                style: node.style.clone(),
+                span: element.span,
+            });
+        }
         self.element_content(element, node);
+        self.markers.truncate(markers);
         self.owner = owner;
         self.close();
     }
@@ -404,7 +437,7 @@ impl Collector<'_> {
     fn element_content(&mut self, element: &Element, node: &StyledNode) {
         // A code block is a paragraph whose lines end in forced breaks.
         if let Some(text) = raw_text(element) {
-            let mut builder = Builder::default();
+            let mut builder = self.builder();
             builder.raw(text, &node.style, element.span);
             self.finish(builder, &node.style, element);
             return;
@@ -419,7 +452,7 @@ impl Collector<'_> {
                 .any(|(_, value)| matches!(value, eval::Value::Content(_)))
         {
             // Display maths and images are reported as such.
-            if ["math", "image", "ref"]
+            if ["math", "image"]
                 .iter()
                 .any(|name| is_builtin(&element.name, name))
             {
@@ -466,8 +499,19 @@ impl Collector<'_> {
                 })
             {
                 let mut part_kids = StyledChildren::new(part_node);
-                self.open(&part_node.style, element, Some(field));
+                self.open(&part_node.style, element, Some(field.clone()));
+                let markers = self.markers.len();
+                if let Some(marker) = self.resolution.marker(element.location)
+                    && marker.part.as_ref() == Some(&field)
+                {
+                    self.markers.push(Pending {
+                        text: marker.text.clone(),
+                        style: part_node.style.clone(),
+                        span: element.span,
+                    });
+                }
                 self.content(content, &part_node.style, element, &mut part_kids);
+                self.markers.truncate(markers);
                 self.close();
             }
         }
@@ -491,7 +535,7 @@ impl Collector<'_> {
             }
             return;
         }
-        let mut builder = Builder::default();
+        let mut builder = self.builder();
         let mut anchored = Vec::new();
         self.inline(
             content,
@@ -580,6 +624,15 @@ impl Collector<'_> {
             out.raw(text, style, element.span);
             return;
         }
+        // A reference shows the text Resolve gave it.
+        if is_builtin(&element.name, "ref") {
+            let text = self
+                .resolution
+                .reference(element.location)
+                .map_or(UNRESOLVED, |r| r.text.as_str());
+            out.push_part(text, style, element.span, TextSource::WHOLE, false);
+            return;
+        }
         if is_builtin(&element.name, "link")
             && let Some(eval::Value::Str(dest)) = element.field("dest")
         {
@@ -593,7 +646,7 @@ impl Collector<'_> {
             self.owner = owner;
             return;
         }
-        // Inline math, an image, a reference: an object layout sizes.
+        // Inline math, an image: an object layout sizes.
         self.not_laid_out(element);
         out.object(style, element, node.location);
     }
@@ -601,16 +654,13 @@ impl Collector<'_> {
     /// Warns, once per build and element, that layout does not draw an
     /// element yet, so the output leaves it out (SPEC §7.9). Each warning
     /// goes with the work that lays its element out: maths with
-    /// `folio-math` (#43), references with the Resolve stage (#44), images
-    /// with figures and images (#47), and the boxes of other content with
-    /// #214.
+    /// `folio-math` (#43), images with figures and images (#47), and the
+    /// boxes of other content with #214.
     fn not_laid_out(&mut self, element: &Element) {
         let name = &element.name;
         let builtin = |text: &str| is_builtin(name, text);
         let message = if builtin("math") {
             EcoString::from("maths is not laid out yet, so the output leaves it out")
-        } else if builtin("ref") {
-            EcoString::from("references are not laid out yet, so the output leaves them out")
         } else if builtin("image") {
             EcoString::from("images are not laid out yet, so the output leaves them out")
         } else {
@@ -621,6 +671,21 @@ impl Collector<'_> {
             Diagnostic::warning(element.span, message)
                 .with_hint("this version of Folio checks it but does not draw it"),
         );
+    }
+
+    /// A new paragraph, which starts with the markers waiting for one.
+    fn builder(&mut self) -> Builder {
+        let mut builder = Builder::default();
+        for marker in self.markers.drain(..) {
+            builder.push_part(
+                &marker.text,
+                &marker.style,
+                marker.span,
+                TextSource::WHOLE,
+                false,
+            );
+        }
+        builder
     }
 
     /// Turns a collected paragraph into segments, with fonts by fallback.

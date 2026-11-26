@@ -469,12 +469,12 @@ fn hex(color: Color) -> String {
     )
 }
 
-/// The document of the object golden file ([`boxes`]): inline maths and a
-/// reference, which stand for objects in a paragraph's text, a figure with
+/// The document of the object golden file ([`boxes`]): inline maths, which
+/// stands for objects in a paragraph's text, a figure with
 /// no content, a block that holds no paragraphs, and a note's anchor, an
 /// object left without a size beside a sized one.
 pub const BOXES: &str = "#doc(title: [Boxes])\n\n= Boxes\n\nA line with a tall box $x$ in \
-it, and a raised one, see @fig:box, after it. The rest of the paragraph runs on so that it \
+it, and a raised one, see $z$, after it. The rest of the paragraph runs on so that it \
 takes a second line and a third, which shows that only the line with the tall box is taller \
 than the others.\n\n#figure[] <fig:box>\n\nA note's anchor#sidenote[A note.] has no size and a \
 sized box $y$ follows it; the justified line ends where its space does.\n";
@@ -492,13 +492,19 @@ pub const TALL: ObjectMetrics = ObjectMetrics {
     shift: Abs::zero(),
 };
 
-/// The size of the raised test box: a reference in [`BOXES`].
+/// The size of the raised test box: the second inline maths of [`BOXES`],
+/// the object at [`RAISED_AT`] in its paragraph.
 pub const RAISED: ObjectMetrics = ObjectMetrics {
     width: Abs::pt(16.0),
     ascent: Abs::pt(6.0),
     descent: Abs::pt(2.0),
     shift: Abs::pt(5.0),
 };
+
+/// Where the raised test box stands in its paragraph's text: after "A line
+/// with a tall box ", the tall box's object character and " in it, and a
+/// raised one, see ".
+pub const RAISED_AT: usize = 23 + 3 + 30;
 
 /// The size of the block test box: the empty figure of [`BOXES`].
 pub const BLOCK: Size = Size::new(Abs::pt(120.0), Abs::pt(60.0));
@@ -528,8 +534,8 @@ pub fn boxes() -> (World, Pages) {
         .unwrap_or_else(|| panic!("{}", built("styles")));
     let fonts = folio::fonts(&world).expect("nothing cancels the build");
     let object = |object: &TextObject| match object.element.name.as_str() {
+        "math" if object.at == RAISED_AT => Some(RAISED),
         "math" => Some(TALL),
-        "ref" => Some(RAISED),
         _ => None,
     };
     let block = |block: &TextBlock| {

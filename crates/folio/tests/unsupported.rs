@@ -55,10 +55,6 @@ fn a_reference_and_maths_are_reported() {
                 "@nowhere"
             ),
             warning(
-                "references are not laid out yet, so the output leaves them out",
-                "@nowhere"
-            ),
-            warning(
                 "maths is not laid out yet, so the output leaves it out",
                 "$x^2$"
             ),
@@ -74,10 +70,9 @@ fn lists_the_warnings_for_what_is_not_supported() {
                  page[size] { margin-top: 1cm; }\n\
                  page:has(heading) { margin-top: 1cm; }\n\
                  figure { side: outer; }\n\
-                 heading { counter-reset: q; marker: none; }\n\
+                 enum-item { marker-position: hanging 8mm; }\n\
                  page:left { margin-top: 1cm; }\n\
                  page.landscape { margin-top: 1cm; }\n\
-                 heading { numbering: \"1.\"; }\n\
                  emph { display: hidden; }\n\
                  paragraph { width: 50%; grid-snap: false; }\n\
                  page { baseline-grid: 12pt; header: \"Exam\"; footer: none; }\n\
@@ -85,7 +80,8 @@ fn lists_the_warnings_for_what_is_not_supported() {
                  figure.here { placement: here; }\n\
                  strong { template: \"bold\"; }\n";
     let text = "= Forces <forces>\n\n\
-                See @forces, $x$ and #image(\"ball.png\"), then $y$ and @forces.\n";
+                See @forces, $x$ and #image(\"ball.png\"), then $y$ and @forces.\n\n\
+                + Item\n";
     let mut world = world(style, text);
     world
         .set_file("ball.png", b"not read yet".to_vec())
@@ -119,10 +115,11 @@ fn lists_the_warnings_for_what_is_not_supported() {
             ":has(heading)",
         ),
         warning(&not_implemented("side"), "side: outer;"),
-        warning(&not_implemented("counter-reset"), "counter-reset: q;"),
-        warning(&not_implemented("marker"), "marker: none;"),
+        warning(
+            &not_implemented("marker-position"),
+            "marker-position: hanging 8mm;",
+        ),
         // The `header` of the ignored `page:first` rule is not reported.
-        warning(&not_implemented("numbering"), "numbering: \"1.\";"),
         warning(&not_implemented("display"), "display: hidden;"),
         warning(&not_implemented("width"), "width: 50%;"),
         warning(&not_implemented("grid-snap"), "grid-snap: false;"),
@@ -131,10 +128,6 @@ fn lists_the_warnings_for_what_is_not_supported() {
         warning(&not_implemented("placement"), "placement: top;"),
         warning(&not_implemented("template"), "template: \"bold\";"),
         // Once per build and kind, at the first.
-        warning(
-            "references are not laid out yet, so the output leaves them out",
-            "@forces",
-        ),
         warning(
             "maths is not laid out yet, so the output leaves it out",
             "$x$",
@@ -180,7 +173,7 @@ fn rules_of_other_targets_and_other_pseudo_classes() {
     // A rule for another target has no effect in this build either way, and
     // a page selector's other errors stay errors.
     let world = world(
-        "@target docx { heading { numbering: \"1.\"; } }\n\
+        "@target docx { heading { marker-position: hanging; } }\n\
          page:foo { margin-top: 1cm; }\n\
          page:nth(0) { margin-top: 1cm; }\n\
          figure { wrap-gap: 0.6em; }\n",
@@ -244,7 +237,7 @@ fn hints_and_overrides_in_content_warn_as_declarations_do() {
         "",
         "#figure(placement: top)[]\n\n\
          #figure(placement: here, width@docx: 50%)[]\n\n\
-         #heading(override: (numbering: \"1.\", space-before: 2pt))[Forces]\n",
+         #heading(override: (marker-position: \"hanging\", space-before: 2pt))[Forces]\n",
     );
     let compiled = compile(&world, Target::Pdf);
     let not_implemented =
@@ -254,8 +247,8 @@ fn hints_and_overrides_in_content_warn_as_declarations_do() {
         [
             warning(&not_implemented("placement"), "figure(placement: top)[]"),
             warning(
-                &not_implemented("numbering"),
-                "heading(override: (numbering: \"1.\", space-before: 2pt))[Forces]"
+                &not_implemented("marker-position"),
+                "heading(override: (marker-position: \"hanging\", space-before: 2pt))[Forces]"
             ),
         ]
     );
@@ -265,7 +258,7 @@ fn hints_and_overrides_in_content_warn_as_declarations_do() {
 fn scoped_rules_warn_only_when_they_apply() {
     let world = world(
         "",
-        "#rule @target docx heading { numbering: \"1.\"; }\n\
+        "#rule @target docx heading { marker-position: hanging; }\n\
          #rule @variant markscheme emph { display: hidden; }\n\
          #rule strong { display: hidden; }\n\
          Text.\n",
@@ -288,7 +281,7 @@ fn scoped_rules_warn_only_when_they_apply() {
     assert_eq!(
         docx,
         [
-            "`numbering` is not implemented yet, so this declaration has no effect",
+            "`marker-position` is not implemented yet, so this declaration has no effect",
             "`display` is not implemented yet, so this declaration has no effect",
         ]
     );
