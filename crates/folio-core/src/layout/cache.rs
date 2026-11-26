@@ -246,8 +246,13 @@ impl Cache {
 
         // Every eighth call, counted from the last that forgot: a call that
         // a cancelled query left unfinished does not skip it.
-        if now >= self.evicted.load(Ordering::Relaxed) + 8 {
-            self.evicted.store(now, Ordering::Relaxed);
+        let last = self.evicted.load(Ordering::Relaxed);
+        if now >= last + 8
+            && self
+                .evicted
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
             lock(&self.entries).retain(|_, entry| entry.used + MAX_AGE >= now);
             lock(&self.hyphens).retain(|_, (_, used)| *used + MAX_AGE >= now);
         }

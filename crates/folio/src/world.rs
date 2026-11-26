@@ -87,8 +87,11 @@ impl Kept {
         self.lock().get(build).cloned().unwrap_or_default()
     }
 
-    /// Updates what is kept of a build, and forgets the builds that are
-    /// not among `builds`, the builds the manifest declares now.
+    /// Updates what is kept of a build, and forgets the builds of variants
+    /// that the manifest no longer declares, given the builds it declares
+    /// now. A build without a variant is kept, as is a target the manifest
+    /// does not declare, since a host may compile it all the same; there
+    /// are few of them.
     pub(crate) fn update(
         &self,
         build: (Option<Name>, Target),
@@ -96,7 +99,9 @@ impl Kept {
         f: impl FnOnce(&mut Last),
     ) {
         let mut kept = self.lock();
-        kept.retain(|build, _| builds.contains(build));
+        kept.retain(|(variant, _), _| {
+            variant.is_none() || builds.iter().any(|(declared, _)| declared == variant)
+        });
         f(kept.entry(build).or_default());
     }
 

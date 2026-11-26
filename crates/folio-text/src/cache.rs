@@ -182,8 +182,13 @@ impl Cache {
 
         // Every eighth call, counted from the last that forgot: a call that
         // a cancelled query left unfinished does not skip it.
-        if now >= self.evicted.load(Ordering::Relaxed) + 8 {
-            self.evicted.store(now, Ordering::Relaxed);
+        let last = self.evicted.load(Ordering::Relaxed);
+        if now >= last + 8
+            && self
+                .evicted
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
             self.evict(now);
         }
         out.into_iter()
@@ -204,7 +209,8 @@ impl Cache {
     ///
     /// `each` may unwind, as a database query that its revision has
     /// cancelled does (SPEC §2.3): the items not yet started are then
-    /// skipped, and the threads drop what they finish afterwards.
+    /// skipped, and the threads drop the items they were working on when
+    /// they finish them.
     ///
     /// # Panics
     ///
@@ -249,6 +255,7 @@ impl Cache {
                         let out: Vec<(usize, O)> = chunk
                             .iter()
                             .enumerate()
+                            .take_while(|_| !stop.load(Ordering::Relaxed))
                             .map(|(j, item)| (start + j, f(item)))
                             .collect();
                         // The caller may have stopped listening.

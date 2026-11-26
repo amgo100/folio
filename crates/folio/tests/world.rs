@@ -526,6 +526,66 @@ fn a_panic_in_a_query_unwinds_in_an_ordinary_world() {
     assert_eq!(message, "injected into `lines`");
 }
 
+/// A query that an edit stops gives up its claim as if it had panicked,
+/// so a handle waiting for it on another thread sees a panic there: an
+/// edit, not a bug, in either kind of world.
+#[test]
+fn an_edit_is_not_a_panic_for_a_handle_that_waits() {
+    for long_lived in [false, true] {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel::<()>();
+        let resume_tx = Mutex::new(resume_tx);
+        let resume_rx = Mutex::new(resume_rx);
+        let started_tx = Mutex::new(started_tx);
+        let armed = Arc::new(AtomicBool::new(false));
+        let hook_armed = armed.clone();
+        let waiting = AtomicBool::new(false);
+        let mut world = World::builder()
+            .long_lived(long_lived)
+            .on_event(move |event| match event {
+                // The first handle reaches `lines`: wait for the edit,
+                // then go on, to stop at the next query it calls.
+                Event::Execute { query }
+                    if query == "lines" && hook_armed.swap(false, Ordering::SeqCst) =>
+                {
+                    waiting.store(true, Ordering::SeqCst);
+                    started_tx.lock().unwrap().send(()).unwrap();
+                    resume_rx.lock().unwrap().recv().unwrap();
+                }
+                Event::Cancel if waiting.swap(false, Ordering::SeqCst) => {
+                    resume_tx.lock().unwrap().send(()).unwrap();
+                }
+                _ => {}
+            })
+            .build(MANIFEST, None)
+            .unwrap();
+        world.set_source("main.fol", MAIN).unwrap();
+        world
+            .set_source("questions/q1.fol", "A question.\n")
+            .unwrap();
+        for path in ["styles/exam.fsty", "styles/markscheme.fsty"] {
+            world.set_source(path, "").unwrap();
+        }
+
+        armed.store(true, Ordering::SeqCst);
+        let compile = |world: World| {
+            thread::spawn(move || {
+                let exam = Name::new("exam").unwrap();
+                folio::compile(&world, Target::Pdf, Some(&exam))
+            })
+        };
+        let first = compile(world.clone());
+        started_rx.recv().unwrap();
+        // The second handle waits for the first's queries.
+        let second = compile(world.clone());
+        thread::sleep(std::time::Duration::from_millis(200));
+
+        world.set_source("main.fol", "= Energy\n").unwrap();
+        assert_eq!(first.join().unwrap(), Err(Cancelled), "{long_lived}");
+        assert_eq!(second.join().unwrap(), Err(Cancelled), "{long_lived}");
+    }
+}
+
 #[test]
 fn compiles_all_builds_in_parallel() {
     let logged = Logged::new();

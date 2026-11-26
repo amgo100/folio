@@ -99,10 +99,10 @@ pub fn compile(
     variant: Option<&Name>,
 ) -> Result<Compiled, Cancelled> {
     let Some(kept) = world.kept() else {
-        return catch(|| compile_now(world, target, variant));
+        return catch(world, || compile_now(world, target, variant));
     };
     let build = (variant.cloned(), target);
-    match isolate(|| compile_now(world, target, variant))? {
+    match isolate(world, || compile_now(world, target, variant))? {
         Ok(compiled) => {
             kept.update(build, &world.builds(), |last| {
                 last.sources = compiled.sources.clone();
@@ -162,10 +162,10 @@ fn compile_now(world: &World, target: Target, variant: Option<&Name>) -> Compile
 /// error with the code `internal-error`, as [`compile`] says.
 pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Checked, Cancelled> {
     let Some(kept) = world.kept() else {
-        return catch(|| check_now(world, target, variant));
+        return catch(world, || check_now(world, target, variant));
     };
     let build = (variant.cloned(), target);
-    match isolate(|| check_now(world, target, variant))? {
+    match isolate(world, || check_now(world, target, variant))? {
         Ok(checked) => {
             kept.update(build, &world.builds(), |last| {
                 last.sources = checked.sources.clone();
@@ -289,7 +289,9 @@ impl Compiled {
 /// variant. Evaluation does not depend on the target, so every target of a
 /// variant shares it. Fails only when an edit to the world cancels it.
 pub fn evaluate(world: &World, variant: Option<&Name>) -> Result<Option<eval::Content>, Cancelled> {
-    catch(|| eval::evaluate(world.db(), world.project(), variant.cloned()).clone())
+    catch(world, || {
+        eval::evaluate(world.db(), world.project(), variant.cloned()).clone()
+    })
 }
 
 /// Builds the document tree of a variant of the world's document (SPEC
@@ -303,7 +305,9 @@ pub fn document(
     world: &World,
     variant: Option<&Name>,
 ) -> Result<Option<model::Document>, Cancelled> {
-    catch(|| model::document(world.db(), world.project(), variant.cloned()).clone())
+    catch(world, || {
+        model::document(world.db(), world.project(), variant.cloned()).clone()
+    })
 }
 
 /// Styles a variant of the world's document for a target (SPEC §2.1,
@@ -318,7 +322,7 @@ pub fn styles(
     target: Target,
     variant: Option<&Name>,
 ) -> Result<Option<style::Styled>, Cancelled> {
-    catch(|| {
+    catch(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         style::styles(db, build).clone()
@@ -333,7 +337,9 @@ pub fn styles(
 /// missing or changed) are diagnostics that [`compile`] reports. Fails only
 /// when an edit to the world cancels it.
 pub fn fonts(world: &World) -> Result<Fonts, Cancelled> {
-    catch(|| folio_core::fonts::fonts(world.db(), world.project()).clone())
+    catch(world, || {
+        folio_core::fonts::fonts(world.db(), world.project()).clone()
+    })
 }
 
 /// Shapes the paragraphs of a variant of the world's document for a target
@@ -351,7 +357,7 @@ pub fn text(
     target: Target,
     variant: Option<&Name>,
 ) -> Result<Option<Text>, Cancelled> {
-    catch(|| {
+    catch(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         folio_core::text::text(db, build).clone()
@@ -374,7 +380,7 @@ pub fn lines(
     target: Target,
     variant: Option<&Name>,
 ) -> Result<Option<Lines>, Cancelled> {
-    catch(|| {
+    catch(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         layout::lines(db, build).clone()
@@ -399,7 +405,7 @@ pub fn pages(
     target: Target,
     variant: Option<&Name>,
 ) -> Result<Option<Pages>, Cancelled> {
-    catch(|| {
+    catch(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         layout::pages(db, build).clone()
@@ -485,24 +491,37 @@ impl std::error::Error for Cancelled {}
 
 /// Runs queries, turning salsa's cancellation unwind into [`Cancelled`].
 /// A panic in a query unwinds on.
-fn catch<T>(f: impl FnOnce() -> T) -> Result<T, Cancelled> {
+fn catch<T>(world: &World, f: impl FnOnce() -> T) -> Result<T, Cancelled> {
     salsa::Cancelled::catch(AssertUnwindSafe(f)).map_err(|cancelled| match cancelled {
-        salsa::Cancelled::PropagatedPanic => {
+        salsa::Cancelled::PropagatedPanic if !cancelled_by_edit(world) => {
             panic!("a query panicked on another thread")
         }
         _ => Cancelled,
     })
 }
 
+/// Whether an edit has cancelled the world's revision.
+///
+/// A query that an edit stops on one thread gives up its claim as if it
+/// had panicked, so the queries on other threads that wait for it see a
+/// panic on another thread: this tells the two apart. The edit waits for
+/// this handle, so the revision stays cancelled while it is asked.
+fn cancelled_by_edit(world: &World) -> bool {
+    salsa::Cancelled::catch(AssertUnwindSafe(|| {
+        salsa::Database::unwind_if_revision_cancelled(world.db())
+    }))
+    .is_err()
+}
+
 /// Runs queries for a long-lived world, turning salsa's cancellation
 /// unwind into [`Cancelled`] and a panic in a query, on this thread or
 /// another, into what it said.
-fn isolate<T>(f: impl FnOnce() -> T) -> Result<Result<T, EcoString>, Cancelled> {
+fn isolate<T>(world: &World, f: impl FnOnce() -> T) -> Result<Result<T, EcoString>, Cancelled> {
     match panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(value) => Ok(Ok(value)),
         Err(payload) => match payload.downcast::<salsa::Cancelled>() {
             Ok(cancelled) => match *cancelled {
-                salsa::Cancelled::PropagatedPanic => {
+                salsa::Cancelled::PropagatedPanic if !cancelled_by_edit(world) => {
                     Ok(Err("a query panicked on another thread".into()))
                 }
                 _ => Err(Cancelled),
@@ -526,8 +545,8 @@ fn panic_message(payload: &(dyn Any + Send)) -> EcoString {
 /// What a watcher watches after a build panicked: the sources and files
 /// that its last compilation or check that did not panic read, and then
 /// every other source and file of the world, since the build that panicked
-/// may have read more (SPEC §12.2). The world's files that the build is not
-/// known to have read are listed as sources or as data.
+/// may have read more (SPEC §12.2). The kind of a file that the build is
+/// not known to have read is told by its extension.
 fn watched(
     world: &World,
     mut sources: EcoVec<ProjectPath>,
@@ -540,8 +559,8 @@ fn watched(
             sources.push(path.clone());
         }
         if seen.insert(path.clone()) {
-            let kind = match path.as_str().rsplit_once('.') {
-                Some((_, "fsty")) => FileKind::Stylesheet,
+            let kind = match extension(path).as_deref() {
+                Some("fsty") => FileKind::Stylesheet,
                 _ => FileKind::Content,
             };
             files.push(FileRead {
@@ -552,13 +571,23 @@ fn watched(
     }
     for path in world.file_paths() {
         if seen.insert(path.clone()) {
+            let kind = match extension(path).as_deref() {
+                Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => FileKind::Image,
+                _ => FileKind::Data,
+            };
             files.push(FileRead {
                 path: path.clone(),
-                kind: FileKind::Data,
+                kind,
             });
         }
     }
     (sources, files)
+}
+
+/// A path's extension, in lower case.
+fn extension(path: &ProjectPath) -> Option<String> {
+    let (_, extension) = path.as_str().rsplit_once('.')?;
+    (!extension.contains('/')).then(|| extension.to_ascii_lowercase())
 }
 
 /// The error that stands for a panic in a query in a long-lived world: a
