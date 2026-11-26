@@ -206,15 +206,26 @@ function dropGlyphs() {
   failed = new Map();
 }
 
+// A glyph that could not be fetched, for a reason that may pass (the
+// network, the server): asked for again after a while.
 function glyphFailed(key) {
   glyphCache.delete(key);
   failed.set(key, Date.now() + RETRY_AFTER);
-  if (!retryTimer) {
-    retryTimer = setTimeout(() => {
-      retryTimer = 0;
-      redrawVisible();
-    }, RETRY_AFTER);
-  }
+  armRetry();
+}
+
+// Redraws when the earliest failed glyph is due again.
+function armRetry() {
+  if (retryTimer || failed.size === 0) return;
+  const due = Math.min(...failed.values());
+  retryTimer = setTimeout(() => {
+    retryTimer = 0;
+    redrawVisible();
+    // Glyphs not due yet, or not on a visible page, wait for the next.
+    const now = Date.now();
+    for (const [key, at] of failed) if (at <= now) failed.delete(key);
+    armRetry();
+  }, Math.max(0, due - Date.now()));
 }
 
 function wantGlyph(font, size, id, sub) {
@@ -240,13 +251,26 @@ async function fetchGlyphs() {
       const part = all.slice(i, i + GLYPHS_PER_REQUEST);
       const url = `/glyphs/${font}?token=${encodeURIComponent(token)}&size=${size}&g=${part.join(",")}`;
       requests.push(fetch(url).then(async (response) => {
+        if (cache !== glyphCache) return false;
+        if (response.status >= 400 && response.status < 500) {
+          // The server will not draw these glyphs, as for a font it does
+          // not have: they are drawn as nothing until the fonts change.
+          for (const g of part) cache.set(keyOf(g), null);
+          return true;
+        }
         if (!response.ok) throw new Error(`${response.status}`);
         const bytes = new Uint8Array(await response.arrayBuffer());
         // Glyphs of fonts the server has replaced since are dropped.
         if (cache !== glyphCache) return false;
         readGlyphs(font, size, bytes);
-        // Glyphs an answer left out are asked for again later.
-        for (const g of part) if (glyphCache.get(keyOf(g)) === undefined) glyphFailed(keyOf(g));
+        // Glyphs an answer left out, past its size limit, are asked for
+        // again at once.
+        for (const g of part) {
+          if (glyphCache.get(keyOf(g)) === undefined) {
+            glyphCache.delete(keyOf(g));
+            wantGlyph(font, size, ...g.split("."));
+          }
+        }
         return true;
       }).catch(() => {
         if (cache === glyphCache) for (const g of part) glyphFailed(keyOf(g));

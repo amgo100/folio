@@ -8,6 +8,7 @@
 //! cancelled check drops its handle at once (SPEC §2.3).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -300,6 +301,7 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         idle_at: None,
         written: 0,
         ids: 0,
+        current: Arc::new(AtomicU64::new(0)),
     };
     Ok(Pending {
         handle: Handle(tx),
@@ -364,6 +366,9 @@ struct Engine {
     written: u64,
     /// The last number given to a page entry ([`PageEntry::id`]).
     ids: u64,
+    /// The revision checked next, which check threads read to leave out
+    /// work an edit has made stale.
+    current: Arc<AtomicU64>,
 }
 
 impl Engine {
@@ -536,6 +541,7 @@ impl Engine {
     /// Marks the world as changed: a new revision, checked next.
     fn edited(&mut self) {
         self.revision += 1;
+        self.current.store(self.revision, Ordering::Relaxed);
         self.dirty = true;
         self.idle_at = None;
         self.settings.emit(Event::Edited {
@@ -584,6 +590,7 @@ impl Engine {
         let build = choose(world, self.settings.variant.as_deref());
         let before = if self.redraw { None } else { self.last.clone() };
         let published = self.publish.borrow().clone();
+        let current = self.current.clone();
         let spawned = thread::Builder::new()
             .name("folio-preview-check".into())
             .spawn(move || {
@@ -606,8 +613,11 @@ impl Engine {
                     Some((pages, frame.files.clone(), frame.diagnostics.clone()))
                 });
                 let _ = tx.send(Input::Done(Box::new(Done { revision, frame })));
-                // The pages go first; source sync and overlays follow.
-                if let Some((pages, files, diagnostics)) = later {
+                // The pages go first; source sync and overlays follow,
+                // unless an edit has made them stale.
+                if let Some((pages, files, diagnostics)) = later
+                    && current.load(Ordering::Relaxed) == revision
+                {
                     let indexed = index(revision, &pages, &*files, &diagnostics);
                     let _ = tx.send(Input::Indexed(Box::new(indexed)));
                 }
@@ -671,6 +681,12 @@ impl Engine {
             })
         });
         let font_generation = old.font_generation + u64::from(frame.fonts_changed);
+        // The marks stay, rather than blink, while the pages are indexed,
+        // when neither the pages nor the diagnostics changed.
+        let overlays = match lists.is_empty() && spans.is_empty() && *old.diagnostics == resolved {
+            true => old.overlays.clone(),
+            false => Arc::new(Vec::new()),
+        };
         self.publish.send_replace(Arc::new(Published {
             revision,
             variant: frame.variant,
@@ -685,7 +701,7 @@ impl Engine {
             },
             font_generation,
             layout,
-            overlays: Arc::new(Vec::new()),
+            overlays,
         }));
         self.settings.emit(Event::Updated(Arc::new(Update {
             revision,

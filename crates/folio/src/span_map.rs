@@ -114,8 +114,8 @@ pub struct Found {
 /// a quarter of it below, as a click finds it. Where no glyph shows the
 /// bytes, as in the markup of an element's call, the boxes of the
 /// fragments and objects whose nodes hold them, and hold the fewest bytes,
-/// are found instead; pages themselves, and nodes that hold the whole file,
-/// are not.
+/// are found instead; pages themselves, and the root nodes of files, are
+/// not.
 ///
 /// To look up many places in the same pages, build an [`Index`] once.
 ///
@@ -155,6 +155,8 @@ pub struct Index {
     boxes: Vec<BoxEntry>,
     /// The end of the bytes of its text that a node's glyphs show.
     extent: HashMap<SourceRef, u32>,
+    /// The root node of each file, which holds every place and shows none.
+    roots: HashSet<SourceRef>,
 }
 
 /// A node's file and its bytes there.
@@ -288,6 +290,7 @@ impl Index {
                     at += child.len();
                 }
             }
+            index.roots.insert(source_ref(source.root().span()));
             index.paths.insert(path, id);
             index.sources.insert(id, source);
         }
@@ -417,13 +420,10 @@ impl Index {
         if !hits.is_empty() {
             return merge(&hits);
         }
-        // A node that holds the whole file, such as the document's, holds
-        // every place and shows none.
-        let all = source.text().len();
         let holding = || {
             self.boxes.iter().filter_map(|b| {
                 let holds = b.file == file
-                    && b.whole != (0..all)
+                    && !self.roots.contains(&b.node)
                     && b.whole.start <= bytes.start
                     && bytes.end <= b.whole.end
                     && (!b.whole.is_empty() || bytes.is_empty());

@@ -66,9 +66,11 @@
 //!    in points from the page's top-left corner, for the first hundred
 //!    diagnostics, and `fonts` a number that changes whenever the font ids
 //!    of glyph runs may name other fonts, when a client drops the glyphs it
-//!    has. The pages are sent before they are indexed for source sync: the
-//!    overlays follow in a second `update` of the same revision, which
-//!    sends no pages, and until then clicks and reveals find nothing;
+//!    has. The pages are sent before they are indexed: the overlays follow
+//!    in a second `update` of the same revision, which sends no pages, and
+//!    until then reveals find nothing (clicks work at once). While neither
+//!    the pages nor the diagnostics change, the first `update` keeps the
+//!    overlays of the revision before;
 //! 2. one binary message per page in `lists` and `spans`, in that order:
 //!    the page's index as four bytes, little-endian, then a message of
 //!    `folio-render`'s wire format ([`folio_render::wire`]), a whole
@@ -310,8 +312,8 @@ pub enum Event {
         revision: u64,
     },
     /// The pages of a revision were indexed after they were sent: from now
-    /// on clicks and [`Preview::reveal`] find their sources, and the
-    /// diagnostics are marked on them.
+    /// on [`Preview::reveal`] finds places on them, and the diagnostics are
+    /// marked on them. Clicks find their sources from the start.
     Indexed {
         /// The revision.
         revision: u64,
