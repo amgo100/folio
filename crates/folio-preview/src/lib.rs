@@ -37,7 +37,7 @@
 //!
 //! # Protocol
 //!
-//! Version [`PROTOCOL`] of the protocol, for the viewer (#51) and other
+//! Version [`PROTOCOL`] of the protocol, for the viewer and other
 //! clients. Every path takes `?token=<token>`.
 //!
 //! | Path | What it serves |
