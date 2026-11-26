@@ -619,6 +619,16 @@ pub fn check_fonts(db: &dyn Db, build: Build<'_>) {
             check_face(db, &fonts.faces[face], span, mode, strict, pdf);
         }
     }
+    // The math font, at the first formula, where Folio lays formulas out
+    // (SPEC §8.2): checked as the faces of text are.
+    let laid_out = matches!(build.target(db), Target::Pdf | Target::Live);
+    if laid_out
+        && let Some(first) = text.maths.first()
+        && let Some(face) = fonts.select(crate::layout::MATH_FONT, FontVariant::default())
+        && !used.contains(&face)
+    {
+        check_face(db, &fonts.faces[face], first.span, mode, strict, pdf);
+    }
 }
 
 /// The source node whose text a byte of a paragraph's text is, if any.

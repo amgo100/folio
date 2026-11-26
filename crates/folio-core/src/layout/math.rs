@@ -306,7 +306,10 @@ pub(super) fn display_content(display: &Display, width: Abs, size: Abs) -> Displ
         .max()
         .unwrap_or_default();
     let centred = (width - math.width) / 2.0;
-    let beside = math.width + gutter + widest <= width;
+    // Beside the formula where it fits with the gutter, at the formula's
+    // place moved as far towards the start as needed.
+    let beside =
+        numbers.is_empty() || centred.min(width - widest - gutter - math.width) >= Abs::zero();
     if !beside {
         // Each number on a line of its own below the formula.
         let mut bottom = math.height;

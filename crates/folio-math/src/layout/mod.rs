@@ -934,7 +934,13 @@ fn breaks(prepared: &[Prepared]) -> Vec<(usize, i32)> {
                 {
                     REL_PENALTY
                 }
-                MathClass::Binary if next.lclass != MathClass::Closing => BIN_PENALTY,
+                // A relation after a binary operator brings its space with it,
+                // which would start the next line.
+                MathClass::Binary
+                    if !matches!(next.lclass, MathClass::Relation | MathClass::Closing) =>
+                {
+                    BIN_PENALTY
+                }
                 _ => return None,
             };
             Some((here.index, penalty))

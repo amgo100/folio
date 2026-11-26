@@ -78,3 +78,12 @@ fn display_formulas_lay_out_in_every_bundled_math_font() {
         }
     }
 }
+
+#[test]
+fn no_break_between_a_binary_operator_and_a_relation() {
+    // The relation's space would start the next line.
+    assert_eq!(inline_chunks(&formula(r"a + = b")), 2);
+    // Nor before a closing delimiter, which the formula's own delimiters
+    // keep together anyway.
+    assert_eq!(inline_chunks(&formula(r"a \le b \le c")), 3);
+}
