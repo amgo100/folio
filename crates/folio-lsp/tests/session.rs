@@ -435,3 +435,23 @@ fn exiting_without_shutting_down_is_a_failure() {
     let result = client.server.take().unwrap().join().unwrap();
     assert!(result.is_err());
 }
+
+#[test]
+fn notifications_between_shutdown_and_exit_are_ignored() {
+    let dir = project(&manifest(folio::VERSION), VALID);
+    let main = uri(&dir.path().join("main.fol"));
+    let mut client = Client::start(dir.path(), |_| {});
+    client.open(&main, VALID);
+    client.settle();
+    let response = client.request("shutdown", Value::Null);
+    assert!(response.response_result.is_ok());
+    // Editors close their files as they quit.
+    client.notify(
+        "textDocument/didClose",
+        json!({ "textDocument": { "uri": main } }),
+    );
+    let response = client.request("textDocument/hover", json!({}));
+    assert!(response.response_result.is_err());
+    client.notify("exit", Value::Null);
+    client.server.take().unwrap().join().unwrap().unwrap();
+}

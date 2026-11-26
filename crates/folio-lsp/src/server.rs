@@ -70,6 +70,7 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
         request_id: 0,
         watch: Watch::No,
         shut_down: false,
+        retry: false,
     };
     server.watch = watch_support(&params);
     if let Some(root) = server.initial_root(&params) {
@@ -155,6 +156,9 @@ struct Server<'a> {
     watch: Watch,
     /// Whether the client asked the server to shut down.
     shut_down: bool,
+    /// Whether a check could not be started, to be tried again at the
+    /// next message.
+    retry: bool,
 }
 
 /// How the client can be asked to report changes to files.
@@ -195,13 +199,25 @@ impl Server<'_> {
             select! {
                 recv(self.connection.receiver) -> message => {
                     let Ok(message) = message else { return Ok(()) };
+                    if std::mem::take(&mut self.retry) {
+                        self.dirty = true;
+                    }
                     match message {
                         Message::Request(request) => {
-                            if self.connection.handle_shutdown(&request)? {
+                            if request.method == req::Shutdown::METHOD {
+                                // Nothing more is done until `exit`.
                                 self.shut_down = true;
-                                return Ok(());
+                                self.dirty = false;
+                                self.send(Response::new_ok(request.id, ()));
+                            } else if self.shut_down {
+                                self.send(Response::new_err(
+                                    request.id,
+                                    ErrorCode::InvalidRequest as i32,
+                                    "the server is shutting down".into(),
+                                ));
+                            } else {
+                                self.request(request);
                             }
-                            self.request(request);
                         }
                         Message::Notification(notification) => {
                             if notification.method == note::Exit::METHOD {
@@ -212,7 +228,9 @@ impl Server<'_> {
                                     false => Err(Error("the client exited without shutting the server down".into())),
                                 };
                             }
-                            self.notification(notification);
+                            if !self.shut_down {
+                                self.notification(notification);
+                            }
                         }
                         Message::Response(_) => {}
                     }
@@ -564,24 +582,28 @@ impl Server<'_> {
         let Some(path) = self.path_of_open(uri) else {
             return;
         };
-        let Some(doc) = self.docs.remove(&path) else {
+        if self.docs.remove(&path).is_none() {
             return;
-        };
+        }
         // The file is what the disk has again.
         let Some(project) = &self.project else {
             return;
         };
         let file = project.root.join(&path);
         self.disk_changed(vec![file.clone()]);
-        // The loader leaves out hidden files and outputs, so a buffer of
-        // one that it did not replace is dropped.
-        let disk = std::fs::read_to_string(&file).ok();
-        if let Some(world) = self.world_mut()
-            && world.source(&path).is_some_and(|s| s.text() == doc.text)
-            && disk.as_deref() != Some(doc.text.as_str())
-            && world.remove_source(&path)
-        {
-            self.edited();
+        // The loader leaves out hidden files and outputs, so the buffer of
+        // one stays unless it is dropped here.
+        let hidden = path.split('/').any(|part| part.starts_with('.'));
+        if let Some(world) = self.world_mut() {
+            let output = world.builds().iter().any(|(variant, target)| {
+                world
+                    .manifest()
+                    .output_path(variant.as_ref(), *target)
+                    .is_some_and(|out| out.as_str() == path)
+            });
+            if (hidden || output) && world.remove_source(&path) {
+                self.edited();
+            }
         }
     }
 
@@ -609,11 +631,15 @@ impl Server<'_> {
         let Some(world) = &mut project.world else {
             // The project could not be loaded: try again when a file it
             // reads changes.
-            let read = paths.iter().any(|path| {
-                project
-                    .project_path(path)
-                    .is_some_and(|rel| !rel.split('/').any(|part| part.starts_with('.')))
-            });
+            // Only a valid manifest and lockfile can mend their errors;
+            // any other failure may mend with any file the loader reads.
+            let read = names_project_file
+                || project.errors.is_none()
+                    && paths.iter().any(|path| {
+                        project
+                            .project_path(path)
+                            .is_some_and(|rel| !rel.split('/').any(|part| part.starts_with('.')))
+                    });
             if read {
                 self.load_world();
             }
@@ -730,7 +756,7 @@ impl Server<'_> {
             });
         if let Err(e) = spawned {
             // Checked again at the next message.
-            self.dirty = true;
+            self.retry = true;
             self.log(
                 lsp::MessageType::ERROR,
                 format!("Folio: cannot start a check: {e}"),
@@ -783,26 +809,31 @@ impl Server<'_> {
                 files.entry(path).or_default().extend(diagnostics);
             }
         }
-        let mut published = BTreeMap::new();
-        for (path, diagnostics) in files {
-            let Some(uri) = uris.get(&path) else {
-                continue;
-            };
-            self.notify::<note::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
-                uri: uri.clone(),
-                diagnostics,
-                version: versions.get(&path).copied(),
-            });
-            published.insert(path, uri);
-        }
+        let files: Vec<(String, Uri, Vec<lsp::Diagnostic>)> = files
+            .into_iter()
+            .filter_map(|(path, diagnostics)| Some((uris.get(&path)?, path, diagnostics)))
+            .map(|(uri, path, diagnostics)| (path, uri, diagnostics))
+            .collect();
+        // Clears first: a client that takes two spellings of a URI for one
+        // file must not clear what was just published.
+        let now: BTreeMap<&String, &Uri> = files.iter().map(|(p, u, _)| (p, u)).collect();
         for (path, uri) in std::mem::take(&mut self.published) {
-            if published.get(&path) != Some(&uri) {
+            if now.get(&path) != Some(&&uri) {
                 self.notify::<note::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
                     uri,
                     diagnostics: Vec::new(),
                     version: versions.get(&path).copied(),
                 });
             }
+        }
+        let mut published = BTreeMap::new();
+        for (path, uri, diagnostics) in files {
+            self.notify::<note::PublishDiagnostics>(lsp::PublishDiagnosticsParams {
+                uri: uri.clone(),
+                diagnostics,
+                version: versions.get(&path).copied(),
+            });
+            published.insert(path, uri);
         }
         self.published = published;
     }
