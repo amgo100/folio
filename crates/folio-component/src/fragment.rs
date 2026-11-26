@@ -62,9 +62,12 @@ impl Fragment {
         }
     }
 
-    /// The same fragment as the box of a source node.
+    /// The same fragment as the box of a source node, as its first
+    /// instance, which is what a component that is given only a
+    /// [`SourceRef`] can say; [`Self::with_location`] names an instance.
     pub fn with_source(mut self, source: SourceRef) -> Self {
         self.source = source;
+        self.instance = 0;
         self
     }
 

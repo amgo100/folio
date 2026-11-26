@@ -56,7 +56,8 @@ impl SourceRef {
 pub struct Location {
     /// The node that made the instance: its markup or its call.
     pub source: SourceRef,
-    /// Which of the node's instances it is, from `0`.
+    /// Which of the node's instances it is: a number that only the core
+    /// interprets.
     pub instance: u32,
 }
 

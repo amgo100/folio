@@ -107,7 +107,8 @@ pub struct TextParagraph {
     pub style: ComputedStyle,
     /// The element whose content the paragraph is.
     pub span: Span,
-    /// The location of that element.
+    /// The location of that element. The paragraphs of its body and of its
+    /// parts share it.
     pub location: Location,
     /// For each segment of the paragraph ([`Paragraph::segments`]), the
     /// style its text is set in and its face.
@@ -414,7 +415,15 @@ impl Collector<'_> {
         // they are written. Each element and part finds its styled node by
         // location or name, so a node that a later stage dropped or added
         // shifts no other (`crate::locate`).
-        let kids = styled_children(element, node);
+        let parts = element
+            .fields
+            .iter()
+            .any(|(key, value)| key != BODY && matches!(value, eval::Value::Content(_)));
+        let kids = if parts {
+            styled_children(element, node)
+        } else {
+            Vec::new()
+        };
         for (key, value) in element.fields.iter() {
             let eval::Value::Content(content) = value else {
                 continue;

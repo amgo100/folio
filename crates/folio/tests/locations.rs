@@ -237,3 +237,25 @@ fn a_stub_resolve_that_inserts_generated_text_keeps_styles_aligned() {
         .collect();
     assert_eq!(found, expected);
 }
+
+#[test]
+fn another_iteration_keeps_the_locations_of_the_earlier_ones() {
+    // Headings open sections with their own span, and a paragraph takes
+    // the span of its first node, a `strong` here: each is counted apart
+    // from the elements that share its span.
+    // The data is edited, not the loop, whose spans a reparse would
+    // renumber.
+    let mut world = world("#let parts = (1, 2)\n\n#for i in parts [= Part\n\n*Bold* start.\n\n]\n");
+    let before = elements(&document(&world));
+    let text = world.source("main.fol").unwrap().text().to_owned();
+    let at = text.find("2)").unwrap() + 1;
+    world.edit_source("main.fol", at..at, ", 3").unwrap();
+    let after = elements(&document(&world));
+    // The root and the first two iterations keep their locations; the
+    // third adds a section, heading, paragraph and strong.
+    assert_eq!(after.len(), before.len() + 4);
+    let kept: Vec<_> = after.iter().map(|(n, _, l)| (n, l)).collect();
+    for (name, _, location) in &before {
+        assert!(kept.contains(&(name, location)), "{name} {location:?} lost");
+    }
+}

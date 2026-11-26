@@ -13,7 +13,7 @@ use super::{is_block, schema};
 use crate::db::{Db, Project, source_file};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Content, Dict, Element, Node, Value, canonical_fields, evaluate};
-use crate::locate::Locator;
+use crate::locate::{Locator, Made};
 
 /// The typed document tree of one variant (SPEC §2.1): what every stage
 /// after evaluation reads.
@@ -110,7 +110,7 @@ impl Model<'_> {
             span,
             location: Location::DETACHED,
         });
-        root.location = self.locator.locate(root.span);
+        root.location = self.locator.locate(root.span, Made::Evaluated);
         root.fields.remove(BODY);
         let body = self.blocks(&rest);
         root.fields.insert(BODY.into(), Value::Content(body));
@@ -134,7 +134,7 @@ impl Model<'_> {
             );
         }
         let mut element = element.clone();
-        element.location = self.locator.locate(element.span);
+        element.location = self.locator.locate(element.span, Made::Evaluated);
         let Some(schema) = schema(self.db, self.project, &element.name) else {
             self.locate_fields(&mut element);
             return element;
@@ -274,7 +274,7 @@ impl Model<'_> {
             .map(|node| match node {
                 Node::Element(element) => {
                     let mut element = element.clone();
-                    element.location = self.locator.locate(element.span);
+                    element.location = self.locator.locate(element.span, Made::Evaluated);
                     self.locate_fields(&mut element);
                     Node::Element(element)
                 }
@@ -354,7 +354,7 @@ impl Blocks {
             "paragraph",
             [(BODY, Value::Content(run.into_iter().collect()))],
             span,
-            locator,
+            locator.locate(span, Made::Paragraph),
         )));
     }
 
@@ -364,7 +364,7 @@ impl Blocks {
                 name,
                 [(BODY, Value::Content(items.into_iter().collect()))],
                 span,
-                locator,
+                locator.locate(span, Made::List),
             )));
         }
     }
@@ -379,28 +379,30 @@ impl Blocks {
 }
 
 /// Opens a section at each heading, holding it and the blocks after it up
-/// to the next heading of the same or a higher level.
+/// to the next heading of the same or a higher level. A section is located
+/// when its heading opens it, in document order.
 fn sections(blocks: Vec<Node>, locator: &mut Locator) -> Vec<Node> {
+    /// An open section: its level, content, span and location.
+    type Open = (i64, Vec<Node>, Span, Location);
     let mut top = Vec::new();
-    // The open sections, outermost first: level, content, span.
-    let mut open: Vec<(i64, Vec<Node>, Span)> = Vec::new();
-    let close =
-        |open: &mut Vec<(i64, Vec<Node>, Span)>, top: &mut Vec<Node>, locator: &mut Locator| {
-            let (level, content, span) = open.pop().expect("a section is open");
-            let section = Node::Element(made(
-                "section",
-                [
-                    ("level", Value::Int(level)),
-                    (BODY, Value::Content(content.into_iter().collect())),
-                ],
-                span,
-                locator,
-            ));
-            match open.last_mut() {
-                Some((_, parent, _)) => parent.push(section),
-                None => top.push(section),
-            }
-        };
+    // The open sections, outermost first.
+    let mut open: Vec<Open> = Vec::new();
+    let close = |open: &mut Vec<Open>, top: &mut Vec<Node>| {
+        let (level, content, span, location) = open.pop().expect("a section is open");
+        let section = Node::Element(made(
+            "section",
+            [
+                ("level", Value::Int(level)),
+                (BODY, Value::Content(content.into_iter().collect())),
+            ],
+            span,
+            location,
+        ));
+        match open.last_mut() {
+            Some((_, parent, ..)) => parent.push(section),
+            None => top.push(section),
+        }
+    };
     for node in blocks {
         if let Node::Element(element) = &node
             && element.name.namespace.is_none()
@@ -410,32 +412,32 @@ fn sections(blocks: Vec<Node>, locator: &mut Locator) -> Vec<Node> {
                 Some(Value::Int(level)) => *level,
                 _ => 1,
             };
-            while open.last().is_some_and(|(l, _, _)| *l >= level) {
-                close(&mut open, &mut top, locator);
+            while open.last().is_some_and(|(l, ..)| *l >= level) {
+                close(&mut open, &mut top);
             }
             let span = element.span;
-            open.push((level, vec![node], span));
+            let location = locator.locate(span, Made::Section);
+            open.push((level, vec![node], span, location));
             continue;
         }
         match open.last_mut() {
-            Some((_, content, _)) => content.push(node),
+            Some((_, content, ..)) => content.push(node),
             None => top.push(node),
         }
     }
     while !open.is_empty() {
-        close(&mut open, &mut top, locator);
+        close(&mut open, &mut top);
     }
     top
 }
 
 /// An element that the document model makes: `paragraph`, `section` and
-/// the lists. Its span is that of its first node or its heading, and its
-/// location the next of that span's.
+/// the lists. Its span is that of its first node or its heading.
 fn made<'f>(
     name: &str,
     fields: impl IntoIterator<Item = (&'f str, Value)>,
     span: Span,
-    locator: &mut Locator,
+    location: Location,
 ) -> Element {
     Element {
         name: QualifiedName::unqualified(Name::new(name).expect("built-in names are identifiers")),
@@ -443,7 +445,7 @@ fn made<'f>(
         fields: fields.into_iter().map(|(k, v)| (k.into(), v)).collect(),
         label: None,
         span,
-        location: locator.locate(span),
+        location,
     }
 }
 

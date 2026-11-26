@@ -23,7 +23,7 @@
 //! ordering or for output (SPEC §2.4). Node identity across reparses, which
 //! the editor keeps, is another thing: [`folio_syntax::NodeIds`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use folio_component::Name;
 use folio_syntax::Span;
@@ -34,22 +34,50 @@ use crate::style::{NodeName, StyledNode};
 
 pub use folio_component::Location;
 
+/// What made an element: evaluation, or the document model, which makes
+/// paragraphs, lists and sections with the span of their first node or
+/// heading. Each is counted apart, so a paragraph's location does not
+/// depend on the elements that share its span, nor a section's on how many
+/// headings its body holds.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) enum Made {
+    /// An element of evaluated content.
+    Evaluated = 0,
+    /// A paragraph of the document model.
+    Paragraph = 1,
+    /// A list of the document model.
+    List = 2,
+    /// A section of the document model.
+    Section = 3,
+}
+
 /// Gives the element instances of one document tree their locations.
 #[derive(Debug, Default)]
 pub(crate) struct Locator {
-    /// How many instances each span has made so far.
-    made: HashMap<Span, u32>,
+    /// How many instances each span has made so far, by what made them. It
+    /// is never iterated, so its order does not matter.
+    made: BTreeMap<(u64, Made), u32>,
 }
 
 impl Locator {
-    /// The location of the next instance made from `span`.
-    pub(crate) fn locate(&mut self, span: Span) -> Location {
-        let count = self.made.entry(span).or_insert(0);
-        let instance = *count;
-        *count = count.saturating_add(1);
+    /// The bits of an instance number that count; the two above them say
+    /// what made the element.
+    const COUNT: u32 = (1 << 30) - 1;
+
+    /// The location of the next instance that `made` makes from `span`.
+    /// Elements without a span are counted from `1`, so that none of them
+    /// is [`Location::DETACHED`].
+    pub(crate) fn locate(&mut self, span: Span, made: Made) -> Location {
+        let first = u32::from(span.is_detached());
+        let count = self
+            .made
+            .entry((span.into_raw().get(), made))
+            .or_insert(first);
+        let n = *count;
+        *count = n.saturating_add(1).min(Self::COUNT);
         Location {
             source: source_ref(span),
-            instance,
+            instance: ((made as u32) << 30) | n,
         }
     }
 }
@@ -60,13 +88,17 @@ impl Locator {
 /// Elements are found by location and parts by name. A child that a later
 /// stage removed has no node, and a node that a later stage added, such as
 /// generated text, styles no element of the document tree, so neither
-/// shifts the others. Lookups in the order of the children cost one step
-/// each.
+/// shifts the others. A lookup costs one step when the children are looked
+/// up in order and a later stage changed nothing between them, and a hash
+/// lookup otherwise.
 #[derive(Debug, Clone)]
 pub struct StyledChildren<'a> {
     nodes: &'a [StyledNode],
     /// Where the next lookup starts.
     at: usize,
+    /// The index of each element's node, made at the first lookup that
+    /// does not find its node next.
+    index: Option<HashMap<Location, usize>>,
 }
 
 impl<'a> StyledChildren<'a> {
@@ -75,14 +107,30 @@ impl<'a> StyledChildren<'a> {
         Self {
             nodes: &node.children,
             at: 0,
+            index: None,
         }
     }
 
     /// The styled node of a child element, or `None` if it has none.
     pub fn element(&mut self, element: &Element) -> Option<&'a StyledNode> {
-        let i = self.find(|node| {
+        let next = self.nodes.get(self.at).is_some_and(|node| {
             node.location == element.location && matches!(node.name, NodeName::Element(_))
-        })?;
+        });
+        let i = if next {
+            self.at
+        } else {
+            let nodes = self.nodes;
+            let index = self.index.get_or_insert_with(|| {
+                let mut index = HashMap::new();
+                for (i, node) in nodes.iter().enumerate() {
+                    if matches!(node.name, NodeName::Element(_)) {
+                        index.entry(node.location).or_insert(i);
+                    }
+                }
+                index
+            });
+            *index.get(&element.location)?
+        };
         self.at = i + 1;
         Some(&self.nodes[i])
     }
@@ -90,21 +138,17 @@ impl<'a> StyledChildren<'a> {
     /// The styled node of the part `name` (a content field other than the
     /// body), or `None` if it has none.
     pub fn part(&mut self, name: &Name) -> Option<&'a StyledNode> {
-        let i = self.find(|node| matches!(&node.name, NodeName::Part(n) if n == name))?;
-        self.at = i + 1;
-        Some(&self.nodes[i])
-    }
-
-    /// The first node from the cursor on that passes `test`, or before the
-    /// cursor if none after it does.
-    fn find(&self, test: impl Fn(&StyledNode) -> bool) -> Option<usize> {
+        let is = |node: &StyledNode| matches!(&node.name, NodeName::Part(n) if n == name);
+        // An element has few parts, so they are searched for.
         let start = self.at.min(self.nodes.len());
         let (before, after) = self.nodes.split_at(start);
-        after
+        let i = after
             .iter()
-            .position(&test)
+            .position(is)
             .map(|i| start + i)
-            .or_else(|| before.iter().position(&test))
+            .or_else(|| before.iter().position(is))?;
+        self.at = i + 1;
+        Some(&self.nodes[i])
     }
 }
 
@@ -119,12 +163,19 @@ mod tests {
         let span = |n: u64| Span::from_raw(NonZeroU64::new((1 << 48) | n).unwrap());
         let (a, b) = (span(2), span(3));
         let mut locator = Locator::default();
-        let first = locator.locate(a);
-        let other = locator.locate(b);
-        let second = locator.locate(a);
+        let first = locator.locate(a, Made::Evaluated);
+        let other = locator.locate(b, Made::Evaluated);
+        let paragraph = locator.locate(a, Made::Paragraph);
+        let second = locator.locate(a, Made::Evaluated);
         assert_eq!(first.source, second.source);
         assert_eq!((first.instance, second.instance), (0, 1));
         assert_eq!(other.instance, 0);
         assert_ne!(first, second);
+        // What the model makes is counted apart.
+        assert_eq!(paragraph.instance, 1 << 30);
+        assert_ne!(paragraph, first);
+        // No element is detached.
+        let detached = locator.locate(Span::detached(), Made::Evaluated);
+        assert_ne!(detached, Location::DETACHED);
     }
 }
