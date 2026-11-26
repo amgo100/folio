@@ -1,0 +1,3 @@
+# Page images are PNG files: bytes, never text with line endings to convert.
+# This overrides `tests/golden/** text eol=lf` in the root .gitattributes.
+*.png binary

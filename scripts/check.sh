@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs every check a change must pass before it is pushed: build, tests
 # (including the dependency-direction check, golden files and fuzz
-# regressions), clippy, rustfmt, rustdoc, the MSRV check and cargo-deny.
+# regressions), clippy, rustfmt, rustdoc, the WebAssembly build of
+# folio-render, the MSRV check and cargo-deny.
 # Usage: scripts/check.sh [--fast]
 #   --fast  skip the MSRV check and cargo-deny
 set -euo pipefail
@@ -30,6 +31,15 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 step "rustdoc"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+
+# folio-render must stay free of threads, tokio and the file system, so
+# that it compiles to WebAssembly (SPEC §2.2, §16.1).
+step "wasm32 build of folio-render"
+if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
+    echo "the wasm32 target is not installed: rustup target add wasm32-unknown-unknown" >&2
+    exit 1
+fi
+cargo build -p folio-render --target wasm32-unknown-unknown --locked
 
 if $fast; then
     step "skipped MSRV and cargo-deny (--fast)"

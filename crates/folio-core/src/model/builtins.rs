@@ -101,10 +101,12 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
             ])
             .positional(["text"])
             .build(),
-        // A placeholder until the math tree exists (M1): the source text.
+        // An equation (SPEC §8.1). Evaluation adds its formula of the math
+        // tree as the field `tree`, a value no field type describes, so the
+        // schema leaves it out; until LaTeX input is read into the same
+        // tree (#41), `tex` holds a LaTeX equation's source instead.
         element("math", ElementKind::Inline, false)
             .fields([
-                FieldDecl::required(name("text"), FieldType::Str),
                 FieldDecl::with_default(name("block"), FieldType::Bool, Value::Bool(false)),
                 optional("tex", FieldType::Str),
             ])

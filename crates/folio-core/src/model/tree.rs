@@ -476,21 +476,21 @@ fn check_labels(db: &dyn Db, root: &Element) {
         refs: Vec<(&'a EcoString, Span)>,
     }
     impl<'a> Walk<'a> {
-        fn element(&mut self, element: &'a Element) {
-            if let Some(label) = &element.label {
-                if let Some(first) = self.seen.get(label) {
-                    diag::report(
-                        self.db,
-                        Diagnostic::error(
-                            element.span,
-                            eco_format!("label `<{label}>` is used twice"),
-                        )
+        fn label(&mut self, label: &EcoString, span: Span) {
+            if let Some(first) = self.seen.get(label) {
+                diag::report(
+                    self.db,
+                    Diagnostic::error(span, eco_format!("label `<{label}>` is used twice"))
                         .with_related(*first, "it is first used here")
                         .with_hint("a label names one element, so references can find it"),
-                    );
-                } else {
-                    self.seen.insert(label.clone(), element.span);
-                }
+                );
+            } else {
+                self.seen.insert(label.clone(), span);
+            }
+        }
+        fn element(&mut self, element: &'a Element) {
+            if let Some(label) = &element.label {
+                self.label(label, element.span);
             }
             if element.name.namespace.is_none()
                 && element.name.name.as_str() == "ref"
@@ -513,6 +513,12 @@ fn check_labels(db: &dyn Db, root: &Element) {
                 }
                 Value::Array(items) => items.iter().for_each(|v| self.value(v)),
                 Value::Dict(dict) => dict.iter().for_each(|(_, v)| self.value(v)),
+                // The labels of an equation's lines (SPEC §8.1).
+                Value::Math(formula) => {
+                    for label in formula.labels() {
+                        self.label(&label.name, label.span);
+                    }
+                }
                 _ => {}
             }
         }
