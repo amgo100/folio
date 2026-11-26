@@ -21,6 +21,8 @@
 //! would, without writing. `folio check`, the language server and the
 //! preview stop there; [`compile_build`] goes on to [`emit`].
 
+use std::collections::{HashMap, HashSet};
+
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{FontId, QualifiedName, SourceRef, Target};
 use folio_core::db::{Build, Bytes, Db, build_files, build_output, source_file};
@@ -36,7 +38,7 @@ use folio_core::resolve::Resolution;
 use folio_core::span_map::{source_ref, span};
 use folio_core::text::{Text, TextBlock, TextFlow, text};
 use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Tag};
-use folio_syntax::{DiagSpan, Span, SubRange};
+use folio_syntax::{DiagSpan, LinkedNode, Span, SubRange};
 
 /// What compiling a build produces, without its diagnostics, which
 /// [`crate::compile`] collects.
@@ -174,7 +176,8 @@ pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let project = build.project(db);
     let doc = document(db, project, build.variant(db).clone()).as_ref()?;
     let files = build_files(db, build);
-    let alt = |span: Span| formula_source(db, files, span);
+    let sources = formula_sources(db, files, text.maths.iter().map(|m| m.span));
+    let alt = |span: Span| sources.get(&span).cloned();
     let structure = structure(&text.root, text, &alt);
     let plain = |field: &str| match doc.root.field(field) {
         Some(Value::Content(content)) => Some(content.plain_text()),
@@ -360,20 +363,53 @@ fn formula_alt(
     })
 }
 
-/// The source of the node at `span` among a build's files, as an
-/// alternate description: without the dollar signs around a formula
+/// The sources of the nodes at `spans` among a build's files, as
+/// alternate descriptions: without the dollar signs around a formula
 /// written in markup or the `:tex` that marks LaTeX, and with runs of
-/// spaces as one space.
-fn formula_source(
+/// spaces as one space. One walk of each file's tree finds them all.
+fn formula_sources(
     db: &dyn Db,
     files: &[folio_core::db::SourceFile],
-    span: Span,
-) -> Option<EcoString> {
-    let id = span.id()?;
-    let file = files.iter().find(|file| file.source(db).id() == id)?;
-    let source = file.source(db);
-    let node = source.find(span)?;
-    let written = source.text().get(node.range())?;
+    spans: impl Iterator<Item = Span>,
+) -> HashMap<Span, EcoString> {
+    fn walk(
+        node: &LinkedNode<'_>,
+        text: &str,
+        wanted: &HashSet<Span>,
+        out: &mut HashMap<Span, EcoString>,
+    ) {
+        if wanted.contains(&node.span()) {
+            if let Some(alt) = text.get(node.range()).and_then(alt_text) {
+                out.insert(node.span(), alt);
+            }
+            return;
+        }
+        for child in node.children() {
+            walk(&child, text, wanted, out);
+        }
+    }
+    let wanted: HashSet<Span> = spans.collect();
+    let mut out = HashMap::new();
+    if wanted.is_empty() {
+        return out;
+    }
+    let ids: HashSet<_> = wanted.iter().filter_map(|span| span.id()).collect();
+    for file in files {
+        let source = file.source(db);
+        if ids.contains(&source.id()) {
+            walk(
+                &LinkedNode::new(source.root()),
+                source.text(),
+                &wanted,
+                &mut out,
+            );
+        }
+    }
+    out
+}
+
+/// A formula's source as its alternate description.
+fn alt_text(written: &str) -> Option<EcoString> {
     let inner = written
         .strip_prefix('$')
         .and_then(|w| w.strip_suffix('$'))
