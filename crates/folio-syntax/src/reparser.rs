@@ -25,17 +25,44 @@ pub(crate) fn reparse(
 ) -> Range<usize> {
     let style = root.kind() == SyntaxKind::Stylesheet;
     try_reparse(text, replaced, replacement_len, None, root, 0, style).unwrap_or_else(|| {
-        let id = root.span().id();
-        *root = if style {
+        let new = if style {
             parse_stylesheet(text)
         } else {
             parse(text)
         };
-        if let Some(id) = id {
-            root.numberize(id, Span::FULL).unwrap();
-        }
+        replace_root(root, new);
         0..text.len()
     })
+}
+
+/// Put a freshly parsed tree in the place of `root`, keeping what it can of
+/// the old tree.
+///
+/// The new root's children are spliced into the old root, which keeps the
+/// leading and trailing top-level items that are equal apart from spans, with
+/// their span numbers and shared subtrees, and numbers only the items between
+/// them in the gap their predecessors leave. A full reparse is forced by an
+/// edit such as an unbalanced `]`, which changes one item: without this, every
+/// span in the file would be renumbered, and every memoised result keyed on
+/// one, such as a call of a closure defined in the file, would be computed
+/// again (#241). Falls back to numbering the whole new tree when the gap is
+/// too narrow.
+fn replace_root(root: &mut SyntaxNode, mut new: SyntaxNode) {
+    let Some(id) = root.span().id() else {
+        *root = new;
+        return;
+    };
+    if root.kind() == new.kind() && root.is_inner() && new.is_inner() {
+        let old_len = root.children().len();
+        let children: Vec<SyntaxNode> = new.children().cloned().collect();
+        let mut spliced = root.clone();
+        if spliced.replace_children(0..old_len, children).is_ok() {
+            *root = spliced;
+            return;
+        }
+    }
+    new.numberize(id, Span::FULL).unwrap();
+    *root = new;
 }
 
 /// Try to reparse inside the given node, returning the range that was
@@ -439,7 +466,7 @@ fn next_nesting(node: &SyntaxNode, nesting: &mut usize) {
 mod tests {
     use std::ops::Range;
 
-    use crate::{Source, Span, parse};
+    use crate::{LinkedNode, Source, Span, parse};
 
     /// How to replace text in the test string.
     enum Edit {
@@ -649,5 +676,92 @@ mod tests {
         test("#if x $a\nb\nc", Edit::End, "$", All);
         test("#for x in \"a\nb\nc", Edit::End, "\"", All);
         test("#for x \"a\nb\nc", Edit::After("x "), "in ", All);
+    }
+
+    /// Every node's span leads back to that node: the numbers are unique and
+    /// ordered as the span machinery requires.
+    #[track_caller]
+    fn assert_spans_resolve(source: &Source) {
+        fn walk(source: &Source, node: LinkedNode<'_>) {
+            let found = source.find(node.span()).expect("the span resolves");
+            assert_eq!(found.range(), node.range(), "{:?}", node.kind());
+            assert_eq!(found.kind(), node.kind());
+            for child in node.children() {
+                walk(source, child);
+            }
+        }
+        walk(source, LinkedNode::new(source.root()));
+    }
+
+    /// The spans of the top-level items, in order.
+    fn item_spans(source: &Source) -> Vec<Span> {
+        source.root().children().map(|c| c.span()).collect()
+    }
+
+    /// A full reparse keeps the spans of the top-level items before and after
+    /// the one the edit changed (#241).
+    #[test]
+    fn test_full_reparse_keeps_spans_of_unchanged_items() {
+        let text = "#let g(x) = x + 1\n\nA #g(2) b.\n\nMore text here.\n";
+        for (at, with) in [
+            (text.find("A ").unwrap(), "]"),
+            (text.find("More").unwrap(), "]"),
+            (text.find(" b.").unwrap(), "]]"),
+        ] {
+            let mut source = Source::detached(text);
+            let before = item_spans(&source);
+            let first = source.root().children().next().unwrap().clone();
+            let last = source.root().children().last().unwrap().clone();
+            let range = source.edit(at..at, with);
+            assert_eq!(range, 0..source.text().len(), "a full reparse");
+
+            let mut fresh = parse(source.text());
+            let mut reparsed = source.root().clone();
+            fresh.synthesize(Span::detached());
+            reparsed.synthesize(Span::detached());
+            assert_eq!(reparsed, fresh);
+            assert_spans_resolve(&source);
+
+            // The `#let` and the trailing text keep their spans and their
+            // shared subtrees.
+            let after = item_spans(&source);
+            assert_eq!(after[..2], before[..2]);
+            assert_eq!(after.last(), before.last());
+            assert!(source.root().children().next().unwrap().is_same(&first));
+            assert!(source.root().children().last().unwrap().is_same(&last));
+        }
+    }
+
+    /// Spans still resolve after many forced full reparses in a row, which
+    /// narrow the gaps between kept spans until numbering falls back to the
+    /// whole tree.
+    #[test]
+    fn test_repeated_full_reparses_keep_spans_ordered() {
+        let mut source = Source::detached("a\n\n#let f(x) = x\n\nb c d\n");
+        for i in 0..200 {
+            let at = source.text().find("b c").unwrap();
+            let with = if i % 2 == 0 { "]" } else { "x ]" };
+            source.edit(at..at, with);
+            assert_spans_resolve(&source);
+        }
+        let mut fresh = parse(source.text());
+        let mut reparsed = source.root().clone();
+        fresh.synthesize(Span::detached());
+        reparsed.synthesize(Span::detached());
+        assert_eq!(reparsed, fresh);
+    }
+
+    /// A stylesheet that is parsed again in full keeps the spans of its
+    /// unchanged rules too.
+    #[test]
+    fn test_full_stylesheet_reparse_keeps_spans() {
+        let text = "doc { font-size: 11pt; }\n\nheading { font-size: 14pt; }\n";
+        let mut source = Source::detached_stylesheet(text);
+        let first = source.root().children().next().unwrap().clone();
+        let at = text.find("heading").unwrap();
+        let range = source.edit(at..at, "}");
+        assert_eq!(range, 0..source.text().len(), "a full reparse");
+        assert!(source.root().children().next().unwrap().is_same(&first));
+        assert_spans_resolve(&source);
     }
 }
