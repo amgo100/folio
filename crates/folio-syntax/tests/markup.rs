@@ -152,6 +152,35 @@ fn math_inline_and_display() {
     assert_eq!(errors("$unclosed"), ["unclosed delimiter"]);
 }
 
+#[test]
+fn math_labels_end_lines() {
+    // A label ends a line: before `\\`, the closing `$` or the end.
+    let text = "$ v^2 = u^2 + 2 a s <eq:suvat> \\\n  s = u t <eq:s>$";
+    ok(text);
+    let tree = root(text);
+    let labels: Vec<&str> = nodes(&tree)
+        .into_iter()
+        .filter_map(SyntaxNode::cast::<ast::Label<'_>>)
+        .map(|label| label.get())
+        .collect();
+    assert_eq!(labels, ["eq:suvat", "eq:s"]);
+    assert_eq!(tree.full_text(), text);
+    // Elsewhere `<` compares or starts a shorthand.
+    for text in [
+        "$a<b>c$",
+        "$a < b > c$",
+        "$x <= y$",
+        "$a <b> + c$",
+        "$<a.b>$",
+    ] {
+        ok(text);
+        assert_eq!(count(&root(text), SyntaxKind::Label), 0, "{text}");
+    }
+    assert_eq!(count(&root("$x <eq:a>$"), SyntaxKind::Label), 1);
+    // A label's name is checked as in markup.
+    assert_eq!(errors("$ x <eq:> $"), ["labels cannot end with `:`"]);
+}
+
 // --- Element calls ------------------------------------------------------------------
 
 #[test]
