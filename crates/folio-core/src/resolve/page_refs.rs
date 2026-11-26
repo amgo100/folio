@@ -5,7 +5,7 @@
 //! it shows can move the target: a wider number can push a line, and so
 //! the target, onto the next page. Resolve therefore reads the pages that
 //! layout made with the numbers of the pass before, and layout reads what
-//! Resolve resolved, a cycle that [`page_numbers`] closes on salsa's cycle
+//! Resolve resolved, a cycle that [`page_numbers`](crate::pipeline::page_numbers) closes on salsa's cycle
 //! handling:
 //!
 //! 1. The first pass knows no page: every page-number reference shows

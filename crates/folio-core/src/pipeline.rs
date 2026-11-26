@@ -18,7 +18,7 @@
 //! 8. **Layout**, for the fixed-layout targets (PDF, live): the text stage
 //!    ([`text`](crate::text::text)), the paragraph builder
 //!    ([`lines`](crate::layout::lines)) and the page builder
-//!    ([`pages`](crate::layout::pages)), which read the step-styled tree.
+//!    ([`pages`](crate::layout::pages())), which read the step-styled tree.
 //! 9. **Emit**: the `folio` crate's `emit` query, which hands a
 //!    fixed-layout target's pages to its writer. The Office targets fork
 //!    after step styling and will take the step-styled tree (M4, M5).
