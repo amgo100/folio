@@ -56,6 +56,12 @@ pub struct Styled {
 /// A node names the element it styles by its location, so later stages
 /// that drop or add nodes keep every node with its element
 /// ([`crate::locate::StyledChildren`]).
+///
+/// A `math` element whose formula holds a vector has one more child, the
+/// part [`VECTOR_PART`]: the style its vectors take, matched as the `math`
+/// element with the class `vector` and inheriting from it, so that
+/// `math.vector { math-style: arrow; }` styles them (SPEC §8.1). Math
+/// layout finds it with [`StyledNode::vector_style`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StyledNode {
     /// The element's name, or the part's.
@@ -68,6 +74,21 @@ pub struct StyledNode {
     pub style: ComputedStyle,
     /// Its children.
     pub children: EcoVec<StyledNode>,
+}
+
+/// The name of the part of a `math` element that holds the style of its
+/// vectors (see [`StyledNode`]).
+pub const VECTOR_PART: &str = "vector";
+
+impl StyledNode {
+    /// The style of the vectors of a `math` element's formula: its part
+    /// [`VECTOR_PART`], present when the formula holds a vector. `None` for
+    /// any other node.
+    pub fn vector_style(&self) -> Option<&StyledNode> {
+        self.children.iter().find(
+            |child| matches!(&child.name, NodeName::Part(name) if name.as_str() == VECTOR_PART),
+        )
+    }
 }
 
 impl Styled {
@@ -380,9 +401,11 @@ impl<'a> Walker<'a> {
                 local.extend(rule.declarations.iter().cloned());
             }
         }
-        if let Child::Element(element) = child {
-            local.extend(self.inline(element));
-        }
+        let own = match child {
+            Child::Element(element) => self.inline(element),
+            Child::Part(..) => Vec::new(),
+        };
+        local.extend(own.iter().cloned());
 
         let style = self.compute(parent, &matched, &local);
 
@@ -396,7 +419,7 @@ impl<'a> Walker<'a> {
             self.scoped_chain.push(view.clone());
         }
         let grandchildren = child.children();
-        let children = (0..grandchildren.len())
+        let mut children: EcoVec<StyledNode> = (0..grandchildren.len())
             .map(|j| {
                 let owner = (span, location);
                 self.node(&grandchildren, j, child_context, Some(&style), owner)
@@ -406,6 +429,12 @@ impl<'a> Walker<'a> {
             self.scoped_chain.pop();
         }
         self.scoped.truncate(mark);
+        if let Child::Element(element) = child
+            && holds_vector(element)
+        {
+            let owner = (span, location);
+            children.push(self.vector_node(siblings, i, context, &style, &own, owner));
+        }
 
         StyledNode {
             name: name_of(child),
@@ -413,6 +442,57 @@ impl<'a> Walker<'a> {
             location,
             style,
             children,
+        }
+    }
+
+    /// The part that styles the vectors of the `math` element at child `i`
+    /// of `siblings` (see [`StyledNode`]): the element seen with the class
+    /// `vector` added, in the element's own context, so that it matches
+    /// every rule the element matches and the `math.vector` rules, and
+    /// computed as a child of the element's `style`. The element's own
+    /// declarations `own` ([`inline`](Self::inline)) apply to it as they do
+    /// to the element, so a local override is not undone by a rule for
+    /// `math`.
+    fn vector_node(
+        &mut self,
+        siblings: &[Child<'_>],
+        i: usize,
+        context: Option<ContextKey<'a>>,
+        style: &ComputedStyle,
+        own: &[Decl],
+        (span, location): (Span, Location),
+    ) -> StyledNode {
+        let vector = |mut view: NodeView| {
+            view.subject.classes.push(VECTOR_PART.into());
+            view
+        };
+        let needs = &self.cascade.needs;
+        let view = vector(self.view(siblings, i, &needs.subject, needs));
+        let key = MatchKey::new(self.db, self.build, view, context);
+        let matched = match_node(self.db, key).clone();
+        let mut local = EcoVec::new();
+        if !self.scoped.is_empty() {
+            let view =
+                vector(self.view(siblings, i, &self.scoped_needs.subject, &self.scoped_needs));
+            let mut chain: Vec<&NodeView> = vec![&view];
+            chain.extend(self.scoped_chain.iter().rev());
+            let mut hits: Vec<&Rule> = self
+                .scoped
+                .iter()
+                .filter(|r| r.selector.matches(&chain))
+                .collect();
+            hits.sort_by_key(|r| r.priority);
+            for rule in hits {
+                local.extend(rule.declarations.iter().cloned());
+            }
+        }
+        local.extend(own.iter().cloned());
+        StyledNode {
+            name: NodeName::Part(Name::new(VECTOR_PART).expect("an identifier")),
+            span,
+            location,
+            style: self.compute(Some(style), &matched, &local),
+            children: EcoVec::new(),
         }
     }
 
@@ -604,6 +684,13 @@ impl<'a> Walker<'a> {
             children,
         }
     }
+}
+
+/// Whether an element is a `math` element whose formula holds a vector.
+fn holds_vector(element: &Element) -> bool {
+    element.name.namespace.is_none()
+        && element.name.name.as_str() == "math"
+        && matches!(element.field("tree"), Some(Value::Math(formula)) if formula.has_vector())
 }
 
 /// The range of `siblings` that the body's elements take. They are

@@ -98,7 +98,9 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("float", float),
     ("int", int),
     ("json", json),
+    ("num", num_func),
     ("panic", panic),
+    ("qty", qty_func),
     ("range", range),
     ("read", read),
     ("repr", repr),
@@ -106,7 +108,75 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("str", str),
     ("toml", toml),
     ("type", type_),
+    ("unit", unit_func),
 ];
+
+/// `qty(9.81, "m s^-2", pm: 0.02, digits: 3)` in text: an inline formula
+/// of the quantity, as `$qty(..)$` makes it (SPEC §8.1). A value is an
+/// integer, a float, or a string that keeps its digits (`"9.80"`).
+fn qty_func(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    quantity_func(vm, args, true, true)
+}
+
+/// `unit("kg m^2 s^-1")` in text.
+fn unit_func(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    quantity_func(vm, args, false, true)
+}
+
+/// `num(6.02e23, pm: .., digits: ..)` in text.
+fn num_func(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    quantity_func(vm, args, true, false)
+}
+
+fn quantity_func(vm: &mut Vm<'_>, args: &mut Args, value: bool, unit: bool) -> EvalResult<Value> {
+    use super::math::{Spanned, number_of, quantity};
+    let span = args.span;
+    let mut positional = |what: &str| match args.eat() {
+        Some(arg) => Ok((arg.value, arg.span)),
+        None => Err(EvalError::new(
+            span,
+            eco_format!("missing argument: {what}"),
+        )),
+    };
+    let value = if value {
+        let (v, at) = positional("value")?;
+        Some((number_of(&v, at)?, at))
+    } else {
+        None
+    };
+    let unit = if unit {
+        let (v, at) = positional("unit")?;
+        Some(Spanned::new(v, at))
+    } else {
+        None
+    };
+    let (pm, digits) = if value.is_some() {
+        // Errors point at the argument, or at the call.
+        let at = |args: &Args, name: &str| {
+            args.items()
+                .iter()
+                .rev()
+                .find(|arg| arg.name.as_deref() == Some(name))
+                .map_or(span, |arg| arg.span)
+        };
+        let pm_at = at(args, "pm");
+        let pm = match args.named::<Value>("pm")? {
+            Some(v) => Some((number_of(&v, pm_at)?, pm_at)),
+            None => None,
+        };
+        let digits_at = at(args, "digits");
+        let digits = args.named::<Value>("digits")?.map(|v| (v, digits_at));
+        (pm, digits)
+    } else {
+        (None, None)
+    };
+    let quantity = quantity(value, pm, unit, digits, span)?;
+    let formula = folio_math::Formula::row(
+        folio_math::Row::new([folio_math::Node::Quantity(std::sync::Arc::new(quantity))]),
+        span,
+    );
+    Ok(Value::Content(vm.math_content(formula, false, span)?))
+}
 
 /// The `calc` module. Its transcendental functions come from `libm`, not
 /// the platform's maths library, so that they give the same bits on every
@@ -1328,6 +1398,12 @@ pub(crate) enum MathFunc {
     Vector,
     /// `hat(i)`, a unit vector.
     UnitVector,
+    /// `qty(9.81, "m s^-2", pm: 0.02, digits: 3)`, a quantity.
+    Quantity,
+    /// `unit("kg m^2")`, a unit alone.
+    Unit,
+    /// `num(6.02e23, pm: .., digits: ..)`, a number alone.
+    Num,
     /// `mat(a, b; c, d, delim: "[")`.
     Matrix,
     /// `cases(a, b)`.
@@ -1356,6 +1432,9 @@ const MATH_FUNCS: &[(&str, MathFunc)] = {
         ("root", MathFunc::Root),
         ("vec", MathFunc::Vector),
         ("hat", MathFunc::UnitVector),
+        ("qty", MathFunc::Quantity),
+        ("unit", MathFunc::Unit),
+        ("num", MathFunc::Num),
         ("mat", MathFunc::Matrix),
         ("cases", MathFunc::Cases),
         ("abs", MathFunc::Fence('|', '|')),
