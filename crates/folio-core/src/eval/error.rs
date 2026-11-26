@@ -1,7 +1,7 @@
 //! Evaluation errors, and the other ways evaluation stops.
 
 use ecow::{EcoString, EcoVec};
-use folio_syntax::Span;
+use folio_syntax::{DiagSpan, Span, SubRange};
 
 use crate::diag::Diagnostic;
 
@@ -10,6 +10,9 @@ use crate::diag::Diagnostic;
 pub struct EvalError {
     /// Where it happened.
     pub span: Span,
+    /// The part of the node at `span` it is about, if not all of it: the
+    /// command of a LaTeX formula, whose source is one node.
+    pub sub_range: Option<SubRange>,
     /// What is wrong.
     pub message: EcoString,
     /// How to fix it.
@@ -23,6 +26,7 @@ impl EvalError {
     pub fn new(span: Span, message: impl Into<EcoString>) -> Self {
         Self {
             span,
+            sub_range: None,
             message: message.into(),
             hints: EcoVec::new(),
             trace: EcoVec::new(),
@@ -34,6 +38,12 @@ impl EvalError {
     /// leaves out.
     pub(crate) fn has_detached_span(&self) -> bool {
         self.span.is_detached() || self.trace.iter().any(|point| point.span.is_detached())
+    }
+
+    /// Narrows the error to a part of the node at its span.
+    pub fn with_sub_range(mut self, sub_range: Option<SubRange>) -> Self {
+        self.sub_range = sub_range;
+        self
     }
 
     /// Adds a hint.
@@ -65,7 +75,10 @@ pub struct Tracepoint {
 /// error.
 impl From<EvalError> for Diagnostic {
     fn from(error: EvalError) -> Self {
-        let mut diag = Diagnostic::error(error.span, error.message);
+        let mut diag = Diagnostic::error(
+            DiagSpan::from_span(error.span, error.sub_range),
+            error.message,
+        );
         for hint in error.hints {
             diag = diag.with_hint(hint);
         }
