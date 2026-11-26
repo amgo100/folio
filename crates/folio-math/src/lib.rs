@@ -30,6 +30,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod layout;
 mod symbols;
 pub mod tex;
 

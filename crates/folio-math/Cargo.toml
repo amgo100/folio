@@ -9,7 +9,10 @@ publish.workspace = true
 
 [dependencies]
 ecow.workspace = true
+folio-component.workspace = true
 folio-syntax.workspace = true
+folio-text.workspace = true
+skrifa.workspace = true
 unicode-math-class.workspace = true
 
 [lints]
