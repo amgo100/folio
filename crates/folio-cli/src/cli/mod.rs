@@ -1,11 +1,12 @@
 //! The commands of SPEC §12.1 and their arguments. `folio build`, `folio
-//! check`, `folio watch`, `folio lsp` and `folio toolchain install` are
-//! implemented; the other
-//! commands, and the flags of `folio build` and `folio check` for later
-//! features, are parsed and rejected as not yet supported.
+//! check`, `folio watch`, `folio fmt`, `folio lsp` and `folio toolchain
+//! install` are implemented; the other commands, and the flags of `folio
+//! build` and `folio check` for later features, are parsed and rejected as
+//! not yet supported.
 
 mod build;
 mod check;
+mod fmt;
 mod lsp;
 mod project;
 mod toolchain;
@@ -49,8 +50,8 @@ enum Command {
     /// Report diagnostics without writing output: every variant and target
     /// the manifest declares, or those chosen
     Check(CheckArgs),
-    /// Format `.fol` and `.fsty` files canonically (not yet supported)
-    Fmt(Later),
+    /// Format the project's `.fol` and `.fsty` files canonically
+    Fmt(FmtArgs),
     /// Move a local override into a stylesheet (not yet supported)
     Promote(Later),
     /// Print elements as JSON (not yet supported)
@@ -70,11 +71,11 @@ impl Command {
             Self::Build(_)
             | Self::Check(_)
             | Self::Watch(_)
+            | Self::Fmt(_)
             | Self::Lsp(_)
             | Self::Toolchain(_) => return None,
             Self::New(_) => "new",
             Self::Present(_) => "present",
-            Self::Fmt(_) => "fmt",
             Self::Promote(_) => "promote",
             Self::Query(_) => "query",
             Self::Components(_) => "components",
@@ -203,6 +204,39 @@ impl CheckArgs {
     }
 }
 
+/// The arguments of `folio fmt`.
+#[derive(Debug, Args)]
+pub(crate) struct FmtArgs {
+    /// Change no file: report each file that is not formatted, with the
+    /// edits that would format it, and exit with status 1 if there is one
+    #[arg(long)]
+    pub(crate) check: bool,
+
+    /// The project directory, which holds folio.toml [default: the current
+    /// directory or the nearest one above it that holds folio.toml]
+    #[arg(long, value_name = "DIR")]
+    pub(crate) root: Option<PathBuf>,
+
+    /// Use this compiler instead of the version folio.toml pins; `current`
+    /// is the running one
+    #[arg(long, value_name = "VERSION", value_parser = ["current"])]
+    pub(crate) compiler: Option<String>,
+
+    /// When to colour diagnostics
+    #[arg(long, value_enum, value_name = "WHEN", default_value_t = Color::Auto)]
+    pub(crate) color: Color,
+
+    /// How to write diagnostics to standard error: `human` with source
+    /// excerpts, or `json` as one document when the command ends
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        default_value_t = DiagnosticsFormat::Human
+    )]
+    pub(crate) diagnostics: DiagnosticsFormat,
+}
+
 /// When to colour diagnostics.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
 pub(crate) enum Color {
@@ -273,6 +307,7 @@ pub(crate) fn run() -> ExitCode {
         Command::Build(args) => build::build(&args.project),
         Command::Check(args) => check::check(&args.project, args.layout),
         Command::Watch(args) => watch::watch(&args),
+        Command::Fmt(args) => fmt::fmt(&args),
         Command::Lsp(args) => lsp::lsp(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         _ => unreachable!("every other command is rejected above"),
@@ -366,6 +401,44 @@ mod tests {
         );
         assert!(parse(&["--report", "fonts"]).is_err());
         assert!(parse(&["--strict"]).is_err());
+    }
+
+    #[test]
+    fn fmt_flags() {
+        let parse = |args: &[&str]| {
+            let mut all = vec!["folio", "fmt"];
+            all.extend(args);
+            match Cli::try_parse_from(all).map(|cli| cli.command) {
+                Ok(Command::Fmt(args)) => Ok(args),
+                Ok(other) => panic!("{other:?}"),
+                Err(error) => Err(error.kind()),
+            }
+        };
+        let args = parse(&[]).unwrap();
+        assert!(!args.check);
+        assert_eq!(args.diagnostics, DiagnosticsFormat::Human);
+        let args = parse(&[
+            "--check",
+            "--root",
+            "dir",
+            "--diagnostics",
+            "json",
+            "--compiler",
+            "current",
+        ])
+        .unwrap();
+        assert_eq!(args.compiler.as_deref(), Some("current"));
+        assert!(args.check);
+        assert_eq!(args.root.as_deref(), Some(std::path::Path::new("dir")));
+        assert_eq!(args.diagnostics, DiagnosticsFormat::Json);
+        assert!(parse(&["--variant", "exam"]).is_err());
+        assert_eq!(
+            Cli::try_parse_from(["folio", "fmt"])
+                .unwrap()
+                .command
+                .later(),
+            None
+        );
     }
 
     #[test]

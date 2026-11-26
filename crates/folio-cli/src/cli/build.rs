@@ -20,7 +20,7 @@ use folio_syntax::DiagSpan;
 use serde::Serialize;
 
 use super::project::{self, LOCKFILE, MANIFEST};
-use super::{DiagnosticsFormat, FAILURE, ProjectArgs, toolchain};
+use super::{Color, DiagnosticsFormat, FAILURE, ProjectArgs, toolchain};
 
 /// What a command does with the builds it chooses.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -324,7 +324,7 @@ pub(super) fn write(
     }
     let message = |e: io::Error| format!("cannot write `{path}`: {e}");
     let (root, file) = resolve(root, &path, true).map_err(message)?;
-    replace(&root, &file, bytes).map_err(message)?;
+    replace(&root, &file, bytes, None).map_err(message)?;
     Ok(Written::File(path))
 }
 
@@ -436,17 +436,27 @@ fn outside(walked: &str) -> io::Error {
 /// file's canonical directory once that is checked to be in the project at
 /// `root`: this narrows, but does not close, the window in which another
 /// process could swap a directory on the way for a link out of the project.
-fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
+/// The new file takes `permissions`, if given, and else the defaults of a
+/// new file.
+pub(super) fn replace(
+    root: &Path,
+    file: &Path,
+    bytes: &[u8],
+    permissions: Option<fs::Permissions>,
+) -> io::Result<()> {
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     let pid = std::process::id();
     let (temporary, mut out) = loop {
         let n = TEMPORARY.fetch_add(1, Ordering::Relaxed);
         let temporary = file.with_file_name(format!(".{name}.{pid}-{n}.folio-tmp"));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // A file that takes permissions is private until it has them.
+        #[cfg(unix)]
+        if permissions.is_some() {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        }
+        match options.open(&temporary) {
             Ok(out) => break (temporary, out),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -455,19 +465,24 @@ fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
     // Where the temporary file really is, which the rename and the clean-up
     // go through, so a directory swapped after the check is not followed.
     let mut placed = temporary.clone();
-    let result = out
-        .write_all(bytes)
-        .and_then(|()| out.sync_all())
-        .and_then(|()| {
-            drop(out);
-            placed = temporary.canonicalize()?;
-            match placed.parent() {
-                Some(dir) if dir.starts_with(root) => fs::rename(&placed, dir.join(&*name)),
-                _ => Err(io::Error::other(
-                    "a directory on the way was replaced by a link out of the project",
-                )),
-            }
-        });
+    // The permissions come first, so the text is never readable by more
+    // than the file's were.
+    let result = match permissions {
+        Some(permissions) => out.set_permissions(permissions),
+        None => Ok(()),
+    }
+    .and_then(|()| out.write_all(bytes))
+    .and_then(|()| out.sync_all())
+    .and_then(|()| {
+        drop(out);
+        placed = temporary.canonicalize()?;
+        match placed.parent() {
+            Some(dir) if dir.starts_with(root) => fs::rename(&placed, dir.join(&*name)),
+            _ => Err(io::Error::other(
+                "a directory on the way was replaced by a link out of the project",
+            )),
+        }
+    });
     if result.is_err() {
         let _ = fs::remove_file(&placed);
     }
@@ -478,7 +493,7 @@ fn replace(root: &Path, file: &Path, bytes: &[u8]) -> io::Result<()> {
 /// to standard error, as it goes, with source excerpts; or, with
 /// `--diagnostics json`, as one JSON document written when the command
 /// ends (`docs/diagnostics-json.md`).
-struct Report {
+pub(super) struct Report {
     color: bool,
     /// The document being collected, with `--diagnostics json`.
     json: Option<Document>,
@@ -541,17 +556,27 @@ impl Report {
     const VERSION: u32 = 1;
 
     fn new(args: &ProjectArgs) -> Self {
+        Self::with(args.color, args.diagnostics)
+    }
+
+    /// A report coloured as `color` says, in `format`.
+    pub(super) fn with(color: Color, format: DiagnosticsFormat) -> Self {
         Self {
-            color: args.color.enabled(),
-            json: (args.diagnostics == DiagnosticsFormat::Json).then(|| Document {
+            color: color.enabled(),
+            json: (format == DiagnosticsFormat::Json).then(|| Document {
                 version: Self::VERSION,
                 ..Document::default()
             }),
         }
     }
 
+    /// Whether the report is the JSON document.
+    pub(super) fn is_json(&self) -> bool {
+        self.json.is_some()
+    }
+
     /// Reports diagnostics, with their spans resolved against `files`.
-    fn diagnostics(&mut self, files: &dyn Files, diagnostics: &[Diagnostic]) {
+    pub(super) fn diagnostics(&mut self, files: &dyn Files, diagnostics: &[Diagnostic]) {
         match &mut self.json {
             Some(document) => document
                 .diagnostics
@@ -577,7 +602,7 @@ impl Report {
     }
 
     /// Ends the report: writes the JSON document, if there is one.
-    fn finish(self) {
+    pub(super) fn finish(self) {
         if let Some(document) = self.json {
             let json = serde_json::to_string_pretty(&document).expect("the report serialises");
             eprintln!("{json}");

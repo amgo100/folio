@@ -1,10 +1,14 @@
 example {
-  padding: 3mm 4mm; border-left: 1.5pt solid $accent; background: $accent-tint;
-  space-before: 8pt; space-after: 8pt; breakable: true;
+  padding: 3mm 4mm;
+  border-left: 1.5pt solid $accent;
+  background: $accent-tint;
+  space-before: 8pt;
+  space-after: 8pt;
+  breakable: true;
   export-name: "Example";
 }
 
-render example {                                   // default template
+render example { // default template
   header: row(
     strong(term() " " counter() if field(title) { ": " field(title) }),
     align-end(badge(field(difficulty))) if field(difficulty) == "extension",
@@ -12,8 +16,13 @@ render example {                                   // default template
   body: slot(statement) rule(0.4pt) slot(solution);
 }
 
-render example as compact { body: slot(statement); }   // named template
-example.short { template: compact; }
+render example as compact {
+  body: slot(statement);
+} // named template
+
+example.short {
+  template: compact;
+}
 
 render exam.question as boxed {
   body: box(slot(stem), padding: 2mm) if field(marks) > 0 else-text;
