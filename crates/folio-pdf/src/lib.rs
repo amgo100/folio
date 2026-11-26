@@ -635,6 +635,10 @@ impl<'a> Writer<'a> {
     }
 }
 
+/// The thickness of the frame drawn for an object whose content is not
+/// laid out yet, inside its box.
+const OBJECT_FRAME: Abs = Abs::pt(0.5);
+
 impl Writer<'_> {
     /// Draws a page: its regions' content as boxes of the top of the
     /// structure.
@@ -679,6 +683,26 @@ impl Writer<'_> {
                     ArtifactType::Layout,
                 )));
                 draw_shape(surface, shape, at);
+                surface.end_tagged();
+            }
+            FragmentItem::Object(_) if self.dry.is_some() => {}
+            FragmentItem::Object(object) => {
+                // No stage lays out the content of an object yet: its box
+                // is drawn as an empty frame, which is not content.
+                let half = OBJECT_FRAME / 2.0;
+                let inner = |side: Abs| (side - OBJECT_FRAME).max(Abs::zero());
+                let path = folio_component::Path::rect(
+                    inner(object.size.width),
+                    inner(object.size.height),
+                );
+                let frame = Shape::stroked(
+                    path,
+                    folio_component::Stroke::solid(folio_component::Color::BLACK, OBJECT_FRAME),
+                );
+                surface.start_tagged(ContentTag::Artifact(krilla::tagging::Artifact::with_kind(
+                    ArtifactType::Layout,
+                )));
+                draw_shape(surface, &frame, at + Point::new(half, half));
                 surface.end_tagged();
             }
         }

@@ -51,16 +51,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::{EcoVec, eco_format};
-use folio_component::{Abs, Fragment, FragmentItem, Location, Path, Point, Shape, Size, Stroke};
+use folio_component::{
+    Abs, Fragment, FragmentItem, Location, ObjectBox, Path, Point, Shape, Size, Stroke,
+};
 use folio_syntax::Span;
 
 use super::cache::Cache;
 use super::flow::{
-    Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, ParagraphInfo, Part, Shared,
-    Walk,
+    BlockObject, Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, ParagraphInfo,
+    Part, Shared, Sizes, Walk,
 };
 use super::master::{BlockBox, PageMaster};
-use super::paragraph::ParagraphLayout;
+use super::paragraph::{ObjectMetrics, ParagraphLayout};
 use super::set::set_line;
 use super::{Lines, lines, report_lines};
 use crate::db::{Build, Db};
@@ -69,7 +71,7 @@ use crate::fonts::{Fonts, fonts};
 use crate::pipeline::step_styled;
 use crate::span_map::source_ref;
 use crate::style::{DeclValue, NodeName, NodeView, Position, Properties, Styled, Subject};
-use crate::text::{Text, text};
+use crate::text::{Text, TextBlock, TextObject, text};
 
 /// How much a page's emptiness costs: an empty page would cost this much.
 pub const FILL: f64 = 1_000.0;
@@ -232,13 +234,33 @@ pub struct Regions<'a> {
     /// it as the page is filled, and a line that does not fit with what it
     /// reserves moves to the next page.
     pub reserve: Option<&'a dyn Fn(LineRef) -> Abs>,
+    /// The size of an inline object, by the element it stands for, as
+    /// maths and images will have once they are laid out (SPEC §7.2,
+    /// §8.2). A paragraph with sized objects is broken again with them,
+    /// and its lines are as tall as its objects reach; an object without a
+    /// size is as wide as nothing and drawn as nothing.
+    pub object: Option<&'a SizeObject<'a>>,
+    /// The size of the content of a block that holds no paragraphs, as a
+    /// display will have: the block's content is then a box of that size,
+    /// at the start of its content box.
+    pub block: Option<&'a SizeBlock<'a>>,
 }
+
+/// A hook that sizes an inline object by the element it stands for
+/// ([`Regions::object`]).
+pub type SizeObject<'a> = dyn Fn(&TextObject) -> Option<ObjectMetrics> + 'a;
+
+/// A hook that sizes the content of a block that holds no paragraphs
+/// ([`Regions::block`]).
+pub type SizeBlock<'a> = dyn Fn(&TextBlock) -> Option<Size> + 'a;
 
 impl Debug for Regions<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Regions")
             .field("width", &self.width.is_some())
             .field("reserve", &self.reserve.is_some())
+            .field("object", &self.object.is_some())
+            .field("block", &self.block.is_some())
             .finish()
     }
 }
@@ -357,6 +379,10 @@ fn build_pages(
         props,
         fonts,
         body,
+        Sizes {
+            inline: regions.object,
+            block: regions.block,
+        },
     );
     let paragraph = |item: usize| match flow.origins[item] {
         Origin::Paragraph(p) => p,
@@ -483,6 +509,11 @@ fn content_hash(fragment: &Fragment) -> u64 {
                 FragmentItem::Shape { shape, source: _ } => {
                     2u8.hash(h);
                     shape.hash(h);
+                }
+                FragmentItem::Object(object) => {
+                    3u8.hash(h);
+                    object.size.hash(h);
+                    object.baseline.hash(h);
                 }
             }
         }
@@ -642,6 +673,8 @@ struct Placed {
     item: usize,
     /// The paragraph broken into lines, and the line.
     line: Option<(Arc<ParagraphInfo>, usize)>,
+    /// The sized content of a block, for a block object.
+    object: Option<Arc<BlockObject>>,
     /// Whether the paragraph was broken at a width other than the flow's.
     rebroken: bool,
 }
@@ -654,7 +687,7 @@ impl Placed {
                 let line = &paragraph.layout.lines[*line];
                 line.ascent + line.descent
             }
-            None => Abs::zero(),
+            None => self.object.as_ref().map_or(Abs::zero(), |o| o.size.height),
         }
     }
 }
@@ -712,10 +745,15 @@ impl<'a> Run<'a> {
             before: before.clone(),
             item: k,
             line: None,
+            object: None,
             rebroken: false,
         };
         match &item.leaf {
             Leaf::Empty => self.leaves.push(empty(&item.before)),
+            Leaf::Box(object) => self.leaves.push(Placed {
+                object: Some(object.clone()),
+                ..empty(&item.before)
+            }),
             Leaf::Paragraph(info) => {
                 let body = page.master.body.size.width;
                 let (paragraph, rebroken) = info.at_width(body, width, page.caches);
@@ -733,6 +771,7 @@ impl<'a> Run<'a> {
                         before,
                         item: k,
                         line: Some((paragraph.clone(), line)),
+                        object: None,
                         rebroken,
                     });
                 }
@@ -1021,6 +1060,20 @@ fn assemble(run: &Run<'_>, end: usize, first: bool) -> Fragment {
                 asm.add(pos, run);
             }
             asm.baseline(baseline);
+        } else if let Some(object) = &leaf.object {
+            let stack = &page.flow.items[leaf.item].stack;
+            let x = stack
+                .last()
+                .map_or(Abs::zero(), |(block, _)| block.content().0);
+            asm.add(
+                Point::new(x, y),
+                FragmentItem::Object(ObjectBox {
+                    size: object.size,
+                    baseline: object.size.height,
+                    location: object.location,
+                }),
+            );
+            asm.baseline(y + object.size.height);
         }
         y += leaf.height();
         if k + 1 < end {

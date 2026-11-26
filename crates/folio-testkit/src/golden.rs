@@ -15,7 +15,8 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use folio::{Abs, Fragment, FragmentItem, Pages, Point, World};
+use folio::layout::{Cache, ObjectMetrics, PageCache, Regions, TextObject};
+use folio::{Abs, Fragment, FragmentItem, Pages, Point, Size, Target, TextBlock, World};
 use folio_component::{Color, Paint, PathItem};
 
 /// The environment variable that makes [`check`] write golden files
@@ -138,8 +139,10 @@ fn point(point: Point) -> String {
 /// A fragment shows its size, the source it is the box of (as
 /// `path:line:column`), its baselines when they are not at its bottom, and
 /// its keep and break penalty when it has them. A glyph run shows its font
-/// (by PostScript name), size, width, number of glyphs and text. Fonts and
-/// sources are named by what is stable across builds, not by ids.
+/// (by PostScript name), size, width, number of glyphs and text. An object
+/// shows its size, its baseline from its top and its element's source.
+/// Fonts and sources are named by what is stable across builds, not by
+/// ids.
 pub fn dump_pages(world: &World, pages: &Pages) -> String {
     let fonts = folio::fonts(world).ok();
     let font_name = |id: u32| -> String {
@@ -273,6 +276,20 @@ fn dump_items(
                 }
                 out.push('\n');
             }
+            FragmentItem::Object(object) => {
+                let _ = write!(
+                    out,
+                    "{indent}object {} {} × {} baseline {}",
+                    point(*pos),
+                    len(object.size.width),
+                    len(object.size.height),
+                    len(object.baseline)
+                );
+                if let Some(at) = locate(world, object.location.source) {
+                    let _ = write!(out, " {at}");
+                }
+                out.push('\n');
+            }
         }
     }
 }
@@ -289,4 +306,77 @@ fn hex(color: Color) -> String {
         "#{:02x}{:02x}{:02x}{:02x}",
         color.r, color.g, color.b, color.a
     )
+}
+
+/// The document of the object golden file ([`boxes`]): inline maths and a
+/// reference, which stand for objects in a paragraph's text, and a figure
+/// with no content, a block that holds no paragraphs.
+pub const BOXES: &str = "#doc(title: [Boxes])\n\n= Boxes\n\nA line with a tall box $x$ in \
+it, and a raised one, see @fig:box, after it. The rest of the paragraph runs on so that it \
+takes a second line and a third, which shows that only the line with the tall box is taller \
+than the others.\n\n#figure[] <fig:box>\n\nA paragraph after the block box.\n";
+
+/// The size of the tall test box: inline maths in [`BOXES`].
+pub const TALL: ObjectMetrics = ObjectMetrics {
+    width: Abs::pt(30.0),
+    ascent: Abs::pt(24.0),
+    descent: Abs::pt(8.0),
+    shift: Abs::zero(),
+};
+
+/// The size of the raised test box: a reference in [`BOXES`].
+pub const RAISED: ObjectMetrics = ObjectMetrics {
+    width: Abs::pt(16.0),
+    ascent: Abs::pt(6.0),
+    descent: Abs::pt(2.0),
+    shift: Abs::pt(5.0),
+};
+
+/// The size of the block test box: the empty figure of [`BOXES`].
+pub const BLOCK: Size = Size::new(Abs::pt(120.0), Abs::pt(60.0));
+
+/// The world of [`BOXES`], and its pages with fixed-size test boxes for
+/// its objects and its empty figure, through the page builder's test hooks
+/// ([`folio::layout::Regions`]). Until maths and images are laid out
+/// (#43, #47), nothing else sizes objects: a normal build of the same
+/// document leaves them without a size.
+pub fn boxes() -> (World, Pages) {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en-GB\"\n";
+    let mut world = World::new(manifest).expect("a valid manifest");
+    world.set_source("main.fol", BOXES).expect("a source");
+    let built = |what: &str| format!("the box document has {what}");
+    let text = folio::text(&world, Target::Pdf, None)
+        .expect("nothing cancels the build")
+        .unwrap_or_else(|| panic!("{}", built("text")));
+    let lines = folio::lines(&world, Target::Pdf, None)
+        .expect("nothing cancels the build")
+        .unwrap_or_else(|| panic!("{}", built("lines")));
+    let styled = folio::styles(&world, Target::Pdf, None)
+        .expect("nothing cancels the build")
+        .unwrap_or_else(|| panic!("{}", built("styles")));
+    let fonts = folio::fonts(&world).expect("nothing cancels the build");
+    let object = |object: &TextObject| match object.element.name.as_str() {
+        "math" => Some(TALL),
+        "ref" => Some(RAISED),
+        _ => None,
+    };
+    let block = |block: &TextBlock| {
+        (block.element.name.as_str() == "figure" && block.children.is_empty()).then_some(BLOCK)
+    };
+    let regions = Regions {
+        object: Some(&object),
+        block: Some(&block),
+        ..Regions::default()
+    };
+    let pages = folio::layout::paginate(
+        &text,
+        &lines,
+        &styled,
+        &fonts,
+        &Cache::new(),
+        &PageCache::new(),
+        regions,
+    );
+    (world, pages)
 }

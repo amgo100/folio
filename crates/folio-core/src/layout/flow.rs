@@ -40,7 +40,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::EcoVec;
-use folio_component::{Abs, Color, Em, Location, Paint, SourceRef, Value};
+use folio_component::{Abs, Color, Em, Location, Paint, Size, SourceRef, Value};
 
 use crate::span_map::source_ref;
 use folio_syntax::Span;
@@ -48,7 +48,10 @@ use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
 use super::master::{BlockBox, BreakBefore};
-use super::paragraph::{LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics};
+use super::page::{SizeBlock, SizeObject};
+use super::paragraph::{
+    LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
+};
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
@@ -125,6 +128,41 @@ pub(super) struct ParagraphInfo {
     pub sources: EcoVec<TextSource>,
     /// The element whose content the paragraph is.
     pub span: Span,
+    /// Its objects, in the order of the text, when any has a size; else
+    /// none, and its objects are drawn as nothing.
+    pub objects: EcoVec<InlineObject>,
+}
+
+/// An object of a paragraph: where it is, the element instance it stands
+/// for, and its size, if it has one.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct InlineObject {
+    /// Where its character is in the paragraph's text.
+    pub at: usize,
+    /// The element instance.
+    pub location: Location,
+    /// Its size; `None` for an object whose content is not laid out yet.
+    pub metrics: Option<ObjectMetrics>,
+}
+
+/// The sizes of a paragraph's objects as the paragraph builder reads them:
+/// zero for an object without a size, which adds nothing to its line.
+fn object_metrics(objects: &[InlineObject]) -> EcoVec<ObjectMetrics> {
+    objects
+        .iter()
+        .map(|o| o.metrics.unwrap_or_default())
+        .collect()
+}
+
+/// A block of content that is not text, such as a display or an image,
+/// sized by the stage that lays it out (SPEC §7.2, §8.2): the content of
+/// the block that holds it, placed at the start of the block's content.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct BlockObject {
+    /// Its size.
+    pub size: Size,
+    /// The element instance it is the content of.
+    pub location: Location,
 }
 
 /// How a segment of a paragraph is set.
@@ -168,7 +206,7 @@ impl ParagraphInfo {
             shaped: &self.shaped,
             style: self.style,
             segments: self.metrics.clone(),
-            objects: EcoVec::new(),
+            objects: object_metrics(&self.objects),
         };
         let layout = caches.cache.layout(
             &input,
@@ -232,6 +270,8 @@ pub(super) enum Leaf {
     Paragraph(Arc<ParagraphInfo>),
     /// A block without lines, which is as tall as its padding and borders.
     Empty,
+    /// The sized content of a block that holds no paragraphs.
+    Box(Arc<BlockObject>),
 }
 
 impl Leaf {
@@ -245,6 +285,7 @@ impl Leaf {
                 (Arc::as_ptr(&paragraph.shaped) as usize).hash(&mut hasher);
             }
             Self::Empty => 0u8.hash(&mut hasher),
+            Self::Box(object) => object.hash(&mut hasher),
         }
         hasher.finish()
     }
@@ -462,8 +503,10 @@ pub(super) struct Flow {
 impl Flow {
     /// Flattens a build's blocks and paragraphs. `layouts` and `slots`
     /// hold the lines and line slots of each paragraph of `text` in a body
-    /// `width` wide; `caches` memoise the hyphens they need and share what
-    /// earlier flows built.
+    /// `width` wide, its objects without sizes; `caches` memoise the
+    /// hyphens they need and share what earlier flows built. `sizes` gives
+    /// objects sizes, and paragraphs with sized objects are broken again.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         text: &Text,
         caches: Caches<'_>,
@@ -472,9 +515,11 @@ impl Flow {
         props: &Properties,
         fonts: &Fonts,
         width: Abs,
+        sizes: Sizes<'_>,
     ) -> Self {
         let Caches { cache, shared, now } = caches;
         let mut builder = Builder {
+            sizes,
             text,
             cache,
             shared,
@@ -679,7 +724,18 @@ enum Event {
     Open(Arc<BlockBox>, Location),
 }
 
+/// Test hooks that size objects (SPEC §7.2): until maths and images are
+/// laid out, nothing else does.
+#[derive(Copy, Clone, Default)]
+pub(super) struct Sizes<'a> {
+    /// The size of an inline object, by the element it stands for.
+    pub inline: Option<&'a SizeObject<'a>>,
+    /// The size of the content of a block that holds no paragraphs.
+    pub block: Option<&'a SizeBlock<'a>>,
+}
+
 struct Builder<'a> {
+    sizes: Sizes<'a>,
     text: &'a Text,
     cache: &'a Cache,
     shared: &'a Shared,
@@ -716,7 +772,15 @@ impl Builder<'_> {
             }
         }
         if self.items.len() == before {
-            self.leaf(Leaf::Empty, Origin::Empty);
+            let size = self.sizes.block.and_then(|f| f(block));
+            let leaf = match size {
+                Some(size) => Leaf::Box(Arc::new(BlockObject {
+                    size,
+                    location: block.location,
+                })),
+                None => Leaf::Empty,
+            };
+            self.leaf(leaf, Origin::Empty);
         }
         self.stack.pop();
         self.pending.push(Event::Close(boxed));
@@ -729,8 +793,36 @@ impl Builder<'_> {
         if layout.lines.is_empty() {
             return;
         }
-        let input = input_with(paragraph, self.props, &mut self.metrics);
+        let mut input = input_with(paragraph, self.props, &mut self.metrics);
         let style = paragraph_style(&paragraph.style, self.props);
+        let mut objects: EcoVec<InlineObject> = EcoVec::new();
+        if let Some(size) = self.sizes.inline
+            && paragraph.objects.iter().any(|o| size(o).is_some())
+        {
+            objects = paragraph
+                .objects
+                .iter()
+                .map(|o| InlineObject {
+                    at: o.at,
+                    location: o.location,
+                    metrics: size(o),
+                })
+                .collect();
+        }
+        let layout = if objects.is_empty() {
+            layout
+        } else {
+            // Sized objects change the breaks the paragraph had without.
+            input.objects = object_metrics(&objects);
+            self.cache.layout(
+                &input,
+                &[LineSlot {
+                    offset: Abs::zero(),
+                    width: self.slots[index].width,
+                }],
+                None,
+            )
+        };
         let count = |name: &str| match paragraph.style.value(self.props, self.props.builtin(name)) {
             Some(Value::Int(n)) => usize::try_from(*n).unwrap_or(0),
             _ => 0,
@@ -762,6 +854,7 @@ impl Builder<'_> {
                 segments: paints,
                 sources: paragraph.sources.clone(),
                 span: paragraph.span,
+                objects,
             },
             self.now,
         );

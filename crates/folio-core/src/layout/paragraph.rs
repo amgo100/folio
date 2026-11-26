@@ -54,8 +54,30 @@ pub struct SegmentMetrics {
     pub descent: Abs,
 }
 
+/// The size of an inline object (SPEC §7.2): content that is not text,
+/// such as inline maths or an image, which a line holds like a glyph.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub struct ObjectMetrics {
+    /// How wide it is.
+    pub width: Abs,
+    /// How far it reaches above its baseline.
+    pub ascent: Abs,
+    /// How far it reaches below its baseline, as a positive length.
+    pub descent: Abs,
+    /// How far its baseline is raised above the line's (negative lowers
+    /// it).
+    pub shift: Abs,
+}
+
+impl ObjectMetrics {
+    /// How far it reaches above and below the line's baseline.
+    fn extent(&self) -> (Abs, Abs) {
+        (self.ascent + self.shift, self.descent - self.shift)
+    }
+}
+
 /// A paragraph to break: shaped, with the metrics of its segments and the
-/// widths of its inline objects. `segments` has one entry per segment of
+/// sizes of its inline objects. `segments` has one entry per segment of
 /// the shaped paragraph.
 #[derive(Debug, Clone)]
 pub struct ParagraphInput<'a> {
@@ -65,10 +87,11 @@ pub struct ParagraphInput<'a> {
     pub style: ParagraphStyle,
     /// The metrics of each of its segments ([`Paragraph::segments`]).
     pub segments: EcoVec<SegmentMetrics>,
-    /// The width of each inline object, in the order of the text. Objects
-    /// past the end of the list are zero wide until inline objects are
-    /// laid out.
-    pub objects: EcoVec<Abs>,
+    /// The size of each inline object, in the order of the text
+    /// ([`object_offsets`]). Objects past the end of the list have no
+    /// size: they are as wide as nothing and add nothing to their line's
+    /// height, as objects whose content is not laid out yet.
+    pub objects: EcoVec<ObjectMetrics>,
 }
 
 /// The width and offset of a line, given per line index (SPEC §7.7): the
@@ -210,7 +233,7 @@ impl Prepared {
 
         // The advance of every cluster, at the byte it starts at.
         let mut advance = vec![0.0; len + 1];
-        let mut objects = input.objects.iter();
+        let offsets = object_offsets(shaped);
         for item in &shaped.items {
             let metrics = &input.segments[item.segment];
             match &item.kind {
@@ -225,8 +248,10 @@ impl Prepared {
                 }
                 ItemKind::Object => {
                     for (i, _) in text[item.range.clone()].char_indices() {
-                        let width = objects.next().map_or(0.0, |w| w.to_pt());
-                        advance[item.range.start + i] += width;
+                        let at = item.range.start + i;
+                        if let Some(m) = object_at(&offsets, &input.objects, at) {
+                            advance[at] += m.width.to_pt();
+                        }
                     }
                 }
                 ItemKind::Missing => {}
@@ -349,6 +374,7 @@ impl Prepared {
         optimal: bool,
     ) -> ParagraphLayout {
         let segments = &input.shaped.paragraph.segments;
+        let offsets = object_offsets(input.shaped);
         let mut lines = EcoVec::with_capacity(ends.len());
         let mut start = &self.breakable.start;
         let mut y = Abs::zero();
@@ -359,7 +385,20 @@ impl Prepared {
             let range = start.offset..end.offset;
             let content_end = end.content_end.max(start.offset);
 
-            let (ascent, descent) = extent(segments, &input.segments, start.offset..content_end);
+            let (mut ascent, mut descent) =
+                extent(segments, &input.segments, start.offset..content_end);
+            // Objects reach as far as they do from the line's baseline.
+            let first = offsets.partition_point(|&at| at < start.offset);
+            for (i, &at) in offsets.iter().enumerate().skip(first) {
+                if at >= content_end {
+                    break;
+                }
+                if let Some(m) = input.objects.get(i) {
+                    let (up, down) = m.extent();
+                    ascent = ascent.max(up);
+                    descent = descent.max(down);
+                }
+            }
             y = match prev_descent {
                 Some(d) => y + d + input.style.leading + ascent,
                 None => ascent,
@@ -454,6 +493,33 @@ fn set_width(measure: &Measure, justify: bool, end: &Candidate) -> (f64, f64) {
         measure.natural + glue * measure.shrink
     };
     (fit, glue)
+}
+
+/// Where each object of a shaped paragraph is: the byte offsets of the
+/// characters of its object segments, in the order of the text. The
+/// objects of [`ParagraphInput::objects`] are in this order.
+pub fn object_offsets(shaped: &Shaped) -> Vec<usize> {
+    let text = shaped.text();
+    shaped
+        .paragraph
+        .segments
+        .iter()
+        .filter(|s| matches!(s.kind, SegmentKind::Object))
+        .flat_map(|s| {
+            text[s.range.clone()]
+                .char_indices()
+                .map(move |(i, _)| s.range.start + i)
+        })
+        .collect()
+}
+
+/// The size of the object at byte `at`, if it has one.
+fn object_at<'a>(
+    offsets: &[usize],
+    objects: &'a [ObjectMetrics],
+    at: usize,
+) -> Option<&'a ObjectMetrics> {
+    objects.get(offsets.binary_search(&at).ok()?)
 }
 
 /// The ascent and descent of the text in a range: the largest of its

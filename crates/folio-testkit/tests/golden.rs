@@ -1,7 +1,9 @@
 //! Layout golden files (SPEC §14.2): the pages of every build of the test
 //! corpus that goes through Folio's layout, dumped as text
 //! ([`folio_testkit::golden::dump_pages`]) and compared with
-//! `tests/golden/layout/<project>-<variant>.<target>.txt`.
+//! `tests/golden/layout/<project>-<variant>.<target>.txt`; and the pages of
+//! a document with fixed-size test boxes for its objects, inline and as a
+//! block ([`folio_testkit::golden::boxes`]), in `boxes.pdf.txt`.
 //!
 //! After a change meant to alter layout, run `scripts/bless.sh` and review
 //! the diff before committing it.
@@ -38,6 +40,12 @@ fn layout() {
         }
     }
     assert!(!expected.is_empty(), "the corpus has no laid-out builds");
+    let (world, pages) = golden::boxes();
+    let path = dir.join("boxes.pdf.txt");
+    if let Err(message) = golden::check(&path, &golden::dump_pages(&world, &pages)) {
+        failures.push(message);
+    }
+    expected.push(path);
     if let Err(message) = golden::prune(&dir, "txt", &expected) {
         failures.push(message);
     }

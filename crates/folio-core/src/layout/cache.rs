@@ -15,8 +15,8 @@ use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind, Shaped};
 
 use super::flow::Fx;
 use super::paragraph::{
-    LineSlot, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics, hyphen_glyphs,
-    layout_paragraph,
+    LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
+    hyphen_glyphs, layout_paragraph,
 };
 
 /// How many calls of [`Cache::layout_all`] a paragraph's lines are kept
@@ -28,8 +28,8 @@ const MAX_AGE: u64 = 32;
 /// The key is what decides the breaks: the paragraph's content (its text,
 /// fonts, languages and break opportunities, [`Paragraph`]), the values
 /// the paragraph builder reads from its computed styles
-/// ([`ParagraphStyle`], [`SegmentMetrics`]), the widths of its inline
-/// objects, and the sequence of its line widths. Slot offsets are not part
+/// ([`ParagraphStyle`], [`SegmentMetrics`]), the sizes of its inline
+/// objects (widths, ascents, descents and baseline shifts), and the sequence of its line widths. Slot offsets are not part
 /// of it: they move lines without changing their breaks, so lines are
 /// placed relative to their slots. A paint-only style change, or a move of
 /// a paragraph to a place with the same widths, therefore finds its lines
@@ -72,7 +72,7 @@ struct KeyData {
     paragraph: Paragraph,
     style: ParagraphStyle,
     segments: EcoVec<SegmentMetrics>,
-    objects: EcoVec<Abs>,
+    objects: EcoVec<ObjectMetrics>,
     widths: EcoVec<Abs>,
 }
 
@@ -353,6 +353,59 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Objects' heights are part of the key: a paragraph with a taller
+    /// object is broken again, and its line is taller, though every width
+    /// is the same.
+    #[test]
+    fn keys_hold_object_heights() {
+        let shaped = folio_text::shape(&Paragraph {
+            text: "\u{FFFC}".into(),
+            segments: EcoVec::from([Segment {
+                range: 0..3,
+                kind: SegmentKind::Object,
+                lang: None,
+                hyphenate: false,
+            }]),
+        });
+        let input = |ascent: f64| ParagraphInput {
+            shaped: &shaped,
+            style: ParagraphStyle {
+                leading: Abs::pt(2.0),
+                indent: Abs::zero(),
+                align: super::super::Align::Start,
+                justify: false,
+                protrusion: false,
+                font_size: Abs::pt(10.0),
+            },
+            segments: EcoVec::from([SegmentMetrics {
+                size: Abs::pt(10.0),
+                tracking: Abs::zero(),
+                ascent: Abs::pt(8.0),
+                descent: Abs::pt(2.0),
+            }]),
+            objects: EcoVec::from([ObjectMetrics {
+                width: Abs::pt(20.0),
+                ascent: Abs::pt(ascent),
+                descent: Abs::pt(3.0),
+                shift: Abs::zero(),
+            }]),
+        };
+        let slots = [LineSlot {
+            offset: Abs::zero(),
+            width: Abs::pt(100.0),
+        }];
+        let cache = Cache::new();
+        let short = cache.layout(&input(5.0), &slots, None);
+        let tall = cache.layout(&input(30.0), &slots, None);
+        assert_eq!(cache.stats(), Stats { hits: 0, misses: 2 });
+        assert_eq!(short.lines[0].ascent, Abs::pt(8.0));
+        assert_eq!(tall.lines[0].ascent, Abs::pt(30.0));
+        assert_eq!(tall.lines[0].descent, Abs::pt(3.0));
+        assert_eq!(tall.lines[0].width, Abs::pt(20.0));
+        cache.layout(&input(30.0), &slots, None);
+        assert_eq!(cache.stats().hits, 1);
+    }
 
     /// Hyphens that no layout asks for are forgotten like paragraphs, so
     /// that the fonts they hold are not kept for ever.

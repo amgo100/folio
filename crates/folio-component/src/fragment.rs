@@ -118,6 +118,27 @@ pub enum FragmentItem {
         /// The source node the shape came from.
         source: SourceRef,
     },
+    /// The box of content that is not text, such as inline maths, an
+    /// image or a display (SPEC §7.2, §8.2), positioned by its top-left
+    /// corner. Layout reserves its space; what it shows is drawn by the
+    /// stage that lays its content out, and a writer draws an object
+    /// whose content is not laid out yet as an empty frame.
+    Object(ObjectBox),
+}
+
+/// The box of an object (SPEC §7.2): content that is not text, laid out by
+/// its own stage and placed by layout like a glyph in a line or a block in
+/// the flow.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct ObjectBox {
+    /// Its size.
+    pub size: Size,
+    /// Its baseline, from its top: where it sits on the baseline of the
+    /// line it is in. The height of a block object.
+    pub baseline: Abs,
+    /// The element instance it is the box of; its source is the element's
+    /// node, as glyphs and shapes name theirs.
+    pub location: Location,
 }
 
 /// The regions a flow is laid out into: the current one, the ones that

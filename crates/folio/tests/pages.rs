@@ -136,6 +136,7 @@ fn strip(pages: &Pages) -> Pages {
                         shape: shape.clone(),
                         source: SourceRef::DETACHED,
                     },
+                    FragmentItem::Object(object) => FragmentItem::Object(object.clone()),
                 };
                 (*pos, item)
             })
@@ -162,7 +163,7 @@ fn runs(fragment: &Fragment, at: Point, out: &mut Vec<(Point, String)>) {
         match item {
             FragmentItem::Group(group) => runs(group, p, out),
             FragmentItem::Text(run) => out.push((p, run.text.to_string())),
-            FragmentItem::Shape { .. } => {}
+            FragmentItem::Shape { .. } | FragmentItem::Object(_) => {}
         }
     }
 }
@@ -514,7 +515,7 @@ fn shapes(fragment: &Fragment, out: &mut Vec<(Abs, Abs)>) {
         match item {
             FragmentItem::Group(group) => shapes(group, out),
             FragmentItem::Shape { .. } => out.push((fragment.size.width, fragment.size.height)),
-            FragmentItem::Text(_) => {}
+            FragmentItem::Text(_) | FragmentItem::Object(_) => {}
         }
     }
 }
@@ -854,7 +855,7 @@ fn a_paragraph_is_broken_at_the_width_of_the_region_it_starts_in() {
             match item {
                 FragmentItem::Group(group) => right(group, x + pos.x, out),
                 FragmentItem::Text(run) => *out = (*out).max(x + pos.x + run.width()),
-                FragmentItem::Shape { .. } => {}
+                FragmentItem::Shape { .. } | FragmentItem::Object(_) => {}
             }
         }
     }

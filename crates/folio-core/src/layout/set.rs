@@ -5,7 +5,9 @@
 use std::ops::Range;
 
 use ecow::{EcoString, EcoVec};
-use folio_component::{Abs, Em, FontId, FragmentItem, Glyph, GlyphRun, Paint, Point};
+use folio_component::{
+    Abs, Em, FontId, FragmentItem, Glyph, GlyphRun, ObjectBox, Paint, Point, Size,
+};
 use folio_text::{Item, ItemKind, Paragraph, Segment};
 
 use super::flow::{ParagraphInfo, em, glyphs};
@@ -63,7 +65,7 @@ pub(super) fn set_line(
         pen = runs.hyphen(info, segment_at(shows.end), shows, c, pen);
     }
 
-    for (piece, _) in shaped.visual_runs(line.range.clone()) {
+    for (piece, level) in shaped.visual_runs(line.range.clone()) {
         let range = piece.start..piece.end.min(line.content_end);
         if range.is_empty() {
             continue;
@@ -75,8 +77,24 @@ pub(super) fn set_line(
             continue;
         };
         let Some((item_glyphs, units_per_em)) = glyphs(&item.kind) else {
-            // Objects are zero wide until they are laid out; missing text
-            // is drawn as nothing.
+            // Objects without a size are as wide as nothing, and missing
+            // text is drawn as nothing.
+            if matches!(item.kind, ItemKind::Object) && !info.objects.is_empty() {
+                let tracking = info
+                    .segments
+                    .get(item.segment)
+                    .map_or(Abs::zero(), |paint| paint.tracking);
+                let mut at: Vec<usize> = text[range.clone()]
+                    .char_indices()
+                    .map(|(i, _)| range.start + i)
+                    .collect();
+                if level % 2 == 1 {
+                    at.reverse();
+                }
+                for at in at {
+                    pen = runs.object(info, at, tracking, pen);
+                }
+            }
             continue;
         };
         let Some(paint) = info.segments.get(item.segment) else {
@@ -313,6 +331,30 @@ impl Runs<'_> {
                 glyphs,
             }),
         ));
+    }
+
+    /// Places the object whose character is at byte `at` of the
+    /// paragraph's text at `pen`, if it has a size, and returns the pen
+    /// after it and its tracking.
+    fn object(&mut self, info: &ParagraphInfo, at: usize, tracking: Abs, pen: Abs) -> Abs {
+        let Ok(i) = info.objects.binary_search_by_key(&at, |o| o.at) else {
+            return pen;
+        };
+        let object = &info.objects[i];
+        let Some(m) = object.metrics else {
+            return pen;
+        };
+        self.flush();
+        let top = self.baseline - m.shift - m.ascent;
+        self.out.push((
+            Point::new(pen, top),
+            FragmentItem::Object(ObjectBox {
+                size: Size::new(m.width, m.ascent + m.descent),
+                baseline: m.ascent,
+                location: object.location,
+            }),
+        ));
+        pen + m.width + tracking
     }
 
     /// Sets a hyphen `c` of segment `segment` at `pen`, showing the bytes
