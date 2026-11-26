@@ -41,6 +41,16 @@ pub(crate) fn decode(image: &Image) -> Option<Decoded> {
     }
 }
 
+/// The most pixels an image is decoded with, as the core reads images
+/// (`folio_core::image::MAX_PIXELS`): a larger one is not drawn, as
+/// decoding it could take more memory than the machine has.
+const MAX_PIXELS: u64 = 8_192 * 8_192;
+
+/// Whether an image of a size may be decoded.
+fn fits(width: u32, height: u32) -> bool {
+    u64::from(width) * u64::from(height) <= MAX_PIXELS
+}
+
 /// Straight RGBA pixels and their size.
 struct Rgba {
     width: u32,
@@ -67,6 +77,10 @@ fn png_rgba(bytes: &[u8]) -> Option<Rgba> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;
+    let info = reader.info();
+    if !fits(info.width, info.height) {
+        return None;
+    }
     let mut buf = vec![0; reader.output_buffer_size()?];
     let info = reader.next_frame(&mut buf).ok()?;
     let buf = &buf[..info.buffer_size()];
@@ -96,6 +110,11 @@ fn jpeg_rgba(bytes: &[u8]) -> Option<Rgba> {
     use zune_jpeg::zune_core::options::DecoderOptions;
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), options);
+    decoder.decode_headers().ok()?;
+    let (width, height) = decoder.dimensions()?;
+    if !fits(width as u32, height as u32) {
+        return None;
+    }
     let data = decoder.decode().ok()?;
     let info = decoder.info()?;
     Some(Rgba {
@@ -108,6 +127,9 @@ fn jpeg_rgba(bytes: &[u8]) -> Option<Rgba> {
 fn webp_rgba(bytes: &[u8]) -> Option<Rgba> {
     let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).ok()?;
     let (width, height) = decoder.dimensions();
+    if !fits(width, height) {
+        return None;
+    }
     let mut buf = vec![0; decoder.output_buffer_size()?];
     decoder.read_image(&mut buf).ok()?;
     let data = if decoder.has_alpha() {
@@ -161,7 +183,7 @@ fn gif_rgba(bytes: &[u8]) -> Option<Rgba> {
 }
 
 fn svg_tree(bytes: &[u8]) -> Option<Arc<usvg::Tree>> {
-    usvg::Tree::from_data(bytes, &usvg::Options::default())
+    usvg::Tree::from_data(bytes, &svg_options())
         .ok()
         .map(Arc::new)
 }
@@ -268,6 +290,18 @@ fn base64(bytes: &[u8], out: &mut String) {
             }
         }
     }
+}
+
+/// How SVG is parsed, as the core parses it
+/// (`folio_core::image::svg_options`): without fonts, and with images only
+/// from `data:` URLs, so that a drawing reads no file.
+fn svg_options() -> usvg::Options<'static> {
+    let mut options = usvg::Options::default();
+    options.image_href_resolver = usvg::ImageHrefResolver {
+        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+        resolve_string: Box::new(|_, _| None),
+    };
+    options
 }
 
 #[cfg(test)]

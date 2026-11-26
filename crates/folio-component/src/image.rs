@@ -64,17 +64,53 @@ impl ImageFormat {
     }
 }
 
-/// Whether a file looks like SVG: an `<svg` tag within its first kilobyte
-/// (after a byte order mark, an XML declaration, comments or a doctype),
-/// gzip-compressed SVG aside.
+/// Whether a file looks like SVG: after a byte order mark, white space,
+/// and the XML prologue (declaration, processing instructions, comments
+/// and a doctype, with its internal subset), its first element is `svg`,
+/// with or without a prefix. Gzip-compressed SVG is not read.
 fn is_svg(bytes: &[u8]) -> bool {
-    let head = &bytes[..bytes.len().min(1024)];
-    let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
-    let start = head.iter().position(|b| !b.is_ascii_whitespace());
-    if !start.is_some_and(|i| head[i] == b'<') {
-        return false;
+    let mut rest = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    loop {
+        rest = rest.trim_ascii_start();
+        if rest.starts_with(b"<?") {
+            rest = after(rest, b"?>");
+        } else if rest.starts_with(b"<!--") {
+            rest = after(rest, b"-->");
+        } else if rest.starts_with(b"<!") {
+            // A doctype, whose internal subset in brackets may hold `>`.
+            let mut depth = 0usize;
+            let end = rest.iter().position(|&b| {
+                match b {
+                    b'[' => depth += 1,
+                    b']' => depth = depth.saturating_sub(1),
+                    b'>' if depth == 0 => return true,
+                    _ => {}
+                }
+                false
+            });
+            rest = end.map_or(&[], |i| &rest[i + 1..]);
+        } else {
+            break;
+        }
     }
-    head.windows(4).any(|w| w == b"<svg")
+    let Some(tag) = rest.strip_prefix(b"<") else {
+        return false;
+    };
+    let name_end = tag
+        .iter()
+        .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/'))
+        .unwrap_or(tag.len());
+    let name = &tag[..name_end];
+    let local = name.rsplit(|&b| b == b':').next().unwrap_or(name);
+    local == b"svg"
+}
+
+/// The bytes after the first `end` in `bytes`, or none.
+fn after<'a>(bytes: &'a [u8], end: &[u8]) -> &'a [u8] {
+    bytes
+        .windows(end.len())
+        .position(|w| w == end)
+        .map_or(&[], |i| &bytes[i + end.len()..])
 }
 
 /// An image file, cheap to clone: its bytes and format. Two images are
@@ -197,6 +233,13 @@ mod tests {
             ImageFormat::detect(b"<?xml version=\"1.0\"?>\n<svg xmlns=\"\"/>"),
             Some(ImageFormat::Svg)
         );
+        let long = format!(
+            "<?xml version=\"1.0\"?>\n<!-- {} -->\n<!DOCTYPE svg [<!ENTITY a \"<b>\">]>\n<svg:svg xmlns:svg=\"\"/>",
+            "licence ".repeat(400)
+        );
+        assert_eq!(ImageFormat::detect(long.as_bytes()), Some(ImageFormat::Svg));
+        assert_eq!(ImageFormat::detect(b"<html><body><svg/>"), None);
+        assert_eq!(ImageFormat::detect(b"<svgx/>"), None);
         assert_eq!(ImageFormat::detect(b"<html><body>"), None);
         assert_eq!(ImageFormat::detect(b"hello"), None);
         assert_eq!(ImageFormat::detect(b""), None);

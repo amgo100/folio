@@ -136,14 +136,18 @@ fn world(files: &[(&str, &str)]) -> World {
 }
 
 /// Whether a diagnostic says only that a feature is not laid out or
-/// implemented yet, which the document model does not depend on.
+/// implemented yet, or why the PDF does not claim PDF/UA-1 (the spec's
+/// example has an image without alt text), which the document model does
+/// not depend on.
 fn not_yet(diagnostic: &folio::Diagnostic) -> bool {
     let message = diagnostic.message.as_str();
     diagnostic.severity == folio::Severity::Warning
         && (message.ends_with("is not laid out yet, so the output leaves it out")
             || message.ends_with("are not laid out yet, so the output leaves them out")
             || message.ends_with("is not laid out yet, so the output shows at most its box")
-            || message.ends_with("is not implemented yet, so this declaration has no effect"))
+            || message.ends_with("is not implemented yet, so this declaration has no effect")
+            || message.ends_with("so it has no effect")
+            || message.starts_with("the PDF does not claim PDF/UA-1"))
 }
 
 /// The document tree of the exam variant; panics with the diagnostics if

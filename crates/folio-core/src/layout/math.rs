@@ -283,25 +283,34 @@ fn images(db: &dyn Db, build: Build<'_>, collected: &crate::text::Collected) -> 
             let Some(image) = &object.image else {
                 continue;
             };
-            let size = image_size(image, slot.width);
-            let metrics = ObjectMetrics {
-                width: size.width,
-                ascent: size.height,
-                descent: Abs::zero(),
-                shift: Abs::zero(),
-                binds: false,
-                after: None,
-            };
-            let item = FragmentItem::Image(ImageBox {
-                size,
-                image: image.loaded.image.clone(),
-                location: object.location,
-            });
-            let items = EcoVec::from([(Point::new(Abs::zero(), -size.height), item)]);
-            images.insert(object.location, LaidImage { metrics, items });
+            images.insert(
+                object.location,
+                laid_image(image, object.location, slot.width),
+            );
         }
     }
     Some(Images(images))
+}
+
+/// An image of the element instance at `location` sized in lines `line`
+/// wide.
+pub(super) fn laid_image(image: &TextImage, location: Location, line: Abs) -> LaidImage {
+    let size = image_size(image, line);
+    let metrics = ObjectMetrics {
+        width: size.width,
+        ascent: size.height,
+        descent: Abs::zero(),
+        shift: Abs::zero(),
+        binds: false,
+        after: None,
+    };
+    let item = FragmentItem::Image(ImageBox {
+        size,
+        image: image.loaded.image.clone(),
+        location,
+    });
+    let items = EcoVec::from([(Point::new(Abs::zero(), -size.height), item)]);
+    LaidImage { metrics, items }
 }
 
 /// The size of an image in lines `line` wide, as [`images`] gives it.

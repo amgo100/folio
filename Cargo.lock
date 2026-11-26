@@ -642,17 +642,22 @@ dependencies = [
  "folio-math",
  "folio-syntax",
  "folio-text",
+ "gif",
  "hayro-syntax",
+ "image-webp",
  "imagesize",
  "indexmap",
  "libm",
+ "png",
  "proptest",
+ "roxmltree 0.21.2",
  "salsa",
  "semver",
  "serde_json",
  "stacker",
  "toml",
  "usvg",
+ "zune-jpeg",
 ]
 
 [[package]]

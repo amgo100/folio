@@ -289,3 +289,57 @@ fn a_changed_image_changes_its_page() {
     assert_eq!(images(&world)[0], ("PNG", 180.0, 90.0));
     assert_eq!(after.changed(&before), [0]);
 }
+
+/// In a region narrower than the body, as floats and other masters will
+/// make, an image sized by its lines is sized by the region's: `width: auto`
+/// narrows to it, and a ratio is of it.
+#[test]
+fn images_in_a_narrower_region() {
+    use folio::layout::{PageCache, Regions};
+    let world = world(
+        true,
+        "#image(\"a.pdf\", alt: \"d\")\n\n#image(\"a.svg\", alt: \"s\", width: 50%)\n",
+    );
+    let line = 80.0 / 25.4 * 72.0;
+    let narrow = Abs::pt(line - 100.0);
+    let width = |_: usize| narrow;
+    let regions = Regions {
+        width: Some(&width),
+        ..Regions::default()
+    };
+    let styled = folio::styles(&world, Target::Pdf, None).unwrap().unwrap();
+    let lines = folio::lines(&world, Target::Pdf, None).unwrap().unwrap();
+    let text = folio::text(&world, Target::Pdf, None).unwrap().unwrap();
+    let fonts = folio::fonts(&world).unwrap();
+    let pages = folio::layout::paginate(
+        &text,
+        &lines,
+        &styled,
+        &fonts,
+        &folio::layout::Cache::new(),
+        &PageCache::new(),
+        regions,
+    );
+    let mut sizes = Vec::new();
+    fn walk(fragment: &folio::Fragment, out: &mut Vec<(f64, f64)>) {
+        for (_, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(group) => walk(group, out),
+                FragmentItem::Image(image) => {
+                    out.push((round(image.size.width), round(image.size.height)))
+                }
+                _ => {}
+            }
+        }
+    }
+    for page in &pages.pages {
+        walk(&page.fragment, &mut sizes);
+    }
+    let narrow = narrow.to_pt();
+    let close = |a: f64, b: f64| (a - b).abs() < 0.02;
+    assert!(
+        close(sizes[0].0, narrow) && close(sizes[0].1, narrow / 2.0),
+        "{sizes:?}"
+    );
+    assert!(close(sizes[1].0, narrow / 2.0), "{sizes:?}");
+}

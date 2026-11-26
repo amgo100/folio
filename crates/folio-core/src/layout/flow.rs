@@ -50,7 +50,7 @@ use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
 use super::master::{BlockBox, BreakBefore, length};
-use super::math::{Display, Maths, display_content};
+use super::math::{Display, Maths, display_content, laid_image};
 use super::page::{SizeBlock, SizeObject};
 use super::paragraph::{
     LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
@@ -58,7 +58,7 @@ use super::paragraph::{
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{Text, TextBlock, TextFlow, TextSource};
+use crate::text::{Text, TextBlock, TextFlow, TextImage, TextSource};
 
 /// The cost of a break that leaves a widow or an orphan (TeX's
 /// `\widowpenalty` and `\clubpenalty`).
@@ -176,8 +176,11 @@ pub(super) struct InlineObject {
     /// Its size; `None` for an object whose content is not laid out yet.
     pub metrics: Option<ObjectMetrics>,
     /// What it draws, from the start of its baseline: a chunk of an inline
-    /// formula. `None` for an object drawn as its box.
+    /// formula or an image. `None` for an object drawn as its box.
     pub content: Option<EcoVec<(Point, FragmentItem)>>,
+    /// For an image, the image, which is sized again in lines of another
+    /// width, as its size can depend on theirs.
+    pub image: Option<TextImage>,
 }
 
 /// The sizes of a paragraph's objects as the paragraph builder reads them:
@@ -274,11 +277,30 @@ impl ParagraphInfo {
             offset: self.slot.offset,
             width: (self.slot.width + (width - body)).max(Abs::zero()),
         };
+        // Images are sized again in lines of the new width.
+        let objects: EcoVec<InlineObject> = if self.objects.iter().any(|o| o.image.is_some()) {
+            self.objects
+                .iter()
+                .map(|o| match &o.image {
+                    Some(image) => {
+                        let laid = laid_image(image, o.location, slot.width);
+                        InlineObject {
+                            metrics: Some(laid.metrics),
+                            content: Some(laid.items),
+                            ..o.clone()
+                        }
+                    }
+                    None => o.clone(),
+                })
+                .collect()
+        } else {
+            self.objects.clone()
+        };
         let input = ParagraphInput {
             shaped: &self.shaped,
             style: self.style,
             segments: self.metrics.clone(),
-            objects: object_metrics(&self.objects),
+            objects: object_metrics(&objects),
         };
         let layout = caches.cache.layout(
             &input,
@@ -293,6 +315,7 @@ impl ParagraphInfo {
             layout,
             slot,
             segments,
+            objects,
             ..(**self).clone()
         };
         (caches.shared.paragraph(info, caches.now), true)
@@ -932,6 +955,11 @@ impl Builder<'_> {
                             None
                         } else {
                             math.map(|(_, items)| items.clone())
+                        },
+                        image: if hook.is_some() {
+                            None
+                        } else {
+                            o.image.clone()
                         },
                     }
                 })

@@ -237,16 +237,17 @@ impl Properties {
 /// declaration sets it to `value` (`None` for a render template): the
 /// feature, for a warning that the declaration has no effect (SPEC §7.9).
 /// Its initial value, and `placement: here`, which is where layout puts
-/// every float, ask for nothing, and `width` is not listed, as images read
-/// it (the text stage warns of it on other elements), nor does `marker-position: inside`, which
+/// every float, ask for nothing, nor does `marker-position: inside`, which
 /// is where the text stage sets every marker. Each entry goes with the work
 /// that reads the property: hanging markers with layout, `display`
 /// with variants and visibility (SPEC §6.3), `template` with render
 /// templates (§5.3), and the others with pages and running elements
 /// (§7.1, §7.8), the baseline grid (§7.3), tables (§7.4), floats (§7.5),
-/// margin notes (§7.6) and text wrap (§7.7). Properties of other targets (slides, animation,
-/// export) and of drawings are not listed: a static or PDF build ignores
-/// them by design.
+/// margin notes (§7.6) and text wrap (§7.7). Properties of other targets
+/// (slides, animation, export) and of drawings are not listed: a static or
+/// PDF build ignores them by design. Nor is `width`: images read it, and
+/// the text stage warns of it on the elements that do not
+/// ([`crate::text`]).
 pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Option<&'static str> {
     if property.name.namespace.is_some() {
         return None;

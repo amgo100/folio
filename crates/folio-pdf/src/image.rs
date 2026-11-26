@@ -87,7 +87,7 @@ pub(crate) fn prepare(image: &Image, embed: bool) -> Result<Drawable, EcoString>
 /// An SVG drawing parsed. Text in it is not set: no fonts are given to
 /// `usvg`, so that output does not depend on the fonts of the machine.
 fn svg(bytes: &[u8]) -> Result<Drawable, usvg::Error> {
-    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default())?;
+    let tree = usvg::Tree::from_data(bytes, &svg_options())?;
     Ok(Drawable::Svg(Arc::new(tree)))
 }
 
@@ -107,4 +107,16 @@ pub(crate) fn draw(surface: &mut Surface<'_>, drawable: &Drawable, x: f32, y: f3
         Drawable::Pdf(pdf) => surface.draw_pdf_page(pdf, size, 0),
     }
     surface.pop();
+}
+
+/// How SVG is parsed, as the core parses it
+/// (`folio_core::image::svg_options`): without fonts, and with images only
+/// from `data:` URLs, so that a drawing reads no file.
+fn svg_options() -> usvg::Options<'static> {
+    let mut options = usvg::Options::default();
+    options.image_href_resolver = usvg::ImageHrefResolver {
+        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+        resolve_string: Box::new(|_, _| None),
+    };
+    options
 }

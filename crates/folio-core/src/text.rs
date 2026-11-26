@@ -478,7 +478,9 @@ impl Collector<'_> {
     /// Collects the paragraphs of an element and its descendants, in a
     /// block of the element's.
     fn element(&mut self, element: &Element, node: &StyledNode) {
-        self.check_width(element, &node.style);
+        if !is_builtin(&element.name, "image") {
+            self.check_width(element, &node.style);
+        }
         self.open(&node.style, element, None);
         let owner = self.own(element);
         // A marker that no paragraph of the element takes is dropped with
@@ -853,21 +855,26 @@ impl Collector<'_> {
 
     /// Warns, once per build and element, that an element other than an
     /// image has a `width`, which only images read so far (SPEC §7.2,
-    /// §7.9): the widths of blocks come with the work on page layout.
+    /// §7.9): the widths of blocks come with the work on page layout. The
+    /// style stage cannot tell, as it reports a declaration without knowing
+    /// which elements it applies to.
     fn check_width(&mut self, element: &Element, style: &ComputedStyle) {
         let width = style.value(self.props, self.props.builtin("width"));
         if width.is_none_or(|w| *w == Value::Auto) {
             return;
         }
+        // Every target: no writer reads it either.
         let name = &element.name;
-        self.report_once(
-            eco_format!("width:{name}"),
-            Diagnostic::warning(
-                element.span,
-                eco_format!("`width` is not implemented yet for `{name}`, so it has no effect"),
-            )
-            .with_hint("only images are sized by `width` so far"),
-        );
+        if self.reported.insert(eco_format!("width:{name}")) {
+            diag::report(
+                self.db,
+                Diagnostic::warning(
+                    element.span,
+                    eco_format!("`width` is not implemented yet for `{name}`, so it has no effect"),
+                )
+                .with_hint("only images are sized by `width` so far"),
+            );
+        }
     }
 
     /// A new paragraph, which starts with the markers waiting for one.

@@ -62,10 +62,10 @@ libm = "0.2.16"
 # synchronous, without an async runtime.
 lsp-server = "0.10.0"
 lsp-types = "0.97.0"
-# PDF output (SPEC §11.1): tagging, PDF/UA, PDF/A and font subsetting. No
-# `simple-text`: Folio shapes text itself. `raster-images` decodes PNG,
-# WebP and GIF and passes JPEG through; `pdf` embeds PDF figures as form
-# XObjects.
+# PDF output (SPEC §11.1): tagging, PDF/UA, PDF/A and font subsetting.
+# Without the default `simple-text`, as Folio shapes text itself.
+# `raster-images` decodes PNG, WebP and GIF and passes JPEG through; `pdf`
+# embeds PDF figures as form XObjects.
 krilla = { version = "0.8.2", default-features = false, features = ["raster-images", "pdf"] }
 # SVG figures as vector paths in PDF (SPEC §11.1), through `usvg`.
 krilla-svg = "0.8.1"
@@ -73,8 +73,10 @@ krilla-svg = "0.8.1"
 # krilla-svg uses), and drawn into page images; PDF figures read for their
 # page size, and converted to SVG where PDF/UA forbids embedding them;
 # the pixel size of raster images; and the decoders of the formats that
-# `png` does not read, for page images. All are the versions krilla uses.
+# `png` does not read, which check images and draw page images. All are
+# the versions krilla uses. `roxmltree` finds text in SVG drawings.
 usvg = "0.47.0"
+roxmltree = "0.21.1"
 resvg = { version = "0.47.0", default-features = false }
 hayro-syntax = "0.7.2"
 hayro-svg = { version = "0.7.0", default-features = false }
