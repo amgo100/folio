@@ -302,7 +302,8 @@ fn markup_becomes_a_content_tree() {
     );
     assert_eq!(
         repr("`code` $x^2$\n```rust\nfn main() {}\n```"),
-        "[raw(text: \"code\", block: false), space, math(text: \"x^2\", block: false), \
+        "[raw(text: \"code\", block: false), space, \
+         math(block: false, tree: formula([attach([x], sup: [num(2)])])), \
          space, raw(text: \"fn main() {}\", block: true, lang: \"rust\")]"
     );
     // Values in markup show as text; content blocks and functions join.
@@ -1239,7 +1240,7 @@ fn component_elements_make_instances() {
     assert_eq!(
         content.repr(),
         "[exam.question(marks: 3, \
-         body: [\"Find\", space, math(text: \"v\", block: false), \".\"], \
+         body: [\"Find\", space, math(block: false, tree: formula([v])), \".\"], \
          override@pptx: (space-before: 24.0pt)) <q:1>, space, \
          exam.question(marks: 1, body: [\"Why?\"]), space]"
     );

@@ -12,6 +12,7 @@ folio-component.workspace = true
 folio-syntax.workspace = true
 folio-fonts.workspace = true
 folio-text.workspace = true
+folio-math.workspace = true
 ecow.workspace = true
 indexmap.workspace = true
 libm.workspace = true

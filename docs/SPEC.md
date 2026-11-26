@@ -76,6 +76,7 @@ Folio is for documents whose structure matters and whose outputs must stay consi
 | Flow state | Everything the page builder carries from one page to the next (§2.3) |
 | Display list | The drawing commands for one fragment, used by the preview, the editor and the live renderer |
 | Span map | The mapping from glyphs and boxes in a fragment back to source positions |
+| Math tree | The semantic tree that evaluation makes of an equation: lines of rows of nodes such as fractions, attachments, n-ary operators, roots, matrices, accents and vectors. Layout, the OMML writer and MathML read it (§8) |
 | Part | The content of an element's slot, or of a content field other than its body, as a node that selectors name like an element (`example > solution`) |
 
 ## 2. Architecture
@@ -125,7 +126,7 @@ Components take part in every stage through the extension points of §3.
 | `folio-component` | Extension-point traits, component registry, manifests, conformance-test API (the suite itself runs as integration tests (tests/) with folio as a dev-dependency); the interface types shared with layout and rendering, such as Fragment and Regions | folio-text, folio-draw (glyph runs and primitives used by fragments) |
 | `folio-text` | Shaping, bidi, hyphenation, line-break opportunities | `harfrust`, `unicode-bidi`, `icu_segmenter`, `hypher` |
 | `folio-fonts` | Font discovery, loading, metrics; subsetting for DOCX and PPTX font embedding (§2.5), since krilla subsets fonts for PDF | `fontdb`, `skrifa`, `subsetter` |
-| `folio-math` | Math parser and OpenType MATH layout, adapted from Typst's math layout (Apache-2.0) | `ttf-parser` |
+| `folio-math` | The math tree (§8.1), which evaluation builds from native and LaTeX input, and OpenType MATH layout, adapted from Typst's math layout (Apache-2.0) | `unicode-math-class`, `ttf-parser` |
 | `folio-draw` | Graphic primitives, paths, label placement | `kurbo` |
 | `folio-layout` | Paragraph and page builders, baseline grid, tables, floats, notes, wrap, footnotes | `folio-text`, `folio-math`, `folio-draw`, folio-component (it calls layout containers) |
 | `folio-anim` | Step model, timelines, effects | — |
@@ -796,7 +797,9 @@ Math is parsed into a semantic math tree and laid out with the font's OpenType M
 
 - **Native syntax**, readable without backslashes: `$v^2 = u^2 + 2 a s$`, `$F = (m v - m u) / t$`, `$sum_(i=1)^n x_i$`, `$vec(F)$`, `$integral_0^T P(t) dif t$`.
 - **LaTeX mode** for pasted material: `$:tex \frac{1}{2} m v^2$`, or `math-input: tex` for a whole project. The formula runs to the first `$` not escaped as `\$`, and is displayed when a space precedes that `$`. It covers the amsmath core (fractions, roots, scripts, matrices, `align`, `cases`, delimiters, accents, operators, `\text`); unknown commands are errors. The colon cannot start an identifier, so the mode never collides with native math.
-- **Display and alignment**: display math with inner spaces; multi-line equations with `\` line breaks and `&` alignment points; per-line numbers and labels (`<eq:suvat>`).
+- **Display and alignment**: display math with inner spaces; multi-line equations with `\` line breaks and `&` alignment points; per-line numbers and labels (`<eq:suvat>`). A line break splits an equation into lines only at its top level, and an alignment point stands only at the top level of a line or of a case of `cases(..)`; anywhere else either is an error. A label ends its line: `<name>` is a label where only spaces stand between it and a line break, the closing `$` or the end of the text, and elsewhere `<` is less-than or starts a shorthand such as `<=`. Line labels are labels of the document, checked and referred to like any other.
+- **Names**: a single letter is a variable. A longer name is first looked up in the script's own bindings, so `#let` bindings and a closure's parameters can be used in equations, and then among the names of math: symbols with dotted modifiers in any order (`alpha`, `arrow.r.long`), operators set upright (`sin`, `lim`), the differential `dif`, and functions (`frac`, `sqrt`, `root`, `vec`, `hat`, `mat`, `cases`, `abs`, `norm`, accents such as `tilde`, decorations such as `overbrace`, alphabets such as `bold` and `bb`). A name that none defines is an error whose hint writes a product of variables with spaces (`a s`) and text in quotes (`"as"`). A name of math that is called but is not a function, such as `sin(x)`, is set before its arguments in parentheses.
+- **Embedded values**: `#` embeds a value. A formula is placed as its row; a number as a number; a string, or content that is only text, as upright text; other values are errors. A script's function called in an equation receives each argument as an inline formula, or as its value for a string or `#` code, and its result is placed as an embedded value is.
 - **Quantities**: `qty(9.81, "m s^-2")` with upright units, thin-space digit grouping and a configurable decimal marker; `unit("kg m^2 s^-1")`; `num(6.02e23)`; uncertainties `qty(2.31, "m", pm: 0.02)`. Vectors `vec(a)` and unit vectors `hat(i)` are semantic; whether a vector is bold or arrowed is a stylesheet choice (`math.vector { math-style: bold-upright; }`).
 
 ### 8.2 Layout

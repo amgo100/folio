@@ -609,6 +609,7 @@ dependencies = [
  "ecow",
  "folio-component",
  "folio-fonts",
+ "folio-math",
  "folio-syntax",
  "folio-text",
  "indexmap",
@@ -643,6 +644,15 @@ dependencies = [
  "lsp-types",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "folio-math"
+version = "0.0.0"
+dependencies = [
+ "ecow",
+ "folio-syntax",
+ "unicode-math-class",
 ]
 
 [[package]]

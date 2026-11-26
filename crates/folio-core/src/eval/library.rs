@@ -1294,3 +1294,162 @@ mod tests {
         }
     }
 }
+
+/// What a name means in an equation, where the script's own bindings do
+/// not define it (SPEC §8.1): a symbol, an operator, the differential, or
+/// a math function.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub(crate) enum MathItem {
+    /// A symbol: `alpha`, `sum`, `arrow.r`.
+    Symbol(char),
+    /// A named operator, set upright: `sin`, and `lim`, whose limits go
+    /// below and above it in display style.
+    Operator {
+        /// Whether its attachments are limits.
+        limits: bool,
+    },
+    /// The differential of `dif t`.
+    Differential,
+    /// A function that builds a node of the math tree when called:
+    /// `frac(a, b)`.
+    Func(MathFunc),
+}
+
+/// The functions of native math, each building a node of the math tree.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub(crate) enum MathFunc {
+    /// `frac(num, den)`.
+    Frac,
+    /// `sqrt(x)`.
+    Sqrt,
+    /// `root(index, x)`.
+    Root,
+    /// `vec(F)`, a vector.
+    Vector,
+    /// `hat(i)`, a unit vector.
+    UnitVector,
+    /// `mat(a, b; c, d, delim: "[")`.
+    Matrix,
+    /// `cases(a, b)`.
+    Cases,
+    /// A body between fixed delimiters: `abs(x)`, `norm(x)`, `floor(x)`,
+    /// `ceil(x)`.
+    Fence(char, char),
+    /// `accent(x, "~")`: an accent given as an argument.
+    Accent,
+    /// An accent by name, as its combining character: `tilde(x)`.
+    NamedAccent(char),
+    /// A line or brace over or under a body: `overline(x)`,
+    /// `underbrace(x, n)`.
+    Decoration(folio_math::DecorationKind),
+    /// A body in another alphabet: `bold(x)`.
+    Styled(folio_math::MathVariant),
+}
+
+/// The functions of native math, by name.
+const MATH_FUNCS: &[(&str, MathFunc)] = {
+    use folio_math::DecorationKind as D;
+    use folio_math::MathVariant as V;
+    &[
+        ("frac", MathFunc::Frac),
+        ("sqrt", MathFunc::Sqrt),
+        ("root", MathFunc::Root),
+        ("vec", MathFunc::Vector),
+        ("hat", MathFunc::UnitVector),
+        ("mat", MathFunc::Matrix),
+        ("cases", MathFunc::Cases),
+        ("abs", MathFunc::Fence('|', '|')),
+        ("norm", MathFunc::Fence('‖', '‖')),
+        ("floor", MathFunc::Fence('⌊', '⌋')),
+        ("ceil", MathFunc::Fence('⌈', '⌉')),
+        ("accent", MathFunc::Accent),
+        ("grave", MathFunc::NamedAccent('\u{300}')),
+        ("acute", MathFunc::NamedAccent('\u{301}')),
+        ("tilde", MathFunc::NamedAccent('\u{303}')),
+        ("macron", MathFunc::NamedAccent('\u{304}')),
+        ("breve", MathFunc::NamedAccent('\u{306}')),
+        ("dot", MathFunc::NamedAccent('\u{307}')),
+        ("dot.double", MathFunc::NamedAccent('\u{308}')),
+        ("dot.triple", MathFunc::NamedAccent('\u{20DB}')),
+        ("circle", MathFunc::NamedAccent('\u{30A}')),
+        ("caron", MathFunc::NamedAccent('\u{30C}')),
+        ("arrow", MathFunc::NamedAccent('\u{20D7}')),
+        ("overline", MathFunc::Decoration(D::Overline)),
+        ("underline", MathFunc::Decoration(D::Underline)),
+        ("overbrace", MathFunc::Decoration(D::Overbrace)),
+        ("underbrace", MathFunc::Decoration(D::Underbrace)),
+        ("overbracket", MathFunc::Decoration(D::Overbracket)),
+        ("underbracket", MathFunc::Decoration(D::Underbracket)),
+        ("upright", MathFunc::Styled(V::Upright)),
+        ("italic", MathFunc::Styled(V::Italic)),
+        ("bold", MathFunc::Styled(V::Bold)),
+        ("cal", MathFunc::Styled(V::Calligraphic)),
+        ("frak", MathFunc::Styled(V::Fraktur)),
+        ("bb", MathFunc::Styled(V::DoubleStruck)),
+        ("sans", MathFunc::Styled(V::SansSerif)),
+        ("mono", MathFunc::Styled(V::Monospace)),
+    ]
+};
+
+/// The named operators: upright names, and whether their attachments are
+/// limits.
+const MATH_OPERATORS: &[(&str, bool)] = &[
+    ("arccos", false),
+    ("arcsin", false),
+    ("arctan", false),
+    ("arg", false),
+    ("cos", false),
+    ("cosh", false),
+    ("cot", false),
+    ("coth", false),
+    ("csc", false),
+    ("deg", false),
+    ("det", true),
+    ("dim", false),
+    ("exp", false),
+    ("gcd", true),
+    ("hom", false),
+    ("inf", true),
+    ("ker", false),
+    ("lg", false),
+    ("lim", true),
+    ("liminf", true),
+    ("limsup", true),
+    ("ln", false),
+    ("log", false),
+    ("max", true),
+    ("min", true),
+    ("mod", false),
+    ("Pr", true),
+    ("sec", false),
+    ("sin", false),
+    ("sinh", false),
+    ("sup", true),
+    ("tan", false),
+    ("tanh", false),
+];
+
+/// What a name means in an equation (SPEC §8.1). A name that is both a
+/// function and a symbol, such as `dot`, is the function where it is
+/// `called` and the symbol elsewhere.
+pub(crate) fn math_item(name: &str, called: bool) -> Option<MathItem> {
+    let func = || {
+        MATH_FUNCS
+            .iter()
+            .find(|&&(n, _)| n == name)
+            .map(|&(_, func)| MathItem::Func(func))
+    };
+    if called && let Some(item) = func() {
+        return Some(item);
+    }
+    if name == "dif" {
+        return Some(MathItem::Differential);
+    }
+    if let Some(&(_, limits)) = MATH_OPERATORS.iter().find(|&&(n, _)| n == name) {
+        return Some(MathItem::Operator { limits });
+    }
+    if let Some(c) = folio_math::symbol(name) {
+        return Some(MathItem::Symbol(c));
+    }
+    func()
+}

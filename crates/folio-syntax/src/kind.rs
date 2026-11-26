@@ -719,7 +719,7 @@ impl SyntaxKind {
             Self::RawDelim => RawDelim, // none: opening backticks | code/markup: Raw
             Self::RawTrimmed => None,   // none
             Self::Link => Known(Markup),
-            Self::Label => Embeddable, // code/markup: expr
+            Self::Label => Embeddable, // code/markup/math: expr
             Self::Ref => Known(Markup),
             Self::RefMarker => Known(Markup),
             Self::Heading => Known(Markup),
