@@ -84,9 +84,9 @@ use folio_syntax::{DiagSpan, SubRange};
 pub use self::cache::{Cache, Stats};
 pub use self::flow::{KEEP, UNBREAKABLE, WIDOW};
 pub use self::master::{BlockBox, BreakBefore, PageMaster, Sides};
-pub(crate) use self::math::{math_face, math_settings};
 use self::math::maths;
 pub use self::math::{Display, LaidMath, MATH_FONT, Maths, Number};
+pub(crate) use self::math::{math_face, math_settings};
 pub use self::page::{
     FILL, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject, pages,
     paginate,

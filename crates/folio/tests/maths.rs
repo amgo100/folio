@@ -313,7 +313,9 @@ fn math_font_chooses_the_family_and_warns_of_what_it_cannot_use() {
     let (fallback, messages) = width("math { math-font: \"Nope Math\"; }\n");
     assert_eq!(fallback, newcm, "New Computer Modern Math sets it instead");
     assert!(
-        messages.iter().any(|m| m.contains("no family of `math-font`")),
+        messages
+            .iter()
+            .any(|m| m.contains("no family of `math-font`")),
         "{messages:?}"
     );
     let (_, messages) = width("math { math-font: \"Source Serif 4\"; }\n");

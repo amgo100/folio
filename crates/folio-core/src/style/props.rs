@@ -651,7 +651,9 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     prop(
         "math-font",
         list(Str),
-        Value::Array(EcoVec::from([Value::Str("New Computer Modern Math".into())])),
+        Value::Array(EcoVec::from([Value::Str(
+            "New Computer Modern Math".into(),
+        )])),
         Layout,
     );
     // How a vector is set: `math.vector { math-style: bold-upright; }`.

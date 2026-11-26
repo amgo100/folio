@@ -180,7 +180,11 @@ pub(super) fn maths(db: &dyn Db, build: Build<'_>) -> Option<Maths> {
                     diag::report(
                         db,
                         Diagnostic::warning(
-                            if glyph.span.is_detached() { m.span } else { glyph.span },
+                            if glyph.span.is_detached() {
+                                m.span
+                            } else {
+                                glyph.span
+                            },
                             eco_format!(
                                 "the math font {name} has no glyph for `{}`, so it is left out",
                                 glyph.text
