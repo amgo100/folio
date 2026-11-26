@@ -17,6 +17,7 @@ doc = false
 [dependencies]
 folio.workspace = true
 folio-lsp.workspace = true
+folio-preview.workspace = true
 folio-syntax.workspace = true
 clap.workspace = true
 ecow.workspace = true
