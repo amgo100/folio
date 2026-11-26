@@ -43,8 +43,10 @@ pub struct Cache {
     hits: AtomicU64,
     misses: AtomicU64,
     /// The glyphs of hyphens, by the font, features and language they are
-    /// set in, and the hyphen.
-    hyphens: Mutex<HashMap<HyphenKey, Hyphen>>,
+    /// set in, and the hyphen, with the clock when each was last asked for.
+    /// They are forgotten like paragraphs, so that the fonts they hold can
+    /// be dropped by the text cache too.
+    hyphens: Mutex<HashMap<HyphenKey, (Hyphen, u64)>>,
 }
 
 /// A hyphen in a font, with features and a language.
@@ -142,6 +144,7 @@ impl Cache {
             .collect();
         if now.is_multiple_of(8) {
             lock(&self.entries).retain(|_, entry| entry.used + MAX_AGE >= now);
+            lock(&self.hyphens).retain(|_, (_, used)| *used + MAX_AGE >= now);
         }
         out
     }
@@ -149,12 +152,14 @@ impl Cache {
     /// The glyphs of a hyphen `c` in a segment's font, features and
     /// language ([`hyphen_glyphs`]), shaped once per world.
     pub(super) fn hyphen(&self, segment: &Segment, c: char) -> Hyphen {
+        let now = self.clock.load(Ordering::Relaxed);
         let key = (segment.kind.clone(), segment.lang.clone(), c);
-        if let Some(found) = lock(&self.hyphens).get(&key) {
+        if let Some((found, used)) = lock(&self.hyphens).get_mut(&key) {
+            *used = now;
             return found.clone();
         }
         let glyphs = hyphen_glyphs(segment, c);
-        lock(&self.hyphens).insert(key, glyphs.clone());
+        lock(&self.hyphens).insert(key, (glyphs.clone(), now));
         glyphs
     }
 
@@ -169,6 +174,11 @@ impl Cache {
     /// The number of paragraphs held.
     pub fn len(&self) -> usize {
         lock(&self.entries).len()
+    }
+
+    /// The number of hyphens held.
+    pub fn hyphens(&self) -> usize {
+        lock(&self.hyphens).len()
     }
 
     /// Whether no paragraph is held.
@@ -190,4 +200,35 @@ impl Debug for Cache {
 /// whole: each insertion or removal is one call.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hyphens that no layout asks for are forgotten like paragraphs, so
+    /// that the fonts they hold are not kept for ever.
+    #[test]
+    fn forgets_hyphens() {
+        let cache = Cache::new();
+        let segment = |_| Segment {
+            range: 0..1,
+            kind: SegmentKind::Object,
+            lang: None,
+            hyphenate: true,
+        };
+        cache.hyphen(&segment(()), '-');
+        cache.hyphen(&segment(()), '\u{2010}');
+        assert_eq!(cache.hyphens(), 2);
+        for _ in 0..MAX_AGE {
+            cache.layout_all(&[]);
+            // One hyphen is asked for on every layout.
+            cache.hyphen(&segment(()), '-');
+        }
+        for _ in 0..8 {
+            cache.layout_all(&[]);
+            cache.hyphen(&segment(()), '-');
+        }
+        assert_eq!(cache.hyphens(), 1);
+    }
 }

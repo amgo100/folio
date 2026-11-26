@@ -1168,6 +1168,9 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 ### 12.2 Watch and preview
 
 - `folio watch` watches the project, debounces edits (10 ms), recompiles incrementally and serves a preview on localhost, protected by a random session token.
+- Loading and file tracking live in the library (`folio::loader`), shared by `folio build`, `folio watch` and the language server. The loader reads the files of the project as `folio build` does (§12.1) and maps the paths that file-system events name to updates of the `World`: a path that is gone is removed with everything under it, a directory is read again, `folio.toml` and `folio.lock` are parsed again and replace the world's only when valid, and a change in the font directory or the lockfile reads the fonts again. A file reached through a link inside the project is updated under the link's path too. Outputs are left out by the path they are written to, so a link that leads to one does not make it an input.
+- Every build lists the files it read or tried to read, with how it read them: content files, stylesheets, data files (`read`, `json`, `csv`, `toml`) and images. A file named but missing is listed, so creating it rebuilds. `folio watch` rebuilds when a listed file, the manifest, the lockfile or a font changes.
+- File ids are freed when a source is removed and given out again, so a long session never runs out of them. Diagnostics are resolved against a snapshot of the files taken with the compilation (`World::snapshot`), which holds no handle on the query database, so the next edit does not wait for it.
 - The viewer receives display lists over a websocket and draws them on a canvas with the same renderer as Folio Studio; only pages whose content changed are sent, and visible pages are laid out first. Which pages changed is told by their content hashes (§2.3).
 - The preview, like the language server, checks a build without emitting it, so diagnostics and pages never wait for PDF output; files are written by the Emit stage (§2.1), on the schedule below.
 - Display lists travel in one compact, versioned binary format, defined in `folio-render` and used unchanged by the preview websocket, Folio Studio's `MessagePort` and live clients (§10.6).
@@ -1178,6 +1181,8 @@ They show the same diagnostics. A diagnostic has a severity, an optional code na
 ### 12.3 Language server
 
 `folio lsp` offers diagnostics, completion for elements, fields and style properties (including those added by components), hover documentation, renaming of labels, go-to-definition for elements and style rules, and a computed-style inspector that answers "which rules style this?".
+
+The language server loads the project with the library's loader (§12.2), applies unsaved editor buffers as source edits on top of it, and resolves each compilation's diagnostics against the snapshot taken with it.
 
 ### 12.4 Folio Studio
 

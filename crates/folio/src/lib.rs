@@ -30,6 +30,7 @@
 #![forbid(unsafe_code)]
 
 pub mod diag;
+pub mod loader;
 mod pipeline;
 pub mod span_map;
 pub mod toolchain;
@@ -40,13 +41,14 @@ use std::fmt::{self, Display, Formatter};
 use std::panic::AssertUnwindSafe;
 
 use ecow::EcoVec;
+use folio_core::db::Read;
 use folio_core::diag::Reported;
 use rayon::prelude::*;
 
 pub use folio_component::{
     Abs, Fragment, FragmentItem, GlyphRun, Name, Point, Ratio, Registry, Size, SourceRef, Target,
 };
-pub use folio_core::db::{BuildMode, Bytes};
+pub use folio_core::db::{BuildMode, Bytes, FileKind, FileRead};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::eval;
 pub use folio_core::eval::Limits;
@@ -67,7 +69,7 @@ pub use folio_text::{
     Shaped, mark_breaks,
 };
 
-pub use self::world::{Event, World, WorldBuilder, WorldError};
+pub use self::world::{Event, Snapshot, World, WorldBuilder, WorldError};
 
 /// The version of this compiler, which `folio.toml` pins for byte-identical
 /// output (SPEC §2.4).
@@ -93,8 +95,10 @@ pub fn compile(
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         let built = pipeline::compile_build(db, build);
         let diagnostics = collect(pipeline::compile_build::accumulated::<Reported>(db, build));
+        let files = files(pipeline::compile_build::accumulated::<Read>(db, build));
         Compiled {
             sources: built.sources.clone(),
+            files,
             output: built.output.clone(),
             diagnostics,
         }
@@ -122,6 +126,7 @@ pub fn check(world: &World, target: Target, variant: Option<&Name>) -> Result<Ch
         let diagnostics = collect(pipeline::check_build::accumulated::<Reported>(db, build));
         Checked {
             sources: checked.sources.clone(),
+            files: files(pipeline::check_build::accumulated::<Read>(db, build)),
             writes: checked.writes,
             diagnostics,
         }
@@ -142,6 +147,17 @@ fn collect(reported: Vec<&Reported>) -> EcoVec<Diagnostic> {
         .collect()
 }
 
+/// The files a query and the queries it depends on read, each once: a
+/// file read twice, or read as a source and as data, is listed where it
+/// was first read.
+fn files(read: Vec<&Read>) -> EcoVec<FileRead> {
+    let mut seen = HashSet::new();
+    read.into_iter()
+        .filter(|r| seen.insert(&r.0.path))
+        .map(|r| r.0.clone())
+        .collect()
+}
+
 /// What checking a build finds ([`check`]): its diagnostics, without
 /// output.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
@@ -149,6 +165,9 @@ pub struct Checked {
     /// The source files the build read, in the order they were found. A
     /// watcher checks again when one of them changes.
     pub sources: EcoVec<ProjectPath>,
+    /// Every file the build read or tried to read, with how it read it, as
+    /// [`Compiled::files`] lists them.
+    pub files: EcoVec<FileRead>,
     /// Whether compiling the build would give a file
     /// ([`Compiled::output`]): its target has a writer, which only PDF has
     /// yet, and the document could be styled. An error of the writer
@@ -172,6 +191,11 @@ pub struct Compiled {
     /// The source files the build read, in the order they were found. A
     /// watcher recompiles when one of them changes.
     pub sources: EcoVec<ProjectPath>,
+    /// Every file the build read or tried to read, with how it read it, in
+    /// the order they were first read: its sources, and the data files and
+    /// images that evaluation read. A file named but missing is listed too.
+    /// A watcher rebuilds when one of them is added, changed or removed.
+    pub files: EcoVec<FileRead>,
     /// The file the target writes: a PDF for [`Target::Pdf`]. `None` when
     /// the document could not be styled, or the target writes no file or
     /// has no writer yet (DOCX and PPTX until M4 and M5, live until M7).

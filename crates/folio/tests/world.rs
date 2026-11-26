@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use folio::{Cancelled, Event, Name, Target, World, WorldError};
+use folio::{Cancelled, Event, FileKind, Name, Target, World, WorldError};
 use folio_syntax::DiagSpanKind;
 
 const MANIFEST: &str = r#"
@@ -113,6 +113,21 @@ fn compiles_a_project() {
             "styles/exam.fsty",
             "questions/q1.fol",
             "styles/base.fsty"
+        ]
+    );
+    // Every file read, with how it was read.
+    let files: Vec<_> = exam
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.kind))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            ("main.fol", FileKind::Content),
+            ("styles/exam.fsty", FileKind::Stylesheet),
+            ("questions/q1.fol", FileKind::Content),
+            ("styles/base.fsty", FileKind::Stylesheet)
         ]
     );
     let markscheme = logged.compile("markscheme");
@@ -454,10 +469,14 @@ fn files_and_ids() {
     assert_eq!(world.set_source("main.fol", "Hello, world").unwrap(), main);
     assert_eq!(world.source("main.fol").unwrap().text(), "Hello, world");
 
-    // Ids are never reused, even after a file is removed.
+    // A removed source's id is freed; a source added soon after gets a new
+    // one.
     world.remove_source("main.fol");
     assert!(world.source("main.fol").is_none());
-    assert_eq!(world.set_source("main.fol", "Again").unwrap(), main);
+    assert_eq!(world.path(main), None);
+    assert_eq!(world.id("main.fol"), None);
+    let main = world.set_source("main.fol", "Again").unwrap();
+    assert_ne!(Some(main), world.id("exam.fsty"));
 
     // Edits reparse in place.
     let reparsed = world.edit_source("main.fol", 0..5, "Once more").unwrap();
@@ -503,4 +522,54 @@ fn files_and_ids() {
     let errors = world.set_manifest("[project]\n").unwrap_err();
     assert!(!errors.is_empty());
     assert_eq!(world.manifest().variants.len(), 2);
+}
+
+/// File ids are recycled: a long session that sees any number of paths
+/// does not run out of them.
+#[test]
+fn adds_and_removes_many_paths() {
+    let mut world = World::new(MANIFEST).unwrap();
+    let kept = world.set_source("main.fol", "Kept").unwrap();
+    let mut seen = BTreeSet::new();
+    for i in 0..100_000 {
+        let path = format!("drafts/{i}.fol");
+        let id = world.set_source(&path, "A draft.").unwrap();
+        assert_eq!(world.path(id), Some(path.as_str()));
+        seen.insert(id);
+        assert!(world.remove_source(&path));
+    }
+    // Ids were new until every one had been given out, and freed ones were
+    // given out again after that.
+    assert!((60_000..100_000).contains(&seen.len()), "{}", seen.len());
+    assert_eq!(world.path(kept), Some("main.fol"));
+
+    // Freed ids are given out lowest first.
+    let ids: Vec<_> = (0..4)
+        .map(|i| world.set_source(&format!("{i}.fol"), "").unwrap())
+        .collect();
+    world.remove_source("1.fol");
+    world.remove_source("2.fol");
+    assert_eq!(world.set_source("new.fol", "").unwrap(), ids[1]);
+    assert_eq!(world.path(ids[2]), None);
+}
+
+/// A snapshot resolves diagnostics after the world has changed, and holds
+/// no handle on the database, so an edit does not wait for it.
+#[test]
+fn snapshots_resolve_diagnostics_after_edits() {
+    let mut world = World::new(MANIFEST).unwrap();
+    world.set_source("main.fol", "#let x = \n").unwrap();
+    let exam = Name::new("exam").unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    let snapshot = world.snapshot();
+    let before = folio::diag::render(&snapshot, &compiled.diagnostics, false);
+
+    // The edit goes ahead while the snapshot is kept.
+    world.remove_source("main.fol");
+    world.set_source("other.fol", "Something else\n").unwrap();
+    assert_eq!(
+        folio::diag::render(&snapshot, &compiled.diagnostics, false),
+        before
+    );
+    assert!(before.contains("main.fol"), "{before}");
 }
