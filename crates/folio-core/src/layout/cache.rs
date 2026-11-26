@@ -459,6 +459,7 @@ mod tests {
                 descent: Abs::pt(3.0),
                 shift: Abs::zero(),
                 after: None,
+                binds: false,
             }]),
         };
         let slots = [LineSlot {

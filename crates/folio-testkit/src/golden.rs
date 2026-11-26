@@ -491,6 +491,7 @@ pub const TALL: ObjectMetrics = ObjectMetrics {
     descent: Abs::pt(8.0),
     shift: Abs::zero(),
     after: None,
+    binds: false,
 };
 
 /// The size of the raised test box: the second inline maths of [`BOXES`],
@@ -501,6 +502,7 @@ pub const RAISED: ObjectMetrics = ObjectMetrics {
     descent: Abs::pt(2.0),
     shift: Abs::pt(5.0),
     after: None,
+    binds: false,
 };
 
 /// Where the raised test box stands in its paragraph's text: after "A line

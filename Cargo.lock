@@ -586,6 +586,7 @@ version = "0.0.0"
 dependencies = [
  "ecow",
  "folio-component",
+ "folio-render",
  "folio-syntax",
  "folio-text",
  "skrifa 0.50.0",

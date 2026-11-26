@@ -96,6 +96,7 @@ impl Maths {
             ascent: laid.ascent,
             descent: laid.descent,
             shift: Abs::zero(),
+            binds: true,
             after: laid.after.map(|after| ObjectBreak {
                 penalty: after.penalty,
                 space: after.space,
@@ -229,7 +230,7 @@ fn lay_out(
         let text = resolution.number(target)?.number.as_ref()?;
         set_number(text, options, m.span)
     };
-    let lines = (0..m.formula.lines().len())
+    let lines: Vec<Option<Number>> = (0..m.formula.lines().len())
         .map(|i| {
             number(Target {
                 location: m.location,
@@ -237,7 +238,11 @@ fn lay_out(
             })
         })
         .collect();
-    let whole = number(Target::element(m.location));
+    let whole = lines
+        .iter()
+        .all(Option::is_none)
+        .then(|| number(Target::element(m.location)))
+        .flatten();
     LaidMath::Display(Arc::new(Display { math, lines, whole }))
 }
 

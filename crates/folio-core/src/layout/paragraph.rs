@@ -72,6 +72,10 @@ pub struct ObjectMetrics {
     /// space at the end of this chunk that a line ending there drops.
     /// Without it, a line breaks around the object as its text allows.
     pub after: Option<ObjectBreak>,
+    /// Whether it binds to the text it touches, as a word does: a line
+    /// breaks before or after it only at a space, or after a dash before
+    /// it. Inline maths binds; an object without a size does not.
+    pub binds: bool,
 }
 
 /// A place where a line may break between two chunks of an inline formula.
@@ -372,6 +376,30 @@ impl Prepared {
                 protrude_start,
             });
         }
+
+        // An object that binds to the text it touches keeps it on its line.
+        let len_obj = folio_text::OBJECT.len_utf8();
+        candidates.retain(|c| {
+            let o = c.offset;
+            if c.kind != BreakKind::Normal || o >= len {
+                return true;
+            }
+            let after_object = offsets
+                .binary_search(&(o - len_obj.min(o)))
+                .ok()
+                .and_then(|i| input.objects.get(i))
+                .is_some_and(|m| m.binds);
+            let before_object = offsets
+                .binary_search(&o)
+                .ok()
+                .and_then(|i| input.objects.get(i))
+                .is_some_and(|m| m.binds);
+            let prev = text[..o].chars().next_back();
+            let next = text[o..].chars().next();
+            let spaced_after = next.is_some_and(char::is_whitespace);
+            let spaced_before = prev.is_some_and(|c| c.is_whitespace() || is_dash(c));
+            !(after_object && !spaced_after || before_object && !spaced_before)
+        });
 
         // Between the chunks of an inline formula a line breaks where math
         // layout allows, at its cost, and drops the space the chunk before

@@ -44,7 +44,7 @@ fn make_up() {
     );
     let main = &project.sources["main.fol"];
     assert_eq!(main.matches("#figure[").count(), spec.figures);
-    assert_eq!(main.matches("\nEquation ").count(), spec.equations);
+    assert_eq!(main.matches("\n$ ").count(), spec.equations);
     assert_eq!(main.matches("\nTable ").count(), spec.tables);
     assert_eq!(refdoc::generate(&Spec::REFERENCE).name, "reference");
 }

@@ -1,0 +1,31 @@
+#doc(title: [Motion and Fields], subject: "A-level Physics, maths in notes")
+
+= Uniform acceleration
+
+A body that starts with speed $u$ and accelerates uniformly at $a$ for a time $t$ reaches the speed $v = u + a t$ and travels the distance $s = u t + 1/2 a t^2$, so that eliminating the time gives $v^2 = u^2 + 2 a s$ for any motion along a straight line with constant acceleration.
+
+$ v &= u + a t <eq:v> \
+  s &= u t + 1/2 a t^2 <eq:s> \
+  v^2 &= u^2 + 2 a s <eq:v2> $
+
+@eq:v2 follows from @eq:v and @eq:s. Newton's second law in its general form is
+
+$ F = (dif p) / (dif t) = (m v - m u) / t $
+
+and the work done by a varying force along a path from $x_1$ to $x_2$ is the integral $W = integral_(x_1)^(x_2) F(x) dif x$, which for a spring of stiffness $k$ gives $W = 1/2 k x^2$.
+
+= Fields
+
+The gravitational field strength at a distance $r$ from a mass $M$ is $g = (G M) / r^2$, and the potential is $V = -(G M) / r$. For a set of point masses the potential adds up:
+
+$ V = -G sum_(i=1)^n m_i / abs(bold(r) - bold(r)_i) $
+
+The magnitude of a vector $vec(E)$ with components $E_x$ and $E_y$ is $abs(vec(E)) = sqrt(E_x^2 + E_y^2)$, and its direction makes the angle $theta = arctan(E_y / E_x)$ with the $x$-axis. A rotation by $theta$ is the matrix
+
+$ R(theta) = mat(cos theta, -sin theta; sin theta, cos theta) $
+
+and the potential of a charged sphere of radius $R$ is
+
+$ V(r) = cases((Q) / (4 pi epsilon_0 r) & r >= R, (Q) / (4 pi epsilon_0 R) & r < R) $
+
+$:tex \lim_{n \to \infty} \left(1 + \frac{1}{n}\right)^n = e $

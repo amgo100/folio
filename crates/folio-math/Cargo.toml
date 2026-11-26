@@ -15,5 +15,8 @@ folio-text.workspace = true
 skrifa.workspace = true
 unicode-math-class.workspace = true
 
+[dev-dependencies]
+folio-render.workspace = true
+
 [lints]
 workspace = true
