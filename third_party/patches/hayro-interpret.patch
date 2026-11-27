@@ -1,0 +1,240 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	1970-01-01 00:00:01.000000000 +0000
++++ b/Cargo.toml	2026-11-27 09:33:36.994416803 +0000
+@@ -51,6 +51,11 @@
+ name = "extract_images"
+ path = "examples/extract_images.rs"
+ 
++# Folio: libm for the float functions whose std versions call the platform's
++# maths library (Folio's SPEC §2.4; see FOLIO.md).
++[dependencies.libm]
++version = "0.2.16"
++
+ [dependencies.bitflags]
+ version = "2.10"
+ 
+diff -ruN a/FOLIO.md b/FOLIO.md
+--- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
++++ b/FOLIO.md	2026-11-27 09:33:36.997092073 +0000
+@@ -0,0 +1,36 @@
++# hayro-interpret 0.7.0, patched for Folio
++
++This is the crates.io release of `hayro-interpret` 0.7.0
++(https://crates.io/crates/hayro-interpret/0.7.0), unpacked as published, with Folio's
++patch applied. Folio uses it through `[patch.crates-io]` in its root
++`Cargo.toml`. Its licence is unchanged: Apache-2.0 OR MIT (LICENSE-APACHE,
++LICENSE-MIT).
++
++Folio converts a PDF figure to SVG through `hayro-svg`, which reads it with
++this crate, where PDF/A or PDF/UA forbids embedding the figure or its PDF
++version is newer than the output's (Folio's SPEC §11.1). Folio's changes
++make the crate's floating-point code call the `libm` crate where it called
++std's transcendental functions, whose results come from the platform's
++maths library, so that such figures give the same PDF bytes on every
++platform (SPEC §2.4, decisions D-300-1 and #304). Each changed file carries
++a comment that starts with `Folio:`.
++
++- `src/function/type4.rs`: the PostScript calculator operators `atan`,
++  `cos`, `sin`, `exp`, `ln` and `log` with `libm` (`atan2f`, `cosf`, `sinf`,
++  `powf`, `logf`, `log10f`).
++- `src/function/type2.rs`: exponential functions with `libm::powf`.
++- `src/color.rs`: CalGray and CalRGB gamma, the sRGB transfer function and
++  the default range of indexed colour with `libm::powf`; the cubes of the
++  L* decode in CalRGB's black-point compensation multiplied out instead of
++  `powi`. Lab and ICC-based colour go through `moxcms`, which this patch
++  does not change (#312).
++- `src/shading.rs`: the Bernstein polynomials of patch meshes multiplied
++  out, and the largest coordinate and component values of mesh data with
++  `libm::ldexpf` (exact powers of two) instead of `powi`.
++- `src/x_object.rs`: the largest component value of image data with
++  `libm::ldexpf` instead of `powi`.
++- `Cargo.toml`: depends on `libm`.
++
++The whole change is `third_party/patches/hayro-interpret.patch` in Folio's repository;
++`scripts/patch-third-party.sh` rebuilds this directory from the release and
++the patch, and `third_party/README.md` says how to move to a new release.
+diff -ruN a/src/color.rs b/src/color.rs
+--- a/src/color.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/color.rs	2026-11-27 09:33:36.995448817 +0000
+@@ -268,7 +268,8 @@
+                 (l.range[0], l.range[1]),
+                 (l.range[2], l.range[3]),
+             ],
+-            ColorSpaceType::Indexed(_) => smallvec![(0.0, 2.0_f32.powf(n) - 1.0)],
++            // Folio: libm instead of the platform maths library (SPEC §2.4).
++            ColorSpaceType::Indexed(_) => smallvec![(0.0, libm::powf(2.0, n) - 1.0)],
+             ColorSpaceType::Separation(_) => smallvec![(0.0, 1.0)],
+             ColorSpaceType::DeviceN(d) => smallvec![(0.0, 1.0); d.num_components as usize],
+             // Not a valid image color space.
+@@ -465,9 +466,10 @@
+             };
+ 
+             let a = input;
+-            let ag = a.powf(g);
++            // Folio: libm instead of the platform maths library (SPEC §2.4).
++            let ag = libm::powf(a, g);
+             let l = yw * ag;
+-            let val = (0.0_f32.max(295.8 * l.powf(0.333_333_34) - 40.8) + 0.5) as u8;
++            let val = (0.0_f32.max(295.8 * libm::powf(l, 0.333_333_34) - 40.8) + 0.5) as u8;
+ 
+             output.copy_from_slice(&[val, val, val]);
+         }
+@@ -523,7 +525,9 @@
+     const D65_WHITEPOINT: [f32; 3] = [0.95047, 1.0, 1.08883];
+ 
+     fn decode_l_constant() -> f32 {
+-        ((8.0_f32 + 16.0) / 116.0).powi(3) / 8.0
++        // Folio: multiplied out instead of `powi` (SPEC §2.4).
++        let v = (8.0_f32 + 16.0) / 116.0;
++        v * v * v / 8.0
+     }
+ 
+     fn srgb_transfer_function(color: f32) -> f32 {
+@@ -532,7 +536,8 @@
+         } else if color >= 0.99554525 {
+             1.0
+         } else {
+-            ((1.0 + 0.055) * color.powf(1.0 / 2.4) - 0.055).clamp(0.0, 1.0)
++            // Folio: libm instead of the platform maths library (SPEC §2.4).
++            ((1.0 + 0.055) * libm::powf(color, 1.0 / 2.4) - 0.055).clamp(0.0, 1.0)
+         }
+     }
+ 
+@@ -564,7 +569,9 @@
+         if l < 0.0 {
+             -Self::decode_l(-l)
+         } else if l > 8.0 {
+-            ((l + 16.0) / 116.0).powi(3)
++            // Folio: multiplied out instead of `powi` (SPEC §2.4).
++            let v = (l + 16.0) / 116.0;
++            v * v * v
+         } else {
+             l * Self::decode_l_constant()
+         }
+@@ -624,9 +631,10 @@
+             let [r, g, b] = input;
+             let [gr, gg, gb] = self.gamma;
+             let [agr, bgg, cgb] = [
+-                if r == 1.0 { 1.0 } else { r.powf(gr) },
+-                if g == 1.0 { 1.0 } else { g.powf(gg) },
+-                if b == 1.0 { 1.0 } else { b.powf(gb) },
++                // Folio: libm instead of the platform maths library (SPEC §2.4).
++                if r == 1.0 { 1.0 } else { libm::powf(r, gr) },
++                if g == 1.0 { 1.0 } else { libm::powf(g, gg) },
++                if b == 1.0 { 1.0 } else { libm::powf(b, gb) },
+             ];
+ 
+             let m = &self.matrix;
+diff -ruN a/src/function/type2.rs b/src/function/type2.rs
+--- a/src/function/type2.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/function/type2.rs	2026-11-27 09:33:36.996603932 +0000
+@@ -33,7 +33,8 @@
+             .c0
+             .iter()
+             .zip(self.c1.iter())
+-            .map(|(c0, c1)| *c0 + input[0].powf(self.n) * (*c1 - *c0))
++            // Folio: libm instead of the platform maths library (SPEC §2.4).
++            .map(|(c0, c1)| *c0 + libm::powf(input[0], self.n) * (*c1 - *c0))
+             .collect::<SmallVec<_>>();
+ 
+         self.clamper.clamp_output(&mut out);
+diff -ruN a/src/function/type4.rs b/src/function/type4.rs
+--- a/src/function/type4.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/function/type4.rs	2026-11-27 09:33:36.996660761 +0000
+@@ -219,7 +219,9 @@
+             }
+             PostScriptOp::Atan => {
+                 two_f!(|n1: f32, n2: f32| {
+-                    let mut res = n1.atan2(n2).to_degrees() % 360.0;
++                    // Folio: libm instead of the platform maths library (SPEC §2.4),
++                    // here and in the operators below.
++                    let mut res = libm::atan2f(n1, n2).to_degrees() % 360.0;
+                     if res < 0.0 {
+                         res += 360.0;
+                     }
+@@ -231,7 +233,7 @@
+                 one_f!(|n: f32| n.ceil());
+             }
+             PostScriptOp::Cos => {
+-                one_f!(|n: f32| n.to_radians().cos());
++                one_f!(|n: f32| libm::cosf(n.to_radians()));
+             }
+             PostScriptOp::Cvi => {
+                 one_f!(|n: f32| n.trunc());
+@@ -243,7 +245,7 @@
+                 two_f!(|n1: f32, n2: f32| n1 / n2);
+             }
+             PostScriptOp::Exp => {
+-                two_f!(|n1: f32, n2: f32| n1.powf(n2));
++                two_f!(|n1: f32, n2: f32| libm::powf(n1, n2));
+             }
+             PostScriptOp::Floor => {
+                 one_f!(|n: f32| n.floor());
+@@ -257,10 +259,10 @@
+                 });
+             }
+             PostScriptOp::Ln => {
+-                one_f!(|n: f32| n.ln());
++                one_f!(|n: f32| libm::logf(n));
+             }
+             PostScriptOp::Log => {
+-                one_f!(|n: f32| n.log10());
++                one_f!(|n: f32| libm::log10f(n));
+             }
+             PostScriptOp::Mod => {
+                 two_f!(|n1: f32, n2: f32| n1.rem(n2));
+@@ -275,7 +277,7 @@
+                 one_f!(|n: f32| n.round());
+             }
+             PostScriptOp::Sin => {
+-                one_f!(|n: f32| n.to_radians().sin());
++                one_f!(|n: f32| libm::sinf(n.to_radians()));
+             }
+             PostScriptOp::Sqrt => {
+                 one_f!(|n: f32| n.sqrt());
+diff -ruN a/src/shading.rs b/src/shading.rs
+--- a/src/shading.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/shading.rs	2026-11-27 09:33:36.996954749 +0000
+@@ -465,10 +465,11 @@
+     /// Evaluate Bernstein polynomial `B_i(t)` for tensor-product patches.
+     fn bernstein(i: usize, t: f64) -> f64 {
+         match i {
+-            0 => (1.0 - t).powi(3),
+-            1 => 3.0 * t * (1.0 - t).powi(2),
+-            2 => 3.0 * t.powi(2) * (1.0 - t),
+-            3 => t.powi(3),
++            // Folio: multiplied out instead of `powi` (SPEC §2.4).
++            0 => (1.0 - t) * (1.0 - t) * (1.0 - t),
++            1 => 3.0 * t * ((1.0 - t) * (1.0 - t)),
++            2 => 3.0 * (t * t) * (1.0 - t),
++            3 => t * t * t,
+             _ => 0.0,
+         }
+     }
+@@ -614,8 +615,10 @@
+ 
+ impl InterpolationHelpers {
+     fn new(bp_coord: u8, bp_comp: u8, x_min: f32, x_max: f32, y_min: f32, y_max: f32) -> Self {
+-        let coord_max = 2.0_f32.powi(bp_coord as i32) - 1.0;
+-        let comp_max = 2.0_f32.powi(bp_comp as i32) - 1.0;
++        // Folio: an exact power of two with `ldexpf` instead of `powi`
++        // (SPEC §2.4).
++        let coord_max = libm::ldexpf(1.0, bp_coord as i32) - 1.0;
++        let comp_max = libm::ldexpf(1.0, bp_comp as i32) - 1.0;
+         Self {
+             bp_coord,
+             bp_comp,
+diff -ruN a/src/x_object.rs b/src/x_object.rs
+--- a/src/x_object.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/x_object.rs	2026-11-27 09:33:36.997055334 +0000
+@@ -952,7 +952,9 @@
+         interpolate(
+             n,
+             0.0,
+-            2.0_f32.powi(bits_per_component as i32) - 1.0,
++            // Folio: an exact power of two with `ldexpf` instead of `powi`
++            // (SPEC §2.4).
++            libm::ldexpf(1.0, bits_per_component as i32) - 1.0,
+             d_min,
+             d_max,
+         )

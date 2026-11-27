@@ -42,7 +42,8 @@ it (Apache License 2.0, section 4(b)), for example:
     // (third_party/typst/LICENSE). Modified for Folio.
 
 ================================================================================
-Patched crates: kurbo, usvg, svgtypes, resvg, tiny-skia, tiny-skia-path
+Patched crates: hayro-interpret, hayro-syntax, kurbo, usvg, svgtypes, resvg,
+tiny-skia, tiny-skia-path
 
 Folio builds modified copies of these crates.io releases in place of the
 releases (SPEC §2.4, D-300-1): their floating-point code calls the `libm`
@@ -52,6 +53,10 @@ Folio changed, and marks every changed file with a comment that starts with
 "Folio:"; the whole change is in third_party/patches/. third_party/README.md
 describes them.
 
+* hayro-interpret 0.7.0, hayro-syntax 0.7.2: https://github.com/LaurenzV/hayro
+  Copyright (c) The Hayro Authors.
+  Apache-2.0 OR MIT: third_party/hayro-interpret/LICENSE-APACHE, LICENSE-MIT
+  (and the same files in third_party/hayro-syntax/)
 * kurbo 0.13.1: https://github.com/linebender/kurbo
   Copyright (c) 2018 Raph Levien and the Kurbo Authors.
   Apache-2.0 OR MIT: third_party/kurbo/LICENSE-APACHE, LICENSE-MIT

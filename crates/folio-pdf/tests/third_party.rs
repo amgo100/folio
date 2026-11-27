@@ -1,8 +1,9 @@
 //! The patched upstream crates in `third_party/` (SPEC §2.4, D-300-1).
 //!
 //! SVG figures reach PDF through `usvg`, `svgtypes`, `kurbo`,
-//! `tiny-skia-path`, `resvg` and `tiny-skia`, whose floating-point code
-//! called std's transcendental functions (`sin`, `atan2`, `powf`, …). Those
+//! `tiny-skia-path`, `resvg` and `tiny-skia`, and PDF figures converted to
+//! SVG through `hayro-interpret` and `hayro-syntax`, whose floating-point
+//! code called std's transcendental functions (`sin`, `atan2`, `powf`, …). Those
 //! come from the platform's maths library, so the same drawing could give
 //! other PDF bytes on another machine. Folio builds patched copies that call
 //! the `libm` crate instead (`scripts/patch-third-party.sh`,
@@ -16,10 +17,13 @@
 //!   that a build would take the unpatched release;
 //! - an arrowhead that usvg turns along its line does not get the rotation
 //!   that `libm` computes, the case that differed between x86-64 and
-//!   aarch64 before the patches (#300).
+//!   aarch64 before the patches (#300);
+//! - a calculator function's colour in the corpus's PDF figure is not the
+//!   one `libm` computes (#304).
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The functions whose results depend on the platform's maths library, or
 /// for `powi` are left to the language: the methods `clippy.toml` disallows.
@@ -43,6 +47,10 @@ const ALLOWED: &[(&str, &str, &str, usize, &str)] = &[(
     11,
     "`f32x8::powf`, tiny-skia's own polynomial approximation in IEEE operations",
 )];
+
+/// The patched crates whose patch needs no `libm`: `hayro-syntax` only
+/// multiplies out a `powi`.
+const WITHOUT_LIBM: &[&str] = &["hayro-syntax"];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -290,7 +298,7 @@ fn every_build_uses_the_patched_crates() {
                 .find(|p| p.contains(&format!("\nversion = \"{version}\"\n")))
                 .unwrap_or_else(|| panic!("{lock} has no {name} {version}"));
             assert!(
-                patched.contains("\n \"libm\",\n"),
+                WITHOUT_LIBM.contains(&name.as_str()) || patched.contains("\n \"libm\",\n"),
                 "{lock} is stale: {name} {version} does not depend on libm, as \
                  its patched copy does; regenerate the lockfile"
             );
@@ -327,4 +335,60 @@ fn rotated(group: &usvg::Group) -> Option<usvg::Transform> {
         usvg::Node::Group(g) => rotated(g),
         _ => None,
     })
+}
+
+#[test]
+fn calculator_colours_come_from_libm() {
+    // The PDF figure of the figures corpus, converted to SVG as Folio does
+    // under PDF/UA (§11.1). Its spot colour's tint transform, a PostScript
+    // calculator function, multiplies atan, sin, cos, log, ln and a power by
+    // 10^4 or 10^5 and keeps the fraction, so that a one-unit difference in
+    // the last place shows in the 8-bit colour. Its two swatches must have
+    // the colours that libm gives, step by step as hayro evaluates the
+    // program in f32 (#304); at both tints, the C libraries of x86-64 and
+    // aarch64 Linux give red channels apart. This checks only the
+    // calculator; the scan above guards every patched call.
+    let path = root().join("tests/corpus/figures/assets/spectrum.pdf");
+    let pdf = hayro_svg::hayro_syntax::Pdf::new(Arc::new(fs::read(path).unwrap())).unwrap();
+    let page = &pdf.pages()[0];
+    let svg = hayro_svg::convert(
+        page,
+        &hayro_svg::RenderCache::new(),
+        &hayro_svg::hayro_interpret::InterpreterSettings::default(),
+        &hayro_svg::SvgRenderSettings::default(),
+    );
+
+    // The two swatches of the spot colour.
+    for t in [1.0f32, 0.4921875] {
+        let fill = spot_fill(t);
+        assert!(
+            svg.contains(&fill),
+            "no swatch with {fill} at tint {t} in:\n{svg}"
+        );
+    }
+}
+
+/// The fill of a swatch of `spectrum.pdf`'s spot colour at tint `t`: its
+/// tint transform (`spectrum.py`) computed with libm in f32, operator by
+/// operator, then the 8-bit colour hayro writes.
+fn spot_fill(t: f32) -> String {
+    let frac = |x: f32, scale: f32| {
+        let v = x * scale;
+        v - v.floor()
+    };
+    let mut atan = libm::atan2f(t * 5.0, 12.0).to_degrees() % 360.0;
+    if atan < 0.0 {
+        atan += 360.0;
+    }
+    let r = frac(atan, 10_000.0);
+    let g = frac(
+        libm::sinf((t * 360.0).to_radians()) + libm::cosf((t * 180.0).to_radians()),
+        100_000.0,
+    );
+    let b = frac(
+        libm::log10f(t * 9.0 + 1.0) + libm::logf(t + 1.0) + libm::powf(t, 0.6),
+        100_000.0,
+    );
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    format!("fill=\"#{:02x}{:02x}{:02x}\"", byte(r), byte(g), byte(b))
 }

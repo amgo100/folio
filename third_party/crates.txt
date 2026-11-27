@@ -1,6 +1,8 @@
 # The upstream crates Folio patches (scripts/patch-third-party.sh,
 # third_party/README.md): name, version, and the SHA-256 of the .crate file
 # on crates.io, as Cargo.lock records it.
+hayro-interpret 0.7.0 f2613d0406898995042d0794c4245b2f2fba1246490c8ac593769bba6551129d
+hayro-syntax 0.7.2 0edeafd70aa2db743de8ede8637d07ec87db05efe69cde371d03f1b185fcef27
 kurbo 0.13.1 4b60dfc32f652b926df6192e55525b16d186c69d47876c3ead4da5cc9f8450e2
 resvg 0.47.0 9be183ad6a216aa96f33e4c8033b0988b8b3ea6fd2359d19af5bac4643fd8e81
 svgtypes 0.16.2 9f12b12995e3638c70618c1facb1ce65302f6a6f706b675f07c58a5d7391120e

@@ -4,10 +4,10 @@ This directory holds what Folio takes from other projects.
 
 - `typst/`: the licence and notice of Typst, from which `folio-syntax` and
   `folio-math` derive (see `NOTICE` at the repository root).
-- `kurbo/`, `resvg/`, `svgtypes/`, `tiny-skia/`, `tiny-skia-path/`, `usvg/`:
-  patched copies of crates.io releases, which the workspace uses in place
-  of the releases through `[patch.crates-io]` in the root `Cargo.toml` (and
-  in `fuzz/Cargo.toml`).
+- `hayro-interpret/`, `hayro-syntax/`, `kurbo/`, `resvg/`, `svgtypes/`,
+  `tiny-skia/`, `tiny-skia-path/`, `usvg/`: patched copies of crates.io
+  releases, which the workspace uses in place of the releases through
+  `[patch.crates-io]` in the root `Cargo.toml` (and in `fuzz/Cargo.toml`).
 
 ## The patched crates
 
@@ -22,6 +22,14 @@ to patch the crates: each copy calls the `libm` crate instead, as Folio's
 own code does (`clippy.toml`). Nothing changes for a document beyond the
 last bits of these numbers.
 
+PDF figures that Folio converts to SVG (under PDF/A or PDF/UA, or when
+their PDF version is newer than the output's; SPEC §11.1) are read by
+`hayro-interpret` and `hayro-syntax`, which `hayro-svg` turns into SVG.
+Their calibrated colour (CalGray, CalRGB), shadings and PostScript
+calculator functions called the same functions, and are patched the same
+way (#304). `tests/corpus/figures/assets/spectrum.pdf`, written by
+`spectrum.py` beside it, exercises them.
+
 Each copy is the release exactly as published on crates.io, with its
 licence files, plus Folio's patch. Its `FOLIO.md` says what the patch
 changes, and every changed file carries a comment that starts with
@@ -29,6 +37,8 @@ changes, and every changed file carries a comment that starts with
 
 | Crate | Version | Licence | Patch |
 |---|---|---|---|
+| hayro-interpret | 0.7.0 | Apache-2.0 OR MIT | `patches/hayro-interpret.patch` |
+| hayro-syntax | 0.7.2 | Apache-2.0 OR MIT | `patches/hayro-syntax.patch` |
 | kurbo | 0.13.1 | Apache-2.0 OR MIT | `patches/kurbo.patch` |
 | resvg | 0.47.0 | Apache-2.0 OR MIT | `patches/resvg.patch` |
 | svgtypes | 0.16.2 | Apache-2.0 OR MIT | `patches/svgtypes.patch` |
@@ -41,11 +51,17 @@ the checksum `Cargo.lock` recorded for it before the patch.
 `cargo test -p folio-pdf --test third_party` fails when a copy calls one of
 the float functions `clippy.toml` disallows outside comments and tests,
 when either workspace stops using a copy, and when an arrowhead's rotation
-is not the one `libm` gives.
+or a calculator function's colour in `spectrum.pdf` is not the one `libm`
+gives.
 
 `polycool`, which kurbo uses to find polynomial roots, is not patched: its
 only such calls outside its tests are `2.0f64.powi(-515)`, a power of two,
 which every way of computing `powi` gives exactly.
+
+Still unpatched, and outside what the corpus uses: krilla's sweep
+gradients (one `atan2`; Folio draws none), and `moxcms`, which converts
+Lab and ICC-based colour in PDF figures, fuses multiply-adds on aarch64
+only and picks SIMD paths by CPU at run time (#312 tracks it).
 
 The copies are not workspace members (`exclude` in the root `Cargo.toml`):
 they keep their own lints, and `cargo test --workspace` does not run their
