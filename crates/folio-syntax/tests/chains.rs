@@ -311,3 +311,114 @@ fn code_in_errors_within_errors_is_parsed_as_code() {
         assert_eq!(equations, 1);
     });
 }
+
+#[test]
+fn code_at_the_depth_limit_parses_as_before() {
+    small_stack(|| {
+        let nested =
+            |n: usize, inner: &str| format!("#({}{inner}{})\n", "(".repeat(n), ")".repeat(n));
+        for n in 240..260 {
+            let plain = check(nested(n, "x"));
+            // A call needs no deeper parse for empty arguments: it parses
+            // wherever a name does.
+            if plain.is_empty() {
+                assert_eq!(check(nested(n, "g()")), plain, "g() at {n}");
+                assert_eq!(check(nested(n, "g().a")), plain, "g().a at {n}");
+                // `not` without `in` keeps its own error.
+                let errors = check(nested(n, "x not y"));
+                assert!(
+                    errors.iter().any(|e| e.contains("keyword `in`"))
+                        && !errors.iter().any(|e| e.contains("depth")),
+                    "x not y at {n}: {errors:?}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn a_cut_chain_keeps_the_shape_of_its_parent() {
+    small_stack(|| {
+        // The error of a postfix chain in a denominator stands where the
+        // denominator stands: the fraction has its three children.
+        for text in [
+            format!("$a / x{}$\n", "!".repeat(3000)),
+            format!("#(a + f{})\n", "()".repeat(3000)),
+        ] {
+            let source = Source::detached(text.clone());
+            assert_eq!(
+                errors(&source),
+                ["maximum parsing depth exceeded"],
+                "{text:.12}"
+            );
+            let mut stack = vec![source.root()];
+            while let Some(node) = stack.pop() {
+                if matches!(
+                    node.kind(),
+                    folio_syntax::SyntaxKind::MathFrac | folio_syntax::SyntaxKind::Binary
+                ) {
+                    let kids = node.children().filter(|c| !c.kind().is_trivia()).count();
+                    assert_eq!(kids, 3, "{:?} in {text:.12}", node.kind());
+                }
+                stack.extend(node.children());
+            }
+        }
+    });
+}
+
+#[test]
+fn a_root_operand_takes_its_radicand() {
+    small_stack(|| {
+        let text = format!("${}√y^z + w$\n", "x^".repeat(300));
+        let source = Source::detached(text);
+        assert_eq!(errors(&source), ["maximum parsing depth exceeded"]);
+        let mut stack = vec![source.root()];
+        while let Some(node) = stack.pop() {
+            if node.kind() == folio_syntax::SyntaxKind::Error {
+                assert!(node.leaf_text().ends_with("^√y^z"));
+            }
+            stack.extend(node.children());
+        }
+    });
+}
+
+#[test]
+fn reparsing_in_an_early_operand_matches_a_full_parse() {
+    // An edit in the first or a middle operand of a chain near the height
+    // limit, making it taller: the operand lies deep in the tree, so the
+    // reparser parses in full, and the trees agree.
+    for (before, op, after) in [("#([b]", " + x", ")"), ("$#[b]", "/x", "$")] {
+        for n in [2000, 2040, 2046, 2047] {
+            for at in [0, n / 2, n - 70] {
+                let mut text = String::from(before);
+                for i in 0..n {
+                    text.push_str(op);
+                    if i == at && at > 0 {
+                        text.push_str(if before.starts_with('$') {
+                            "/#[c]"
+                        } else {
+                            " + [c]"
+                        });
+                    }
+                }
+                text.push_str(after);
+                text.push('\n');
+                let mut source = Source::detached(text.clone());
+                let target = if at == 0 { "b]" } else { "c]" };
+                let pos = text.find(target).unwrap();
+                let with = format!("{}a{}", "#[".repeat(20), "]".repeat(20));
+                source.edit(pos..pos + 1, &with);
+                let fresh = Source::detached(source.text().to_string());
+                assert_eq!(
+                    errors(&source),
+                    errors(&fresh),
+                    "{op:?} × {n}, edit at {at}"
+                );
+                assert!(
+                    source.root().spanless_eq(fresh.root()),
+                    "{op:?} × {n}, edit at {at}"
+                );
+            }
+        }
+    }
+}
