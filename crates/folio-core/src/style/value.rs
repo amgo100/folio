@@ -23,11 +23,11 @@ use folio_component::{Abs, Name, PropertyType, Ratio, Scalar, Value};
 use folio_syntax::ast::{self, AstNode};
 use folio_syntax::{Span, SyntaxNode};
 
+use super::rules::Origin;
 use crate::db::{Db, Project};
 use crate::diag;
 use crate::eval::{self, Arg, Args, EvalError, Func, ops};
 use crate::project::ProjectPath;
-use super::rules::Origin;
 
 /// A value as a stylesheet declares it, before it is computed for an
 /// element.
