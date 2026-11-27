@@ -284,13 +284,17 @@ impl Number {
     }
 
     /// A float, in the shortest form that reads back as the same float:
-    /// `0.1`, `9.0`, or with a power of ten where Rust writes one
-    /// (`1e-7`, `6.02e23`). `None` for NaN and the infinities.
+    /// `0.1`, `9`, or with a power of ten where Rust writes one (`1e-7`,
+    /// `6.02e23`). A whole float has no decimals: the `.0` Rust writes is
+    /// a figure nobody wrote. `None` for NaN and the infinities.
     pub fn from_float(value: f64) -> Option<Self> {
         if !value.is_finite() {
             return None;
         }
         let mut number = Self::parse(&format!("{value:?}")).ok()?;
+        if number.frac == "0" {
+            number.frac = EcoString::new();
+        }
         // `-0.0` is zero.
         if value == 0.0 {
             number.negative = false;
@@ -531,12 +535,51 @@ const UNIT_NAMES: &[(&str, &str)] = &[
     ("micro", "µ"),
 ];
 
+/// The names of [`UNIT_NAMES`] that an SI prefix may stand before:
+/// `kohm` is `kΩ`. The others name units of angle and temperature, which
+/// take no prefix, or `micro`, which is itself a prefix.
+const PREFIXED_NAMES: &[&str] = &["ohm"];
+
+/// The SI prefixes, as written before a named symbol (`kohm`, `Mohm`,
+/// `mohm`), and the symbols they stand for. `micro` is spelt out, as `µ`
+/// is hard to type; `da` is the one prefix of two letters.
+const SI_PREFIXES: &[(&str, &str)] = &[
+    ("Q", "Q"),
+    ("R", "R"),
+    ("Y", "Y"),
+    ("Z", "Z"),
+    ("E", "E"),
+    ("P", "P"),
+    ("T", "T"),
+    ("G", "G"),
+    ("M", "M"),
+    ("k", "k"),
+    ("h", "h"),
+    ("da", "da"),
+    ("d", "d"),
+    ("c", "c"),
+    ("m", "m"),
+    ("micro", "µ"),
+    ("µ", "µ"),
+    ("n", "n"),
+    ("p", "p"),
+    ("f", "f"),
+    ("a", "a"),
+    ("z", "z"),
+    ("y", "y"),
+    ("r", "r"),
+    ("q", "q"),
+];
+
 impl Unit {
     /// Reads a unit: factors separated by spaces, each a symbol with an
     /// optional integer power after `^`: `kg m^2 s^-1`. A symbol is
     /// letters of any script and the signs `°`, `′`, `″` and `%`, and may
-    /// start with a name for a hard-to-type symbol: `ohm` for `Ω`, `deg`
-    /// for `°`, `degC` for `°C`, `micro` for `µ` (`microF`).
+    /// be or end in a name for a hard-to-type symbol: `ohm` for `Ω`, `deg`
+    /// for `°`, `degC` for `°C`, `micro` for `µ` (`microF`), and an SI
+    /// prefix before `ohm` (`kohm`, `Mohm`, `mohm`, `microohm`). A symbol of
+    /// several letters that ends in a name but is not one of these is an
+    /// error, not letters set as they are: `xohm`, `kdegC`.
     pub fn parse(text: &str) -> Result<Self, UnitError> {
         let mut factors = EcoVec::new();
         for (start, word) in words(text) {
@@ -597,10 +640,10 @@ impl Unit {
                     if negative { -magnitude } else { magnitude }
                 }
             };
-            factors.push(UnitFactor {
-                symbol: expand(symbol),
-                power,
-            });
+            let Some(symbol) = expand(symbol) else {
+                return Err(unknown_name(symbol, range.start));
+            };
+            factors.push(UnitFactor { symbol, power });
         }
         if factors.is_empty() {
             return Err(UnitError {
@@ -676,19 +719,75 @@ fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 /// A symbol with a name for a hard-to-type symbol expanded: `ohm` is `Ω`,
-/// `microF` is `µF`.
-fn expand(symbol: &str) -> EcoString {
+/// `microF` is `µF`, `kohm` is `kΩ`. `None` for a symbol of several
+/// letters that ends in a name but is neither the name, nor `micro` before
+/// a symbol, nor an SI prefix before a name that takes one: `xohm`,
+/// `kdeg`, which would otherwise be set as the letters they are.
+fn expand(symbol: &str) -> Option<EcoString> {
     if let Some(&(_, expanded)) = UNIT_NAMES.iter().find(|(name, _)| *name == symbol) {
-        return expanded.into();
+        return Some(expanded.into());
+    }
+    // An SI prefix before a name that takes one: `kohm`, `microohm`.
+    for &name in PREFIXED_NAMES {
+        if let Some(prefix) = symbol.strip_suffix(name)
+            && let Some(&(_, prefix)) = SI_PREFIXES.iter().find(|(p, _)| *p == prefix)
+        {
+            let mut out = EcoString::from(prefix);
+            out.push_str(&expand(name)?);
+            return Some(out);
+        }
     }
     if let Some(rest) = symbol.strip_prefix("micro")
         && !rest.is_empty()
+        // A name that takes no prefix takes no `micro` either: `microdeg`.
+        && !UNIT_NAMES.iter().any(|(name, _)| *name == rest)
     {
         let mut out = EcoString::from("µ");
-        out.push_str(&expand(rest));
-        return out;
+        out.push_str(&expand(rest)?);
+        return Some(out);
     }
-    symbol.into()
+    if ends_in_name(symbol) {
+        return None;
+    }
+    Some(symbol.into())
+}
+
+/// Whether a symbol ends in one of the names of [`UNIT_NAMES`] after other
+/// letters: `xohm`, `kdegC`.
+fn ends_in_name(symbol: &str) -> bool {
+    UNIT_NAMES
+        .iter()
+        .any(|(name, _)| symbol.len() > name.len() && symbol.ends_with(name))
+}
+
+/// The error for a symbol that ends in a name it cannot be read with:
+/// `xohm`, `kdegC`. It points at the symbol, which starts at `start` in the
+/// unit's text.
+fn unknown_name(symbol: &str, start: usize) -> UnitError {
+    let (name, _) = UNIT_NAMES
+        .iter()
+        .filter(|(name, _)| symbol.len() > name.len() && symbol.ends_with(name))
+        .max_by_key(|(name, _)| name.len())
+        .expect("the symbol ends in a name");
+    let prefix = &symbol[..symbol.len() - name.len()];
+    let (message, hint) = if PREFIXED_NAMES.contains(name) {
+        (
+            format!("`{prefix}` is not an SI prefix of `{name}`"),
+            format!(
+                "write an SI prefix before `{name}`: `k{name}`, `M{name}`, `m{name}`, `micro{name}`"
+            ),
+        )
+    } else {
+        (
+            format!("`{name}` takes no prefix, so `{symbol}` is not a unit"),
+            format!("write `{name}` alone, or separate the factors with spaces"),
+        )
+    };
+    UnitError {
+        message: message.into(),
+        hint: Some(hint.into()),
+        range: start..start + symbol.len(),
+    }
 }
 
 impl Display for Unit {
@@ -739,7 +838,11 @@ mod tests {
     fn floats_in_shortest_form() {
         assert_eq!(Number::from_float(0.1).unwrap().to_string(), "0.1");
         assert_eq!(Number::from_float(6.02e23).unwrap().to_string(), "6.02e23");
-        assert_eq!(Number::from_float(-0.0).unwrap().to_string(), "0.0");
+        assert_eq!(Number::from_float(-0.0).unwrap().to_string(), "0");
+        assert_eq!(Number::from_float(2.0).unwrap().to_string(), "2");
+        assert_eq!(Number::from_float(-1500.0).unwrap().to_string(), "-1500");
+        assert_eq!(Number::from_float(1e21).unwrap().to_string(), "1e21");
+        assert_eq!(Number::from_float(2.5).unwrap().to_string(), "2.5");
         assert_eq!(Number::from_float(f64::NAN), None);
         assert_eq!(Number::from_int(-42).to_string(), "-42");
     }
@@ -811,5 +914,52 @@ mod tests {
         assert_eq!(Unit::parse("m  s^x").unwrap_err().range, 3..6);
         assert!(Unit::parse("^2").is_err());
         assert!(Unit::parse("  ").is_err());
+    }
+
+    #[test]
+    fn expands_prefixed_names() {
+        let unit = |text: &str| Unit::parse(text).unwrap().to_string();
+        assert_eq!(unit("kohm"), "kΩ");
+        assert_eq!(unit("Mohm"), "MΩ");
+        assert_eq!(unit("mohm"), "mΩ");
+        assert_eq!(unit("Gohm"), "GΩ");
+        assert_eq!(unit("microohm"), "µΩ");
+        assert_eq!(unit("µohm"), "µΩ");
+        assert_eq!(unit("daohm"), "daΩ");
+        assert_eq!(unit("kohm m"), "kΩ m");
+        assert_eq!(unit("V kohm^-1"), "V kΩ^-1");
+        assert_eq!(unit("microF"), "µF");
+        assert_eq!(unit("degC"), "°C");
+        assert_eq!(unit("angstrom"), "Å");
+        // Symbols that merely contain a name stay as they are.
+        assert_eq!(unit("kg"), "kg");
+        assert_eq!(unit("ohmx"), "ohmx");
+    }
+
+    #[test]
+    fn rejects_unknown_names() {
+        let error = Unit::parse("m xohm").unwrap_err();
+        assert_eq!(error.range, 2..6);
+        assert!(
+            error.message.contains("`x` is not an SI prefix"),
+            "{error:?}"
+        );
+        assert!(error.hint.unwrap().contains("kohm"));
+        let error = Unit::parse("kdegC").unwrap_err();
+        assert_eq!(error.range, 0..5);
+        assert!(
+            error.message.contains("`degC` takes no prefix"),
+            "{error:?}"
+        );
+        for bad in [
+            "mdeg",
+            "microdeg",
+            "karcmin",
+            "Mangstrom",
+            "kiloohm",
+            "microxohm",
+        ] {
+            assert!(Unit::parse(bad).is_err(), "{bad}");
+        }
     }
 }
