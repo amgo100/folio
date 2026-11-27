@@ -498,9 +498,9 @@ fn token_references_in_content() {
     );
     let compiled = folio::compile(&nested, Target::Pdf, Some(&name("exam"))).unwrap();
     assert!(
-        compiled.diagnostics[0]
-            .message
-            .ends_with("`tok.gap` can be a whole value or an item of a list only, not nested deeper"),
+        compiled.diagnostics[0].message.ends_with(
+            "`tok.gap` can be a whole value or an item of a list only, not nested deeper"
+        ),
         "{:?}",
         compiled.diagnostics
     );
