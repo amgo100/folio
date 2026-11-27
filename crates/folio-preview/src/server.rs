@@ -51,7 +51,13 @@ struct Shared {
     /// Messages for every client, such as `reveal`.
     broadcast: broadcast::Sender<Arc<str>>,
     on_event: Option<Hook>,
+    /// The figures `/figure/` converted last, by content hash, oldest
+    /// first.
+    figures: std::sync::Mutex<Vec<(u64, Arc<str>)>>,
 }
+
+/// How many converted figures `/figure/` keeps.
+const FIGURES_KEPT: usize = 16;
 
 /// Binds the port on `127.0.0.1` and serves on a thread of its own.
 pub(crate) fn start(
@@ -84,6 +90,7 @@ pub(crate) fn start(
         stop,
         broadcast,
         on_event,
+        figures: std::sync::Mutex::new(Vec::new()),
     });
     let thread = thread::Builder::new()
         .name("folio-preview-server".into())
@@ -158,6 +165,11 @@ async fn connection(mut stream: TcpStream, shared: Arc<Shared>) {
                 font(&shared, n)
             } else if let Some(n) = path.strip_prefix("/glyphs/") {
                 glyphs(&shared, n, &request).await
+            } else if let Some(hash) = path
+                .strip_prefix("/figure/")
+                .and_then(|rest| rest.strip_suffix(".svg"))
+            {
+                figure(&shared, hash).await
             } else {
                 http::error("404 Not Found")
             }
@@ -230,6 +242,105 @@ async fn png(shared: &Shared, n: &str) -> Vec<u8> {
         Ok(Ok(bytes)) => http::response("200 OK", "image/png", &[], &bytes),
         _ => http::error("500 Internal Server Error"),
     }
+}
+
+/// The policy of a figure's SVG: it may show the images embedded in it and
+/// style itself, and nothing else, should it be opened as a page.
+const FIGURE_POLICY: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox";
+
+/// A vector figure of the current revision as SVG, found by the content
+/// hash of its file (`Image::content_hash`, as 16 hexadecimal digits): an
+/// SVG figure, or a PDF figure converted to SVG, both as `folio-render`'s
+/// SVG output draws them, at the size of the first box that holds the
+/// figure. Its root does not keep the aspect ratio, so that a client may
+/// stretch it to any other box, as the figure is stretched to its box.
+async fn figure(shared: &Shared, hash: &str) -> Vec<u8> {
+    let digits = |s: &str| s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let Some(hash) = (hash.len() == 16 && digits(hash))
+        .then(|| u64::from_str_radix(hash, 16).ok())
+        .flatten()
+    else {
+        return http::error("404 Not Found");
+    };
+    let answer = |svg: &str| {
+        http::response(
+            "200 OK",
+            "image/svg+xml",
+            &[("Content-Security-Policy", FIGURE_POLICY)],
+            svg.as_bytes(),
+        )
+    };
+    let published = shared.published.borrow().clone();
+    let found = published.pages.iter().find_map(|entry| {
+        entry
+            .list
+            .items
+            .iter()
+            .find_map(|item| match &item.command {
+                folio_render::Command::Image(image)
+                    if image.image.content_hash() == hash
+                        && matches!(
+                            image.image.format(),
+                            folio_component::ImageFormat::Svg | folio_component::ImageFormat::Pdf
+                        ) =>
+                {
+                    Some(image.clone())
+                }
+                _ => None,
+            })
+    });
+    let Some(image) = found else {
+        return http::error("404 Not Found");
+    };
+    // A figure is converted once while it is among the last ones asked
+    // for: its content hash names its bytes. The one found moves to the end.
+    let kept = |figures: &mut Vec<(u64, Arc<str>)>| {
+        let i = figures.iter().position(|(h, _)| *h == hash)?;
+        let entry = figures.remove(i);
+        let svg = entry.1.clone();
+        figures.push(entry);
+        Some(svg)
+    };
+    if let Some(svg) = shared.figures.lock().ok().and_then(|mut f| kept(&mut f)) {
+        return answer(&svg);
+    }
+    let fonts = published.fonts.clone();
+    let converted = tokio::task::spawn_blocking(move || {
+        let rect = folio_render::Rect {
+            x: 0.0,
+            y: 0.0,
+            ..image.rect
+        };
+        let list = folio_render::DisplayList {
+            width: rect.width,
+            height: rect.height,
+            span: folio_render::Span::DETACHED,
+            items: vec![folio_render::Item {
+                command: folio_render::Command::Image(folio_render::ImageItem { rect, ..image }),
+                span: folio_render::Span::DETACHED,
+            }],
+        };
+        let svg = folio_render::svg(&list, &*fonts, &mut folio_render::Outlines::new());
+        match svg.strip_prefix("<svg ") {
+            Some(rest) => format!("<svg preserveAspectRatio=\"none\" {rest}"),
+            None => svg,
+        }
+    })
+    .await;
+    // A figure that cannot be converted is an SVG without its image.
+    let Ok(svg) = converted else {
+        return http::error("500 Internal Server Error");
+    };
+    let svg: Arc<str> = svg.into();
+    if let Ok(mut figures) = shared.figures.lock()
+        && kept(&mut figures).is_none()
+    {
+        if figures.len() == FIGURES_KEPT {
+            figures.remove(0);
+        }
+        figures.push((hash, svg.clone()));
+    }
+    answer(&svg)
 }
 
 /// The bytes of a font that glyph runs name.
