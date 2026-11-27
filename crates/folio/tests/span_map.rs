@@ -4,6 +4,7 @@
 //! the nodes they come from keep their identity across edits elsewhere.
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 
 use folio::span_map::{self, Placed};
 use folio::{Fragment, FragmentItem, NodeId, Pages, Source, Target, World};
@@ -80,7 +81,7 @@ fn check_glyph(
     kind: SyntaxKind,
     written: &str,
     source: &Source,
-    bytes: std::ops::Range<usize>,
+    bytes: Range<usize>,
     seen: &mut Seen,
 ) {
     let shown = placed.text();
@@ -301,4 +302,91 @@ fn node_ids_are_stable_across_edits_elsewhere() {
 
     // The pages after the edits resolve as before.
     check_glyphs(&world, &pages(&world));
+}
+
+/// The glyphs whose source is the element written at `at`, such as a list
+/// item's marker: each with its page, pen position and where a click on it
+/// leads.
+fn marker_glyphs(world: &World, pages: &Pages, at: usize) -> Vec<(usize, f64, f64, Range<usize>)> {
+    let mut out = Vec::new();
+    for (index, page) in pages.pages.iter().enumerate() {
+        for placed in span_map::glyphs(&page.fragment) {
+            let Some(location) = span_map::locate_glyph(world, placed.glyph) else {
+                continue;
+            };
+            if location.bytes.start == at && location.bytes.len() > placed.text().len() {
+                let (x, y) = (placed.pos.x.to_pt(), placed.pos.y.to_pt());
+                out.push((index, x, y, location.bytes));
+            }
+        }
+    }
+    out
+}
+
+/// Whether a found area covers a glyph whose pen position is at `x`, `y`.
+fn covers(found: &span_map::Found, page: usize, x: f64, y: f64) -> bool {
+    let (left, top) = (found.pos.x.to_pt(), found.pos.y.to_pt());
+    found.page == page
+        && left <= x
+        && x < left + found.size.width.to_pt()
+        && top <= y
+        && y <= top + found.size.height.to_pt()
+}
+
+/// Revealing the editor's cursor in a list item marks the text under it,
+/// not the item's label, whose glyphs stand for the whole item (#417);
+/// clicking the label still selects the item.
+#[test]
+fn a_cursor_in_a_list_item_marks_its_text_not_its_label() {
+    let text = "+ First item, with words.\n+ Second item.\n  - A nested bullet item.\n";
+    let world = world("", text);
+    let pages = pages(&world);
+    let fragments: Vec<_> = pages.pages.iter().map(|p| &p.fragment).collect();
+    let index = span_map::Index::new(&world, &fragments);
+
+    for (item, inside) in [
+        ("+ First", "with"),
+        ("+ Second", "item."),
+        ("- A", "bullet"),
+    ] {
+        let at = text.find(item).unwrap();
+        let markers = marker_glyphs(&world, &pages, at);
+        assert!(!markers.is_empty(), "{item:?} has no marker");
+        // Click-to-source on the label selects the whole item, the nested
+        // list of the second one included.
+        let whole = markers[0].3.clone();
+        assert!(markers.iter().all(|m| m.3 == whole), "{markers:?}");
+        let end = text[at..].find('\n').unwrap() + at;
+        assert!(
+            whole.end >= end,
+            "{item:?} selects {:?}",
+            &text[whole.clone()]
+        );
+
+        // A cursor and a selection inside the item's text, and a cursor at
+        // the end of it, mark that text alone.
+        let word = text[at..].find(inside).unwrap() + at;
+        for bytes in [word + 1..word + 1, word..word + inside.len(), end..end] {
+            let found = index.find("main.fol", bytes.clone());
+            assert!(!found.is_empty(), "{item:?} at {bytes:?} finds nothing");
+            assert!(found.iter().all(|f| f.glyphs), "{found:?}");
+            for &(page, x, y, _) in &markers {
+                assert!(
+                    !found.iter().any(|f| covers(f, page, x, y)),
+                    "{item:?} at {bytes:?} marks the label: {found:?}"
+                );
+            }
+        }
+
+        // At the item's own marker syntax, and for the whole item, as a
+        // diagnostic on it would, the label is marked.
+        let (page, x, y, _) = markers[0];
+        for bytes in [at..at, whole] {
+            let found = index.find("main.fol", bytes.clone());
+            assert!(
+                found.iter().any(|f| covers(f, page, x, y)),
+                "{item:?} at {bytes:?} does not mark the label: {found:?}"
+            );
+        }
+    }
 }

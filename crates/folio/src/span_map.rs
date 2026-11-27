@@ -111,7 +111,11 @@ pub struct Found {
 /// finds the glyph whose text holds the byte after it, or else the glyph
 /// whose text ends there, at the end of a word. A glyph's area reaches from
 /// its pen position to the next and from a font size above its baseline to
-/// a quarter of it below, as a click finds it. Where no glyph shows the
+/// a quarter of it below, as a click finds it. A glyph that stands for a
+/// whole element, such as a list item's marker or a heading's number, is
+/// left out where glyphs of text inside the element show the bytes, unless
+/// the bytes hold the whole element: a cursor in an item's text marks that
+/// text, not the item's label. Where no glyph shows the
 /// bytes, as in the markup of an element's call, the boxes of the
 /// fragments and objects whose nodes hold them, and hold the fewest bytes,
 /// are found instead; pages themselves, and the root nodes of files, are
@@ -405,19 +409,47 @@ impl Index {
                 r.start < bytes.end && bytes.start < r.end
             }
         };
-        let mut hits: Vec<(usize, &GlyphEntry)> = resolved
-            .iter()
-            .filter(|(_, _, r)| overlaps(r))
-            .map(|&(i, g, _)| (i, g))
-            .collect();
-        if hits.is_empty() && bytes.is_empty() {
-            hits = resolved
+        // A glyph that stands for a whole element, such as a list item's
+        // marker or a heading's number, is not found for a place inside
+        // other text of the element that its glyphs show: there the reveal
+        // marks that text alone (#417). It is found where nothing inside
+        // it shows the bytes, as at the item's `+`, and for bytes that hold
+        // the whole element.
+        let whole = |g: &GlyphEntry, r: &Range<usize>| {
+            *r == g.whole && !(bytes.start <= r.start && r.end <= bytes.end)
+        };
+        let nested = |inner: &Range<usize>, outer: &Range<usize>| {
+            inner != outer && outer.start <= inner.start && inner.end <= outer.end
+        };
+        let mut hits: Vec<&(usize, &GlyphEntry, Range<usize>)> =
+            resolved.iter().filter(|(_, _, r)| overlaps(r)).collect();
+        if bytes.is_empty() && hits.iter().all(|(_, g, r)| whole(g, r)) {
+            // At the end of a word: the glyph whose text ends there, also
+            // where only whole elements hold the place.
+            let ends = resolved
                 .iter()
-                .filter(|(_, _, r)| !r.is_empty() && r.end == bytes.start)
-                .map(|&(i, g, _)| (i, g))
-                .collect();
+                .filter(|(_, _, r)| !r.is_empty() && r.end == bytes.start);
+            if hits.is_empty() {
+                hits = ends.collect();
+            } else {
+                let inside: Vec<_> = ends
+                    .filter(|(_, _, r)| hits.iter().any(|(_, _, outer)| nested(r, outer)))
+                    .collect();
+                hits.extend(inside);
+                hits.sort_by_key(|(i, _, _)| *i);
+            }
+        }
+        let shadowed: Vec<Range<usize>> = hits
+            .iter()
+            .filter(|(_, g, r)| whole(g, r))
+            .filter(|(_, _, r)| hits.iter().any(|(_, _, inner)| nested(inner, r)))
+            .map(|(_, _, r)| r.clone())
+            .collect();
+        if !shadowed.is_empty() {
+            hits.retain(|(_, g, r)| !(whole(g, r) && shadowed.contains(r)));
         }
         if !hits.is_empty() {
+            let hits: Vec<(usize, &GlyphEntry)> = hits.iter().map(|&&(i, g, _)| (i, g)).collect();
             return merge(&hits);
         }
         let holding = || {
