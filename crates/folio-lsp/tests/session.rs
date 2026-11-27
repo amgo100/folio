@@ -66,6 +66,9 @@ struct Client {
     next_id: i32,
     /// The revision the server checks next, from its last `Edited` event.
     latest: u64,
+    /// Whether the server has changed the world since [`Self::settle`] last
+    /// returned; starting it counts.
+    edited: bool,
     /// The revisions whose checks have started and not yet ended.
     running: BTreeSet<u64>,
     /// The checks that ended since [`Self::settle`] last returned.
@@ -107,6 +110,7 @@ impl Client {
             shown: Vec::new(),
             next_id: 0,
             latest: 0,
+            edited: true,
             running: BTreeSet::new(),
             ended: Vec::new(),
         };
@@ -161,7 +165,13 @@ impl Client {
             .receiver
             .recv_timeout(TIMEOUT)
             .expect("the server answers");
-        match &message {
+        self.take(&message);
+        message
+    }
+
+    /// Answers a request of the server, or keeps a notification.
+    fn take(&mut self, message: &Message) {
+        match message {
             Message::Request(request) if request.method == "window/showDocument" => {
                 self.shown.push(request.params.clone());
                 self.connection
@@ -179,19 +189,23 @@ impl Client {
             Message::Notification(notification) => self.notifications.push(notification.clone()),
             Message::Response(_) => {}
         }
-        message
     }
 
     /// Waits for an event of the server. Every event it reads, wanted or
     /// not, is accounted for in the checks [`Self::settle`] waits for.
     fn event(&mut self, wanted: impl Fn(&Event) -> bool) -> Event {
         loop {
-            let event = self
-                .events
-                .recv_timeout(TIMEOUT)
-                .expect("the server reports");
+            let Ok(event) = self.events.recv_timeout(TIMEOUT) else {
+                panic!(
+                    "the server reports (checks still running: {:?})",
+                    self.running
+                );
+            };
             match event {
-                Event::Edited { revision } => self.latest = revision,
+                Event::Edited { revision } => {
+                    self.latest = revision;
+                    self.edited = true;
+                }
                 Event::Started { revision } => {
                     self.running.insert(revision);
                 }
@@ -207,9 +221,10 @@ impl Client {
         }
     }
 
-    /// Waits until the check of the latest revision has been published and
-    /// every check that started has ended, and returns the outcomes of the
-    /// checks that ended since the last call.
+    /// Waits until the server has changed the world since the last call, the
+    /// check of the latest revision has been published and every check that
+    /// started has ended, and returns the outcomes of the checks that ended
+    /// since the last call.
     ///
     /// A cancelled check reports its end from its own thread, so its
     /// `Checked` can come after that of the check that overtook it: waiting
@@ -220,7 +235,7 @@ impl Client {
                 .ended
                 .iter()
                 .any(|&ended| ended == (self.latest, Outcome::Published));
-            if published && self.running.is_empty() {
+            if self.edited && published && self.running.is_empty() {
                 break;
             }
             self.event(|_| true);
@@ -228,10 +243,9 @@ impl Client {
         // Every notification of that check is sent before the event; take
         // them in.
         while let Ok(message) = self.connection.receiver.try_recv() {
-            if let Message::Notification(notification) = message {
-                self.notifications.push(notification);
-            }
+            self.take(&message);
         }
+        self.edited = false;
         std::mem::take(&mut self.ended)
     }
 
