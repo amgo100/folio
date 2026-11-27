@@ -41,14 +41,17 @@ impl<'a> Word<'a> {
 }
 
 /// The core's words: `(key, English, Polish)`. A key is the reference key
-/// of a built-in element (SPEC §4.3), or `page`, the word of a page-number
-/// reference (*page 4*, *s. 4*). The Polish words are abbreviations,
+/// of a built-in element (SPEC §4.3), `page`, the word of a page-number
+/// reference (*page 4*, *s. 4*), or `continued`, the mark that starts the
+/// part of a footnote that runs onto the next page (*(cont.)*, *(cd.)*,
+/// for *ciąg dalszy*; SPEC §7.8, decision D-46-1). The Polish words are abbreviations,
 /// which do not inflect, so a reference reads right in any case of the
 /// sentence around it (decision D-44-1): *zob. rys. 1*, *na rys. 1*.
 const WORDS: &[(&str, Word<'static>, Word<'static>)] = &[
     ("section", Word::plain("Section"), Word::plain("rozdz.")),
     ("figure", Word::plain("Figure"), Word::plain("rys.")),
     ("page", Word::plain("page"), Word::plain("s.")),
+    ("continued", Word::plain("(cont.)"), Word::plain("(cd.)")),
     (
         "equation",
         Word::plain("Equation"),

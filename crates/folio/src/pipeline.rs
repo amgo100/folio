@@ -321,6 +321,18 @@ pub(crate) fn structure(
     text: &Text,
     alt: &dyn Fn(Span) -> Option<EcoString>,
 ) -> Tag {
+    structure_of(block, text, alt, false)
+}
+
+/// The structure of a block, as [`structure`] gives it; `in_note` for the
+/// blocks of a footnote, whose own footnotes are not placed, so they have
+/// no node (SPEC §7.8).
+fn structure_of(
+    block: &TextBlock,
+    text: &Text,
+    alt: &dyn Fn(Span) -> Option<EcoString>,
+    in_note: bool,
+) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
     let mut tag = Tag::new(role, source_ref(block.span));
     tag.instance = block.location.instance;
@@ -331,23 +343,39 @@ pub(crate) fn structure(
     }
     for child in &block.children {
         match child {
-            TextFlow::Block(block) => tag.children.push(structure(block, text, alt)),
+            TextFlow::Block(block) => {
+                tag.children.push(structure_of(block, text, alt, in_note));
+            }
             TextFlow::Paragraph(index) => {
+                let paragraph = &text.paragraphs[*index];
                 // A formula's first chunk, as the others continue it, and
                 // each image, with its alt text as its description.
-                for object in &text.paragraphs[*index].objects {
+                let objects = paragraph.objects.iter().filter_map(|object| {
                     let (role, description) = if object.math.is_some_and(|m| m.chunk == 0) {
                         (Role::Formula, formula_alt(text, object.span, alt))
                     } else if let Some(image) = &object.image {
                         (Role::Figure, image.alt.clone().and_then(clean))
                     } else {
-                        continue;
+                        return None;
                     };
                     let mut child = Tag::new(role, source_ref(object.span));
                     child.instance = object.location.instance;
                     child.text = description;
-                    tag.children.push(child);
-                }
+                    Some((object.at, child))
+                });
+                // A footnote's note, whose boxes the page builder draws
+                // inside the paragraph's on the page of its anchor
+                // (SPEC §7.8, §11.1).
+                let notes = paragraph.notes.iter().filter(|_| !in_note).map(|anchor| {
+                    (
+                        anchor.range.start,
+                        structure_of(&text.notes[anchor.note], text, alt, true),
+                    )
+                });
+                let mut children: Vec<(usize, Tag)> = objects.chain(notes).collect();
+                children.sort_by_key(|(at, _)| *at);
+                tag.children
+                    .extend(children.into_iter().map(|(_, child)| child));
             }
         }
     }
@@ -428,13 +456,20 @@ fn alt_text(written: &str) -> Option<EcoString> {
 }
 
 /// The text of the paragraphs a block holds directly, as [`clean`] gives
-/// it.
+/// it, without the anchors of footnotes.
 fn block_text(block: &TextBlock, text: &Text) -> Option<EcoString> {
     let mut words = String::new();
     for child in &block.children {
         if let TextFlow::Paragraph(index) = child {
+            let paragraph = &text.paragraphs[*index];
+            let shown = paragraph.shaped.text();
+            let mut at = 0;
             words.push(' ');
-            words.push_str(text.paragraphs[*index].shaped.text());
+            for anchor in &paragraph.notes {
+                words.push_str(&shown[at..anchor.range.start]);
+                at = anchor.range.end;
+            }
+            words.push_str(&shown[at..]);
         }
     }
     clean(words.into())
@@ -458,7 +493,7 @@ fn role(element: &QualifiedName, part: Option<&str>) -> Role {
         ("terms", None) => Role::List(ListKind::Terms),
         ("list-item" | "enum-item" | "terms-item", None) => Role::ListItem,
         ("terms-item", Some("term")) => Role::Label,
-        ("sidenote", None) => Role::Note,
+        ("footnote" | "sidenote", None) => Role::Note,
         ("raw", None) => Role::Code,
         ("math", None) => Role::Formula,
         (_, Some("caption")) => Role::Caption,

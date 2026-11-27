@@ -379,6 +379,10 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
         Layout,
     );
     prop("tracking", Length, pt(0.0), Layout);
+    // SPEC §5.2: raises text above the baseline, or lowers it where it is
+    // negative, and makes its line as much taller: superscripts such as
+    // footnote markers.
+    prop("baseline-shift", Length, pt(0.0), Layout);
     prop(
         "features",
         any_of([PropertyType::None, list(Str)]),

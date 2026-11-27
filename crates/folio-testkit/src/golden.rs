@@ -577,3 +577,52 @@ pub fn boxes() -> (World, Pages) {
     );
     (world, pages)
 }
+
+/// The document of the footnote golden file ([`footnotes`]): notes on
+/// small pages, numbered from 1 on each page, one of them long enough to
+/// continue on the next page, which starts with what is left of it before
+/// the notes anchored there (SPEC §7.8).
+pub const FOOTNOTES: &str = "#doc(title: [Projectile motion])\n\n= Projectile motion\n\n\
+A ball is thrown horizontally from the top of a cliff.#footnote[Air resistance is \
+negligible throughout.] Its horizontal velocity stays the same while its vertical velocity \
+grows at a steady rate,#footnote[The acceleration of free fall, $g = qty(9.81, \"m s^-2\")$.] so \
+its path is a parabola.\n\n\
+The time of flight depends only on the height of the cliff and not on the speed of the \
+throw. A faster ball lands further away, but it lands at the same moment as a slower one \
+thrown at the same time, because both fall the same height from rest in the vertical \
+direction. This surprises many students when they first meet it, and a simple \
+demonstration with two coins shows it well.\n\n\
+The range is the horizontal speed multiplied by the time of flight.#footnote[This holds \
+only while the ground below the cliff is level. On a slope the ball lands earlier or later, \
+and the range must be found from where the path meets the ground. The same method works \
+for a ball thrown at an angle, once its velocity has been resolved into horizontal and \
+vertical components, each of which is treated on its own as before. A worked example \
+follows in the next lesson, with a table of results to compare with the experiment, and a \
+short set of exam questions. The questions start with a ball thrown from a table, which is \
+easy to film with a phone held at the side, and end with a ball thrown up a slope, which \
+needs both components at once. Bring a calculator, a ruler and squared paper.] A ball thrown at twice the speed travels twice as far before \
+it lands.\n\n\
+== Questions\n\n\
+Find the time of flight of a ball thrown from a cliff 20 m high.#footnote[Give your answer \
+to two significant figures.] Then find how far from the foot of the cliff it lands when it \
+is thrown at $qty(5, \"m s^-1\")$.\n";
+
+/// The stylesheet of [`FOOTNOTES`]: small pages whose footnotes are
+/// numbered from 1 on each.
+pub const FOOTNOTES_STYLE: &str = "page { page-size: 105mm 148mm; margin-top: 12mm; margin-bottom: 12mm; \
+margin-inner: 12mm; margin-outer: 12mm; counter-reset: footnote; }\n";
+
+/// The world of [`FOOTNOTES`], and its pages.
+pub fn footnotes() -> (World, Pages) {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en-GB\"\nstyles = [\"styles/footnotes.fsty\"]\n";
+    let mut world = World::new(manifest).expect("a valid manifest");
+    world.set_source("main.fol", FOOTNOTES).expect("a source");
+    world
+        .set_source("styles/footnotes.fsty", FOOTNOTES_STYLE)
+        .expect("a stylesheet");
+    let pages = folio::pages(&world, Target::Pdf, None)
+        .expect("nothing cancels the build")
+        .expect("the footnote document has pages");
+    (world, pages)
+}

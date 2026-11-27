@@ -9,7 +9,7 @@ from the scripts in `scripts/`.
 | Path | What it holds |
 | --- | --- |
 | `tests/corpus/<project>/` | The test corpus: whole projects (`folio.toml`, content, stylesheets), each covering features a real document uses. Every build of every project goes through the golden, PDF, determinism and command-line tests. |
-| `tests/golden/layout/` | Layout golden files: `<project>-<variant>.<target>.txt` for each corpus build that goes through layout, a text dump of its pages and fragments, and `<project>-<variant>.<target>-<page>.png` for each of its pages, drawn by `folio-render`; `boxes.pdf.*` for a document with fixed-size object boxes. |
+| `tests/golden/layout/` | Layout golden files: `<project>-<variant>.<target>.txt` for each corpus build that goes through layout, a text dump of its pages and fragments, and `<project>-<variant>.<target>-<page>.png` for each of its pages, drawn by `folio-render`; `boxes.pdf.*` for a document with fixed-size object boxes; `footnotes.pdf.*` for a document with footnotes numbered per page, one of them continued. |
 | `crates/folio-testkit/` | The test infrastructure as a crate: corpus loading, golden-file checks and dumps, the fuzz harnesses, the reference document generator, the benchmarks. |
 | `crates/folio-testkit/benches/compile.rs` | The instruction-count benchmarks of the regression gate. |
 | `crates/folio/tests/determinism/digests.txt` | The SHA-256 digests of the corpus outputs (SPEC §2.4). |

@@ -77,6 +77,7 @@ pub const UNBREAKABLE: f64 = 100_000.0;
 /// both.
 pub(super) fn slots(
     root: &TextBlock,
+    notes: &[TextBlock],
     props: &Properties,
     width: Abs,
     count: usize,
@@ -125,6 +126,11 @@ pub(super) fn slots(
     };
     let root_box = BlockBox::of(&root.style, props, root.span, Abs::zero(), width);
     walk(root, &root_box, &mut w);
+    // A footnote's block is as wide as the body (SPEC §7.8).
+    for note in notes {
+        let note_box = BlockBox::of(&note.style, props, note.span, Abs::zero(), width);
+        walk(note, &note_box, &mut w);
+    }
     (w.slots, w.widths)
 }
 
@@ -163,6 +169,34 @@ pub(super) struct ParagraphInfo {
     /// sized its objects, so that its lines are not those [`lines`](super::lines)
     /// broke.
     pub hooked: bool,
+    /// The footnotes anchored in it, in the order of the text (SPEC §7.8).
+    pub notes: EcoVec<Anchor>,
+}
+
+/// A footnote anchored in a paragraph: where its anchor is, and its note.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct Anchor {
+    /// The bytes of the paragraph's text that the anchor is.
+    pub range: Range<usize>,
+    /// The note.
+    pub note: Arc<Note>,
+}
+
+/// A footnote's note: the flow of its blocks, which the page builder
+/// places at the foot of the page of its anchor (SPEC §7.8). It does not
+/// depend on where in the document the note is, so that the pages that
+/// show it can be found in the page cache wherever an edit moved it.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct Note {
+    /// The `footnote` element instance.
+    pub location: Location,
+    /// Where it was made.
+    pub span: Span,
+    /// Its blocks flattened, the footnote's own block the outermost.
+    pub flow: Flow,
+    /// The mark that starts the part of it that runs onto the next page,
+    /// a paragraph of one line (*(cont.)*), if it has one.
+    pub mark: Option<Arc<ParagraphInfo>>,
 }
 
 /// An object of a paragraph: where it is, the element instance it stands
@@ -251,6 +285,8 @@ pub(super) struct SegmentPaint {
     pub tracking: Abs,
     /// The paint of its glyphs.
     pub fill: Paint,
+    /// How far its glyphs are raised above the baseline.
+    pub shift: Abs,
     /// The hyphens its lines need, inserted ones (`-`) and the explicit
     /// ones Polish repeats: each with its glyphs in the segment's font, in
     /// font units of the units per em they come with.
@@ -584,8 +620,8 @@ pub(super) enum Origin {
     Empty,
 }
 
-/// The flow of a build.
-#[derive(Debug, Clone)]
+/// The flow of a build, or of a footnote's note.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(super) struct Flow {
     /// The leaves, with what lies before each; at least one.
     pub items: Vec<Item>,
@@ -620,7 +656,7 @@ impl Flow {
             .filter(|(_, m)| m.display)
             .map(|(i, m)| (m.location, i))
             .collect();
-        let mut builder = Builder {
+        let builder = Builder {
             sizes,
             displays,
             text,
@@ -630,31 +666,17 @@ impl Flow {
             layouts,
             slots,
             props,
+            fonts,
+            width,
             metrics: FaceMetrics::new(fonts),
             stack: EcoVec::new(),
             pending: Vec::new(),
             prev: None,
             items: Vec::new(),
             origins: Vec::new(),
+            in_note: false,
         };
-        let root = &text.root;
-        let root_box = shared.block(
-            Arc::new(BlockBox::of(
-                &root.style,
-                props,
-                root.span,
-                Abs::zero(),
-                width,
-            )),
-            now,
-        );
-        builder.block(root, root_box);
-        let end = builder.boundary(None);
-        Flow {
-            items: builder.items,
-            end,
-            origins: builder.origins,
-        }
+        builder.flow(&text.root)
     }
 
     /// The boundary before leaf `i`, or after the last for `i == len`.
@@ -853,6 +875,9 @@ struct Builder<'a> {
     layouts: &'a [Arc<ParagraphLayout>],
     slots: &'a [LineSlot],
     props: &'a Properties,
+    fonts: &'a Fonts,
+    /// The width of the body.
+    width: Abs,
     metrics: FaceMetrics<'a>,
     /// The blocks open, outermost first, with their locations.
     stack: EcoVec<(Arc<BlockBox>, Location)>,
@@ -862,9 +887,78 @@ struct Builder<'a> {
     prev: Option<Leaf>,
     items: Vec<Item>,
     origins: Vec<Origin>,
+    /// Whether it builds a footnote's note, whose own footnotes are not
+    /// placed (the text stage reports them).
+    in_note: bool,
 }
 
 impl Builder<'_> {
+    /// The flow of the blocks of `root`, the outermost a box as wide as the
+    /// body.
+    fn flow(mut self, root: &TextBlock) -> Flow {
+        let root_box = self.shared.block(
+            Arc::new(BlockBox::of(
+                &root.style,
+                self.props,
+                root.span,
+                Abs::zero(),
+                self.width,
+            )),
+            self.now,
+        );
+        self.block(root, root_box);
+        let end = self.boundary(None);
+        Flow {
+            items: self.items,
+            end,
+            origins: self.origins,
+        }
+    }
+
+    /// The note of a footnote, whose block is `block`: a flow of its own.
+    /// Its origins are left out, as paragraphs' indices in the build's
+    /// text move with edits elsewhere, and a note is the same wherever it
+    /// is.
+    fn note(&self, block: &TextBlock, continued: Option<usize>) -> Arc<Note> {
+        let mut builder = Builder {
+            sizes: self.sizes,
+            displays: self.displays.clone(),
+            text: self.text,
+            cache: self.cache,
+            shared: self.shared,
+            now: self.now,
+            layouts: self.layouts,
+            slots: self.slots,
+            props: self.props,
+            fonts: self.fonts,
+            width: self.width,
+            metrics: FaceMetrics::new(self.fonts),
+            stack: EcoVec::new(),
+            pending: Vec::new(),
+            prev: None,
+            items: Vec::new(),
+            origins: Vec::new(),
+            in_note: true,
+        };
+        let mark = continued.and_then(|i| builder.paragraph_info(i));
+        let mut flow = builder.flow(block);
+        flow.origins.clear();
+        // The mark stands where the note's first paragraph does.
+        let first = flow.items.iter().find_map(|item| match &item.leaf {
+            Leaf::Paragraph(p) => Some(p.slot),
+            _ => None,
+        });
+        let mark = match (mark, first) {
+            (Some(mark), Some(slot)) if mark.slot != slot => Some(self.reslot(&mark, slot)),
+            (mark, _) => mark,
+        };
+        Arc::new(Note {
+            location: block.location,
+            span: block.span,
+            flow,
+            mark,
+        })
+    }
     fn block(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) {
         self.stack.push((boxed.clone(), block.location));
         self.pending
@@ -926,11 +1020,44 @@ impl Builder<'_> {
     }
 
     fn paragraph(&mut self, index: usize) {
+        if let Some(info) = self.paragraph_info(index) {
+            self.leaf(Leaf::Paragraph(info), Origin::Paragraph(index));
+        }
+    }
+
+    /// A paragraph broken again into lines in another slot.
+    fn reslot(&self, info: &ParagraphInfo, slot: LineSlot) -> Arc<ParagraphInfo> {
+        let input = ParagraphInput {
+            shaped: &info.shaped,
+            style: info.style,
+            segments: info.metrics.clone(),
+            objects: object_metrics(&info.objects),
+        };
+        let layout = self.cache.layout(
+            &input,
+            &[LineSlot {
+                offset: Abs::zero(),
+                width: slot.width,
+            }],
+            None,
+        );
+        let segments = paints(self.cache, &info.shaped, &layout, &info.segments);
+        Arc::new(ParagraphInfo {
+            layout,
+            slot,
+            segments,
+            ..info.clone()
+        })
+    }
+
+    /// Paragraph `index` of the text broken into lines, or `None` when it
+    /// has none.
+    fn paragraph_info(&mut self, index: usize) -> Option<Arc<ParagraphInfo>> {
         let text = self.text;
         let paragraph = &text.paragraphs[index];
         let layout = self.layouts[index].clone();
         if layout.lines.is_empty() {
-            return;
+            return None;
         }
         let mut input = input_with(paragraph, self.props, &mut self.metrics);
         let style = paragraph_style(&paragraph.style, self.props);
@@ -992,10 +1119,26 @@ impl Builder<'_> {
                 size: metrics.size,
                 tracking: metrics.tracking,
                 fill: fill(&seg.style, self.props),
+                shift: metrics.shift,
                 hyphens: EcoVec::new(),
             })
             .collect();
         let paints = paints(self.cache, &paragraph.shaped, &layout, &base);
+        let notes = if self.in_note {
+            EcoVec::new()
+        } else {
+            paragraph
+                .notes
+                .iter()
+                .map(|anchor| Anchor {
+                    range: anchor.range.clone(),
+                    note: self.note(
+                        &text.notes[anchor.note],
+                        text.continued.get(anchor.note).copied().flatten(),
+                    ),
+                })
+                .collect()
+        };
         let info = self.shared.paragraph(
             ParagraphInfo {
                 shaped: paragraph.shaped.clone(),
@@ -1012,10 +1155,11 @@ impl Builder<'_> {
                 span: paragraph.span,
                 objects,
                 hooked,
+                notes,
             },
             self.now,
         );
-        self.leaf(Leaf::Paragraph(info), Origin::Paragraph(index));
+        Some(info)
     }
 
     fn leaf(&mut self, leaf: Leaf, origin: Origin) {

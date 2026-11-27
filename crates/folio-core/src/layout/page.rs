@@ -62,6 +62,7 @@ use super::flow::{
     BlockObject, Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, ParagraphInfo,
     Part, Shared, Sizes, Walk,
 };
+use super::footnote::{self, Carried, NOTE_SPLIT, NoteSet, Placement};
 use super::master::{BlockBox, PageMaster};
 use super::paragraph::{ObjectMetrics, ParagraphLayout};
 use super::set::set_line;
@@ -224,11 +225,12 @@ pub struct LineRef {
     pub line: usize,
 }
 
-/// Where a page starts in the flow: the first slice of the layout part of
-/// the flow state (SPEC §2.3). It is small, `Eq` and hashes stably, so that
-/// it can key the page cache.
+/// Where a page starts in the flow, or a note on a page in its own flow:
+/// the first slice of the layout part of the flow state (SPEC §2.3), which
+/// the queue of notes carried over completes ([`Carried`]). It is small,
+/// `Eq` and hashes stably, so that it can key the page cache.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct State {
+pub(super) struct State {
     /// The leaf of the flow the page starts in.
     item: usize,
     /// The line of that leaf's paragraph the page starts at: zero at the
@@ -242,7 +244,7 @@ struct State {
 
 impl State {
     /// The start of the flow.
-    const START: Self = Self {
+    pub(super) const START: Self = Self {
         item: 0,
         line: 0,
         width: Abs::zero(),
@@ -271,6 +273,10 @@ struct PageOut {
     relaxed: EcoVec<Constraint>,
     /// The source of the leaf that overflows the page, and by how much.
     overflow: Option<(Span, Abs)>,
+    /// The notes the page carries over to the next, in order (SPEC §7.8).
+    queue: EcoVec<Carried>,
+    /// The source of a footnote that overflows the page, and by how much.
+    note_overflow: Option<(Span, Abs)>,
 }
 
 /// Test hooks for the regions the page builder fills, standing in for
@@ -485,7 +491,8 @@ fn build_pages(
     let mut pages = EcoVec::new();
     let mut hashes = EcoVec::new();
     let mut state = State::START;
-    while state.item < flow.items.len() {
+    let mut queue: EcoVec<Carried> = EcoVec::new();
+    while state.item < flow.items.len() || !queue.is_empty() {
         // The cache still forgets what it would have when `check` unwinds.
         let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut *check));
         if let Err(cancelled) = checked {
@@ -511,6 +518,7 @@ fn build_pages(
             caches,
             master,
             state,
+            queue: &queue,
             width,
             reserve,
         };
@@ -535,6 +543,7 @@ fn build_pages(
             item: state.item + out.next.item,
             ..out.next
         };
+        queue = out.queue.clone();
     }
     cache.sweep(now);
     Pages {
@@ -738,15 +747,32 @@ fn report(db: &dyn Db, out: &PageOut) {
             .with_hint("make it smaller, or the page's margins"),
         );
     }
+    if let Some((span, by)) = out.note_overflow {
+        diag::report(
+            db,
+            Diagnostic::warning(
+                span,
+                eco_format!(
+                    "this footnote does not fit on the page of its anchor: it is {:.1}pt taller \
+                     than the space left for it",
+                    by.to_pt()
+                ),
+            )
+            .with_code(codes::PAGE_OVERFLOW)
+            .with_hint("shorten the footnote, or move its anchor"),
+        );
+    }
 }
 
 /// A page to build: where it starts in a flow, and its region.
-struct PageRequest<'a> {
+pub(super) struct PageRequest<'a> {
     flow: &'a Flow,
     caches: Caches<'a>,
     master: PageMaster,
     /// Where the page starts.
     state: State,
+    /// The notes carried over to it.
+    pub(super) queue: &'a [Carried],
     /// The width of its body.
     width: Abs,
     /// The space a line reserves at the page's foot, by its leaf and line.
@@ -754,13 +780,13 @@ struct PageRequest<'a> {
 }
 
 /// A leaf of a page: a line of a paragraph, or an empty block.
-struct Placed {
+pub(super) struct Placed {
     /// What lies before it.
-    before: Boundary,
+    pub(super) before: Boundary,
     /// The leaf of the flow it is or is a line of.
-    item: usize,
+    pub(super) item: usize,
     /// The paragraph broken into lines, and the line.
-    line: Option<(Arc<ParagraphInfo>, usize)>,
+    pub(super) line: Option<(Arc<ParagraphInfo>, usize)>,
     /// The sized content of a block, for a block object.
     object: Option<Arc<BlockObject>>,
     /// Whether the paragraph was broken at a width other than the flow's,
@@ -770,7 +796,7 @@ struct Placed {
 
 impl Placed {
     /// How tall it is: a line from its ascent to its descent.
-    fn height(&self) -> Abs {
+    pub(super) fn height(&self) -> Abs {
         match &self.line {
             Some((paragraph, line)) => {
                 let line = &paragraph.layout.lines[*line];
@@ -784,19 +810,27 @@ impl Placed {
 /// The leaves of a page and those after it, from where it starts in the
 /// flow: each paragraph broken into lines at the width of the page's
 /// region, or, for the one the page starts inside, at the width it was
-/// broken at before. Leaves are made as the page builder reads them.
-struct Run<'a> {
+/// broken at before. Leaves are made as the page builder reads them. A
+/// note on the page is a run of its own flow.
+pub(super) struct Run<'a> {
     page: &'a PageRequest<'a>,
-    leaves: Vec<Placed>,
+    /// The flow: the body's, or a note's.
+    pub(super) flow: &'a Flow,
+    /// Whether it is the body's flow, whose lines the test hook of
+    /// [`Regions::reserve`] reserves space for.
+    main: bool,
+    pub(super) leaves: Vec<Placed>,
     /// The next leaf of the flow to read.
     next: usize,
 }
 
 impl<'a> Run<'a> {
-    fn new(page: &'a PageRequest<'a>) -> Self {
-        let state = page.state;
+    /// The leaves of `flow` from `state` on, in the region of `page`.
+    pub(super) fn new(page: &'a PageRequest<'a>, flow: &'a Flow, state: State, main: bool) -> Self {
         let mut run = Self {
             page,
+            flow,
+            main,
             leaves: Vec::new(),
             next: state.item,
         };
@@ -808,8 +842,8 @@ impl<'a> Run<'a> {
     }
 
     /// Leaf `i`, if the flow has it.
-    fn get(&mut self, i: usize) -> Option<&Placed> {
-        let flow = self.page.flow;
+    pub(super) fn get(&mut self, i: usize) -> Option<&Placed> {
+        let flow = self.flow;
         while self.leaves.len() <= i && self.next < flow.items.len() {
             self.read(self.next, self.page.width, 0);
             self.next += 1;
@@ -819,17 +853,67 @@ impl<'a> Run<'a> {
 
     /// The boundary before leaf `i`, or after the last for the leaf past
     /// it, once [`Run::get`] has read it.
-    fn boundary(&self, i: usize) -> &Boundary {
+    pub(super) fn boundary(&self, i: usize) -> &Boundary {
         self.leaves
             .get(i)
-            .map_or(&self.page.flow.end, |leaf| &leaf.before)
+            .map_or(&self.flow.end, |leaf| &leaf.before)
+    }
+
+    /// Where the flow continues after its first `end` leaves read, for a
+    /// run that started at `from`: the leaf of the flow and the line of its
+    /// paragraph, with the width the paragraph was broken at when that is
+    /// inside it; or the end of the flow.
+    pub(super) fn state_at(&self, end: usize, from: State) -> State {
+        match self.leaves.get(end) {
+            Some(leaf) => {
+                let line = leaf.line.as_ref().map_or(0, |(_, line)| *line);
+                let width = if line == 0 {
+                    Abs::zero()
+                } else if leaf.item == from.item && from.line > 0 {
+                    from.width
+                } else {
+                    self.page.width
+                };
+                State {
+                    item: leaf.item,
+                    line,
+                    width,
+                }
+            }
+            None => State {
+                item: self.flow.items.len(),
+                ..State::START
+            },
+        }
+    }
+
+    /// Starts the leaves read with the line of `mark`, the mark of a
+    /// continued footnote (SPEC §7.8): inside the blocks the first leaf
+    /// starts in, a leading above it.
+    pub(super) fn prepend(&mut self, mark: &Arc<ParagraphInfo>) {
+        let Some(first) = self.leaves.first_mut() else {
+            return;
+        };
+        let before = std::mem::take(&mut first.before);
+        first.before.parts.push(Part::Lead(mark.leading));
+        let item = first.item;
+        self.leaves.insert(
+            0,
+            Placed {
+                before,
+                item,
+                line: Some((mark.clone(), 0)),
+                object: None,
+                rebroken: false,
+            },
+        );
     }
 
     /// Adds the leaves of leaf `k` of the flow, from line `from` of its
     /// paragraph broken in a region `width` wide.
     fn read(&mut self, k: usize, width: Abs, from: usize) {
         let page = self.page;
-        let item = &page.flow.items[k];
+        let item = &self.flow.items[k];
         let empty = |before: &Boundary| Placed {
             before: before.clone(),
             item: k,
@@ -879,7 +963,7 @@ impl<'a> Run<'a> {
     fn reserve(&self, i: usize) -> Abs {
         let leaf = &self.leaves[i];
         match (self.page.reserve, &leaf.line) {
-            (Some(f), Some((_, line))) => f(leaf.item, *line),
+            (Some(f), Some((_, line))) if self.main => f(leaf.item, *line),
             _ => Abs::zero(),
         }
     }
@@ -895,12 +979,15 @@ struct Break {
     forced: bool,
     /// How far the page's content is taller than the space left for it.
     overflow: Abs,
+    /// How much of each of the page's notes it places (SPEC §7.8).
+    notes: Placement,
 }
 
 /// Finds where the page that starts at the first leaf of `run` ends: the
-/// body's height less what the lines on it reserve at its foot is the
-/// space its content may fill.
-fn break_page(run: &mut Run<'_>, height: Abs, first: bool) -> Break {
+/// body's height less what the lines on it reserve at its foot, and less
+/// the notes anchored above the break, is the space its content may fill.
+/// The notes of the lines read join `notes` as the lines are read.
+fn break_page<'a>(run: &mut Run<'a>, notes: &mut NoteSet<'a>, height: Abs, first: bool) -> Break {
     run.get(0).expect("a page starts at a leaf");
     let before = &run.leaves[0].before;
     let mut y = if first {
@@ -909,38 +996,46 @@ fn break_page(run: &mut Run<'_>, height: Abs, first: bool) -> Break {
         before.walk(Walk::Top, |_, _| {})
     };
     let mut reserved = Abs::zero();
-    let mut best: Option<(usize, f64)> = None;
+    let mut best: Option<(usize, f64, Placement)> = None;
     let mut k = 0;
     loop {
         y += run.leaves[k].height();
         reserved += run.reserve(k);
+        notes.anchor(run, k);
         let space = height - reserved;
         let last = run.get(k + 1).is_none();
         let boundary = run.boundary(k + 1);
         let bottom = y + boundary.walk(Walk::Bottom, |_, _| {});
-        let fits = bottom.to_pt() <= space.to_pt() + EPSILON;
+        // The notes take what the body's content leaves, and a page must
+        // take its first leaf.
+        let placed = notes.place(space - bottom, k == 0);
+        let fits = bottom.to_pt() <= space.to_pt() + EPSILON && placed.ok;
         if !fits && k > 0 {
-            let (end, _) = best.expect("a break before the leaf that overflows");
+            let (end, _, notes) = best.expect("a break before the leaf that overflows");
             return Break {
                 end,
                 read: k + 1,
                 forced: false,
                 overflow: Abs::zero(),
+                notes,
             };
         }
-        let overflow = if fits { Abs::zero() } else { bottom - space };
+        let overflow = (bottom - space).max(Abs::zero());
         if last || boundary.forced {
             return Break {
                 end: k + 1,
                 read: k + 1,
                 forced: true,
                 overflow,
+                notes: placed,
             };
         }
-        let empty = ((space - bottom).to_pt() / height.to_pt()).max(0.0);
-        let cost = FILL * empty * empty + boundary.penalty;
-        if best.is_none_or(|(_, c)| cost <= c) {
-            best = Some((k + 1, cost));
+        let used = bottom + placed.height;
+        let empty = ((space - used).to_pt() / height.to_pt()).max(0.0);
+        let split = if placed.split { NOTE_SPLIT } else { 0.0 };
+        let cost = FILL * empty * empty + boundary.penalty + split;
+        if best.as_ref().is_none_or(|(_, c, _)| cost <= *c) {
+            best = Some((k + 1, cost, placed.clone()));
         }
         if !fits {
             // The first leaf alone overflows the page.
@@ -949,6 +1044,19 @@ fn break_page(run: &mut Run<'_>, height: Abs, first: bool) -> Break {
                 read: k + 1,
                 forced: false,
                 overflow,
+                notes: placed,
+            };
+        }
+        if placed.split {
+            // The notes fill the page: a later break would only split
+            // them further (SPEC §7.8).
+            let (end, _, notes) = best.expect("this break at least");
+            return Break {
+                end,
+                read: k + 1,
+                forced: false,
+                overflow: Abs::zero(),
+                notes,
             };
         }
         y += boundary.gap();
@@ -959,10 +1067,30 @@ fn break_page(run: &mut Run<'_>, height: Abs, first: bool) -> Break {
 /// Breaks and assembles a page; returns it with the run it read and the
 /// leaf of the run after the last whose boundary after it was read.
 fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
-    let mut run = Run::new(page);
-    let first = page.state == State::START;
-    let found = break_page(&mut run, page.master.body.size.height, first);
-    let fragment = assemble(&run, found.end, first);
+    let mut run = Run::new(page, page.flow, page.state, true);
+    let mut notes = NoteSet::new(page);
+    let first = page.state == State::START && page.queue.is_empty();
+    let height = page.master.body.size.height;
+    let found = if run.get(0).is_some() {
+        break_page(&mut run, &mut notes, height, first)
+    } else {
+        // Only notes carried over are left: the page holds what fits of
+        // them.
+        let placed = notes.place(height, true);
+        let placed = if placed.leaves.iter().any(|&m| m > 0) {
+            placed
+        } else {
+            notes.place_first(height)
+        };
+        Break {
+            end: 0,
+            read: 0,
+            forced: true,
+            overflow: Abs::zero(),
+            notes: placed,
+        }
+    };
+    let fragment = assemble(&run, &notes, &found, first);
     let relaxed = if found.forced {
         EcoVec::new()
     } else {
@@ -980,6 +1108,17 @@ fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
         };
         (span, found.overflow)
     });
+    let note_overflow = (found.notes.overflow > Abs::zero()).then(|| {
+        let i = found
+            .notes
+            .leaves
+            .iter()
+            .zip(&notes.runs)
+            .position(|(&m, run)| m > 0 && run.anchor.is_some())
+            .unwrap_or(0);
+        let span = notes.runs.get(i).map_or(Span::detached(), |r| r.note.span);
+        (span, found.notes.overflow)
+    });
     let placed = &run.leaves[..found.end];
     let lines = placed
         .iter()
@@ -994,27 +1133,12 @@ fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
             _ => None,
         })
         .collect();
-    let next = match run.leaves.get(found.end) {
-        Some(leaf) => {
-            let line = leaf.line.as_ref().map_or(0, |(_, line)| *line);
-            let width = if line == 0 {
-                Abs::zero()
-            } else if leaf.item == start && page.state.line > 0 {
-                page.state.width
-            } else {
-                page.width
-            };
-            State {
-                item: leaf.item - start,
-                line,
-                width,
-            }
-        }
-        None => State {
-            item: page.flow.items.len() - start,
-            ..State::START
-        },
+    let next = run.state_at(found.end, page.state);
+    let next = State {
+        item: next.item - start,
+        ..next
     };
+    let queue = notes.carried(&found.notes).into_iter().collect();
     let out = PageOut {
         hash: content_hash(&fragment),
         fragment,
@@ -1023,9 +1147,14 @@ fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
         rebroken,
         relaxed,
         overflow,
+        queue,
+        note_overflow,
     };
     (out, run, found.read)
 }
+
+/// Items positioned from the top-left of the body.
+type Items = Vec<(Point, FragmentItem)>;
 
 /// A block open on the page being assembled.
 struct OpenBox {
@@ -1117,34 +1246,121 @@ impl Assembler {
     }
 }
 
-/// Assembles the page of the first `end` leaves of `run`.
-fn assemble(run: &Run<'_>, end: usize, first: bool) -> Fragment {
+/// Assembles the page `found` breaks `run` at, with its notes, `notes`
+/// placed as it says.
+fn assemble(run: &Run<'_>, notes: &NoteSet<'_>, found: &Break, first: bool) -> Fragment {
     let page = run.page;
     let master = &page.master;
-    let mut asm = Assembler {
+    let widen = page.width - master.body.size.width;
+    let new_asm = || Assembler {
         open: Vec::new(),
         items: Vec::new(),
         baselines: None,
-        widen: page.width - master.body.size.width,
+        widen,
     };
-    let mut y = Abs::zero();
+
+    // The notes, set from the top of their area at the foot of the body:
+    // each the items of its boxes, positioned from the top-left of the
+    // body.
+    let height = master.body.size.height;
+    let placed = &found.notes;
+    let top = height - placed.height;
+    let mut y = top + footnote::SKIP;
+    let mut last: Option<usize> = None;
+    // Each note's items, with the leaf whose line anchors it.
+    let mut sets: Vec<(Option<usize>, Items)> = Vec::new();
+    for (i, (note, &m)) in notes.runs.iter().zip(&placed.leaves).enumerate() {
+        if m == 0 {
+            continue;
+        }
+        if let Some(prev) = last {
+            y += notes.gap(prev, placed.leaves[prev], i);
+        }
+        last = Some(i);
+        let mut asm = new_asm();
+        y = lay(&note.run, m, false, &mut asm, y, &mut |_, _| {});
+        while !asm.open.is_empty() {
+            asm.close(y, true);
+        }
+        sets.push((note.anchor, asm.items));
+    }
+
+    let mut asm = new_asm();
+    if found.end > 0 {
+        let mut attach = |k: usize, asm: &mut Assembler| {
+            for (anchor, items) in &mut sets {
+                if *anchor == Some(k) {
+                    for (pos, item) in items.drain(..) {
+                        asm.add(pos, item);
+                    }
+                }
+            }
+        };
+        let y = lay(run, found.end, first, &mut asm, Abs::zero(), &mut attach);
+        while !asm.open.is_empty() {
+            asm.close(y, true);
+        }
+    }
+    // The separator, and the notes carried over, which no line on the page
+    // anchors.
+    if last.is_some() {
+        let (pos, rule) = footnote::separator(top, page.width);
+        asm.items.push((pos, rule));
+    }
+    for (_, items) in sets {
+        asm.items.extend(items);
+    }
+
+    let body = master.body;
+    let mut content = Fragment::new(Size::new(page.width, body.size.height));
+    for (pos, item) in asm.items {
+        content.push(pos, item);
+    }
+    if let Some((first, last)) = asm.baselines {
+        content.first_baseline = first;
+        content.last_baseline = last;
+    }
+    let mut fragment = Fragment::new(master.size);
+    fragment.push_fragment(body.origin, content);
+    fragment
+}
+
+/// Lays the first `end` leaves of `run` into `asm` from `y`, the top of
+/// the first, with the blocks around them, and returns where the last
+/// block that ends below them ends. `first` keeps the spaces before the
+/// first leaf, as at the start of a document; else the page starts with
+/// the padding and borders of the blocks that start there, and the blocks
+/// the first leaf is in that started before it continue. `after` is called
+/// with each leaf placed.
+fn lay(
+    run: &Run<'_>,
+    end: usize,
+    first: bool,
+    asm: &mut Assembler,
+    mut y: Abs,
+    after: &mut dyn FnMut(usize, &mut Assembler),
+) -> Abs {
     let head = &run.leaves[0];
     if first {
-        y += head.before.walk(Walk::Through, |p, at| asm.event(p, at));
+        let base = y;
+        y += head
+            .before
+            .walk(Walk::Through, |p, at| asm.event(p, base + at));
     } else {
-        let stack = &page.flow.items[head.item].stack;
+        let stack = &run.flow.items[head.item].stack;
         let continued = stack.len().saturating_sub(head.before.opens());
         for (block, location) in &stack[..continued] {
             asm.open.push(OpenBox {
                 block: block.clone(),
                 location: *location,
-                top: Abs::zero(),
+                top: y,
                 continued: true,
                 items: Vec::new(),
                 baselines: None,
             });
         }
-        y += head.before.walk(Walk::Top, |p, at| asm.event(p, y + at));
+        let base = y;
+        y += head.before.walk(Walk::Top, |p, at| asm.event(p, base + at));
     }
     for k in 0..end {
         let leaf = &run.leaves[k];
@@ -1157,7 +1373,7 @@ fn assemble(run: &Run<'_>, end: usize, first: bool) -> Fragment {
             }
             asm.baseline(baseline);
         } else if let Some(object) = &leaf.object {
-            let stack = &page.flow.items[leaf.item].stack;
+            let stack = &run.flow.items[leaf.item].stack;
             let x = stack
                 .last()
                 .map_or(Abs::zero(), |(block, _)| block.content().0);
@@ -1185,6 +1401,7 @@ fn assemble(run: &Run<'_>, end: usize, first: bool) -> Fragment {
                 None => asm.baseline(y + object.size.height),
             }
         }
+        after(k, asm);
         y += leaf.height();
         if k + 1 < end {
             let base = y;
@@ -1197,22 +1414,7 @@ fn assemble(run: &Run<'_>, end: usize, first: bool) -> Fragment {
     y += run
         .boundary(end)
         .walk(Walk::Bottom, |p, at| asm.event(p, base + at));
-    while !asm.open.is_empty() {
-        asm.close(y, true);
-    }
-
-    let body = master.body;
-    let mut content = Fragment::new(Size::new(page.width, body.size.height));
-    for (pos, item) in asm.items {
-        content.push(pos, item);
-    }
-    if let Some((first, last)) = asm.baselines {
-        content.first_baseline = first;
-        content.last_baseline = last;
-    }
-    let mut fragment = Fragment::new(master.size);
-    fragment.push_fragment(body.origin, content);
-    fragment
+    y
 }
 
 /// Draws a block's background and borders into its fragment: the top
@@ -1299,6 +1501,8 @@ type Reserves = Arc<[(usize, usize, Abs)]>;
 struct Entry {
     /// The line and width of the state the page started at.
     state: (usize, Abs),
+    /// The notes carried over to the page (SPEC §7.8).
+    queue: EcoVec<Carried>,
     /// The leaves of the flow the builder read.
     items: Vec<Item>,
     /// The boundary after the last leaf, when the builder read it.
@@ -1352,8 +1556,15 @@ impl PageCache {
     fn page(&self, page: &PageRequest<'_>, root: Location) -> (Arc<PageOut>, Fragment) {
         let (flow, state, now) = (page.flow, page.state, page.caches.now);
         let mut start = Fx::default();
-        start.write_u64(flow.items[state.item].leaf.fingerprint());
+        // A page of notes carried over past the end of the flow starts at
+        // no leaf.
+        start.write_u64(
+            flow.items
+                .get(state.item)
+                .map_or(0, |i| i.leaf.fingerprint()),
+        );
         start.write_usize(state.line);
+        start.write_usize(page.queue.len());
         let key = (
             page.master,
             page.width,
@@ -1381,6 +1592,7 @@ impl PageCache {
         });
         let entry = Entry {
             state: (state.line, state.width),
+            queue: page.queue.iter().cloned().collect(),
             items: flow.items[state.item..stop].to_vec(),
             end: run.leaves.get(read).is_none().then(|| flow.end.clone()),
             reserves,
@@ -1462,7 +1674,7 @@ impl Entry {
     /// lines reserve.
     fn matches(&self, page: &PageRequest<'_>) -> bool {
         let (flow, state) = (page.flow, page.state);
-        if self.state != (state.line, state.width) {
+        if self.state != (state.line, state.width) || self.queue[..] != *page.queue {
             return false;
         }
         let stop = state.item + self.items.len();

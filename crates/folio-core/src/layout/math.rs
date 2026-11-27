@@ -274,6 +274,7 @@ fn images(db: &dyn Db, build: Build<'_>, collected: &crate::text::Collected) -> 
     let body = super::PageMaster::of(&styled.page, props).body.size.width;
     let (slots, _) = super::flow::slots(
         &collected.root,
+        &collected.notes,
         props,
         body,
         collected.paragraphs.len(),

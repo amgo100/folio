@@ -65,6 +65,7 @@
 
 mod cache;
 mod flow;
+mod footnote;
 pub mod linebreak;
 mod master;
 mod math;
@@ -146,8 +147,14 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let maths = maths(db, build).unwrap_or_default();
 
     let width = PageMaster::of(&styled.page, props).body.size.width;
-    let (slots, display_widths) =
-        flow::slots(&text.root, props, width, text.paragraphs.len(), &text.maths);
+    let (slots, display_widths) = flow::slots(
+        &text.root,
+        &text.notes,
+        props,
+        width,
+        text.paragraphs.len(),
+        &text.maths,
+    );
     let slots: EcoVec<LineSlot> = slots.into();
     // The paragraph builder places lines relative to their slots.
     let widths: Vec<[LineSlot; 1]> = slots
@@ -248,11 +255,15 @@ fn input_with<'a>(
                     .face
                     .and_then(|face| metrics.get(face))
                     .unwrap_or((FALLBACK_ASCENT, FALLBACK_DESCENT));
+                // Raised text makes its line reach higher, lowered text
+                // lower (SPEC §5.2).
+                let shift = length(&s.style, props, "baseline-shift");
                 SegmentMetrics {
                     size,
                     tracking: length(&s.style, props, "tracking"),
-                    ascent: size * ascent,
-                    descent: size * descent,
+                    ascent: (size * ascent + shift).max(Abs::zero()),
+                    descent: (size * descent - shift).max(Abs::zero()),
+                    shift,
                 }
             })
             .collect(),

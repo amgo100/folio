@@ -6,7 +6,9 @@
 //! with `tests/golden/layout/<project>-<variant>.<target>-<page>.png`; and
 //! the same for a document with fixed-size test boxes for its objects,
 //! inline and as a block ([`folio_testkit::golden::boxes`]), in
-//! `boxes.pdf.txt` and `boxes.pdf-<page>.png`. Each page's display list
+//! `boxes.pdf.txt` and `boxes.pdf-<page>.png`; and for a document with
+//! footnotes ([`folio_testkit::golden::footnotes`]), in `footnotes.pdf.txt`
+//! and `footnotes.pdf-<page>.png`. Each page's display list
 //! also goes through the wire format and back unchanged.
 //!
 //! After a change meant to alter layout or drawing, run `scripts/bless.sh`
@@ -45,6 +47,15 @@ fn layout() {
     check_build(
         &dir,
         "boxes.pdf.txt",
+        &world,
+        &pages,
+        &mut expected,
+        &mut failures,
+    );
+    let (world, pages) = golden::footnotes();
+    check_build(
+        &dir,
+        "footnotes.pdf.txt",
         &world,
         &pages,
         &mut expected,

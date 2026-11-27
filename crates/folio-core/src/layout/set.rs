@@ -137,6 +137,7 @@ pub(super) fn set_line(
                     face,
                     size,
                     fill: paint.fill.clone(),
+                    shift: paint.shift,
                     item: i,
                 },
                 pen,
@@ -257,6 +258,8 @@ struct Key {
     face: u32,
     size: Abs,
     fill: Paint,
+    /// How far the run is raised above the baseline.
+    shift: Abs,
     /// The item of the paragraph, so a run's text is one range of it.
     item: usize,
 }
@@ -322,7 +325,7 @@ impl Runs<'_> {
             })
             .collect();
         self.out.push((
-            Point::new(current.x, self.baseline),
+            Point::new(current.x, self.baseline - current.key.shift),
             FragmentItem::Text(GlyphRun {
                 font: FontId(current.key.face),
                 size: current.key.size,
@@ -424,8 +427,10 @@ impl Runs<'_> {
             glyphs,
         };
         let width = run.width();
-        self.out
-            .push((Point::new(pen, self.baseline), FragmentItem::Text(run)));
+        self.out.push((
+            Point::new(pen, self.baseline - paint.shift),
+            FragmentItem::Text(run),
+        ));
         pen + width
     }
 }

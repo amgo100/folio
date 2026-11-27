@@ -1,4 +1,4 @@
-//! The built-in elements (SPEC §4.2, §7.5, §7.6): their schemas, and which
+//! The built-in elements (SPEC §4.2, §7.5, §7.6, §7.8): their schemas, and which
 //! of them content can call.
 
 use std::sync::LazyLock;
@@ -128,6 +128,12 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
                 optional("alt", FieldType::Str),
             ])
             .positional(["path"])
+            .build(),
+        // A footnote (SPEC §7.8): a marker at its anchor, and its blocks
+        // at the foot of the anchor's page.
+        element("footnote", Note, true)
+            .body(content(Blocks))
+            .counter()
             .build(),
         element("sidenote", Note, true)
             .body(content(Blocks))
