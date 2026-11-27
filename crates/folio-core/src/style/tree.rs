@@ -66,9 +66,10 @@ pub struct Styled {
 ///
 /// A `footnote` element has one more child too, the part [`NOTE_PART`]:
 /// the style of its note, matched as the footnote and inheriting from the
-/// `doc` element rather than from the anchor, except for `lang`, and for
-/// `font` where the anchor's language is another than the document's,
-/// which follow the anchor, as the footnote's body does (SPEC §7.8). The text stage finds it with [`StyledNode::note_style`].
+/// `doc` element rather than from the anchor, as the footnote's body does
+/// (SPEC §7.8). Only `lang` follows the anchor, and `font` too where the
+/// anchor's language, by language and script, is another than the
+/// document's. The text stage finds it with [`StyledNode::note_style`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StyledNode {
     /// The element's name, or the part's.
@@ -204,6 +205,10 @@ pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
         has_scoped: false,
         order: 0,
         root_style: None,
+        default_lang: {
+            let manifest = project.manifest(db);
+            Lang::new(manifest.project.lang.v.as_str()).unwrap_or_else(Lang::english)
+        },
         variant: build.variant(db).clone(),
         target: build.target(db),
     };
@@ -369,6 +374,8 @@ struct Walker<'a> {
     /// footnotes inherit from, but for `lang`, and `font` in another
     /// language ([`NOTE_PART`]).
     root_style: Option<ComputedStyle>,
+    /// The manifest's language, which `lang: auto` stands for.
+    default_lang: Lang,
     variant: Option<Name>,
     target: Target,
 }
@@ -633,20 +640,27 @@ impl<'a> Walker<'a> {
             .unwrap_or_else(|| project.manifest(self.db).project.entry.v.clone())
     }
 
-    /// The language a style sets text in, by its primary subtag: its `lang`,
-    /// or the manifest's language where that is `auto` or not a language
-    /// tag, as the text stage reads it.
+    /// The language a style sets text in, without its region, so that
+    /// `en-GB` and `en` are one language but `sr-Latn` and `sr-Cyrl` two:
+    /// its `lang`, or the manifest's language where that is `auto` or not
+    /// a language tag, as the text stage reads it.
     fn language(&self, style: &ComputedStyle) -> EcoString {
         let props = &self.cascade.properties;
         let tag = match style.value(props, props.builtin("lang")) {
             Some(folio_component::Value::Str(tag)) => Lang::new(tag),
             _ => None,
         };
-        let lang = tag.unwrap_or_else(|| {
-            let manifest = self.build.project(self.db).manifest(self.db);
-            Lang::new(manifest.project.lang.v.as_str()).unwrap_or_else(Lang::english)
-        });
-        lang.primary().into()
+        let lang = tag.unwrap_or_else(|| self.default_lang.clone());
+        let mut out = EcoString::from(lang.primary());
+        // A script is the one subtag of four letters (`Lang::new` checks
+        // the form).
+        for subtag in lang.as_str().split('-').skip(1) {
+            if subtag.len() == 4 && subtag.bytes().all(|b| b.is_ascii_alphabetic()) {
+                out.push('-');
+                out.push_str(subtag);
+            }
+        }
+        out
     }
 
     /// The declarations an element makes for itself: its `override`

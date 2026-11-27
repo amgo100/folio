@@ -59,10 +59,10 @@ raw { font: "Source Code Pro", "New Computer Modern"; font-size: 0.9em; }
 // numbered through the document, with small raised numbers at the anchor
 // and before the note, upright and of normal weight wherever the anchor
 // is. The marker at the anchor is 0.7 of the anchor's size; the note
-// inherits from the document (but for the language of the text around its
-// anchor, and its font when that is another language), so the marker before it is 0.7 and its
-// blocks 0.8 of the body's size (1.143 times the marker's), on their
-// baselines, wherever the anchor is.
+// inherits from the document (but for the language of the text around
+// its anchor, and that text's font when it is in another language), so
+// the marker before it is 0.7 and its blocks 0.8 of the body's size
+// (1.143 times the marker's), on their baselines, wherever the anchor is.
 footnote {
   numbering: "1"; font-size: 0.7em; baseline-shift: 0.35em; font-weight: normal;
   font-style: normal; space-before: 0.4em;

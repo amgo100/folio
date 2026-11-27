@@ -266,7 +266,7 @@ fn notes_take_the_documents_style_and_markers_their_anchors() {
 }
 
 #[test]
-fn notes_keep_the_language_and_font_of_their_anchors() {
+fn notes_keep_the_language_of_their_anchors_and_the_font_of_another() {
     // A note anchored in a Polish passage of an English document is
     // Polish, in the passage's font, but sized like every other note
     // (SPEC §7.8, D-327-4 = B).
@@ -390,4 +390,29 @@ fn notes_take_the_anchors_font_only_in_another_language() {
     // the passage's tag.
     assert_eq!(font(notes[3]), document, "a note in a British passage");
     assert_eq!(get(&styled, notes[3], "lang"), Value::Str("en-GB".into()));
+}
+
+#[test]
+fn another_script_is_another_language_for_notes() {
+    // `sr-Latn` in a `sr-Cyrl` document: the same language in another
+    // script, whose font the note keeps.
+    let mut world = world(
+        Some("styles/main.fsty"),
+        "doc { lang: \"sr-Cyrl\"; }\n.latn { lang: \"sr-Latn\"; font: \"Source Sans 3\"; }\n",
+    );
+    world
+        .set_source(
+            "main.fol",
+            "Text.#footnote[A.]\n\n#emph(class: \"latn\")[Tekst.#footnote[B.]]\n",
+        )
+        .unwrap();
+    let styled = styled(&world);
+    let notes: Vec<_> = all(&styled, "footnote")
+        .into_iter()
+        .map(|n| n.note_style().expect("a note part"))
+        .collect();
+    let font = |node| get(&styled, node, "font");
+    assert_eq!(font(notes[0]), font(&styled.root));
+    assert_eq!(font(notes[1]), font(all(&styled, "emph")[0]));
+    assert_ne!(font(notes[1]), font(&styled.root));
 }
