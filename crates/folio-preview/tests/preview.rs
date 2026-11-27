@@ -564,8 +564,8 @@ fn figures_are_served_as_svg() {
     if lower.bytes().any(|b| b.is_ascii_alphabetic()) {
         bad.push(format!("/figure/{}.svg", lower.to_uppercase()));
     }
-    if lower.starts_with('0') {
-        bad.push(format!("/figure/+{}.svg", &lower[1..]));
+    if let Some(rest) = lower.strip_prefix('0') {
+        bad.push(format!("/figure/+{rest}.svg"));
     }
     for bad in &bad {
         let target = format!("{bad}?token={token}");
