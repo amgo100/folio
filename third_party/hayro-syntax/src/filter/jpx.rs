@@ -48,6 +48,15 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
         },
     };
     let has_alpha = image.has_alpha();
+    // Folio: an image whose header says it would take more memory decoded
+    // than `MAX_IMAGE_BYTES` is not decoded.
+    let channels = u64::from(image.color_space().num_channels()) + u64::from(has_alpha);
+    let bytes = u64::from(width)
+        .saturating_mul(u64::from(height))
+        .saturating_mul(channels.max(4));
+    if bytes > crate::MAX_IMAGE_BYTES {
+        return None;
+    }
     let bitmap = image.decode().ok()?;
 
     let (mut data, mut alpha) = if !has_alpha {

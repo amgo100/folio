@@ -30,6 +30,17 @@ calculator functions called the same functions, and are patched the same
 way (#304). `tests/corpus/figures/assets/spectrum.pdf`, written by
 `spectrum.py` beside it, exercises them.
 
+PDF figures come from files Folio does not trust (SPEC §14.3), and the two
+hayro crates are patched for that too (#333): `hayro-syntax` reads arrays
+and dictionaries at most 256 deep and decodes no JPEG 2000 image larger than
+`hayro_syntax::MAX_IMAGE_BYTES` (256 MiB), and `hayro-interpret` does not
+draw a form XObject inside itself, stops a page after a fixed amount of
+work, and decodes images only up to `MAX_IMAGE_BYTES` for a page, sending a
+warning for each limit reached. Folio's image reader
+(`folio_core::image::read_image`) converts every PDF figure's page once
+and refuses the figure on those warnings, so that `folio check` and
+`folio build` give the same error.
+
 Each copy is the release exactly as published on crates.io, with its
 licence files, plus Folio's patch. Its `FOLIO.md` says what the patch
 changes, and every changed file carries a comment that starts with

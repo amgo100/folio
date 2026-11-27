@@ -70,6 +70,14 @@ object!(Array<'a>, Array);
 
 impl Skippable for Array<'_> {
     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
+        // Folio: arrays and dictionaries nested more deeply than
+        // `MAX_NESTING` are not read (see `Reader::nest`).
+        r.nest(|r| skip_inner(r, is_content_stream))
+    }
+}
+
+fn skip_inner(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
+    {
         r.forward_tag(b"[")?;
 
         loop {

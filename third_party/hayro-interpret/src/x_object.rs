@@ -114,6 +114,21 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         return;
     }
 
+    // Folio: a form XObject that draws itself, through its own resources or
+    // a form it draws, is not drawn again.
+    let budget = context.interpreter_cache.object_cache.1.clone();
+    let id = x_object.dict.obj_id();
+    if let Some(id) = id
+        && !budget.enter_form(
+            (id.obj_number, id.gen_number),
+            &context.settings.warning_sink,
+        )
+    {
+        context.end_nested_interpretation();
+        return;
+    }
+    let _form = FormGuard(id.map(|_| budget));
+
     let has_oc = xobject_oc(&x_object.dict, context);
     if !context.ocg_state.is_visible() {
         if has_oc {
@@ -177,6 +192,18 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     }
 
     context.end_nested_interpretation();
+}
+
+// Folio: leaves the form XObject marked by `Budget::enter_form` when its
+// drawing ends, on every return.
+struct FormGuard(Option<std::sync::Arc<crate::cache::Budget>>);
+
+impl Drop for FormGuard {
+    fn drop(&mut self) {
+        if let Some(budget) = &self.0 {
+            budget.leave_form();
+        }
+    }
 }
 
 pub(crate) fn draw_image_xobject<'a, 'b>(
@@ -414,6 +441,20 @@ fn decode_context<'a>(
         width: obj.width,
         height: obj.height,
     };
+
+    // Folio: an image is decoded only if it fits, with the images decoded
+    // before it, in `hayro_syntax::MAX_IMAGE_BYTES`, at four bytes a pixel
+    // or more (RGBA as it is drawn, or more components and bits).
+    let bytes_per_pixel = (u64::from(decode_params.num_components.unwrap_or(4))
+        * u64::from(dict_bpc.unwrap_or(8)))
+    .div_ceil(8)
+    .max(4);
+    let bytes = u64::from(obj.width)
+        .saturating_mul(u64::from(obj.height))
+        .saturating_mul(bytes_per_pixel);
+    if !obj.cache.1.take_image_bytes(bytes, &obj.warning_sink) {
+        return None;
+    }
 
     let decoded = obj
         .stream

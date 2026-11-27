@@ -1,6 +1,6 @@
 diff -ruN a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml	1970-01-01 00:00:01.000000000 +0000
-+++ b/Cargo.toml	2026-11-27 09:33:36.994416803 +0000
++++ b/Cargo.toml	2026-11-27 14:41:34.996688513 +0000
 @@ -51,6 +51,11 @@
  name = "extract_images"
  path = "examples/extract_images.rs"
@@ -15,8 +15,8 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 09:33:36.997092073 +0000
-@@ -0,0 +1,36 @@
++++ b/FOLIO.md	2026-11-27 14:41:34.985785431 +0000
+@@ -0,0 +1,56 @@
 +# hayro-interpret 0.7.0, patched for Folio
 +
 +This is the crates.io release of `hayro-interpret` 0.7.0
@@ -50,12 +50,124 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +  `libm::ldexpf` instead of `powi`.
 +- `Cargo.toml`: depends on `libm`.
 +
++Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
++#333). These changes bound the time and memory one interpretation of a
++page may take, and report each limit reached through the settings'
++warning sink, so that Folio can refuse the figure:
++
++- `src/cache.rs`: the object cache, which every nested context of one
++  interpretation shares, carries a `Budget`: the work done (an operator
++  is one unit, a form XObject, pattern, soft mask or Type 3 glyph 100) up
++  to `MAX_WORK` (10,000,000), the bytes of images decoded up to
++  `hayro_syntax::MAX_IMAGE_BYTES`, and the form XObjects being drawn.
++- `src/interpret/mod.rs`: three new warnings, `FormCycle`, `TooComplex`
++  and `ImageTooLarge`; `interpret` spends a unit of work for each
++  operator and stops when the work is used up.
++- `src/context.rs`: a nested context and a form XObject spend work.
++- `src/x_object.rs`: a form XObject that is already being drawn, one that
++  draws itself, is not drawn again (`FormCycle`); before an image is
++  decoded, its size at four bytes a pixel or more (its components and bits
++  per component) is taken from what is left of `MAX_IMAGE_BYTES`, and an
++  image that does not fit is not drawn (`ImageTooLarge`).
++
 +The whole change is `third_party/patches/hayro-interpret.patch` in Folio's repository;
 +`scripts/patch-third-party.sh` rebuilds this directory from the release and
 +the patch, and `third_party/README.md` says how to move to a new release.
+diff -ruN a/src/cache.rs b/src/cache.rs
+--- a/src/cache.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/cache.rs	2026-11-27 14:41:34.996539721 +0000
+@@ -4,11 +4,78 @@
+ use std::any::Any;
+ use std::collections::HashMap;
+ use std::collections::hash_map::Entry;
++use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+ use std::sync::{Arc, Mutex};
+ 
+ type CacheMap = HashMap<u128, Option<Box<dyn Any + Send + Sync>>>;
++// Folio: the cache also carries the limits of one interpretation, as every
++// nested context, pattern, soft mask and image shares it (see `Budget`).
+ #[derive(Clone)]
+-pub(crate) struct Cache(Arc<Mutex<CacheMap>>);
++pub(crate) struct Cache(Arc<Mutex<CacheMap>>, pub(crate) Arc<Budget>);
++
++// Folio: what one interpretation of a page (with every form, pattern, soft
++// mask and glyph it draws) may do, so that a hostile file ends in bounded
++// time and memory: a form XObject that draws itself is not drawn again, the
++// work is counted (an operator is one unit, a nested interpretation
++// `NESTED_COST`) and stops at `MAX_WORK`, and the images decoded together
++// may take at most `hayro_syntax::MAX_IMAGE_BYTES`. Each limit reached
++// sends a warning to the settings' warning sink.
++/// The most work one interpretation does (Folio).
++pub(crate) const MAX_WORK: u64 = 10_000_000;
++/// The work a nested interpretation costs (Folio).
++pub(crate) const NESTED_COST: u64 = 100;
++
++#[derive(Default)]
++pub(crate) struct Budget {
++    work: AtomicU64,
++    image_bytes: AtomicU64,
++    exhausted: AtomicBool,
++    forms: Mutex<Vec<(i32, i32)>>,
++}
++
++impl Budget {
++    /// Spends `units` of work; `false` once the work is used up, with one
++    /// warning the first time.
++    pub(crate) fn spend(&self, units: u64, sink: &crate::WarningSinkFn) -> bool {
++        let before = self.work.fetch_add(units, Ordering::Relaxed);
++        if before.saturating_add(units) <= MAX_WORK {
++            return true;
++        }
++        if !self.exhausted.swap(true, Ordering::Relaxed) {
++            sink(crate::InterpreterWarning::TooComplex);
++        }
++        false
++    }
++
++    /// Takes `bytes` of decoded image data from what the interpretation may
++    /// decode; `false` when that is more than is left.
++    pub(crate) fn take_image_bytes(&self, bytes: u64, sink: &crate::WarningSinkFn) -> bool {
++        let before = self.image_bytes.fetch_add(bytes, Ordering::Relaxed);
++        if before.saturating_add(bytes) <= hayro_syntax::MAX_IMAGE_BYTES {
++            return true;
++        }
++        sink(crate::InterpreterWarning::ImageTooLarge);
++        false
++    }
++
++    /// Marks a form XObject as being drawn; `false` when it already is,
++    /// that is, when it draws itself.
++    pub(crate) fn enter_form(&self, id: (i32, i32), sink: &crate::WarningSinkFn) -> bool {
++        let mut forms = self.forms.lock().unwrap();
++        if forms.contains(&id) {
++            drop(forms);
++            sink(crate::InterpreterWarning::FormCycle);
++            return false;
++        }
++        forms.push(id);
++        true
++    }
++
++    /// Marks the form XObject drawn last as done.
++    pub(crate) fn leave_form(&self) {
++        self.forms.lock().unwrap().pop();
++    }
++}
+ 
+ impl Default for Cache {
+     fn default() -> Self {
+@@ -18,7 +85,7 @@
+ 
+ impl Cache {
+     pub(crate) fn new() -> Self {
+-        Self(Arc::new(Mutex::new(HashMap::new())))
++        Self(Arc::new(Mutex::new(HashMap::new())), Arc::default())
+     }
+ 
+     pub(crate) fn get_or_insert_with<T: Clone + Send + Sync + 'static>(
 diff -ruN a/src/color.rs b/src/color.rs
 --- a/src/color.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/color.rs	2026-11-27 09:33:36.995448817 +0000
++++ b/src/color.rs	2026-11-27 14:41:34.990095567 +0000
 @@ -268,7 +268,8 @@
                  (l.range[0], l.range[1]),
                  (l.range[2], l.range[3]),
@@ -125,9 +237,44 @@ diff -ruN a/src/color.rs b/src/color.rs
              ];
  
              let m = &self.matrix;
+diff -ruN a/src/context.rs b/src/context.rs
+--- a/src/context.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/context.rs	2026-11-27 14:41:34.990234702 +0000
+@@ -84,6 +84,14 @@
+         state: State<'a>,
+         nesting_depth: u32,
+     ) -> Self {
++        // Folio: a nested context (a pattern, soft mask or glyph) costs
++        // work; once it is used up, `interpret` draws nothing in it.
++        if nesting_depth > 0 {
++            cache
++                .object_cache
++                .1
++                .spend(crate::cache::NESTED_COST, &settings.warning_sink);
++        }
+         let ocg_state = {
+             let root_ref = xref.root_id();
+             xref.get::<Dict<'_>>(root_ref)
+@@ -294,6 +302,16 @@
+             return false;
+         }
+ 
++        // Folio: a form XObject costs work too.
++        if !self
++            .interpreter_cache
++            .object_cache
++            .1
++            .spend(crate::cache::NESTED_COST, &self.settings.warning_sink)
++        {
++            return false;
++        }
++
+         self.nesting_depth += 1;
+ 
+         true
 diff -ruN a/src/function/type2.rs b/src/function/type2.rs
 --- a/src/function/type2.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/function/type2.rs	2026-11-27 09:33:36.996603932 +0000
++++ b/src/function/type2.rs	2026-11-27 14:41:34.993923517 +0000
 @@ -33,7 +33,8 @@
              .c0
              .iter()
@@ -140,7 +287,7 @@ diff -ruN a/src/function/type2.rs b/src/function/type2.rs
          self.clamper.clamp_output(&mut out);
 diff -ruN a/src/function/type4.rs b/src/function/type4.rs
 --- a/src/function/type4.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/function/type4.rs	2026-11-27 09:33:36.996660761 +0000
++++ b/src/function/type4.rs	2026-11-27 14:41:34.994303190 +0000
 @@ -219,7 +219,9 @@
              }
              PostScriptOp::Atan => {
@@ -192,9 +339,45 @@ diff -ruN a/src/function/type4.rs b/src/function/type4.rs
              }
              PostScriptOp::Sqrt => {
                  one_f!(|n: f32| n.sqrt());
+diff -ruN a/src/interpret/mod.rs b/src/interpret/mod.rs
+--- a/src/interpret/mod.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/interpret/mod.rs	2026-11-27 14:41:34.994738777 +0000
+@@ -132,6 +132,16 @@
+     UnsupportedFont,
+     /// An image failed to decode.
+     ImageDecodeFailure,
++    // Folio: the limits of one interpretation (see `cache::Budget`).
++    /// A form XObject draws itself; it is not drawn again (Folio).
++    FormCycle,
++    /// The page takes more work to draw than the interpreter does; the rest
++    /// is not drawn (Folio).
++    TooComplex,
++    /// An image, or the images drawn together, would take more memory
++    /// decoded than `hayro_syntax::MAX_IMAGE_BYTES`; it is not drawn
++    /// (Folio).
++    ImageTooLarge,
+ }
+ 
+ /// interpret the contents of the page and render them into the device.
+@@ -227,6 +237,15 @@
+     context.save_state();
+ 
+     while let Some(op) = ops.next() {
++        // Folio: every operator is a unit of the interpretation's work.
++        if !context
++            .interpreter_cache
++            .object_cache
++            .1
++            .spend(1, &context.settings.warning_sink)
++        {
++            break;
++        }
+         match op {
+             TypedInstruction::SaveState(_) => context.save_state(),
+             TypedInstruction::StrokeColorDeviceRgb(s) => {
 diff -ruN a/src/shading.rs b/src/shading.rs
 --- a/src/shading.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/shading.rs	2026-11-27 09:33:36.996954749 +0000
++++ b/src/shading.rs	2026-11-27 14:41:34.995267238 +0000
 @@ -465,10 +465,11 @@
      /// Evaluate Bernstein polynomial `B_i(t)` for tensor-product patches.
      fn bernstein(i: usize, t: f64) -> f64 {
@@ -226,8 +409,70 @@ diff -ruN a/src/shading.rs b/src/shading.rs
              bp_comp,
 diff -ruN a/src/x_object.rs b/src/x_object.rs
 --- a/src/x_object.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/x_object.rs	2026-11-27 09:33:36.997055334 +0000
-@@ -952,7 +952,9 @@
++++ b/src/x_object.rs	2026-11-27 14:41:34.995994776 +0000
+@@ -114,6 +114,21 @@
+         return;
+     }
+ 
++    // Folio: a form XObject that draws itself, through its own resources or
++    // a form it draws, is not drawn again.
++    let budget = context.interpreter_cache.object_cache.1.clone();
++    let id = x_object.dict.obj_id();
++    if let Some(id) = id
++        && !budget.enter_form(
++            (id.obj_number, id.gen_number),
++            &context.settings.warning_sink,
++        )
++    {
++        context.end_nested_interpretation();
++        return;
++    }
++    let _form = FormGuard(id.map(|_| budget));
++
+     let has_oc = xobject_oc(&x_object.dict, context);
+     if !context.ocg_state.is_visible() {
+         if has_oc {
+@@ -179,6 +194,18 @@
+     context.end_nested_interpretation();
+ }
+ 
++// Folio: leaves the form XObject marked by `Budget::enter_form` when its
++// drawing ends, on every return.
++struct FormGuard(Option<std::sync::Arc<crate::cache::Budget>>);
++
++impl Drop for FormGuard {
++    fn drop(&mut self) {
++        if let Some(budget) = &self.0 {
++            budget.leave_form();
++        }
++    }
++}
++
+ pub(crate) fn draw_image_xobject<'a, 'b>(
+     x_object: &ImageXObject<'b>,
+     context: &mut Context<'a>,
+@@ -415,6 +442,20 @@
+         height: obj.height,
+     };
+ 
++    // Folio: an image is decoded only if it fits, with the images decoded
++    // before it, in `hayro_syntax::MAX_IMAGE_BYTES`, at four bytes a pixel
++    // or more (RGBA as it is drawn, or more components and bits).
++    let bytes_per_pixel = (u64::from(decode_params.num_components.unwrap_or(4))
++        * u64::from(dict_bpc.unwrap_or(8)))
++    .div_ceil(8)
++    .max(4);
++    let bytes = u64::from(obj.width)
++        .saturating_mul(u64::from(obj.height))
++        .saturating_mul(bytes_per_pixel);
++    if !obj.cache.1.take_image_bytes(bytes, &obj.warning_sink) {
++        return None;
++    }
++
+     let decoded = obj
+         .stream
+         .decoded_image(&decode_params)
+@@ -952,7 +993,9 @@
          interpolate(
              n,
              0.0,

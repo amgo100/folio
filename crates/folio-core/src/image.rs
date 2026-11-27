@@ -42,10 +42,18 @@ pub fn load_image(db: &dyn Db, file: DataFile) -> Result<LoadedImage, EcoString>
     read_image(bytes.shared())
 }
 
-/// The most pixels an image may have: 8,192 × 8,192, 256 MB as RGBA. A
-/// larger one is refused before it is decoded, as decoding it could take
-/// more memory than the machine has.
+/// The most pixels an image may have: 8,192 × 8,192. A larger one is
+/// refused before it is decoded, as decoding it could take more memory than
+/// the machine has.
 pub const MAX_PIXELS: u64 = 8_192 * 8_192;
+
+/// The most memory the rasters of one image may take decoded: 256 MB,
+/// 8,192 × 8,192 pixels at four bytes each (RGBA). A pixel takes four bytes
+/// or more: a 16-bit RGBA PNG takes eight. The rasters an SVG or PDF figure
+/// holds count together, so that a figure cannot bring in a raster larger
+/// than a raster file may be. It is the limit the PDF reader applies to the
+/// images it decodes (`hayro_syntax::MAX_IMAGE_BYTES`).
+pub const MAX_IMAGE_BYTES: u64 = MAX_PIXELS * 4;
 
 /// The longest side of an image's natural size, in points: the most any
 /// length may be (SPEC §5.1), so that layout and the PDF stay in range.
@@ -67,14 +75,16 @@ pub fn read_image(bytes: Arc<[u8]>) -> Result<LoadedImage, EcoString> {
     let (width, height) = match format {
         ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::Webp | ImageFormat::Gif => {
             let size = imagesize::blob_size(&bytes).map_err(|e| broken(&e))?;
+            let decoded = raster_bytes(format, &bytes).map_err(|e| broken(&e))?;
             let pixels = (size.width as u64).saturating_mul(size.height as u64);
-            if pixels > MAX_PIXELS {
+            if pixels > MAX_PIXELS || decoded > MAX_IMAGE_BYTES {
                 return Err(eco_format!(
-                    "this {} image is too large: {} × {} pixels, more than Folio reads ({} million)",
+                    "this {} image is too large: {} × {} pixels, {} decoded, more than the {} Folio reads",
                     format.name(),
                     size.width,
                     size.height,
-                    MAX_PIXELS / 1_000_000
+                    megabytes(decoded),
+                    megabytes(MAX_IMAGE_BYTES)
                 ));
             }
             decodes(format, &bytes).map_err(|e| broken(&e))?;
@@ -82,6 +92,7 @@ pub fn read_image(bytes: Arc<[u8]>) -> Result<LoadedImage, EcoString> {
         }
         ImageFormat::Svg => {
             let tree = usvg::Tree::from_data(&bytes, &svg_options()).map_err(|e| broken(&e))?;
+            svg_rasters_fit(&tree).map_err(|e| broken(&e))?;
             text = svg_has_text(&bytes);
             let size = tree.size();
             (
@@ -95,6 +106,7 @@ pub fn read_image(bytes: Arc<[u8]>) -> Result<LoadedImage, EcoString> {
             let Some(page) = pdf.pages().first() else {
                 return Err(broken(&"it has no pages"));
             };
+            pdf_page_fits(page).map_err(|e| broken(&e))?;
             let (width, height) = page.render_dimensions();
             (f64::from(width), f64::from(height))
         }
@@ -126,6 +138,133 @@ pub fn svg_options() -> usvg::Options<'static> {
         },
         ..usvg::Options::default()
     }
+}
+
+/// Megabytes of 2²⁰ bytes, rounded to the nearest, for messages.
+fn megabytes(bytes: u64) -> EcoString {
+    eco_format!("{} MB", bytes.saturating_add(1 << 19) >> 20)
+}
+
+/// The memory a raster file takes decoded: its pixels at four bytes each,
+/// or more for a PNG of more channels or bits (a 16-bit RGBA PNG takes
+/// eight), which the PDF writer keeps. Reads only the file's header.
+fn raster_bytes(format: ImageFormat, bytes: &[u8]) -> Result<u64, String> {
+    let size = imagesize::blob_size(bytes).map_err(|e| e.to_string())?;
+    let mut per_pixel = 4;
+    if format == ImageFormat::Png {
+        let reader = png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .map_err(|e| e.to_string())?;
+        per_pixel = per_pixel.max(reader.info().bytes_per_pixel() as u64);
+    }
+    Ok((size.width as u64)
+        .saturating_mul(size.height as u64)
+        .saturating_mul(per_pixel))
+}
+
+/// Checks that the rasters an SVG drawing holds (as `data:` URLs, in it or
+/// in the SVG drawings it holds) take at most [`MAX_IMAGE_BYTES`] decoded
+/// together. Each raster counts once, however often it is drawn. Reads
+/// only their headers.
+fn svg_rasters_fit(tree: &usvg::Tree) -> Result<(), String> {
+    fn walk(
+        group: &usvg::Group,
+        seen: &mut Vec<*const Vec<u8>>,
+        total: &mut u64,
+    ) -> Result<(), String> {
+        for node in group.children() {
+            if let usvg::Node::Image(image) = node {
+                let (format, data) = match image.kind() {
+                    usvg::ImageKind::JPEG(data) => (ImageFormat::Jpeg, data),
+                    usvg::ImageKind::PNG(data) => (ImageFormat::Png, data),
+                    usvg::ImageKind::GIF(data) => (ImageFormat::Gif, data),
+                    usvg::ImageKind::WEBP(data) => (ImageFormat::Webp, data),
+                    usvg::ImageKind::SVG(tree) => {
+                        walk(tree.root(), seen, total)?;
+                        continue;
+                    }
+                };
+                if seen.contains(&Arc::as_ptr(data)) {
+                    continue;
+                }
+                seen.push(Arc::as_ptr(data));
+                let bytes = raster_bytes(format, data)
+                    .map_err(|e| format!("a {} image in it cannot be read: {e}", format.name()))?;
+                *total = total.saturating_add(bytes);
+            }
+            if let usvg::Node::Group(group) = node {
+                walk(group, seen, total)?;
+            }
+            let mut result = Ok(());
+            node.subroots(|root| {
+                if result.is_ok() {
+                    result = walk(root, seen, total);
+                }
+            });
+            result?;
+        }
+        Ok(())
+    }
+    let mut total = 0;
+    walk(tree.root(), &mut Vec::new(), &mut total)?;
+    too_large(total)
+}
+
+/// The error for rasters in a figure that take more than
+/// [`MAX_IMAGE_BYTES`] decoded.
+fn too_large(total: u64) -> Result<(), String> {
+    if total > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "the images in it take {} decoded, more than the {} Folio reads",
+            megabytes(total),
+            megabytes(MAX_IMAGE_BYTES)
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that a PDF figure's page can be drawn within the PDF reader's
+/// limits, by converting it to SVG as the PDF writer and the renderer do:
+/// no form XObject that draws itself, no more work than the reader does,
+/// and images that take at most [`MAX_IMAGE_BYTES`] decoded together.
+fn pdf_page_fits(page: &hayro_syntax::page::Page<'_>) -> Result<(), String> {
+    use hayro_svg::hayro_interpret::{InterpreterSettings, InterpreterWarning};
+    use std::sync::Mutex;
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let sink = warnings.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |warning| {
+            if let Ok(mut warnings) = sink.lock() {
+                warnings.push(warning);
+            }
+        }),
+        ..InterpreterSettings::default()
+    };
+    hayro_svg::convert(
+        page,
+        &hayro_svg::RenderCache::new(),
+        &settings,
+        &hayro_svg::SvgRenderSettings::default(),
+    );
+    let warnings = warnings.lock().map_err(|e| e.to_string())?;
+    for warning in warnings.iter() {
+        match warning {
+            InterpreterWarning::FormCycle => {
+                return Err("a form XObject in it draws itself".into());
+            }
+            InterpreterWarning::TooComplex => {
+                return Err("its page takes more work to draw than Folio does".into());
+            }
+            InterpreterWarning::ImageTooLarge => {
+                return Err(format!(
+                    "the images in it take more than the {} decoded that Folio reads",
+                    megabytes(MAX_IMAGE_BYTES)
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Whether an SVG drawing has a `text` element, which is not drawn.
@@ -180,7 +319,7 @@ fn decodes(format: ImageFormat, bytes: &[u8]) -> Result<(), String> {
             let mut options = gif::DecodeOptions::new();
             options.set_color_output(gif::ColorOutput::RGBA);
             options.set_memory_limit(gif::MemoryLimit::Bytes(
-                std::num::NonZeroU64::new(MAX_PIXELS * 4).expect("not zero"),
+                std::num::NonZeroU64::new(MAX_IMAGE_BYTES).expect("not zero"),
             ));
             let mut decoder = options
                 .read_info(Cursor::new(bytes))
@@ -245,6 +384,32 @@ mod tests {
             "<!-- <text> was here --><rect width='1' height='1'/>"
         ));
         assert!(!with("<textArea/>"));
+    }
+
+    /// The core's limit is the one the PDF reader applies.
+    #[test]
+    fn limit_matches_the_pdf_reader() {
+        assert_eq!(MAX_IMAGE_BYTES, hayro_syntax::MAX_IMAGE_BYTES);
+    }
+
+    /// A form XObject that draws itself is refused, by its first `Do`
+    /// (#333).
+    #[test]
+    fn a_form_that_draws_itself() {
+        let bytes = include_bytes!("../tests/untrusted/form-cycle-once.pdf");
+        let error = read_image(Arc::from(&bytes[..])).unwrap_err();
+        assert_eq!(
+            error,
+            "this PDF file cannot be read: a form XObject in it draws itself"
+        );
+    }
+
+    #[test]
+    fn megabytes_round() {
+        assert_eq!(megabytes(MAX_IMAGE_BYTES), "256 MB");
+        assert_eq!(megabytes(0), "0 MB");
+        assert_eq!(megabytes((1 << 20) + (1 << 19)), "2 MB");
+        assert_eq!(megabytes(u64::MAX), "17592186044415 MB");
     }
 
     #[test]

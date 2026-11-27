@@ -9,19 +9,42 @@ pub struct Reader<'a> {
     pub data: &'a [u8],
     /// The current byte-offset.
     pub offset: usize,
+    // Folio: how many arrays and dictionaries the reader is inside.
+    depth: u32,
 }
 
 impl<'a> Reader<'a> {
     /// Create a new reader.
     #[inline]
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, offset: 0 }
+        Self {
+            data,
+            offset: 0,
+            depth: 0,
+        }
     }
 
     /// Create a new reader at the given offset.
     #[inline]
     pub fn new_with(data: &'a [u8], offset: usize) -> Self {
-        Self { data, offset }
+        Self {
+            data,
+            offset,
+            depth: 0,
+        }
+    }
+
+    /// Runs `f` one array or dictionary deeper, or returns `None` when that
+    /// would be deeper than [`crate::MAX_NESTING`] (Folio).
+    #[inline]
+    pub(crate) fn nest<T>(&mut self, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
+        if self.depth >= crate::MAX_NESTING {
+            return None;
+        }
+        self.depth += 1;
+        let result = f(self);
+        self.depth -= 1;
+        result
     }
 
     /// Returns `true` if the reader has reached the end of the data.

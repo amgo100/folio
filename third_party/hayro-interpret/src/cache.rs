@@ -4,11 +4,78 @@ use kurbo::Affine;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 type CacheMap = HashMap<u128, Option<Box<dyn Any + Send + Sync>>>;
+// Folio: the cache also carries the limits of one interpretation, as every
+// nested context, pattern, soft mask and image shares it (see `Budget`).
 #[derive(Clone)]
-pub(crate) struct Cache(Arc<Mutex<CacheMap>>);
+pub(crate) struct Cache(Arc<Mutex<CacheMap>>, pub(crate) Arc<Budget>);
+
+// Folio: what one interpretation of a page (with every form, pattern, soft
+// mask and glyph it draws) may do, so that a hostile file ends in bounded
+// time and memory: a form XObject that draws itself is not drawn again, the
+// work is counted (an operator is one unit, a nested interpretation
+// `NESTED_COST`) and stops at `MAX_WORK`, and the images decoded together
+// may take at most `hayro_syntax::MAX_IMAGE_BYTES`. Each limit reached
+// sends a warning to the settings' warning sink.
+/// The most work one interpretation does (Folio).
+pub(crate) const MAX_WORK: u64 = 10_000_000;
+/// The work a nested interpretation costs (Folio).
+pub(crate) const NESTED_COST: u64 = 100;
+
+#[derive(Default)]
+pub(crate) struct Budget {
+    work: AtomicU64,
+    image_bytes: AtomicU64,
+    exhausted: AtomicBool,
+    forms: Mutex<Vec<(i32, i32)>>,
+}
+
+impl Budget {
+    /// Spends `units` of work; `false` once the work is used up, with one
+    /// warning the first time.
+    pub(crate) fn spend(&self, units: u64, sink: &crate::WarningSinkFn) -> bool {
+        let before = self.work.fetch_add(units, Ordering::Relaxed);
+        if before.saturating_add(units) <= MAX_WORK {
+            return true;
+        }
+        if !self.exhausted.swap(true, Ordering::Relaxed) {
+            sink(crate::InterpreterWarning::TooComplex);
+        }
+        false
+    }
+
+    /// Takes `bytes` of decoded image data from what the interpretation may
+    /// decode; `false` when that is more than is left.
+    pub(crate) fn take_image_bytes(&self, bytes: u64, sink: &crate::WarningSinkFn) -> bool {
+        let before = self.image_bytes.fetch_add(bytes, Ordering::Relaxed);
+        if before.saturating_add(bytes) <= hayro_syntax::MAX_IMAGE_BYTES {
+            return true;
+        }
+        sink(crate::InterpreterWarning::ImageTooLarge);
+        false
+    }
+
+    /// Marks a form XObject as being drawn; `false` when it already is,
+    /// that is, when it draws itself.
+    pub(crate) fn enter_form(&self, id: (i32, i32), sink: &crate::WarningSinkFn) -> bool {
+        let mut forms = self.forms.lock().unwrap();
+        if forms.contains(&id) {
+            drop(forms);
+            sink(crate::InterpreterWarning::FormCycle);
+            return false;
+        }
+        forms.push(id);
+        true
+    }
+
+    /// Marks the form XObject drawn last as done.
+    pub(crate) fn leave_form(&self) {
+        self.forms.lock().unwrap().pop();
+    }
+}
 
 impl Default for Cache {
     fn default() -> Self {
@@ -18,7 +85,7 @@ impl Default for Cache {
 
 impl Cache {
     pub(crate) fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::new())))
+        Self(Arc::new(Mutex::new(HashMap::new())), Arc::default())
     }
 
     pub(crate) fn get_or_insert_with<T: Clone + Send + Sync + 'static>(

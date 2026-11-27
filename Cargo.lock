@@ -643,6 +643,7 @@ dependencies = [
  "folio-syntax",
  "folio-text",
  "gif",
+ "hayro-svg",
  "hayro-syntax",
  "image-webp",
  "imagesize",

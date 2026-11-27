@@ -158,6 +158,14 @@ impl Debug for Dict<'_> {
 
 impl Skippable for Dict<'_> {
     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
+        // Folio: arrays and dictionaries nested more deeply than
+        // `MAX_NESTING` are not read (see `Reader::nest`).
+        r.nest(|r| skip_inner(r, is_content_stream))
+    }
+}
+
+fn skip_inner(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
+    {
         r.forward_tag(b"<<")?;
 
         loop {
@@ -267,6 +275,21 @@ pub(crate) fn probe_dict<'a>(
 }
 
 fn parse_dict_with<'a, F>(
+    r: &mut Reader<'a>,
+    ctx: &ReaderContext<'a>,
+    start_tag: Option<&[u8]>,
+    end_tag: &[u8],
+    on_entry: F,
+) -> Option<&'a [u8]>
+where
+    F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
+{
+    // Folio: a dictionary read whole counts towards `MAX_NESTING` too, as
+    // entries it cannot read are read as objects.
+    r.nest(|r| parse_dict_with_inner(r, ctx, start_tag, end_tag, on_entry))
+}
+
+fn parse_dict_with_inner<'a, F>(
     r: &mut Reader<'a>,
     ctx: &ReaderContext<'a>,
     start_tag: Option<&[u8]>,
