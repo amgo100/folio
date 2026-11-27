@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The forces on a sledge pulled at constant velocity across level snow:
+     the tension T in the rope at the angle θ above the horizontal, the
+     weight W, the normal contact force R and the friction F. Folio does
+     not set text in SVG images yet, so the letters are drawn as strokes. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="230" viewBox="0 0 360 230">
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#000000"/>
+    </marker>
+  </defs>
+  <!-- The snow, hatched below its surface. -->
+  <path d="M 20 160 H 340" stroke="#000000" stroke-width="1.5"/>
+  <path d="M 30 160 l -8 10 M 50 160 l -8 10 M 70 160 l -8 10 M 90 160 l -8 10 M 110 160 l -8 10
+           M 130 160 l -8 10 M 150 160 l -8 10 M 170 160 l -8 10 M 190 160 l -8 10 M 210 160 l -8 10
+           M 230 160 l -8 10 M 250 160 l -8 10 M 270 160 l -8 10 M 290 160 l -8 10 M 310 160 l -8 10
+           M 330 160 l -8 10" stroke="#606060" stroke-width="1"/>
+  <!-- The sledge: a box on two runners. -->
+  <rect x="135" y="112" width="90" height="40" fill="#d8e4f0" stroke="#000000" stroke-width="1.5"/>
+  <path d="M 128 156 H 232 Q 240 156 240 148" fill="none" stroke="#000000" stroke-width="2"/>
+  <path d="M 150 152 v 4 M 210 152 v 4" stroke="#000000" stroke-width="1.5"/>
+  <!-- The horizontal through the rope's end, and the angle θ. -->
+  <path d="M 225 132 H 305" stroke="#000000" stroke-width="1" stroke-dasharray="4 3"/>
+  <path d="M 270 132 A 45 45 0 0 0 265.78 112.98" fill="none" stroke="#000000" stroke-width="1"/>
+  <!-- The forces. -->
+  <path d="M 225 132 L 324.7 85.5" fill="none" stroke="#c02020" stroke-width="2.2" marker-end="url(#head)"/>
+  <path d="M 180 132 V 222" fill="none" stroke="#2040c0" stroke-width="2.2" marker-end="url(#head)"/>
+  <path d="M 180 132 V 52" fill="none" stroke="#208020" stroke-width="2.2" marker-end="url(#head)"/>
+  <path d="M 135 152 H 70" fill="none" stroke="#000000" stroke-width="2.2" marker-end="url(#head)"/>
+  <circle cx="180" cy="132" r="2.5" fill="#000000"/>
+  <!-- The letters T, W, R, F and θ. -->
+  <g fill="none" stroke="#000000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 318 64 h 12 M 324 64 v 15"/>
+    <path d="M 188 202 l 3 15 l 3.5 -10 l 3.5 10 l 3 -15"/>
+    <path d="M 188 50 v 15 M 188 50 h 5 a 3.75 3.75 0 0 1 0 7.5 h -5 M 192 57.5 l 5 7.5"/>
+    <path d="M 84 128 v 15 M 84 128 h 9 M 84 135.5 h 7"/>
+    <ellipse cx="284" cy="120" rx="3.5" ry="6"/>
+    <path d="M 280.5 120 h 7"/>
+  </g>
+</svg>

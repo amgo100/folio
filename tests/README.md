@@ -108,6 +108,32 @@ The command line names a project's outputs after its entry file
 (`figures.pdf`, `exam-exam.pdf`); each digest must appear in
 `crates/folio/tests/determinism/digests.txt`.
 
+## The acceptance exam
+
+`tests/corpus/acceptance` is the acceptance exam of SPEC §15: a four-page
+A-level physics paper on mechanics, electricity and waves, written as a
+teacher would write it, that the M1 exit criteria are judged on. It uses
+inline and display maths with numbered, labelled equations and one
+`$:tex …$` equation; quantities, units and numbers (`#qty`, with an
+uncertainty and an angle) and a semantic vector; numbered questions
+(headings) with parts (nested enumerations); references to equations,
+figures and questions, with a supplement, and page references to a later
+and an earlier page; footnotes on three pages; a bulleted list with a
+marker; and two numbered figures: a force diagram with arrowheads as SVG
+(`assets/sledge.svg`, its letters drawn as strokes, since Folio does not
+set text in SVG yet) and an oscilloscope trace as PNG (`assets/trace.png`,
+generated: a sine of period 4 and amplitude 2.5 divisions on a 10 × 8
+grid). Its mark scheme comes with the exam component (M2).
+
+It is checked as every corpus document is (layout dumps and page images,
+PDF/UA-1, determinism, the command line), and its golden page images
+were reviewed by hand once; a change to them is reviewed as a change to
+what a teacher sees. The M1 exit check of `scripts/bench.sh --wall`
+(`watch-edit`) previews it.
+
+Project names in the corpus have no hyphen: the command-line test reads
+the project from a digest's file name up to the first `-` or `.`.
+
 ## Adding a corpus document
 
 1. Add a project directory under `tests/corpus/` with `folio.toml`,
@@ -195,11 +221,11 @@ the limits of SPEC §14.1 and §15:
 
 - scenarios, each run 20 times after a warm-up and judged by its 95th
   percentile: the M0 exit check (gated: 200 ms); the M1 exit check
-  (`watch-edit`, gated: 80 ms), which serves the corpus exam with `folio
-  watch`'s preview (`folio-preview`), watching a temporary copy on disk,
-  writes a one-word edit to it and times until a websocket client has the
-  display lists of the pages the edit changed (#57 points it at the
-  acceptance exam); the reference document's
+  (`watch-edit`, gated: 80 ms), which serves the acceptance exam
+  (below) with `folio watch`'s preview (`folio-preview`), watching a
+  temporary copy on disk, writes an edit of a quantity on its second page
+  to it and times until a websocket client has the display lists of the
+  pages the edit changed; the reference document's
   full compile, one-word edit to PDF, one-word edit to the pages (the
   preview of the M1 exit check: 80 ms), one-word edit checked without
   emit (reported only), stylesheet edit, and the ratio of
