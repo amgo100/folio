@@ -82,7 +82,8 @@
 //! visible come first: it sends `{"type": "visible", "pages": [..]}`
 //! whenever that changes. They are also laid out first (SPEC §12.2): once
 //! any client has said what it shows, a revision whose document has pages
-//! after the last visible one may come in two updates, the first with the
+//! after the last visible one, as the revision before had, may come in two
+//! updates, the first with the
 //! pages through it that changed, and the pages after them and the
 //! diagnostics still those of the revision before, then one with the
 //! rest. A client applies each update as it comes; a click on a page after
@@ -308,8 +309,8 @@ pub enum Event {
     /// laid out and sent, before the rest (SPEC §12.2). The pages after
     /// them, and the diagnostics, are those of the revision before until
     /// the revision is checked ([`Event::Updated`]). Only when a client
-    /// has said which pages it shows and the document has pages after
-    /// them.
+    /// has said which pages it shows, and the document has pages after
+    /// them, as the revision before had.
     FirstPages {
         /// The revision.
         revision: u64,

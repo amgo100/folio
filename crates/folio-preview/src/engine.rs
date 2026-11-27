@@ -957,8 +957,9 @@ fn choose(world: &World, variant: Option<&str>) -> Result<(Option<Name>, Target)
 /// Checks a build on a handle of the world and prepares what changed
 /// since `before` to send; `None` when an edit cancelled it.
 ///
-/// When a client shows pages (`visible`, the last of them) and the build
-/// has pages after them, those through it are laid out first, and what
+/// When a client shows pages (`visible`, the last of them), the pages sent
+/// before go past it, and the build still has pages after it, those
+/// through it are laid out first, and what
 /// changed of them is handed to `first` to send before the check goes on
 /// (SPEC §12.2). Strictly forward page breaking needs the pages before
 /// the last visible one anyway; the check then finds them in the page
@@ -999,7 +1000,10 @@ fn check(
     // The fonts the clients have, and whether they must drop their glyphs.
     let mut fonts_before = published.fonts.clone();
     let mut redraw = before.is_none();
+    // When the pages sent before end by the last visible one, so will
+    // these most likely: laying them out first would only add work.
     if let Some(last) = visible
+        && published.pages.len() > last + 1
         && let Some(laid) = folio::pages_through(world, target, variant.as_ref(), last).ok()?
         && !laid.complete
     {
