@@ -302,3 +302,44 @@ fn rules_span_the_region_they_are_set_in() {
         assert!(close(pos.x, pages.master.body.origin.x + Abs::pt(6.0)));
     }
 }
+
+#[test]
+fn min_height_is_at_most_the_body_height() {
+    // A block asking for more than a page grows to the body's height and
+    // still ends on a page, never below its foot.
+    let world = world(
+        "figure { min-height: 400mm; border: 1pt solid #000000; space-before: 0pt; }\n",
+        &format!("{}\n\n#figure[Short.]\n\nAfter.\n", prose(40)),
+    );
+    let pages = pages(&world);
+    let body = pages.master.body;
+    for page in &pages.pages {
+        for (pos, _) in page_shapes(page) {
+            assert!(
+                pos.y <= body.origin.y + body.size.height + Abs::pt(0.01),
+                "{pos:?}"
+            );
+        }
+    }
+    let diags = diagnostics(&world);
+    assert!(
+        diags
+            .iter()
+            .all(|d| d.code.as_deref() != Some("page-overflow")),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn unbreakable_ruled_lines_in_an_unbreakable_block_warn_once() {
+    let world = world(
+        "figure.answer { rule-lines: 25; rule-spacing: 10mm; breakable: false; }\n",
+        "Question.\n\n#figure(class: \"answer\")[]\n",
+    );
+    let diags = diagnostics(&world);
+    let broken = diags
+        .iter()
+        .filter(|d| d.code.as_deref() == Some("broken-unbreakable"))
+        .count();
+    assert_eq!(broken, 1, "{diags:?}");
+}

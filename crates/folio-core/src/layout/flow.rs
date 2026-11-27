@@ -646,8 +646,9 @@ impl Flow {
     /// Flattens a build's blocks and paragraphs. `layouts` and `slots`
     /// hold the lines and line slots of each paragraph of `text` in a body
     /// `width` wide, its objects without sizes; `caches` memoise the
-    /// hyphens they need and share what earlier flows built. `sizes` gives
-    /// objects sizes, and paragraphs with sized objects are broken again.
+    /// hyphens they need and share what earlier flows built. `height` is
+    /// the body's height, which bounds `min-height`. `sizes` gives objects
+    /// sizes, and paragraphs with sized objects are broken again.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         text: &Text,
@@ -657,6 +658,7 @@ impl Flow {
         props: &Properties,
         fonts: &Fonts,
         width: Abs,
+        height: Abs,
         sizes: Sizes<'_>,
     ) -> Self {
         let Caches { cache, shared, now } = caches;
@@ -679,6 +681,7 @@ impl Flow {
             props,
             fonts,
             width,
+            height,
             metrics: FaceMetrics::new(fonts),
             stack: EcoVec::new(),
             pending: Vec::new(),
@@ -1008,6 +1011,9 @@ struct Builder<'a> {
     fonts: &'a Fonts,
     /// The width of the body.
     width: Abs,
+    /// The height of the body: no `min-height` is taller, so that a block's
+    /// foot always fits on a page.
+    height: Abs,
     metrics: FaceMetrics<'a>,
     /// The blocks open, outermost first, with their locations.
     stack: EcoVec<(Arc<BlockBox>, Location)>,
@@ -1083,6 +1089,7 @@ impl Builder<'_> {
             props: self.props,
             fonts: self.fonts,
             width: self.width,
+            height: self.height,
             metrics: FaceMetrics::new(self.fonts),
             stack: EcoVec::new(),
             pending: Vec::new(),
@@ -1129,6 +1136,7 @@ impl Builder<'_> {
         if let Some(rules) = &boxed.rules {
             self.rules(block, &boxed, rules);
         }
+        let min_height = boxed.min_height.min(self.height);
         if self.items.len() == before {
             let size = self.sizes.block.and_then(|f| f(block));
             let leaf = match size {
@@ -1145,8 +1153,8 @@ impl Builder<'_> {
                     // A block with nothing to set and a `min-height` is a
                     // box of that height, which a page break does not
                     // divide (SPEC §6.3).
-                    None if boxed.min_height > Abs::zero() => Leaf::Box(Arc::new(BlockObject {
-                        size: Size::new(boxed.content().1, boxed.min_height),
+                    None if min_height > Abs::zero() => Leaf::Box(Arc::new(BlockObject {
+                        size: Size::new(boxed.content().1, min_height),
                         location: block.location,
                         content: Some(EcoVec::new()),
                         baselines: None,
@@ -1158,12 +1166,12 @@ impl Builder<'_> {
             };
             self.leaf(leaf, Origin::Empty);
         }
-        if boxed.min_height > Abs::zero() {
+        if min_height > Abs::zero() {
             self.fills.push(Fill {
                 first: before,
                 end: self.items.len(),
                 depth: self.stack.len() - 1,
-                min: boxed.min_height,
+                min: min_height,
             });
         }
         self.stack.pop();
@@ -1219,6 +1227,14 @@ impl Builder<'_> {
                 continue;
             }
             let before = &mut self.items.last_mut().expect("a leaf was added").before;
+            // A block around them that may not break already says so.
+            let held = before
+                .constraints
+                .iter()
+                .any(|c| matches!(c, Constraint::Unbreakable(_)));
+            if held {
+                continue;
+            }
             if !rules.breakable {
                 before.penalty += UNBREAKABLE;
                 before

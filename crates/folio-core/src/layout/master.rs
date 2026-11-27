@@ -148,6 +148,11 @@ pub struct BlockBox {
     pub rules: Option<Rules>,
 }
 
+/// The most ruled lines a block has (SPEC §6.3): more than the tallest
+/// page holds at the smallest spacing, so that a stylesheet cannot make a
+/// build lay out lines without end.
+pub const MAX_RULE_LINES: usize = 15_000;
+
 /// Ruled lines of a block (SPEC §6.3): `rule-lines`, `rule-spacing`,
 /// `rule-stroke` and `rule-breakable`.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -171,7 +176,10 @@ impl Rules {
     fn of(style: &ComputedStyle, props: &Properties) -> Option<Self> {
         let value = |name: &str| style.value(props, props.builtin(name));
         let count = match value("rule-lines") {
-            Some(Value::Int(n)) => usize::try_from(*n).ok().filter(|&n| n > 0)?,
+            Some(Value::Int(n)) => usize::try_from(*n)
+                .ok()
+                .filter(|&n| n > 0)?
+                .min(MAX_RULE_LINES),
             _ => return None,
         };
         let stroke = match value("rule-stroke") {

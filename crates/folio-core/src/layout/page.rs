@@ -535,6 +535,7 @@ fn build_pages(
         props,
         fonts,
         body,
+        master.body.size.height,
         Sizes {
             inline: regions.object,
             block: regions.block,
@@ -1523,6 +1524,8 @@ fn lay(
                     asm.baseline(y + first);
                     asm.baseline(y + last);
                 }
+                // An empty box, or blank lines, set no baseline.
+                None if object.content.as_ref().is_some_and(|c| c.is_empty()) => {}
                 None => asm.baseline(y + object.size.height),
             }
         }
