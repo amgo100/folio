@@ -55,6 +55,20 @@ fn document() -> String {
 /// `query` has run for `delay`, edits the world and returns how long the
 /// edit waited for the compilation to stop.
 fn wait(source: &str, query: &str, delay: Duration) -> Duration {
+    wait_for(source, query, delay, |world| {
+        folio::compile(world, Target::Pdf, None).map(drop)
+    })
+}
+
+/// Starts `run` on a fresh world of `source` on another thread; once
+/// `query` has run for `delay`, edits the world and returns how long the
+/// edit waited for `run` to stop.
+fn wait_for(
+    source: &str,
+    query: &str,
+    delay: Duration,
+    run: fn(&World) -> Result<(), Cancelled>,
+) -> Duration {
     let (started_tx, started_rx) = mpsc::channel();
     let started_tx = Mutex::new(started_tx);
     let armed = Arc::new(AtomicBool::new(true));
@@ -74,7 +88,7 @@ fn wait(source: &str, query: &str, delay: Duration) -> Duration {
     world.set_source("main.fol", source).unwrap();
 
     let handle = world.clone();
-    let worker = thread::spawn(move || folio::compile(&handle, Target::Pdf, None));
+    let worker = thread::spawn(move || run(&handle));
     let started = started_rx.recv().unwrap();
     thread::sleep(delay.saturating_sub(started.elapsed()));
 
@@ -125,7 +139,8 @@ fn stages(source: &str) -> Vec<(&'static str, Duration, Duration)> {
 /// An edit made in the middle of each long query of a compilation of a
 /// hundred-page document stops it within a few paragraphs or a page: within a
 /// few milliseconds in an optimised build, and within a small part of the
-/// query's time in any build.
+/// query's time in any build. So does one made while the preview lays out
+/// the first pages.
 #[test]
 fn an_edit_stops_a_long_query_within_milliseconds() {
     let source = document();
@@ -144,4 +159,23 @@ fn an_edit_stops_a_long_query_within_milliseconds() {
             );
         }
     }
+
+    // The preview lays out the first pages, all of them asked for here,
+    // as `pages` does, and an edit stops it between pages alike. Measured
+    // after the others, never beside them. `lines` is the first query it
+    // runs, and it runs `text` before its own work, so the delay counts
+    // from its start as `pages`' does.
+    let (_, took, delay) = stages(&source)
+        .into_iter()
+        .find(|(query, ..)| *query == "pages")
+        .unwrap();
+    let waited = wait_for(&source, "lines", delay, |world| {
+        folio::pages_through(world, Target::Pdf, None, usize::MAX).map(drop)
+    });
+    eprintln!("the first pages: took {took:?}, an edit in the middle waited {waited:?}");
+    assert!(
+        waited < (took / 4).max(Duration::from_millis(50)),
+        "an edit in the middle of laying out the first pages, which takes {took:?}, \
+         waited {waited:?}"
+    );
 }

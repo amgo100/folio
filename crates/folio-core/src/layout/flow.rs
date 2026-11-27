@@ -737,7 +737,7 @@ impl Shared {
         let mut map = lock(&self.blocks);
         let bucket = map.entry(key).or_default();
         if let Some((shared, used)) = bucket.iter_mut().find(|(b, _)| *b == block) {
-            *used = now;
+            *used = (*used).max(now);
             return shared.clone();
         }
         bucket.push((block.clone(), now));
@@ -764,7 +764,7 @@ fn intern<T: Eq>(map: &Interned<T>, key: u64, value: T, now: u64) -> Arc<T> {
     let mut map = lock(map);
     let bucket = map.entry(key).or_default();
     if let Some((shared, used)) = bucket.iter_mut().find(|(v, _)| **v == value) {
-        *used = now;
+        *used = (*used).max(now);
         return shared.clone();
     }
     let value = Arc::new(value);
