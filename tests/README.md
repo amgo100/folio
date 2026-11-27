@@ -74,8 +74,11 @@ another machine, so it catches output that depends on the platform only
 when it runs on one that differs. SVG figures are where that happened:
 upstream crates called the platform's maths library, and an arrowhead in
 `tests/corpus/figures` turned by a different last bit on aarch64 (#300).
-They are now patched to call `libm` (`third_party/README.md`), and the
-corpus gives the same digests on x86-64 and aarch64.
+They are now patched to call `libm` (`third_party/README.md`), as are the
+crates that read PDF figures converted to SVG (#304; the figure
+`tests/corpus/figures/assets/spectrum.pdf` turns its colours' last bits
+into visible ones), and the corpus gives the same digests on x86-64 and
+aarch64.
 
 To check it on an aarch64 machine (Linux, or macOS on Apple Silicon), run
 the determinism test there:

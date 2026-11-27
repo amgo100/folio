@@ -16,6 +16,10 @@ The forces on a block on a ramp are drawn in @fig:ramp, with a shadow under the 
 
 #figure[#image("assets/field.pdf", alt: "Field lines curving from a positive charge on the left to a negative charge on the right")][The field between two charges] <fig:field>
 
+Colour swatches from a printer's PDF keep their calibrated colours, spot colours and blends (@fig:spectrum).
+
+#figure[#image("assets/spectrum.pdf", alt: "Five colour swatches in calibrated and Lab colour, two swatches of a spot colour, and two colour blends, one through the spot colour and one from blue to yellow", width: 80%)][Colour swatches and blends] <fig:spectrum>
+
 = Pictures
 
 A photograph is kept as the JPEG it is:

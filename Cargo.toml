@@ -152,11 +152,13 @@ opt-level = 2
 debug = "line-tables-only"
 
 # Upstream crates whose floating-point code called the platform's maths
-# library, patched to call `libm` (SPEC §2.4, D-300-1), so that SVG figures
-# give the same PDF bytes on every platform. third_party/README.md says what
+# library, patched to call `libm` (SPEC §2.4, D-300-1), so that SVG and PDF
+# figures give the same PDF bytes on every platform. third_party/README.md says what
 # each patch changes; scripts/patch-third-party.sh rebuilds the copies from
 # the crates.io releases. fuzz/Cargo.toml has the same table.
 [patch.crates-io]
+hayro-interpret = { path = "third_party/hayro-interpret" }
+hayro-syntax = { path = "third_party/hayro-syntax" }
 kurbo = { path = "third_party/kurbo" }
 resvg = { path = "third_party/resvg" }
 svgtypes = { path = "third_party/svgtypes" }

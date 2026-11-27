@@ -108,6 +108,8 @@ bench = false
 # The same patched crates as the main workspace (SPEC §2.4, D-300-1; see
 # the root Cargo.toml), so that the fuzz targets build what Folio ships.
 [patch.crates-io]
+hayro-interpret = { path = "../third_party/hayro-interpret" }
+hayro-syntax = { path = "../third_party/hayro-syntax" }
 kurbo = { path = "../third_party/kurbo" }
 resvg = { path = "../third_party/resvg" }
 svgtypes = { path = "../third_party/svgtypes" }
