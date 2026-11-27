@@ -15,7 +15,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 
-use crate::engine::{Overlay, Published};
+use crate::engine::{Overlay, Published, Visible};
 use crate::http::{self, MAX_HEAD, Request};
 use crate::{Error, Event, Hook, PROTOCOL, Source};
 
@@ -45,6 +45,8 @@ struct Shared {
     token: Arc<str>,
     port: u16,
     published: watch::Receiver<Arc<Published>>,
+    /// The pages each client shows, which the engine lays out first.
+    visible: Arc<Visible>,
     stop: watch::Receiver<bool>,
     /// Messages for every client, such as `reveal`.
     broadcast: broadcast::Sender<Arc<str>>,
@@ -56,6 +58,7 @@ pub(crate) fn start(
     port: u16,
     token: Arc<str>,
     published: watch::Receiver<Arc<Published>>,
+    visible: Arc<Visible>,
     broadcast: broadcast::Sender<Arc<str>>,
     on_event: Option<Hook>,
 ) -> Result<(Handle, SocketAddr, JoinHandle<()>), Error> {
@@ -77,6 +80,7 @@ pub(crate) fn start(
         token,
         port: addr.port(),
         published,
+        visible,
         stop,
         broadcast,
         on_event,
@@ -374,6 +378,12 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
     let mut broadcast = shared.broadcast.subscribe();
     let mut known = Known::new();
     let mut visible: Vec<usize> = Vec::new();
+    // Forgets what the client shows however its task ends.
+    let seen = Seen {
+        visible: shared.visible.clone(),
+        id: shared.visible.join(),
+    };
+    let id = seen.id;
     let current = published.borrow_and_update().clone();
     if send(&mut ws, &current, &mut known, &visible).await.is_err() {
         return;
@@ -391,7 +401,10 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
             }
             message = ws.next() => match message {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
-                    Ok(ClientMessage::Visible { pages }) => visible = pages,
+                    Ok(ClientMessage::Visible { pages }) => {
+                        shared.visible.show(id, &pages);
+                        visible = pages;
+                    }
                     Ok(ClientMessage::Click { revision, page, x, y }) => {
                         let current = published.borrow().clone();
                         let reply = click(&shared, &current, revision, page, x, y);
@@ -419,7 +432,21 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
             _ = stop.changed() => break,
         }
     }
+    // A client that is going no longer decides what is laid out first.
+    drop(seen);
     let _ = ws.close(None).await;
+}
+
+/// A client's record of the pages it shows, forgotten when it is dropped.
+struct Seen {
+    visible: Arc<Visible>,
+    id: u64,
+}
+
+impl Drop for Seen {
+    fn drop(&mut self) {
+        self.visible.leave(self.id);
+    }
 }
 
 /// Answers a click on a page with the source it shows, and tells the hook
@@ -453,11 +480,12 @@ fn click(
 
 /// The source of what a point on a page shows.
 fn locate(published: &Published, page: usize, x: f32, y: f32) -> Option<folio::diag::Location> {
-    // Pages kept from an earlier revision show source that has changed.
+    // Pages kept from an earlier revision show source that has changed,
+    // as do those after the first pages of a revision until it is checked.
     let layout = published
         .layout
         .as_ref()
-        .filter(|layout| layout.revision == published.revision)?;
+        .filter(|layout| layout.revision == published.revision && page < layout.laid)?;
     let entry = published.pages.get(page)?;
     let list = &entry.list;
     if !(x.is_finite() && y.is_finite()) {
@@ -517,6 +545,7 @@ struct UpdateMessage<'a> {
     diagnostics: &'a [folio::diag::Resolved],
     overlays: &'a [Overlay],
     fonts: u64,
+    partial: bool,
 }
 
 /// Sends a client what it does not have of a revision: the `update`
@@ -562,6 +591,7 @@ async fn send(
         diagnostics: &published.diagnostics,
         overlays: &published.overlays,
         fonts: published.font_generation,
+        partial: published.partial,
     };
     let text = serde_json::to_string(&update).expect("the update serialises");
     ws.feed(Message::text(text)).await?;

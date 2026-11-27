@@ -49,12 +49,12 @@
 //! | `/glyphs/<n>?size=<px>&g=<id>.<sub>,..` | Glyphs of font `n` rasterised at `px` pixels to the em (at most 2048), for a client that draws display lists itself (SPEC §12.4); see below |
 //!
 //! On the websocket, the server sends, for every revision the client has
-//! not seen:
+//! not seen, or the rest of one whose first pages it was sent:
 //!
 //! 1. a text message, a JSON object `{"type": "update", "protocol": 1,
 //!    "revision": r, "variant": v | null, "target": "pdf", "pages": n,
 //!    "lists": [..], "spans": [..], "banner": text | null, "diagnostics":
-//!    [..], "overlays": [..], "fonts": g}`: `pages` is how many pages the document has now (pages the
+//!    [..], "overlays": [..], "fonts": g, "partial": p}`: `pages` is how many pages the document has now (pages the
 //!    client had beyond it are gone), `lists` the indices of the pages
 //!    whose display lists follow, `spans` those whose span maps follow,
 //!    `banner` why the pages shown are not of this revision, if they are
@@ -66,7 +66,8 @@
 //!    in points from the page's top-left corner, for the first hundred
 //!    diagnostics, and `fonts` a number that changes whenever the font ids
 //!    of glyph runs may name other fonts, when a client drops the glyphs it
-//!    has. The pages are sent before they are indexed: the overlays follow
+//!    has, and `partial` whether only the first pages are of this
+//!    revision (see below). The pages are sent before they are indexed: the overlays follow
 //!    in a second `update` of the same revision, which sends no pages, and
 //!    until then reveals find nothing (clicks work at once). While neither
 //!    the pages nor the diagnostics change, the first `update` keeps the
@@ -80,7 +81,14 @@
 //!
 //! A new connection receives every page. Pages that the client says are
 //! visible come first: it sends `{"type": "visible", "pages": [..]}`
-//! whenever that changes.
+//! whenever that changes. They are also laid out first (SPEC §12.2): once
+//! any client has said what it shows, a revision whose document has pages
+//! after the last visible one, as the revision before had, may come in two
+//! updates: the first, with `partial` true, sends the pages through it
+//! that changed, while the pages after them, the diagnostics and the marks
+//! on other pages stay those of the revision before; the second sends the
+//! rest. A client applies each update as it comes; a click on a page after
+//! those laid out first finds no source until the second.
 //!
 //! Source sync (SPEC §12.2): a client sends `{"type": "click", "revision":
 //! r, "page": n, "x": x, "y": y}` for a click at a point of a page, in
@@ -298,6 +306,24 @@ pub enum Event {
         /// The new revision.
         revision: u64,
     },
+    /// The pages of a revision through the last that a client shows were
+    /// laid out and sent, before the rest (SPEC §12.2). The pages after
+    /// them, and the diagnostics, are those of the revision before until
+    /// the revision is checked ([`Event::Updated`]). Only when a client
+    /// has said which pages it shows, and the document has pages after
+    /// them, as the revision before had.
+    FirstPages {
+        /// The revision.
+        revision: u64,
+        /// How many pages were laid out, from the first.
+        laid: usize,
+        /// How many pages the preview shows.
+        pages: usize,
+        /// The pages whose display lists were sent again.
+        lists: Vec<usize>,
+        /// The pages whose span maps were sent again.
+        spans: Vec<usize>,
+    },
     /// A revision was checked and sent to the clients.
     Updated(Arc<Update>),
     /// The check of a revision ended after an edit had overtaken it, so
@@ -414,6 +440,7 @@ impl Preview {
             options.port,
             token.clone(),
             published.clone(),
+            pending.visible.clone(),
             broadcast.clone(),
             options.on_event.clone(),
         )?;
