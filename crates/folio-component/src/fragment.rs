@@ -64,21 +64,9 @@ impl Fragment {
         }
     }
 
-    /// The same fragment as the box of a source node, without saying
-    /// which instance of it ([`Location::UNKNOWN_INSTANCE`]), as a
-    /// component given only a [`SourceRef`] can; [`Self::with_location`]
-    /// names an instance.
-    pub fn with_source(mut self, source: SourceRef) -> Self {
-        self.source = source;
-        self.instance = if source.is_detached() {
-            0
-        } else {
-            Location::UNKNOWN_INSTANCE
-        };
-        self
-    }
-
-    /// The same fragment as the box of an element instance.
+    /// The same fragment as the box of an element instance. A component
+    /// names the instance it lays out by the location the core gives it
+    /// (SPEC §3.3), so that each box names one instance.
     pub fn with_location(mut self, location: Location) -> Self {
         self.source = location.source;
         self.instance = location.instance;

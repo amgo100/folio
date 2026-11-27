@@ -24,7 +24,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{FontId, QualifiedName, SourceRef, Target};
+use folio_component::{FontId, Location, QualifiedName, SourceRef, Target};
 use folio_core::db::{Build, Bytes, Db, build_files, build_output, source_file};
 use folio_core::diag::{self, Diagnostic};
 use folio_core::eval::Value;
@@ -324,6 +324,16 @@ pub(crate) fn structure(
     structure_of(block, text, alt, false)
 }
 
+/// The location a structure node of the element at `span`, instance
+/// `location`, names: the node of its span, so that an element without a
+/// location still names its own node rather than none.
+fn located(span: Span, location: Location) -> Location {
+    Location {
+        source: source_ref(span),
+        instance: location.instance,
+    }
+}
+
 /// The structure of a block, as [`structure`] gives it; `in_note` for the
 /// blocks of a footnote, whose own footnotes are not placed, so they have
 /// no node (SPEC §7.8).
@@ -334,8 +344,8 @@ fn structure_of(
     in_note: bool,
 ) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
-    let mut tag = Tag::new(role, source_ref(block.span));
-    tag.instance = block.location.instance;
+    // The node of its span, as its boxes name it, with its instance.
+    let mut tag = Tag::new(role, located(block.span, block.location));
     match role {
         Role::Heading => tag.text = block_text(block, text),
         Role::Formula => tag.text = formula_alt(text, block.span, alt),
@@ -358,8 +368,7 @@ fn structure_of(
                     } else {
                         return None;
                     };
-                    let mut child = Tag::new(role, source_ref(object.span));
-                    child.instance = object.location.instance;
+                    let mut child = Tag::new(role, located(object.span, object.location));
                     child.text = description;
                     Some((object.at, child))
                 });

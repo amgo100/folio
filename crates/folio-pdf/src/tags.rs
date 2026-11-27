@@ -249,13 +249,9 @@ impl<'a> Tagger<'a> {
     /// Whether a box of the element instance at `location` is a footnote's
     /// note, whether or not its node could be entered.
     pub(crate) fn is_foot_box(&self, location: Location) -> bool {
-        self.feet.get(&location.source).is_some_and(|instances| {
-            instances.iter().any(|&i| {
-                i == location.instance
-                    || i == Location::UNKNOWN_INSTANCE
-                    || location.instance == Location::UNKNOWN_INSTANCE
-            })
-        })
+        self.feet
+            .get(&location.source)
+            .is_some_and(|instances| instances.contains(&location.instance))
     }
 
     /// Adds marked content to `node`: to the `Link` of run `link` in it,
@@ -421,13 +417,9 @@ impl<'a> Tagger<'a> {
 }
 
 /// Whether a group of the element instance at `location` is a box of
-/// `tag`: they name the same source and the same instance, or one of them
-/// does not know which instance it is ([`Location::UNKNOWN_INSTANCE`]).
+/// `tag`: they name the same source and the same instance.
 fn is_box_of(tag: &Tag, location: Location) -> bool {
-    tag.source == location.source
-        && (tag.instance == location.instance
-            || tag.instance == Location::UNKNOWN_INSTANCE
-            || location.instance == Location::UNKNOWN_INSTANCE)
+    tag.source == location.source && tag.instance == location.instance
 }
 
 fn take<'a>(nodes: &mut [Option<Out<'a>>], index: usize) -> Out<'a> {

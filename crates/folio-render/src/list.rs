@@ -52,8 +52,10 @@ pub struct Span {
     /// The node.
     pub source: SourceRef,
     /// Which instance of the element made from `source`: a key only
-    /// the core interprets, [`Location::UNKNOWN_INSTANCE`] when the item
-    /// names a node but not an instance, `0` for a detached item.
+    /// the core interprets, `0` for a detached item. A shape names its own
+    /// node with the instance of the box that holds it, which is a location
+    /// only where the box is its node's: a rule of a formula names the
+    /// formula's sub-node and the instance it is drawn for.
     pub instance: u64,
 }
 
@@ -310,12 +312,12 @@ impl DisplayList {
                     span: box_span,
                 }),
                 FragmentItem::Shape { shape, source } => {
+                    // A shape is drawn for the instance whose box holds
+                    // it, as a glyph is.
                     let instance = if source.is_detached() {
                         0
-                    } else if *source == fragment.source {
-                        fragment.instance
                     } else {
-                        Location::UNKNOWN_INSTANCE
+                        fragment.instance
                     };
                     self.items.push(Item {
                         command: Command::Path(path(shape, x, y)),

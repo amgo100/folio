@@ -251,6 +251,11 @@ trait LayoutContainer {
               resume: Option<&ContainerState>, cx: &mut LayoutCx) -> ContainerResult;
 }
 
+struct ChildFlow {
+    location: Location,       // the element instance the container lays out (§2.3)
+    /* the child blocks, which the container lays out through `LayoutCx` */
+}
+
 enum ContainerResult {
     Done(Fragment),
     Break { fragment: Fragment, resume: ContainerState },  // continue in the next region
@@ -268,6 +273,7 @@ struct Fragment {
 
 - The core page builder owns pages, floats, margin notes and footnotes. A container receives the regions available to it (sizes, exclusions, the baseline grid, and any footnote areas the master defines per region) and lays out its child flow by calling back into the core's paragraph and block builders through `LayoutCx`.
 - **Footnotes are negotiated.** When a container's layout pulls footnotes onto the page, it calls `cx.place_footnotes(...)`, which returns the height left for the container; the container lays out again against that height. After two rounds without agreement, the core defers the last anchor line to the next page. Per-column footnote areas are a core service.
+- **Locations.** The `ChildFlow` a container receives carries the location (§2.3) of the element instance it lays out, and the container names it on every box it returns for that instance, with `Fragment::with_location`. A box names one instance or none (`Location::DETACHED`): there is no box of a source without an instance, so the box of the next instance of a loop-made container at the top of a page is never taken for the last one continuing, in the PDF structure tree (§11.1) or by the leak check (§6.4). The core lays out the child flow, so the boxes of its elements name their own instances.
 - To split across pages, a container returns `Break` with the fragment for this page and a `ContainerState`. The state implements `Eq` with a stable hash and holds positions and small data only, and it becomes part of the layout part of the flow state (§2.3).
 - `NoFit` asks the page builder to move the container to the next region, as for an unbreakable block. On a fresh, empty region, `Regions` carries `must_progress: true`, and the container must return `Done` or `Break` having placed at least one line or block, with overflow if necessary. If it returns `NoFit` anyway, that is a conformance failure: the core takes the first unbreakable block of the container's child flow, places it as overflow with a diagnostic, and calls the container again with its resume position advanced past that block, so layout always terminates.
 - Floats and notes anchored inside a container are passed back to the core with their anchor positions; a container may offer extra float areas, such as the tops of individual columns.
