@@ -158,6 +158,11 @@ async fn connection(mut stream: TcpStream, shared: Arc<Shared>) {
                 font(&shared, n)
             } else if let Some(n) = path.strip_prefix("/glyphs/") {
                 glyphs(&shared, n, &request).await
+            } else if let Some(hash) = path
+                .strip_prefix("/figure/")
+                .and_then(|rest| rest.strip_suffix(".svg"))
+            {
+                figure(&shared, hash).await
             } else {
                 http::error("404 Not Found")
             }
@@ -229,6 +234,74 @@ async fn png(shared: &Shared, n: &str) -> Vec<u8> {
     match rendered {
         Ok(Ok(bytes)) => http::response("200 OK", "image/png", &[], &bytes),
         _ => http::error("500 Internal Server Error"),
+    }
+}
+
+/// The policy of a figure's SVG: it may show the images embedded in it and
+/// style itself, and nothing else, should it be opened as a page.
+const FIGURE_POLICY: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox";
+
+/// A vector figure of the current revision as SVG, found by the content
+/// hash of its file (`Image::content_hash`, as 16 hexadecimal digits): an
+/// SVG figure, or a PDF figure converted to SVG, both as `folio-render`'s
+/// SVG output draws them, stretched to the size of the box they fill.
+async fn figure(shared: &Shared, hash: &str) -> Vec<u8> {
+    let Some(hash) = (hash.len() == 16)
+        .then(|| u64::from_str_radix(hash, 16).ok())
+        .flatten()
+    else {
+        return http::error("404 Not Found");
+    };
+    let published = shared.published.borrow().clone();
+    let found = published.pages.iter().find_map(|entry| {
+        entry
+            .list
+            .items
+            .iter()
+            .find_map(|item| match &item.command {
+                folio_render::Command::Image(image)
+                    if image.image.content_hash() == hash
+                        && matches!(
+                            image.image.format(),
+                            folio_component::ImageFormat::Svg | folio_component::ImageFormat::Pdf
+                        ) =>
+                {
+                    Some(image.clone())
+                }
+                _ => None,
+            })
+    });
+    let Some(image) = found else {
+        return http::error("404 Not Found");
+    };
+    let fonts = published.fonts.clone();
+    let converted = tokio::task::spawn_blocking(move || {
+        let rect = folio_render::Rect {
+            x: 0.0,
+            y: 0.0,
+            ..image.rect
+        };
+        let list = folio_render::DisplayList {
+            width: rect.width,
+            height: rect.height,
+            span: folio_render::Span::DETACHED,
+            items: vec![folio_render::Item {
+                command: folio_render::Command::Image(folio_render::ImageItem { rect, ..image }),
+                span: folio_render::Span::DETACHED,
+            }],
+        };
+        folio_render::svg(&list, &*fonts, &mut folio_render::Outlines::new())
+    })
+    .await;
+    match converted {
+        // A figure that cannot be converted is an SVG without its image.
+        Ok(svg) => http::response(
+            "200 OK",
+            "image/svg+xml",
+            &[("Content-Security-Policy", FIGURE_POLICY)],
+            svg.as_bytes(),
+        ),
+        Err(_) => http::error("500 Internal Server Error"),
     }
 }
 

@@ -376,10 +376,34 @@ fn the_viewer_draws_pages_inside_an_iframe() {
     let dir = project("exam");
     let (preview, events) = start(dir.path(), |o| o.watch(false));
     updated(&events, |u| u.pages > 0);
+    node("iframe.cjs", &preview.url());
+}
+
+#[test]
+fn the_viewer_draws_images() {
+    // Every image of the acceptance exam (SVG, PNG) and of the figures
+    // corpus (every format, PDF among them) is drawn on its page in
+    // Chromium (`tests/images.cjs`). Needs Node.js with Playwright, as
+    // above; `figures_are_served_as_svg` checks the server's part.
+    if !playwright() {
+        eprintln!("skipped: Node.js with Playwright is not installed");
+        return;
+    }
+    for name in ["acceptance", "figures"] {
+        let dir = project(name);
+        let (preview, events) = start(dir.path(), |o| o.watch(false));
+        updated(&events, |u| u.pages > 0);
+        node("images.cjs", &preview.url());
+    }
+}
+
+/// Runs a script of this crate's `tests` directory with Node.js and fails
+/// with its output unless it succeeds.
+fn node(script: &str, url: &str) {
     let mut child = std::process::Command::new("node")
         .current_dir(tests_dir())
-        .arg("iframe.cjs")
-        .arg(preview.url())
+        .arg(script)
+        .arg(url)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -397,10 +421,81 @@ fn the_viewer_draws_pages_inside_an_iframe() {
     let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
-        "{}{}",
+        "{script}: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn figures_are_served_as_svg() {
+    use folio_component::ImageFormat;
+    let dir = project("figures");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    let received = receive_from(&mut ws, first.revision);
+    let mut images = Vec::new();
+    for (_, message) in &received.frames {
+        if let wire::Message::List(list) = message {
+            for item in &list.items {
+                if let folio_render::Command::Image(image) = &item.command {
+                    images.push(image.image.clone());
+                }
+            }
+        }
+    }
+    let format = |f: ImageFormat| images.iter().filter(|i| i.format() == f).count();
+    assert!(
+        format(ImageFormat::Svg) > 0 && format(ImageFormat::Pdf) > 0,
+        "{images:?}"
+    );
+
+    let token = preview.token().to_owned();
+    let path = |image: &folio_component::Image| {
+        format!("/figure/{:016x}.svg?token={token}", image.content_hash())
+    };
+    for image in &images {
+        let (head, body) = request(&preview, &path(image), &[]);
+        if matches!(image.format(), ImageFormat::Svg | ImageFormat::Pdf) {
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+            assert_eq!(header(&head, "Content-Type"), Some("image/svg+xml"));
+            let policy = header(&head, "Content-Security-Policy").expect("a policy");
+            assert!(policy.contains("default-src 'none'"), "{policy}");
+            let svg = String::from_utf8(body).unwrap();
+            assert!(svg.starts_with("<svg"), "{svg:.100}");
+            // The figure itself, embedded: a PDF figure as the SVG it
+            // converts to.
+            assert!(
+                svg.contains("href=\"data:image/svg+xml;base64,"),
+                "{svg:.300}"
+            );
+        } else {
+            // Raster images are drawn from the list's own bytes.
+            assert_eq!(get(&preview, &path(image), &[]).0, "HTTP/1.1 404 Not Found");
+        }
+    }
+    let svg = images
+        .iter()
+        .find(|i| i.format() == ImageFormat::Svg)
+        .unwrap();
+    let without_token = format!("/figure/{:016x}.svg", svg.content_hash());
+    assert_eq!(
+        get(&preview, &without_token, &[]).0,
+        "HTTP/1.1 403 Forbidden"
+    );
+    for bad in [
+        "/figure/0123.svg",
+        "/figure/zzzzzzzzzzzzzzzz.svg",
+        "/figure/0000000000000000.svg",
+    ] {
+        let target = format!("{bad}?token={token}");
+        assert_eq!(
+            get(&preview, &target, &[]).0,
+            "HTTP/1.1 404 Not Found",
+            "{bad}"
+        );
+    }
 }
 
 /// This crate's `tests` directory, which holds `iframe.cjs`.

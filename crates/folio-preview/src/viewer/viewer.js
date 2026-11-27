@@ -1,7 +1,9 @@
 // The viewer of `folio watch` (SPEC §12.2): it receives the display lists
 // of the pages over the websocket, in `folio-render`'s wire format, and
 // draws them on canvases with Canvas 2D, from glyphs that the server
-// rasterises at the current zoom (SPEC §12.4). A click asks the server for
+// rasterises at the current zoom (SPEC §12.4), and images: raster ones
+// decoded from the bytes in the list, SVG and PDF figures as the SVG the
+// server makes of them (`/figure/`). A click asks the server for
 // the source it shows; the server tells it where an editor's cursor is
 // (`reveal`) and where the diagnostics point (`overlays`). The protocol is
 // documented in `folio-preview`'s crate documentation.
@@ -176,7 +178,128 @@ function command(tag, r) {
     }
     case 2: return { kind: "frame", rect: r.rect() };
     case 3: return { kind: "box" }; // Draws nothing.
+    case 4: { // Image
+      const rect = r.rect();
+      const format = r.u8();
+      const n = r.count(1);
+      const bytes = r.bytes.subarray(r.pos, r.pos + n);
+      r.pos += n;
+      return { kind: "image", rect, format, bytes, key: contentHash(bytes) };
+    }
     default: return { kind: "unknown" }; // A command of a later version.
+  }
+}
+
+// The content hash of an image file's bytes, as 16 hexadecimal digits: the
+// hash `folio_component::Image::content_hash` takes, in 64-bit arithmetic
+// on pairs of 32-bit halves, so that the viewer names a figure to the
+// server as the server does.
+function contentHash(bytes) {
+  // a * b mod 2^64, of halves (high, low); returns [high, low].
+  const mul = (ah, al, bh, bl) => {
+    const a0 = al & 0xffff, a1 = al >>> 16, b0 = bl & 0xffff, b1 = bl >>> 16;
+    const p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    const mid = (p00 >>> 16) + (p01 & 0xffff) + (p10 & 0xffff);
+    const lo = (((mid & 0xffff) << 16) | (p00 & 0xffff)) >>> 0;
+    const hi = (p11 + (p01 >>> 16) + (p10 >>> 16) + Math.floor(mid / 0x10000)
+      + Math.imul(ah, bl) + Math.imul(al, bh)) >>> 0;
+    return [hi, lo];
+  };
+  const KH = 0x517cc1b7, KL = 0x27220a95;
+  let h = 0x243f6a88, l = 0x85a308d3;
+  const mix = (wh, wl) => {
+    const rh = ((h << 5) | (l >>> 27)) >>> 0;
+    const rl = ((l << 5) | (h >>> 27)) >>> 0;
+    [h, l] = mul((rh ^ wh) >>> 0, (rl ^ wl) >>> 0, KH, KL);
+  };
+  mix(Math.floor(bytes.length / 0x100000000), bytes.length >>> 0);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const whole = bytes.length - (bytes.length % 8);
+  for (let i = 0; i < whole; i += 8) mix(view.getUint32(i + 4, true), view.getUint32(i, true));
+  if (whole < bytes.length) {
+    const word = new Uint8Array(8);
+    word.set(bytes.subarray(whole));
+    const w = new DataView(word.buffer);
+    mix(w.getUint32(4, true), w.getUint32(0, true));
+  }
+  // The final avalanche: h ^= h >> 33, h *= C, h ^= h >> 33.
+  l = (l ^ (h >>> 1)) >>> 0;
+  [h, l] = mul(h, l, 0xff51afd7, 0xed558ccd);
+  l = (l ^ (h >>> 1)) >>> 0;
+  return h.toString(16).padStart(8, "0") + l.toString(16).padStart(8, "0");
+}
+
+// ---------------------------------------------------------------------
+// Images.
+
+// The media types of the raster formats of the wire format's format byte;
+// 4 (SVG) and 5 (PDF) are figures the server converts.
+const RASTER_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+// Content hash → { source, failed } once settled: `source` an ImageBitmap
+// or an <img> to draw, or null when the image cannot be shown; undefined
+// while it is decoded or fetched.
+let imageCache = new Map();
+
+// The image of a list item to draw, or undefined while it is not ready
+// (the page is drawn again when it is); null when it cannot be shown.
+function imageOf(item) {
+  const cached = imageCache.get(item.key);
+  if (cached !== undefined || imageCache.has(item.key)) return cached && cached.source;
+  imageCache.set(item.key, undefined);
+  const cache = imageCache;
+  const settle = (source, retry) => {
+    if (cache !== imageCache) {
+      if (source && source.close) source.close();
+      return;
+    }
+    if (source === null && retry) {
+      // A failure that may pass (the network, the server): asked again
+      // after a while.
+      setTimeout(() => {
+        if (cache.get(item.key) === null) cache.delete(item.key);
+        repaintImages();
+      }, RETRY_AFTER);
+      cache.set(item.key, null);
+    } else {
+      cache.set(item.key, { source });
+    }
+    repaintImages();
+  };
+  if (item.format < RASTER_TYPES.length) {
+    createImageBitmap(new Blob([item.bytes], { type: RASTER_TYPES[item.format] })).then(
+      (bitmap) => settle(bitmap, false),
+      () => settle(null, false), // Bytes that do not decode never will.
+    );
+  } else if (item.format === 4 || item.format === 5) {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => settle(img, false);
+    img.onerror = () => settle(null, true);
+    img.src = `/figure/${item.key}.svg?token=${encodeURIComponent(token)}`;
+  } else {
+    cache.set(item.key, { source: null }); // A format of a later version.
+  }
+  return undefined;
+}
+
+// Draws again the pages with images, once one is ready or asked for again.
+function repaintImages() {
+  for (const page of pages) if (page && page.images) page.drawn = 0;
+  redrawVisible();
+}
+
+// Drops the images no page's list holds any more.
+function pruneImages() {
+  const used = new Set();
+  for (const page of pages) {
+    if (!page || !page.list) continue;
+    for (const item of page.list.items) if (item.kind === "image") used.add(item.key);
+  }
+  for (const [key, entry] of imageCache) {
+    if (used.has(key)) continue;
+    if (entry && entry.source && entry.source.close) entry.source.close();
+    imageCache.delete(key);
   }
 }
 
@@ -365,8 +488,21 @@ function draw(page) {
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, width, height);
   let complete = true;
+  let waiting = false;
+  page.images = false;
   for (const item of list.items) {
-    if (item.kind === "glyphs") {
+    if (item.kind === "image") {
+      page.images = true;
+      const source = imageOf(item);
+      if (source === undefined) waiting = true;
+      else if (source) {
+        const { x, y, width: w, height: h } = item.rect;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(source, x * scale, y * scale, w * scale, h * scale);
+      }
+    } else if (item.kind === "glyphs") {
       complete = drawGlyphs(ctx, item, scale) && complete;
     } else if (item.kind === "path") {
       drawPath(ctx, item, scale);
@@ -381,6 +517,7 @@ function draw(page) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
   }
+  complete = complete && !waiting;
   page.drawn = complete ? zoom * dpr : 0;
   return complete;
 }
@@ -491,7 +628,7 @@ function pageElement(i) {
   el.addEventListener("click", (event) => click(i, event));
   pagesEl.appendChild(el);
   observer.observe(el);
-  page = { list: null, el, canvas, img: null, size: null, marks: [], drawn: 0 };
+  page = { list: null, el, canvas, img: null, size: null, marks: [], drawn: 0, images: false };
   pages[i] = page;
   return page;
 }
@@ -740,6 +877,7 @@ function apply({ update, frames }) {
     }
     // A span map changes nothing that is drawn.
   }
+  pruneImages();
   if (fitting || !zoom) zoom = fitZoom();
   for (const page of pages) if (page) layoutPage(page);
   diagnostics = update.diagnostics || [];
