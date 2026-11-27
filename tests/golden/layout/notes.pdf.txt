@@ -87,54 +87,32 @@ page 2 419.53 × 595.28, 19 line(s)
             text (111.49, 14.29) SourceSerif4-Regular 10.50 w 105.84 21 glyph(s) "Two views of one wave"
         box (0.00, 180.54) 328.82 × 17.81 main.fol:31:1 baselines 14.29..14.29
           text (0.00, 14.29) SourceSerif4-Regular 10.50 w 262.62 57 glyph(s) "To measure the speed of sound in air, follow these steps:"
-page 3 419.53 × 595.28, 19 line(s)
-  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 10.88..421.40
-    box (0.00, 0.00) 328.82 × 424.92 main.fol:1:2 baselines 10.88..421.40
-      box (0.00, 0.00) 328.82 × 424.92 main.fol:25:1 baselines 10.88..421.40
-        box (0.00, 0.00) 328.82 × 161.93 main.fol:33:1 baselines 10.88..155.00
+page 3 419.53 × 595.28, 20 line(s)
+  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 10.88..444.30
+    box (0.00, 0.00) 328.82 × 447.82 main.fol:1:2 baselines 10.88..444.30
+      box (0.00, 0.00) 328.82 × 447.82 main.fol:25:1 baselines 10.88..444.30
+        box (0.00, 0.00) 328.82 × 108.99 main.fol:33:1 baselines 10.88..102.06
           box (15.75, 0.00) 313.07 × 39.03 main.fol:33:1 baselines 10.88..32.10
             box (0.00, 0.00) 313.07 × 39.03 main.fol:33:3 baselines 10.88..32.10
-              text (0.00, 10.88) SourceSerif4-Regular 10.50 w 10.69 3 glyph(s) "1.\u{a0}"
-              text (10.69, 10.88) SourceSerif4-Regular 10.50 w 299.10 62 glyph(s) "set up a loudspeaker and two microphones connected to an oscil"
+              text (0.00, 10.88) SourceSerif4-Regular 10.50 w 309.79 64 glyph(s) "set up a loudspeaker and two microphones connected to an oscillo"
               text (309.79, 10.88) SourceSerif4-Regular 10.50 w 3.28 1 glyph(s) "-"
-              text (0.00, 32.10) SourceSerif4-Regular 10.50 w 38.86 8 glyph(s) "loscope;"
-          box (15.75, 41.13) 313.07 × 71.01 main.fol:34:1 baselines 14.29..64.08
+              text (0.00, 32.10) SourceSerif4-Regular 10.50 w 29.97 6 glyph(s) "scope;"
+          box (15.75, 41.13) 313.07 × 21.22 main.fol:34:1 baselines 14.29..14.29
             box (0.00, 0.00) 313.07 × 21.22 main.fol:34:3 baselines 14.29..14.29
-              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "2.\u{a0}"
-              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 288.05 60 glyph(s) "move one microphone until the two traces are in phase again:"
-            box (0.00, 26.47) 313.07 × 44.54 main.fol:35:3 baselines 14.29..37.61
-              box (15.75, 0.00) 297.32 × 21.22 main.fol:35:3 baselines 14.29..14.29
-                box (0.00, 0.00) 297.32 × 21.22 main.fol:35:5 baselines 14.29..14.29
-                  text (0.00, 14.29) SourceSerif4-Regular 10.50 w 14.91 4 glyph(s) "(a)\u{a0}"
-                  text (14.91, 14.29) SourceSerif4-Regular 10.50 w 227.73 46 glyph(s) "watch the traces as the microphone moves away;"
-              box (15.75, 23.32) 297.32 × 21.22 main.fol:36:3 baselines 14.29..14.29
-                box (0.00, 0.00) 297.32 × 21.22 main.fol:36:5 baselines 14.29..14.29
-                  text (0.00, 14.29) SourceSerif4-Regular 10.50 w 15.51 4 glyph(s) "(b)\u{a0}"
-                  text (15.51, 14.29) SourceSerif4-Regular 10.50 w 185.28 40 glyph(s) "stop where the peaks first line up again;"
-          box (15.75, 117.39) 313.07 × 21.22 main.fol:37:1 baselines 14.29..14.29
-            box (0.00, 0.00) 313.07 × 21.22 main.fol:37:3 baselines 14.29..14.29
-              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "3.\u{a0}"
-              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 247.26 51 glyph(s) "record the distance moved, which is one wavelength;"
-          box (15.75, 140.71) 313.07 × 21.22 main.fol:38:1 baselines 14.29..14.29
-            box (0.00, 0.00) 313.07 × 21.22 main.fol:38:3 baselines 14.29..14.29
-              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.64 3 glyph(s) "4.\u{a0}"
-              text (10.64, 14.29) SourceSerif4-Regular 10.50 w 302.43 65 glyph(s) "multiply the wavelength by the frequency of the signal generator."
-        box (0.00, 167.18) 328.82 × 42.44 main.fol:40:1 baselines 14.29..35.51
-          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 163.46 36 glyph(s) "If the peaks never line up in part ("
-          text (163.46, 14.29) SourceSerif4-Regular 10.50 w 6.06 1 glyph(s) "b"
-          text (169.52, 14.29) SourceSerif4-Regular 10.50 w 159.30 34 glyph(s) ") of step 2, check the connections"
-          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 62.29 13 glyph(s) "made in step "
-          text (62.29, 35.51) SourceSerif4-Regular 10.50 w 5.25 1 glyph(s) "1"
-          text (67.54, 35.51) SourceSerif4-Regular 10.50 w 192.69 43 glyph(s) "; the traces should move apart as in part ("
-          text (260.22, 35.51) SourceSerif4-Regular 10.50 w 5.34 1 glyph(s) "a"
-          text (265.57, 35.51) SourceSerif4-Regular 10.50 w 6.29 2 glyph(s) ")."
-        box (0.00, 214.87) 328.82 × 21.22 main.fol:42:1 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 288.05 60 glyph(s) "move one microphone until the two traces are in phase again;"
+          box (15.75, 64.45) 313.07 × 21.22 main.fol:35:1 baselines 14.29..14.29
+            box (0.00, 0.00) 313.07 × 21.22 main.fol:35:3 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 247.26 51 glyph(s) "record the distance moved, which is one wavelength;"
+          box (15.75, 87.77) 313.07 × 21.22 main.fol:36:1 baselines 14.29..14.29
+            box (0.00, 0.00) 313.07 × 21.22 main.fol:36:3 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 304.26 65 glyph(s) "multiply the wavelength by the frequency of the signal generator."
+        box (0.00, 114.24) 328.82 × 21.22 main.fol:38:1 baselines 14.29..14.29
           text (0.00, 14.29) SourceSerif4-Regular 10.50 w 250.87 52 glyph(s) "The calculation can be checked with a short program:"
-        box (0.00, 241.34) 328.82 × 54.41 main.fol:44:1 baselines 12.27..48.54
+        box (0.00, 140.71) 328.82 × 54.41 main.fol:40:1 baselines 12.27..48.54
           text (0.00, 12.27) SourceCodePro-Regular 9.00 w 97.20 18 glyph(s) "frequency = 2000.0"
           text (0.00, 30.41) SourceCodePro-Regular 9.00 w 97.20 18 glyph(s) "wavelength = 0.171"
           text (0.00, 48.54) SourceCodePro-Regular 9.00 w 156.60 29 glyph(s) "print(frequency * wavelength)"
-        box (0.00, 301.01) 328.82 × 123.91 main.fol:50:1 baselines 14.29..120.39
+        box (0.00, 200.37) 328.82 × 127.32 main.fol:46:1 baselines 14.29..120.39
           text (0.00, 14.29) SourceSerif4-Regular 10.50 w 325.54 68 glyph(s) "Interference, diffraction and polarisation are the phenomena that dis"
           text (325.54, 14.29) SourceSerif4-Regular 10.50 w 3.28 1 glyph(s) "-"
           text (0.00, 35.51) SourceSerif4-Regular 10.50 w 328.82 70 glyph(s) "tinguish waves from streams of particles. Only transverse waves can be"
@@ -143,26 +121,27 @@ page 3 419.53 × 595.28, 19 line(s)
           text (325.54, 77.95) SourceSerif4-Regular 10.50 w 3.28 1 glyph(s) "-"
           text (0.00, 99.17) SourceSerif4-Regular 10.50 w 328.82 72 glyph(s) "netically, counterintuitively and characteristically need hyphenation in"
           text (0.00, 120.39) SourceSerif4-Regular 10.50 w 120.17 24 glyph(s) "narrow justified columns."
-page 4 419.53 × 595.28, 13 line(s)
-  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 12.50..283.45
-    box (0.00, 0.00) 328.82 × 286.97 main.fol:1:2 baselines 12.50..283.45
-      box (0.00, 0.00) 328.82 × 286.97 main.fol:25:1 baselines 12.50..283.45
-        box (0.00, 0.00) 328.82 × 286.97 main.fol:52:1 baselines 12.50..283.45
-          box (0.00, 0.00) 328.82 × 19.99 main.fol:52:1 baselines 12.50..12.50 keep penalty 10000
-            text (0.00, 12.50) SourceSans3-Bold 12.50 w 95.10 16 glyph(s) "Stationary waves"
-          box (0.00, 25.24) 328.82 × 84.88 main.fol:54:1 baselines 14.29..77.95
+        box (0.00, 337.70) 328.82 × 110.12 main.fol:48:1 baselines 15.91..106.60
+          box (0.00, 0.00) 328.82 × 23.40 main.fol:48:1 baselines 15.91..15.91 keep penalty 10000
+            text (0.00, 15.91) SourceSans3-Bold 12.50 w 95.10 16 glyph(s) "Stationary waves"
+          box (0.00, 28.65) 328.82 × 81.47 main.fol:50:1 baselines 14.29..77.95
             text (0.00, 14.29) SourceSerif4-Regular 10.50 w 325.54 66 glyph(s) "A stationary wave forms when two progressive waves of the same fre"
             text (325.54, 14.29) SourceSerif4-Regular 10.50 w 3.28 1 glyph(s) "-"
             text (0.00, 35.51) SourceSerif4-Regular 10.50 w 328.82 65 glyph(s) "quency and amplitude travel in opposite directions and superpose."
             text (0.00, 56.73) SourceSerif4-Regular 10.50 w 328.82 65 glyph(s) "Points that never move are nodes; points of maximum amplitude are"
             text (0.00, 77.95) SourceSerif4-Regular 10.50 w 323.66 68 glyph(s) "antinodes. The distance between adjacent nodes is half a wavelength."
-          box (0.00, 115.37) 328.82 × 106.10 main.fol:56:1 baselines 14.29..99.17
-            text (0.00, 14.29) SourceSerif4-Regular 10.50 w 328.82 71 glyph(s) "Stationary waves on a string fixed at both ends have a node at each end,"
-            text (0.00, 35.51) SourceSerif4-Regular 10.50 w 328.82 68 glyph(s) "so only certain wavelengths fit: the fundamental, whose wavelength is"
-            text (0.00, 56.73) SourceSerif4-Regular 10.50 w 328.82 71 glyph(s) "twice the length of the string, and its harmonics. The frequency of the"
-            text (0.00, 77.95) SourceSerif4-Regular 10.50 w 328.82 68 glyph(s) "fundamental depends on the tension in the string, its length and its"
-            text (0.00, 99.17) SourceSerif4-Regular 10.50 w 99.36 21 glyph(s) "mass per unit length."
-          box (0.00, 226.72) 328.82 × 60.25 main.fol:58:1 baselines 14.29..56.73
+page 4 419.53 × 595.28, 8 line(s)
+  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 10.88..164.67
+    box (0.00, 0.00) 328.82 × 168.19 main.fol:1:2 baselines 10.88..164.67
+      box (0.00, 0.00) 328.82 × 168.19 main.fol:25:1 baselines 10.88..164.67
+        box (0.00, 0.00) 328.82 × 168.19 main.fol:48:1 baselines 10.88..164.67
+          box (0.00, 0.00) 328.82 × 102.69 main.fol:52:1 baselines 10.88..95.76
+            text (0.00, 10.88) SourceSerif4-Regular 10.50 w 328.82 71 glyph(s) "Stationary waves on a string fixed at both ends have a node at each end,"
+            text (0.00, 32.10) SourceSerif4-Regular 10.50 w 328.82 68 glyph(s) "so only certain wavelengths fit: the fundamental, whose wavelength is"
+            text (0.00, 53.32) SourceSerif4-Regular 10.50 w 328.82 71 glyph(s) "twice the length of the string, and its harmonics. The frequency of the"
+            text (0.00, 74.54) SourceSerif4-Regular 10.50 w 328.82 68 glyph(s) "fundamental depends on the tension in the string, its length and its"
+            text (0.00, 95.76) SourceSerif4-Regular 10.50 w 99.36 21 glyph(s) "mass per unit length."
+          box (0.00, 107.94) 328.82 × 60.25 main.fol:54:1 baselines 14.29..56.73
             text (0.00, 14.29) SourceSerif4-Regular 10.50 w 328.82 68 glyph(s) "In a pipe closed at one end there is a node at the closed end and an"
             text (0.00, 35.51) SourceSerif4-Regular 10.50 w 328.82 68 glyph(s) "antinode at the open end, so only odd harmonics are present. An open"
             text (0.00, 56.73) SourceSerif4-Regular 10.50 w 290.77 60 glyph(s) "pipe has antinodes at both ends and supports every harmonic."
