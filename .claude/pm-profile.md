@@ -59,7 +59,7 @@ In the **folio** environment these are already installed. Elsewhere, run them fi
 - `crates/folio-core/src/text.rs`: collection, pairing by location, shaping; touched by most text, layout and diagnostics work.
 - `crates/folio-core/src/layout/` (`mod.rs`, `page.rs`, `flow.rs`, `cache.rs`): the layout stage.
 - `crates/folio/src/lib.rs`, `crates/folio/src/pipeline.rs`: public API and the compile root.
-- `crates/folio/src/cli/`: the command line.
+- `crates/folio-cli/src/cli/`: the command line.
 - `crates/folio-text/src/cache.rs`: shaping pool and cache.
 - `crates/folio-component/src/fragment.rs`: the `FragmentItem` enum is matched exhaustively in tests (`tests/check.rs`, `tests/pages.rs`, `folio-testkit/src/golden.rs`), so a new variant touches those files too.
 - `tests/README.md`: separate sections (fuzzing, benchmarks) can be owned by different items.

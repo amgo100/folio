@@ -4,7 +4,7 @@
 //! Every build of every project is checked by the layout golden files
 //! (`tests/golden.rs` of this crate), krilla's PDF/UA-1 validator
 //! (`folio`'s `tests/pdf.rs`), the determinism check (`folio`'s
-//! `tests/determinism.rs`) and the command line (`folio`'s `tests/cli.rs`).
+//! `tests/determinism.rs`) and the command line (`folio-cli`'s `tests/cli.rs`).
 //! A new document that exercises a feature goes here, and its golden files
 //! are written with `scripts/bless.sh`.
 
