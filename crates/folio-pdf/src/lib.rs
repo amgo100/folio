@@ -350,6 +350,12 @@ pub struct Tag {
     pub text: Option<EcoString>,
     /// The nodes it holds, in document order.
     pub children: Vec<Tag>,
+    /// Whether its boxes on a page are a footnote's note, set at the
+    /// page's foot (SPEC §7.8): the writer draws them after the rest of
+    /// the page, so content order, which text extraction follows, reads
+    /// the page's body before its notes. Its place in the structure, where
+    /// its anchor is, does not change.
+    pub foot: bool,
 }
 
 impl Tag {
@@ -362,6 +368,7 @@ impl Tag {
             instance: Location::UNKNOWN_INSTANCE,
             text: None,
             children: Vec::new(),
+            foot: false,
         }
     }
 }
@@ -862,6 +869,19 @@ struct Writer<'a> {
     ua: bool,
     /// Each image prepared, with the warning drawing it gives.
     images: HashMap<folio_component::Image, image::Prepared>,
+    /// The boxes of footnotes met on the page being drawn, each with where
+    /// it is and its structure node, drawn after the rest of the page.
+    deferred: Vec<(Fragment, Point, usize)>,
+    /// Whether the deferred notes are being drawn, when nothing inside
+    /// them is deferred again.
+    in_feet: bool,
+    /// The link of each glyph of each run of the page being drawn, by the
+    /// run's drawing ([`RunAt`]), assigned in the order of the page's
+    /// fragments before it is drawn, so that drawing footnotes last takes
+    /// no link from the runs after their anchors.
+    assigned: HashMap<RunAt, Vec<Option<usize>>>,
+    /// The source of the last glyph that link assignment met.
+    assigning: Option<(SourceRef, Range<u32>)>,
 }
 
 /// The links of a document as the pages draw them: which link each run of
@@ -1163,8 +1183,48 @@ impl<'a> Writer<'a> {
             }),
             ua: false,
             images: HashMap::new(),
+            deferred: Vec::new(),
+            in_feet: false,
+            assigned: HashMap::new(),
+            assigning: None,
         }
     }
+}
+
+/// A drawing of a glyph run: the run's address and where it is drawn. A
+/// box that a page shares between two places (a cloned fragment shares its
+/// items) draws the same run twice, at two places.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+struct RunAt {
+    run: usize,
+    x: u64,
+    y: u64,
+}
+
+impl RunAt {
+    fn new(run: &GlyphRun, at: Point) -> Self {
+        Self {
+            run: run as *const GlyphRun as usize,
+            x: at.x.to_pt().to_bits(),
+            y: at.y.to_pt().to_bits(),
+        }
+    }
+}
+
+/// Whether a run is a hyphen that a line repeats (Polish, after a break at
+/// an explicit hyphen): one that shows the same bytes of its source as the
+/// glyph drawn just before it, `last`. That is told only where the source
+/// shows exactly the hyphen's bytes, as text written as it is does.
+fn repeated_hyphen(run: &GlyphRun, last: Option<&(SourceRef, Range<u32>)>) -> bool {
+    let hyphen = !run.glyphs.is_empty() && matches!(run.text.as_str(), "-" | "\u{2010}");
+    let inserted = hyphen && run.glyphs.iter().all(|g| g.source.1.is_empty());
+    hyphen
+        && !inserted
+        && last.is_some_and(|last| {
+            run.glyphs
+                .iter()
+                .all(|g| &g.source == last && g.source.1.len() == run.text.len())
+        })
 }
 
 /// The thickness of the frame drawn for an object whose content is not
@@ -1174,7 +1234,15 @@ const OBJECT_FRAME: Abs = Abs::pt(0.5);
 impl Writer<'_> {
     /// Draws a page: its regions' content as boxes of the top of the
     /// structure.
+    ///
+    /// The boxes of footnotes are drawn last, after the body they are
+    /// anchored in, so that content order reads each page's body whole
+    /// and then its notes, as they are seen (SPEC §7.8, §11.1).
     fn page(&mut self, surface: &mut Surface<'_>, page: &Fragment) {
+        self.assigned.clear();
+        if !self.links.sources.is_empty() {
+            self.assign(page, Point::zero());
+        }
         for (offset, item) in page.items.iter() {
             match item {
                 FragmentItem::Group(region) => {
@@ -1183,6 +1251,61 @@ impl Writer<'_> {
                 other => self.item(surface, other, *offset, Tagger::TOP),
             }
         }
+        // From the top of the footnote area down, as they are read; notes
+        // at the same height keep the order the page holds them in.
+        let mut deferred = std::mem::take(&mut self.deferred);
+        deferred.sort_by(|a, b| a.1.y.to_pt().total_cmp(&b.1.y.to_pt()));
+        self.in_feet = true;
+        for (note, at, node) in deferred {
+            self.fragment(surface, &note, at, node);
+            self.tagger.advance();
+        }
+        self.in_feet = false;
+    }
+
+    /// Assigns the glyphs of the runs in `fragment` to links, in the order
+    /// of its items, as drawing them in that order would.
+    ///
+    /// A footnote's note leaves the run before it as the run before the
+    /// next, as drawing it last does: a hyphen that the next line repeats
+    /// is told as it is drawn, and a link broken around the note goes on.
+    fn assign(&mut self, fragment: &Fragment, pos: Point) {
+        for (offset, item) in fragment.items.iter() {
+            let at = pos + *offset;
+            match item {
+                FragmentItem::Group(group) if self.tagger.is_foot_box(group.location()) => {
+                    let before = (self.assigning.take(), self.links.current);
+                    self.assign(group, at);
+                    (self.assigning, self.links.current) = before;
+                }
+                FragmentItem::Group(group) => self.assign(group, at),
+                FragmentItem::Text(run) => {
+                    let repeated = repeated_hyphen(run, self.assigning.as_ref());
+                    self.assigning = run.glyphs.last().map(|g| g.source.clone());
+                    let links = self.run_links(run, repeated);
+                    self.assigned.insert(RunAt::new(run, at), links);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The link of each glyph of a run, as [`Links::glyph`] gives them in
+    /// order. `repeated` for a hyphen that a line repeats, whose bytes do
+    /// not count.
+    fn run_links(&mut self, run: &GlyphRun, repeated: bool) -> Vec<Option<usize>> {
+        let mut cluster = None;
+        run.glyphs
+            .iter()
+            .map(|g| {
+                // A cluster's bytes count once; an inserted or a repeated
+                // hyphen's not at all.
+                let new = cluster != Some(&g.range) && !g.source.1.is_empty() && !repeated;
+                cluster = Some(&g.range);
+                let bytes = if new { g.range.len() } else { 0 };
+                self.links.glyph(g.source.0, bytes)
+            })
+            .collect()
     }
 
     /// Draws a fragment's content with its top-left corner at `pos`, as
@@ -1204,7 +1327,19 @@ impl Writer<'_> {
         match item {
             FragmentItem::Group(group) => {
                 let child = self.tagger.enter(node, group.location(), at.y);
-                self.fragment(surface, group, at, child);
+                // A note's box is drawn last whether or not its node was
+                // found, so that content order never breaks a sentence.
+                let foot = !self.in_feet
+                    && if child != node {
+                        self.tagger.is_foot(child)
+                    } else {
+                        self.tagger.is_foot_box(group.location())
+                    };
+                if foot {
+                    self.deferred.push((group.clone(), at, child));
+                } else {
+                    self.fragment(surface, group, at, child);
+                }
                 self.tagger.advance();
             }
             FragmentItem::Text(run) => self.text(surface, run, at, node),
@@ -1297,13 +1432,7 @@ impl Writer<'_> {
         // hyphenated word extracts whole.
         let hyphen = !run.glyphs.is_empty() && matches!(run.text.as_str(), "-" | "\u{2010}");
         let inserted = hyphen && run.glyphs.iter().all(|g| g.source.1.is_empty());
-        let repeated = hyphen
-            && !inserted
-            && self.last.as_ref().is_some_and(|last| {
-                run.glyphs
-                    .iter()
-                    .all(|g| &g.source == last && g.source.1.len() == run.text.len())
-            });
+        let repeated = repeated_hyphen(run, self.last.as_ref());
         self.last = run.glyphs.last().map(|g| g.source.clone());
         // The run is drawn in pieces, each of glyphs of one link or of
         // none, as the text of a link is content of its `Link` element.
@@ -1313,17 +1442,17 @@ impl Writer<'_> {
         if !linked && !run.glyphs.is_empty() {
             pieces.push((0..run.glyphs.len(), None));
         }
-        let mut cluster = None;
-        for (i, g) in run.glyphs.iter().enumerate().filter(|_| linked) {
-            // A cluster's bytes count once; an inserted or a repeated
-            // hyphen's not at all.
-            let new = cluster != Some(&g.range) && !g.source.1.is_empty() && !repeated;
-            cluster = Some(&g.range);
-            let bytes = if new { g.range.len() } else { 0 };
-            let link = self.links.glyph(g.source.0, bytes);
-            match pieces.last_mut() {
-                Some((range, last)) if *last == link => range.end = i + 1,
-                _ => pieces.push((i..i + 1, link)),
+        if linked {
+            // Assigned in the page's order before it was drawn.
+            let links = match self.assigned.get(&RunAt::new(run, at)) {
+                Some(links) => links.clone(),
+                None => self.run_links(run, repeated),
+            };
+            for (i, link) in links.into_iter().enumerate() {
+                match pieces.last_mut() {
+                    Some((range, last)) if *last == link => range.end = i + 1,
+                    _ => pieces.push((i..i + 1, link)),
+                }
             }
         }
         let Some(font) = self.font(run) else {
