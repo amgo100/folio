@@ -1345,3 +1345,101 @@ fn a_note_after_a_formula_on_its_anchors_line_is_found_and_written_last() {
         "body {body:?}, notes {notes:?}"
     );
 }
+
+/// The navigation of the link tests below: destinations `a` and `b` at
+/// node 2, and a link of source 30 to each, with the texts given.
+fn two_links(texts: [&str; 2]) -> Navigation {
+    let at = Location {
+        source: SourceRef(2),
+        instance: Location::UNKNOWN_INSTANCE,
+    };
+    Navigation {
+        destinations: ["a", "b"]
+            .into_iter()
+            .map(|name| Destination {
+                name: name.into(),
+                location: at,
+            })
+            .collect(),
+        links: ["a", "b"]
+            .into_iter()
+            .zip(texts)
+            .map(|(name, text)| Link {
+                source: SourceRef(30),
+                destination: Some(name.into()),
+                text: text.into(),
+            })
+            .collect(),
+        page_labels: Vec::new(),
+    }
+}
+
+/// A box whose items one page draws twice, sharing their buffer (as a
+/// cloned fragment does): each drawing of its run is its own link, in
+/// order (#308 review).
+#[test]
+fn a_shared_box_drawn_twice_gives_each_drawing_its_own_link() {
+    let structure = tag(Role::Document, 1, vec![tag(Role::Paragraph, 2, vec![])]);
+    let FragmentItem::Group(shared) = boxed(2, vec![run("see", 30)]) else {
+        unreachable!()
+    };
+    let mut body =
+        Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(100.0))).with_source(SourceRef(1));
+    body.push(
+        Point::new(Abs::zero(), Abs::pt(10.0)),
+        FragmentItem::Group(shared.clone()),
+    );
+    body.push(
+        Point::new(Abs::zero(), Abs::pt(60.0)),
+        FragmentItem::Group(shared),
+    );
+    let pages = [page(vec![FragmentItem::Group(body)])];
+    let navigation = two_links(["see", "see"]);
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    let mut found = annotations(&text(&written.bytes));
+    found.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let order: Vec<&str> = found.iter().map(|(d, _)| d.as_str()).collect();
+    assert_eq!(order, ["a", "b"]);
+}
+
+/// A Polish line that repeats the explicit hyphen it was broken at, after
+/// a line that anchors a footnote: the repeated hyphen counts no bytes of
+/// its link, whose last glyph stays in it, as when no note is drawn last
+/// (#308 review).
+#[test]
+fn a_repeated_hyphen_after_a_note_keeps_its_link() {
+    let note = Tag {
+        foot: true,
+        ..tag(Role::Note, 4, vec![tag(Role::Paragraph, 5, vec![])])
+    };
+    let structure = tag(Role::Document, 1, vec![tag(Role::Paragraph, 2, vec![note])]);
+    // The link `ab-cd` broken after its hyphen, which the next line
+    // repeats: the same bytes 2..3 of the source.
+    let pages = [page(vec![boxed(
+        1,
+        vec![boxed(
+            2,
+            vec![
+                run("ab-", 30),
+                boxed(4, vec![boxed(5, vec![run("1 A note.", 15)])]),
+                run_with("-", 30, |_| 2..3),
+                run_with("cd", 30, |r| r.start + 3..r.end + 3),
+                run("ef", 30),
+            ],
+        )],
+    )])];
+    let navigation = two_links(["ab-cd", "ef"]);
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    let found = annotations(&text(&written.bytes));
+    let count = |d: &str| found.iter().filter(|(dest, _)| dest == d).count();
+    // `ab-`, `-` and `cd` are link a, on three lines; `ef` link b.
+    assert_eq!((count("a"), count("b")), (3, 1), "{found:?}");
+}
