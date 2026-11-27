@@ -9,8 +9,7 @@ use folio::style::{NodeName, Styled, StyledNode};
 use folio::{Event, Name, Registry, Target, World};
 use folio_component::{
     Abs, Body, Color, Component, ComponentManifest, ComponentName, ContentKind, Declarations,
-    Effect, ElementKind, ElementSchema, FieldDecl, FieldType, INTERFACE_VERSION, PropertyDecl,
-    PropertyType, SlotDecl, Value,
+    ElementKind, ElementSchema, FieldDecl, FieldType, PropertyDecl, PropertyType, SlotDecl, Value,
 };
 
 const MANIFEST: &str = r#"
@@ -41,12 +40,11 @@ struct Exam;
 
 impl Component for Exam {
     fn manifest(&self) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new("exam").unwrap(),
-            version: semver::Version::new(0, 0, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
     }
 
     fn declarations(&self) -> Declarations {
@@ -55,33 +53,25 @@ impl Component for Exam {
         question.body = Body::Content(ContentKind::Blocks);
         let mut example = ElementSchema::new(name("example"), ElementKind::Block);
         example.body = Body::Slots(EcoVec::from([
-            SlotDecl {
-                name: name("statement"),
-                content: ContentKind::Blocks,
-            },
-            SlotDecl {
-                name: name("solution"),
-                content: ContentKind::Blocks,
-            },
+            SlotDecl::new(name("statement"), ContentKind::Blocks),
+            SlotDecl::new(name("solution"), ContentKind::Blocks),
         ]));
-        Declarations {
-            elements: EcoVec::from([question, example]),
-            properties: EcoVec::from([PropertyDecl {
-                name: name("mark-gap"),
-                ty: PropertyType::Length,
-                initial: Value::Length(Abs::pt(4.0)),
-                inherited: true,
-                effect: Effect::Layout,
-            }]),
-            ..Declarations::default()
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([question, example]);
+        declarations.properties = EcoVec::from([PropertyDecl::new(
+            name("mark-gap"),
+            PropertyType::Length,
+            Value::Length(Abs::pt(4.0)),
+        )
+        .with_inherited(true)]);
+        declarations
     }
 }
 
 /// A world with the exam component, a content file and stylesheets.
 fn world(main: &str, sheets: &[(&str, &str)]) -> World {
     let mut registry = Registry::new();
-    registry.register(&Exam).unwrap();
+    registry.register(Exam).unwrap();
     let mut world = World::builder()
         .components(registry)
         .build(MANIFEST, None)
@@ -434,6 +424,109 @@ fn local_overrides_and_hints() {
     );
 }
 
+/// Content names a token `tok.name` (SPEC §5.4): evaluation keeps the name
+/// and each build resolves it against its own tokens, so a variant's
+/// overlay that redefines the token changes the value in that variant.
+#[test]
+fn token_references_in_content() {
+    let tokens = world(
+        "#figure(override: (space-before: tok.gap, color: tok.warn), width: tok.half)[] \
+         #figure(override: (padding: (tok.gap, 2pt)))[]\n",
+        &[
+            (
+                "styles/main.fsty",
+                "$gap: 6pt;\n$warn: #d62728;\n$half: 50%;\n",
+            ),
+            ("styles/markscheme.fsty", "$gap: 9pt;\n"),
+        ],
+    );
+    let exam = styled(&tokens, "exam", Target::Pdf);
+    let figures = all(&exam, "figure");
+    assert_eq!(get(&exam, figures[0], "space-before"), pt(6.0));
+    assert_eq!(
+        get(&exam, figures[0], "color"),
+        Value::Color(Color::rgb(0xd6, 0x27, 0x28))
+    );
+    let literal = world("#figure(width: 50%)[]\n", &[]);
+    let literal = styled(&literal, "exam", Target::Pdf);
+    assert_eq!(
+        get(&exam, figures[0], "width"),
+        get(&literal, first(&literal, "figure"), "width")
+    );
+    let literal = world("#figure(override: (padding: (6pt, 2pt)))[]\n", &[]);
+    let literal = styled(&literal, "exam", Target::Pdf);
+    assert_eq!(
+        get(&exam, figures[1], "padding"),
+        get(&literal, first(&literal, "figure"), "padding")
+    );
+    let markscheme = styled(&tokens, "markscheme", Target::Pdf);
+    assert_eq!(
+        get(&markscheme, all(&markscheme, "figure")[0], "space-before"),
+        pt(9.0)
+    );
+    // The hint resolves like any other value; nothing lays figure widths
+    // out yet.
+    assert_eq!(
+        messages(&tokens),
+        ["`width` is not implemented yet for `figure`, so it has no effect"]
+    );
+
+    // An unknown token is an error at the element, in the build, named as
+    // content writes it.
+    let unknown = world(
+        "#figure(override: (space-before: tok.gpa))[]\n",
+        &[("styles/main.fsty", "$gap: 6pt;\n")],
+    );
+    let compiled = folio::compile(&unknown, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert_eq!(compiled.diagnostics[0].message, "unknown token `tok.gpa`");
+    assert_eq!(compiled.diagnostics[0].hints[0], "did you mean `tok.gap`?");
+
+    // Deeper than an item of a list, a token reference is not resolved.
+    let nested = world(
+        "#figure(override: (padding: ((tok.gap,), 2pt)))[]\n",
+        &[("styles/main.fsty", "$gap: 6pt;\n")],
+    );
+    let compiled = folio::compile(&nested, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert!(
+        compiled.diagnostics[0].message.ends_with(
+            "`tok.gap` can be a whole value or an item of a list only, not nested deeper"
+        ),
+        "{:?}",
+        compiled.diagnostics
+    );
+
+    // A token reference is not text, and has no value to compare yet.
+    for (source, start) in [
+        (
+            "Course: #tok.gap\n",
+            "`tok.gap` names a stylesheet token and cannot be shown as text",
+        ),
+        (
+            "#if tok.gap == 6pt [A] else [B]\n",
+            "cannot compare tok.gap and 6.0pt with `==`: a token's value is known only",
+        ),
+    ] {
+        let shown = world(source, &[("styles/main.fsty", "$gap: 6pt;\n")]);
+        let compiled = folio::compile(&shown, Target::Pdf, Some(&name("exam"))).unwrap();
+        assert!(
+            compiled.diagnostics[0].message.starts_with(start),
+            "{source:?}: {:?}",
+            compiled.diagnostics
+        );
+    }
+
+    // A script cannot compute with a token reference.
+    let computed = world("#figure(override: (space-before: tok.gap * 2))[]\n", &[]);
+    let compiled = folio::compile(&computed, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert!(
+        compiled.diagnostics[0]
+            .message
+            .starts_with("cannot multiply a token and an int: a token's value is known only"),
+        "{:?}",
+        compiled.diagnostics
+    );
+}
+
 /// Inline declarations rank by form, whatever order their fields are
 /// written in (SPEC §5.4): hints, then scoped hints, then `override`, then
 /// scoped `override@…`.
@@ -553,6 +646,40 @@ fn scoped_rules_apply_inside_their_element() {
         get(&slides, all(&slides, "exam.question")[1], "indent"),
         pt(1.0)
     );
+}
+
+#[test]
+fn scoped_rules_take_stylesheet_values() {
+    // The declarations of `#rule` are written as in a stylesheet (SPEC
+    // §5.4): hex colours, and tokens resolved against the build's sheets.
+    let known = world(
+        "#rule paragraph { color: #d62728; indent: $gap * 2; }\nText.\n",
+        &[("styles/main.fsty", "$gap: 1.5pt;\n")],
+    );
+    let exam = styled(&known, "exam", Target::Pdf);
+    let p = first(&exam, "paragraph");
+    assert_eq!(
+        get(&exam, p, "color"),
+        Value::Color(Color::rgb(0xd6, 0x27, 0x28))
+    );
+    assert_eq!(get(&exam, p, "indent"), pt(3.0));
+    assert!(messages(&known).is_empty(), "{:?}", messages(&known));
+
+    // A token that no sheet of the build defines is an error at the
+    // declaration.
+    let unknown = world("#rule paragraph { indent: $gpa; }\nText.\n", &[]);
+    assert_eq!(messages(&unknown), ["unknown token `$gpa`"]);
+
+    // `tok.warn` is how content outside a scoped rule names a token; in a
+    // rule, as in a stylesheet, the error says to write `$warn`.
+    let content_form = world("#rule paragraph { color: tok.warn; }\nText.\n", &[]);
+    let compiled = folio::compile(&content_form, Target::Pdf, Some(&name("exam"))).unwrap();
+    let diagnostic = &compiled.diagnostics[0];
+    assert_eq!(
+        diagnostic.message,
+        "`tok.warn` names a token in content only"
+    );
+    assert_eq!(diagnostic.hints[0], "write `$warn` here");
 }
 
 #[test]

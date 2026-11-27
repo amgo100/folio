@@ -435,9 +435,18 @@ fn check_locked(
             "`folio.lock` locks {}, but {origin} has {hash}",
             locked.hash.v
         ))
-        .with_hint(
-            "the file changed since it was locked: restore the locked file, or lock the new one",
-        ),
+        .with_hint(if *origin == FontOrigin::Cache {
+            // The cache finds a file by the hash it is locked by, so
+            // locking the other hash would not find it.
+            eco_format!(
+                "the font cache file `fonts/{}` in {CACHE_DIR} holds another file: \
+                 replace it with the locked file, or delete it",
+                folio_fonts::FontHash(want).hex()
+            )
+        } else {
+            "the file changed since it was locked: restore the locked file, or lock the new one"
+                .into()
+        }),
         None => Diagnostic::error(
             locked.postscript_name.span,
             eco_format!(
@@ -445,12 +454,18 @@ fn check_locked(
                 locked.family.v
             ),
         )
-        .with_hint(
-            "put its file in the project's `fonts` directory, or fetch it into the font cache",
-        ),
+        .with_hint(eco_format!(
+            "put its file in the project's `fonts` directory, or copy it into the font cache \
+             as `fonts/{}` in {CACHE_DIR}",
+            folio_fonts::FontHash(locked.hash.v.0).hex()
+        )),
     };
     diag::report(db, diagnostic);
 }
+
+/// Where the font cache is, for hints that say where to put a file: its
+/// directory is `fonts` in this one (`folio_fonts::cache_root`).
+const CACHE_DIR: &str = "Folio's cache directory (`$FOLIO_CACHE_DIR`, by default `folio` in the user's cache directory)";
 
 /// The fonts a node's text asks for: the family chain and the variant.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -748,10 +763,20 @@ fn check_face(db: &dyn Db, face: &Face, span: Span, mode: BuildMode, strict: boo
         };
         diag::report(
             db,
-            diagnostic.with_hint(eco_format!(
-                "{} is not locked: lock it in `folio.lock`, or put it in the project's `fonts` directory",
-                face.origin
-            )),
+            diagnostic
+                .with_hint(eco_format!(
+                    "{} is not locked: lock it with a `[[font]]` entry in `folio.lock` \
+                     (family `{}`, postscript-name `{}` and the `sha256:` hash of its file), \
+                     or put the file in the project's `fonts` directory",
+                    face.origin,
+                    face.family,
+                    face.postscript_name
+                ))
+                .with_hint(eco_format!(
+                    "a locked font is found among the system fonts, or, on a machine that \
+                     does not have it, in the font cache as `fonts/<the hash's 64 hex digits>` \
+                     in {CACHE_DIR}"
+                )),
         );
     }
     if pdf

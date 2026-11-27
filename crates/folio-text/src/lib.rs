@@ -23,7 +23,8 @@
 //!   and a line that breaks at an explicit hyphen repeats it on the next.
 //!
 //! A [`Cache`] memoises shaped paragraphs and shapes new ones in parallel
-//! with `rayon`.
+//! with `rayon` when its shaping pool has several threads; with one (as
+//! with `RAYON_NUM_THREADS=1`), it shapes them on the calling thread.
 //!
 //! This is the `folio-text` crate of SPEC §2.2. It depends on no other
 //! Folio crate, so that `folio-component` may depend on it: fonts come in as

@@ -1023,8 +1023,9 @@ fn schema_entry(p: &mut Parser<'_>) {
 
 /// Parses a scoped rule (SPEC §5.4): `rule question { numbering: "(a)"; }`,
 /// `rule @target pptx figure { .. }`. The selectors and declarations are
-/// those of stylesheets (SPEC §5.1); token names and colours are written
-/// `tok.accent` and `rgb("1f5fa8")` in content.
+/// those of stylesheets (SPEC §5.1), and the declaration block is lexed as
+/// in a stylesheet, so its values name tokens `$accent` and colours
+/// `#1f5fa8`.
 fn scoped_rule(p: &mut Parser<'_>) {
     let m = p.marker();
     p.assert(SyntaxKind::Rule);

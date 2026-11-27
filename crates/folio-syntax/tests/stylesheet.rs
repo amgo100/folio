@@ -799,23 +799,44 @@ fn scoped_rules_use_the_stylesheet_grammar() {
     assert_eq!(count(&root, SyntaxKind::PseudoClass), 1);
     assert_eq!(count(&root, SyntaxKind::AttrSelector), 1);
 
-    // In content, tokens and colours are written as code.
-    let text = "#rule .warn { color: tok.warn; background: rgb(\"1f5fa8\"); }";
+    // The declarations are lexed as in a stylesheet: `$name` is a token and
+    // `#hex` a colour, while `tok.warn` stays a field access (SPEC §5.4).
+    let text = "#rule .warn { color: #d62728; font-size: $size * 1.2; border: tok.warn; }";
     let root = parse(text);
+    assert_eq!(root.full_text(), text);
     let (errors, _) = Source::detached(text).root().errors_and_warnings();
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(count(&root, SyntaxKind::TokenName), 0);
+    assert_eq!(count(&root, SyntaxKind::Color), 1);
+    assert_eq!(count(&root, SyntaxKind::TokenName), 1);
     assert_eq!(count(&root, SyntaxKind::FieldAccess), 1);
+    assert_eq!(count(&root, SyntaxKind::Equation), 0);
 
-    // In content, `name[..]` is a call with a content argument, as in
-    // scripts, and braces hold template items.
-    let text = "#rule q { trailer: strong[Total] if field(t) { \": \" field(t) }; }";
-    let root = parse(text);
-    let (errors, _) = Source::detached(text).root().errors_and_warnings();
+    // A rule's text parses to the same tree in content as in a stylesheet,
+    // so it moves between the two unchanged.
+    let decls = "{ trailer: strong(\"Total\") if field(t) { \": \" field(t) }; \
+                 slide-break: heading[level=2]; aspect: 16:9; fill: #fff; }";
+    let content = parse(&format!("#rule q {decls}"));
+    let sheet = parse_stylesheet(&format!("q {decls}"));
+    let block = |root: &SyntaxNode| {
+        nodes(root)
+            .into_iter()
+            .find(|n| n.kind() == SyntaxKind::RuleBlock)
+            .unwrap()
+            .clone()
+    };
+    assert!(block(&content).spanless_eq(&block(&sheet)));
+    let (errors, _) = Source::detached(format!("#rule q {decls}"))
+        .root()
+        .errors_and_warnings();
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(count(&root, SyntaxKind::CompoundSelector), 1);
-    assert_eq!(count(&root, SyntaxKind::ContentBlock), 1);
-    assert_eq!(count(&root, SyntaxKind::TemplateBlock), 1);
+    assert_eq!(count(&content, SyntaxKind::TemplateBlock), 1);
+    assert_eq!(count(&content, SyntaxKind::ContentBlock), 0);
+
+    // After the block, content is lexed as content again.
+    let root = parse("#rule q { fill: #fff; } $x$ #c <l>");
+    assert_eq!(count(&root, SyntaxKind::Color), 1);
+    assert_eq!(count(&root, SyntaxKind::Equation), 1);
+    assert_eq!(count(&root, SyntaxKind::Label), 1);
 
     // An id selector and the excluded combinator.
     let (errors, _) = Source::detached("#rule #{fig:ball} ~ x { a: 1; }")
@@ -880,16 +901,29 @@ fn reparse_of_top_level_items_is_local() {
 
 #[test]
 fn reparse_of_a_scoped_rule_in_a_stylesheet_value() {
-    // The content block is lexed as content, so its scoped rule must be
-    // reparsed as content too: `#fff` is not a colour there.
-    let text = "q { fallback: [#rule a { b: #fff; }]; }";
+    // The content block is lexed as content, but the declaration block of
+    // its scoped rule is lexed as a stylesheet again, also when reparsed
+    // (SPEC §5.4): `--x` is what a stylesheet makes of it there.
+    let text = "q { fallback: [#rule a { b: --x; }]; }";
     let mut source = Source::detached_stylesheet(text);
-    assert_eq!(count(source.root(), SyntaxKind::Color), 0);
+    let in_sheet = parse_stylesheet("q { b: --x; }");
+    assert_eq!(
+        count(source.root(), SyntaxKind::Unary),
+        count(&in_sheet, SyntaxKind::Unary)
+    );
     let at = text.find("b:").unwrap();
     let reparsed = source.edit(at..at, "b");
-    assert_eq!(&source.text()[reparsed], "{ bb: #fff; }");
+    assert!(source.text()[reparsed].contains("bb: --x;"));
     assert!(source.root().spanless_eq(&parse_stylesheet(source.text())));
-    assert_eq!(count(source.root(), SyntaxKind::Color), 0);
+
+    // `#fff` is a colour there.
+    let text = "q { fallback: [#rule a { b: #fff; }]; }";
+    let mut source = Source::detached_stylesheet(text);
+    assert_eq!(count(source.root(), SyntaxKind::Color), 1);
+    let at = text.find("b:").unwrap();
+    source.edit(at..at, "b");
+    assert!(source.root().spanless_eq(&parse_stylesheet(source.text())));
+    assert_eq!(count(source.root(), SyntaxKind::Color), 1);
 }
 
 #[test]
@@ -925,4 +959,15 @@ fn reparse_of_a_scoped_rule_block_in_content() {
     let reparsed = source.edit(at..at + 1, "i");
     assert_eq!(&source.text()[reparsed], "{ numbering: \"(i)\"; }");
     assert!(source.root().spanless_eq(&parse(source.text())));
+
+    // The block is reparsed as a stylesheet, as it was parsed.
+    let at = source.text().find("; }").unwrap() + 1;
+    let reparsed = source.edit(at..at, " color: #fff; indent: $gap;");
+    assert_eq!(
+        &source.text()[reparsed],
+        "{ numbering: \"(i)\"; color: #fff; indent: $gap; }"
+    );
+    assert!(source.root().spanless_eq(&parse(source.text())));
+    assert_eq!(count(source.root(), SyntaxKind::Color), 1);
+    assert_eq!(count(source.root(), SyntaxKind::TokenName), 1);
 }

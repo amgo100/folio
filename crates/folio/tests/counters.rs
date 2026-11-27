@@ -7,7 +7,7 @@ use ecow::EcoVec;
 use folio::{Name, Registry, Target, World};
 use folio_component::{
     Body, Component, ComponentManifest, ComponentName, ContentKind, CounterDecl, Declarations,
-    ElementKind, ElementSchema, INTERFACE_VERSION, LocaleString, QualifiedName, Within,
+    ElementKind, ElementSchema, LocaleString, QualifiedName, Within,
 };
 
 fn name(text: &str) -> Name {
@@ -20,12 +20,11 @@ struct Exam;
 
 impl Component for Exam {
     fn manifest(&self) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new("exam").unwrap(),
-            version: semver::Version::new(0, 0, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
     }
 
     fn declarations(&self) -> Declarations {
@@ -36,43 +35,33 @@ impl Component for Exam {
 
         let mut part = ElementSchema::new(name("part"), ElementKind::Block);
         part.body = Body::Content(ContentKind::Blocks);
-        part.counter = Some(CounterDecl {
-            within: None,
-            // The component's own elements, unqualified.
-            scope: EcoVec::from([
-                QualifiedName::new("question").unwrap(),
-                QualifiedName::new("part").unwrap(),
-            ]),
-        });
+        let mut counter = CounterDecl::new();
+        // The component's own elements, unqualified.
+        counter.scope = EcoVec::from([
+            QualifiedName::new("question").unwrap(),
+            QualifiedName::new("part").unwrap(),
+        ]);
+        part.counter = Some(counter);
         part.ref_key = Some(name("part"));
 
         // Restarted at each top-level heading, and scoped to questions.
         let mut note = ElementSchema::new(name("note"), ElementKind::Block);
         note.body = Body::Content(ContentKind::Blocks);
-        note.counter = Some(CounterDecl {
-            within: Some(Within {
-                element: QualifiedName::new("heading").unwrap(),
-                fields: EcoVec::from([(name("level"), folio_component::Value::Int(1))]),
-            }),
-            scope: EcoVec::from([QualifiedName::new("question").unwrap()]),
-        });
+        let mut counter = CounterDecl::new();
+        counter.within = Some(Within::new(
+            QualifiedName::new("heading").unwrap(),
+            [(name("level"), folio_component::Value::Int(1))],
+        ));
+        counter.scope = EcoVec::from([QualifiedName::new("question").unwrap()]);
+        note.counter = Some(counter);
 
-        Declarations {
-            elements: EcoVec::from([question, part, note]),
-            locale_strings: EcoVec::from([
-                LocaleString {
-                    lang: "en".into(),
-                    key: name("question"),
-                    text: "Question".into(),
-                },
-                LocaleString {
-                    lang: "en".into(),
-                    key: name("part"),
-                    text: "part".into(),
-                },
-            ]),
-            ..Declarations::default()
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([question, part, note]);
+        declarations.locale_strings = EcoVec::from([
+            LocaleString::new("en", name("question"), "Question"),
+            LocaleString::new("en", name("part"), "part"),
+        ]);
+        declarations
     }
 }
 
@@ -86,7 +75,7 @@ const STYLE: &str = "question { numbering: \"1\"; }\n\
 
 fn world(style: &str, text: &str) -> World {
     let mut registry = Registry::new();
-    registry.register(&Exam).unwrap();
+    registry.register(Exam).unwrap();
     let mut world = World::builder()
         .components(registry)
         .build(MANIFEST, None)
