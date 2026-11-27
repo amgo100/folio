@@ -532,10 +532,13 @@ impl Gather<'_> {
     /// The origin of an overlay's rules, and whether the overlay applies to
     /// the build. Reports scopes that name no declared variant or no
     /// target. An overlay in a component's default stylesheet keeps its
-    /// origin (SPEC §3.2), so a project's rules still win over it.
+    /// origin (SPEC §3.2), so a project's rules still win over it, and may
+    /// name variants the project does not declare: they do not match, and
+    /// its unknown targets are the host's to report.
     fn overlay(&self, overlay: ast::Overlay<'_>, outer: Origin) -> (Origin, bool) {
         let mut origin = outer;
-        let raises = outer > Origin::ComponentDefault;
+        let component = outer == Origin::ComponentDefault;
+        let raises = !component;
         let mut matches = true;
         for scope in overlay.scopes() {
             let names: Vec<_> = scope.names().collect();
@@ -551,7 +554,7 @@ impl Gather<'_> {
                             .variants
                             .iter()
                             .any(|v| v.name.v.as_str() == name.get());
-                        if !declared {
+                        if !declared && !component {
                             diag::report(
                                 self.db,
                                 Diagnostic::error(
@@ -578,6 +581,7 @@ impl Gather<'_> {
                     for name in names {
                         match Target::from_name(name.get()) {
                             Some(target) => any |= target == self.target,
+                            None if component => {}
                             None => diag::report(
                                 self.db,
                                 Diagnostic::error(

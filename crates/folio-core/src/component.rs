@@ -12,11 +12,11 @@ use std::ops::Range;
 
 use ecow::{EcoString, eco_format};
 use folio_component::{
-    ComponentName, ElementSchema, Name, PropertyDecl, QualifiedName, Registered, Registry,
+    ComponentName, ElementSchema, Name, PropertyDecl, QualifiedName, Registered, Registry, Target,
     TemplateDecl,
 };
 use folio_syntax::ast::{self, AstNode, StyleItem};
-use folio_syntax::{DiagSpanKind, Source};
+use folio_syntax::{DiagSpanKind, Source, Span};
 
 use crate::diag::Diagnostic;
 use crate::project::{Bindings, ComponentSource, Components};
@@ -403,17 +403,44 @@ impl DefaultSheet {
             })
             .collect();
         if let Some(sheet) = source.root().cast::<ast::Stylesheet<'_>>() {
-            for item in sheet.items() {
-                if let StyleItem::Import(import) = item {
-                    let range = source.find(import.to_untyped().span()).map(|n| n.range());
-                    errors.push(error(
-                        "a component's default stylesheet cannot import another",
-                        range,
-                    ));
-                }
+            let mut found = Vec::new();
+            check_items(sheet.items(), &mut found);
+            for (span, message) in found {
+                let range = source.find(span).map(|n| n.range());
+                errors.push(error(&message, range));
             }
         }
         Self { source, errors }
+    }
+}
+
+/// What the host rejects in a default stylesheet's items, inside overlay
+/// blocks too: imports, and targets that do not exist. Variants a project
+/// does not declare are allowed: their blocks do not match.
+fn check_items<'a>(items: impl Iterator<Item = StyleItem<'a>>, out: &mut Vec<(Span, EcoString)>) {
+    for item in items {
+        match item {
+            StyleItem::Import(import) => out.push((
+                import.to_untyped().span(),
+                "a component's default stylesheet cannot import another".into(),
+            )),
+            StyleItem::Overlay(overlay) => {
+                for scope in overlay.scopes() {
+                    if scope.kind() == "target" {
+                        for name in scope.names() {
+                            if Target::from_name(name.get()).is_none() {
+                                out.push((
+                                    name.span(),
+                                    eco_format!("unknown target `{}`", name.get()),
+                                ));
+                            }
+                        }
+                    }
+                }
+                check_items(overlay.items(), out);
+            }
+            _ => {}
+        }
     }
 }
 

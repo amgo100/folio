@@ -297,10 +297,20 @@ fn component_lints_report_at_their_instances() {
         "{}",
         text(found.span)
     );
+    // The second question's parts add up; the lint found nothing there.
     let related: Vec<_> = found.related.iter().map(|r| text(r.span)).collect();
     assert_eq!(related.len(), 2);
     assert!(
         related[0].starts_with("exam.part(marks: 2)[A]"),
         "{related:?}"
     );
+}
+
+#[test]
+fn a_component_sheet_may_name_variants_the_project_lacks() {
+    // `handout` is not declared: the block does not match, and the
+    // project, which cannot change the component's sheet, sees no error.
+    let world = project("@variant handout { item { indent: 9pt; } }\n", "", "");
+    let styled = styles(&world, "exam");
+    assert_ne!(get(&styled, "exam.item", "indent"), pt(9.0));
 }

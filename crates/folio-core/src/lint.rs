@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use ecow::{EcoVec, eco_format};
 use folio_component::{
-    Instance, InstanceTree, LintDiagnostic, Location, Name, Part, Severity, Value as Plain,
+    BODY, Body, ElementSchema, FieldType, Instance, InstanceTree, LintDiagnostic, Location, Name,
+    Part, Registered, Severity, Value as Plain,
 };
 use folio_syntax::Span;
 
@@ -18,9 +19,21 @@ use crate::model::document;
 
 /// Runs the lints of the components a build uses, over its variant's
 /// document tree, and reports what they find. The document tree is the same
-/// for every target of a variant, so the lints run once per variant.
+/// for every target of a variant, so the lints run once per variant. A
+/// build whose components declare no elements has nothing to lint, and
+/// does not read the document tree here.
 pub fn check_lints(db: &dyn Db, build: Build<'_>) {
-    lint_variant(db, build.project(db), build.variant(db).clone());
+    let project = build.project(db);
+    let linted = component_host(db, project)
+        .as_ref()
+        .is_some_and(|host| host.components().any(has_elements));
+    if linted {
+        lint_variant(db, project, build.variant(db).clone());
+    }
+}
+
+fn has_elements(component: &Registered) -> bool {
+    !component.declarations.elements.is_empty()
 }
 
 #[salsa::tracked]
@@ -31,10 +44,15 @@ fn lint_variant(db: &dyn Db, project: Project, variant: Option<Name>) {
     let Some(document) = document(db, project, variant) else {
         return;
     };
-    for component in host.components() {
+    for component in host.components().filter(|c| has_elements(c)) {
         let namespace = component.manifest.namespace();
         let mut spans = HashMap::new();
-        let view = InstanceTree::new(own_in_element(&namespace, &document.root, &mut spans));
+        let mut cx = Cx {
+            component,
+            namespace: &namespace,
+            spans: &mut spans,
+        };
+        let view = InstanceTree::new(cx.in_element(&document.root));
         for found in run_lint(db, project, namespace.clone(), view).iter() {
             diag::report(db, diagnostic(&namespace, found, &spans));
         }
@@ -86,94 +104,123 @@ fn diagnostic(
     out
 }
 
-/// The component's instances in an element: the element itself if it is
-/// one, else those in its fields, in their order.
-fn own_in_element(
-    namespace: &Name,
-    element: &Element,
-    spans: &mut HashMap<Location, Span>,
-) -> Vec<Instance> {
-    if element.name.namespace.as_ref() == Some(namespace) {
-        return vec![instance(namespace, element, spans)];
-    }
-    let mut out = Vec::new();
-    for (_, value) in element.fields.iter() {
-        own_in_value(namespace, value, spans, &mut out);
-    }
-    out
+/// What walking the document tree for one component needs.
+struct Cx<'a> {
+    component: &'a Registered,
+    namespace: &'a Name,
+    /// The span of each instance, to report diagnostics at.
+    spans: &'a mut HashMap<Location, Span>,
 }
 
-/// The component's instances in a field's value, at any depth that no
-/// other instance of the component is between.
-fn own_in_value(
-    namespace: &Name,
-    value: &Value,
-    spans: &mut HashMap<Location, Span>,
-    out: &mut Vec<Instance>,
-) {
-    match value {
-        Value::Content(content) => out.extend(own_in_content(namespace, content, spans)),
-        Value::Array(items) => {
-            for item in items.as_slice() {
-                own_in_value(namespace, item, spans, out);
-            }
+impl Cx<'_> {
+    /// The component's instances in an element: the element itself if it
+    /// is one, else those in its fields, in their order.
+    fn in_element(&mut self, element: &Element) -> Vec<Instance> {
+        if element.name.namespace.as_ref() == Some(self.namespace) {
+            return vec![self.instance(element)];
         }
-        Value::Dict(dict) => {
-            for (_, item) in dict.iter() {
-                own_in_value(namespace, item, spans, out);
-            }
+        let mut out = Vec::new();
+        for (_, value) in element.fields.iter() {
+            self.in_value(value, &mut out);
         }
-        _ => {}
+        out
     }
-}
 
-fn own_in_content(
-    namespace: &Name,
-    content: &Content,
-    spans: &mut HashMap<Location, Span>,
-) -> Vec<Instance> {
-    let mut out = Vec::new();
-    for node in content.nodes() {
-        if let Node::Element(element) = node {
-            out.extend(own_in_element(namespace, element, spans));
-        }
-    }
-    out
-}
-
-/// The view of one of the component's instances: its fields that are not
-/// content as plain values, and a part for each field that holds content.
-fn instance(namespace: &Name, element: &Element, spans: &mut HashMap<Location, Span>) -> Instance {
-    spans.insert(element.location, element.span);
-    let mut out = Instance::new(element.name.clone(), element.location);
-    out.label = element.label.clone();
-    let mut fields = EcoVec::new();
-    let mut parts = EcoVec::new();
-    for (key, value) in element.fields.iter() {
-        // Fields scoped to a variant or target (`override@markscheme`) are
-        // not names; the view holds the fields that apply to every build.
-        let Some(name) = Name::new(key) else {
-            continue;
-        };
+    /// The component's instances in a field's value, at any depth that no
+    /// other instance of the component is between.
+    fn in_value(&mut self, value: &Value, out: &mut Vec<Instance>) {
         match value {
-            Value::Content(content) => parts.push(
-                Part::new(name, own_in_content(namespace, content, spans))
-                    .with_empty(content.is_empty()),
-            ),
-            _ => {
-                if let Some(plain) = plain(value) {
-                    fields.push((name, plain));
+            Value::Content(content) => out.extend(self.in_content(content)),
+            Value::Array(items) => {
+                for item in items.as_slice() {
+                    self.in_value(item, out);
+                }
+            }
+            Value::Dict(dict) => {
+                for (_, item) in dict.iter() {
+                    self.in_value(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn in_content(&mut self, content: &Content) -> Vec<Instance> {
+        let mut out = Vec::new();
+        for node in content.nodes() {
+            if let Node::Element(element) = node {
+                out.extend(self.in_element(element));
+            }
+        }
+        out
+    }
+
+    /// The view of one of the component's instances: its fields that are
+    /// not content as plain values, and a part for each field that holds
+    /// content. Every slot and content field its schema declares has a
+    /// part, empty when the call left it out.
+    fn instance(&mut self, element: &Element) -> Instance {
+        self.spans.insert(element.location, element.span);
+        let mut out = Instance::new(element.name.clone(), element.location);
+        out.label = element.label.clone();
+        let mut fields = EcoVec::new();
+        let mut parts: EcoVec<Part> = EcoVec::new();
+        for (key, value) in element.fields.iter() {
+            // Fields scoped to a variant or target (`override@markscheme`)
+            // are not names; the view holds the fields that apply to every
+            // build.
+            let Some(name) = Name::new(key) else {
+                continue;
+            };
+            match value {
+                Value::Content(content) => {
+                    let children = self.in_content(content);
+                    parts.push(Part::new(name, children).with_empty(content.is_empty()));
+                }
+                _ => {
+                    if let Some(plain) = plain(value) {
+                        fields.push((name, plain));
+                    }
                 }
             }
         }
+        if let Some(schema) = self.component.element(element.name.name.as_str()) {
+            for declared in content_parts(schema) {
+                if !parts.iter().any(|p| p.name == declared) {
+                    parts.push(Part::new(declared, []));
+                }
+            }
+        }
+        out.fields = fields;
+        out.parts = parts;
+        out
     }
-    out.fields = fields;
-    out.parts = parts;
+}
+
+/// The names of the parts a schema declares: its body, its slots and its
+/// content fields.
+fn content_parts(schema: &ElementSchema) -> Vec<Name> {
+    let mut out = Vec::new();
+    match &schema.body {
+        Body::None => {}
+        Body::Slots(slots) => out.extend(slots.iter().map(|s| s.name.clone())),
+        Body::Content(_) => out.extend(Name::new(BODY)),
+    }
+    out.extend(
+        schema
+            .fields
+            .iter()
+            .filter(|f| f.ty == FieldType::Content)
+            .map(|f| f.name.clone()),
+    );
     out
 }
 
-/// A value as plain data, if it has a plain form: content, functions and
-/// the like have none.
+/// A value as plain data, if it has a plain form. Content, functions and
+/// the like have none, nor have a length that mixes `em` and absolute
+/// units and a dictionary whose keys are not names: the view leaves such
+/// fields out, as it leaves out fields that are not given and default to
+/// `none`. A label becomes a string.
 fn plain(value: &Value) -> Option<Plain> {
     Some(match value {
         Value::None => Plain::None,

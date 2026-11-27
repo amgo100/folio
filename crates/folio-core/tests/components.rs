@@ -382,6 +382,14 @@ fn default_stylesheets_are_parsed_when_hosted() {
         "{:?}",
         sheet.errors
     );
+    // An import in a block is a syntax error; unknown targets are errors,
+    // and undeclared variants are allowed.
+    let nested = host("@target pdf { @import \"x.fsty\"; }\n@target paper { }\n@variant any { }\n");
+    let (_, sheet) = nested.stylesheets().next().unwrap();
+    assert_eq!(sheet.errors.len(), 2, "{:?}", sheet.errors);
+    assert!(sheet.errors[0].ends_with("`@import` is allowed only at the top level"));
+    assert!(sheet.errors[1].ends_with("unknown target `paper`"));
+
     let imports = host("@import \"x.fsty\";\nquestion { indent: 0; }\n");
     let (_, sheet) = imports.stylesheets().next().unwrap();
     assert_eq!(

@@ -104,7 +104,9 @@ impl Registry {
 /// component itself, for the extension points that run code.
 ///
 /// Registered components are equal, and hash alike, when their manifests
-/// and declarations are: a component's calls are pure (SPEC §3.5).
+/// and declarations are: a component's calls are pure (SPEC §3.5), and its
+/// version changes whenever its code does, so the core may keep results
+/// made by an equal component registered earlier.
 #[derive(Clone)]
 pub struct Registered {
     /// The component's manifest.
