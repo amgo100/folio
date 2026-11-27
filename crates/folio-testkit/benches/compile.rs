@@ -24,15 +24,16 @@
 //! `compile_variants` counts the ten-page document with three variants: the
 //! teacher's variant alone, and all three.
 //!
-//! Callgrind counts only the benchmark function's thread. Paragraphs that
-//! `folio-text` shapes several at a time run on its shaping thread, so
-//! their shaping is not counted: a full compile's or a stylesheet edit's
-//! counts leave most of the shaping out, and a one-word edit's, which
-//! shapes one paragraph on the calling thread, keep it. Gungraun also turns
-//! counting on and off on entering and leaving any function of a
-//! benchmark's wrapper module, a closure that the body defines and does
-//! not inline included, so the bodies here do their work in loops rather
-//! than closures (the small closures that only read a length are inlined). Issue #234 tracks counting the shaping thread.
+//! Callgrind counts only the benchmark function's thread. The benchmarks
+//! run with one `rayon` thread (`RAYON_NUM_THREADS=1`), and with one
+//! thread `folio-text` shapes on the calling thread instead of handing
+//! paragraphs to its shaping pool, so every count includes all the shaping
+//! its compile does (`crates/folio-text/tests/shaping_thread.rs` checks
+//! this). Gungraun also turns counting on and off on entering and leaving
+//! any function of a benchmark's wrapper module, a closure that the body
+//! defines and does not inline included, so the bodies here do their work
+//! in loops rather than closures (the small closures that only read a
+//! length are inlined).
 
 // Gungraun's macros expand to paths the first lint calls redundant, and to
 // public items without documentation.
