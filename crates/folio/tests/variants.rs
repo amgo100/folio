@@ -63,6 +63,23 @@ fn hidden_content_and_formula_source_do_not_reach_the_exam_pdf() {
     assert!(!holds(&markscheme, "ANSWERCOMMENT"), "comments never do");
 }
 
+/// Each instance of a formula that a loop makes reads as evaluation made
+/// it, not as the first instance does.
+#[test]
+fn each_instance_of_a_formula_has_its_own_alt_text() {
+    let mut world = World::new(MANIFEST).unwrap();
+    world
+        .set_source(
+            "main.fol",
+            "#for v in (17, 29) [Value $x = #v$.\n\n$ y = #v $\n\n]\n",
+        )
+        .unwrap();
+    let pdf = searchable(&pdf(&world, "exam"));
+    for alt in ["x = 17", "x = 29", "y = 17", "y = 29"] {
+        assert!(holds(&pdf, alt), "{alt}");
+    }
+}
+
 /// A PDF's bytes followed by every Flate stream of it, inflated.
 fn searchable(pdf: &[u8]) -> Vec<u8> {
     let mut out = pdf.to_vec();
@@ -83,7 +100,12 @@ fn searchable(pdf: &[u8]) -> Vec<u8> {
         let Some(end) = find(&pdf[body..], b"endstream").map(|i| body + i) else {
             break;
         };
-        let dict = &pdf[pdf[..start].iter().rposition(|&b| b == b'<').unwrap_or(0)..start];
+        // The stream's object, from `obj` to `stream`, holds its dictionary.
+        let object = pdf[..start]
+            .windows(3)
+            .rposition(|w| w == b"obj")
+            .unwrap_or(0);
+        let dict = &pdf[object..start];
         if find(dict, b"FlateDecode").is_some() {
             // A zlib stream: two bytes of header before the deflate data.
             let inflated = inflate(&pdf[body + 2..end])

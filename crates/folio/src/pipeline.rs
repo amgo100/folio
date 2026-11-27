@@ -34,7 +34,7 @@ use folio_core::pipeline::step_styled;
 use folio_core::project::ProjectPath;
 use folio_core::resolve::Resolution;
 use folio_core::span_map::{source_ref, span};
-use folio_core::text::{Text, TextBlock, TextFlow, text};
+use folio_core::text::{Text, TextBlock, TextFlow, TextMath, text};
 use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Tag};
 use folio_syntax::{DiagSpan, Span, SubRange};
 
@@ -334,7 +334,16 @@ fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
     let mut tag = Tag::new(role, located(block.span, block.location));
     match role {
         Role::Heading => tag.text = block_text(block, text),
-        Role::Formula => tag.text = formula_alt(text, block.span),
+        Role::Formula => {
+            // The display of this instance: each instance of a formula
+            // made in a loop or by a closure reads as evaluation made it.
+            let math = text
+                .maths
+                .iter()
+                .find(|m| m.span == block.span && m.location == block.location)
+                .or_else(|| text.maths.iter().find(|m| m.span == block.span));
+            tag.text = math.and_then(formula_alt);
+        }
         _ => {}
     }
     for child in &block.children {
@@ -347,8 +356,10 @@ fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
                 // A formula's first chunk, as the others continue it, and
                 // each image, with its alt text as its description.
                 let objects = paragraph.objects.iter().filter_map(|object| {
-                    let (role, description) = if object.math.is_some_and(|m| m.chunk == 0) {
-                        (Role::Formula, formula_alt(text, object.span))
+                    let (role, description) = if let Some(m) = object.math.filter(|m| m.chunk == 0)
+                    {
+                        let math = text.maths.get(m.formula);
+                        (Role::Formula, math.and_then(formula_alt))
                     } else if let Some(image) = &object.image {
                         (Role::Figure, image.alt.clone().and_then(clean))
                     } else {
@@ -377,13 +388,12 @@ fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
     tag
 }
 
-/// The alternate description of the formula of the `math` element at
-/// `span`: a reading of its evaluated math tree, with its quantities in the
-/// number format of its text ([`folio_math::Formula::reading`]). It is
-/// never read from the source, so that comments, script code and what
-/// another variant shows do not reach it (SPEC §6.4, §11.1).
-fn formula_alt(text: &Text, span: Span) -> Option<EcoString> {
-    let math = text.maths.iter().find(|math| math.span == span)?;
+/// The alternate description of a formula: a reading of its evaluated
+/// math tree, with its quantities in the number format of its text
+/// ([`folio_math::Formula::reading`]). It is never read from the source,
+/// so that comments, script code and what another variant shows do not
+/// reach it (SPEC §6.4, §11.1).
+fn formula_alt(math: &TextMath) -> Option<EcoString> {
     clean(math.formula.reading(&math.settings.number).into())
 }
 

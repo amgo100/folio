@@ -16,7 +16,9 @@
 //! - n-ary operators as their symbol with their limits: `∑_(i = 1)^n`;
 //! - everything else as the native function that makes it: `sqrt(x)`,
 //!   `root(3, x)`, `vec(F)`, `hat(i)`, `tilde(x)`, `overline(x)`,
-//!   `bold(x)`, `mat(1, 2; 3, 4)`, `cases(..)`;
+//!   `bold(x)`, `mat(1, 2; 3, 4)` (with `delim: "|"; ` first for other
+//!   delimiters), `cases(..)`, and an accent without a name of its own as
+//!   `accent(x, ^)` or `accent(x, U+20E1)`;
 //! - quantities as they are set in the formula's number format, without
 //!   the separators of digit groups: `9.81 m s^(−2)`;
 //! - lines separated by `; `, without their labels or alignment points.
@@ -39,12 +41,13 @@ impl Formula {
             out: String::new(),
             space: false,
             operand: true,
+            scripted: false,
             full: false,
             format,
         };
         for (i, line) in self.lines().iter().enumerate() {
             if i > 0 {
-                reader.token(";", false, true);
+                reader.semicolon();
             }
             reader.row(&line.row);
         }
@@ -64,6 +67,10 @@ struct Reader<'a> {
     /// an opening or punctuation. A sign there is a prefix, and an opening
     /// is spaced from what comes before.
     operand: bool,
+    /// Whether the last token ends a fraction or an attachment, which an
+    /// opening is spaced from, so that `1/2 (a + b)` does not read as
+    /// `1/2(a + b)`.
+    scripted: bool,
     /// Whether the reading reached [`MAX_LEN`].
     full: bool,
     format: &'a NumberFormat,
@@ -94,6 +101,7 @@ impl Reader<'_> {
         }
         self.space = after;
         self.operand = !after;
+        self.scripted = false;
     }
 
     /// An operator, spaced on both sides, after which an operand follows.
@@ -125,6 +133,12 @@ impl Reader<'_> {
     /// A comma between arguments.
     fn comma(&mut self) {
         self.token(",", false, true);
+        self.operand = true;
+    }
+
+    /// A semicolon between lines or the rows of a matrix.
+    fn semicolon(&mut self) {
+        self.token(";", false, true);
         self.operand = true;
     }
 
@@ -179,7 +193,7 @@ impl Reader<'_> {
             }
             Node::Symbol(atom) => match atom.class {
                 MathClass::Space => {}
-                MathClass::Opening => self.token(&atom.text, self.operand, false),
+                MathClass::Opening => self.token(&atom.text, self.operand || self.scripted, false),
                 MathClass::Closing => self.token(&atom.text, false, true),
                 MathClass::Punctuation => {
                     self.token(&atom.text, false, true);
@@ -203,6 +217,7 @@ impl Reader<'_> {
                 self.part(&frac.den);
                 self.space = true;
                 self.operand = false;
+                self.scripted = true;
             }
             Node::Attach(attach) => {
                 self.space_before();
@@ -220,6 +235,7 @@ impl Reader<'_> {
                 }
                 self.space = true;
                 self.operand = false;
+                self.scripted = true;
             }
             Node::Nary(nary) => {
                 let mut op = [0; 4];
@@ -242,7 +258,11 @@ impl Reader<'_> {
             Node::Delimited(delimited) => {
                 let mut buf = [0; 4];
                 if let Some(open) = delimited.open {
-                    self.token(open.encode_utf8(&mut buf), self.operand, false);
+                    self.token(
+                        open.encode_utf8(&mut buf),
+                        self.operand || self.scripted,
+                        false,
+                    );
                 }
                 self.row(&delimited.body);
                 if let Some(close) = delimited.close {
@@ -251,9 +271,20 @@ impl Reader<'_> {
             }
             Node::Matrix(matrix) => {
                 self.open("mat");
+                // Delimiters other than parentheses mean something: a
+                // determinant, a norm.
+                if (matrix.open, matrix.close) != (Some('('), Some(')')) {
+                    let delim = match matrix.open {
+                        None => "none".to_string(),
+                        Some(open) => format!("\"{open}\""),
+                    };
+                    self.token("delim:", true, true);
+                    self.word(&delim);
+                    self.semicolon();
+                }
                 for (i, cells) in matrix.rows.iter().enumerate() {
                     if i > 0 {
-                        self.token(";", false, true);
+                        self.semicolon();
                     }
                     for (j, cell) in cells.iter().enumerate() {
                         if j > 0 {
@@ -271,11 +302,16 @@ impl Reader<'_> {
             Node::Accent(accent) => match accent_name(accent.accent) {
                 Some(name) => self.func(name, &[&accent.base]),
                 None => {
+                    // A combining mark alone would combine with the space
+                    // before it.
                     self.open("accent");
                     self.row(&accent.base);
                     self.comma();
-                    let mut buf = [0; 4];
-                    self.word(accent.accent.encode_utf8(&mut buf));
+                    let mark = match accent.accent {
+                        '\u{302}' => "^".to_string(),
+                        c => format!("U+{:04X}", u32::from(c)),
+                    };
+                    self.word(&mark);
                     self.close();
                 }
             },
@@ -318,7 +354,9 @@ fn is_sign(text: &str) -> bool {
 fn is_simple(row: &Row) -> bool {
     match row.nodes() {
         [node] => match node {
-            Node::Ident(atom) | Node::Number(atom) | Node::Text(atom) | Node::Symbol(atom) => {
+            // A number's digit groups read as one number.
+            Node::Number(_) => true,
+            Node::Ident(atom) | Node::Text(atom) | Node::Symbol(atom) => {
                 !atom.text.chars().any(char::is_whitespace)
             }
             Node::Operator(_)
@@ -346,7 +384,6 @@ fn accent_name(accent: char) -> Option<&'static str> {
     Some(match accent {
         '\u{300}' => "grave",
         '\u{301}' => "acute",
-        '\u{302}' => "hat",
         '\u{303}' => "tilde",
         '\u{304}' | '\u{305}' => "macron",
         '\u{306}' => "breve",
@@ -380,6 +417,10 @@ mod tests {
         assert_eq!(read("f(x) = x, y"), "f(x) = x, y");
         assert_eq!(read("\\sin x"), "sin x");
         assert_eq!(read("x = -1 + 2 (a - b)"), "x = −1 + 2(a − b)");
+        assert_eq!(
+            read("\\frac{1}{2} (a + b) + x^2 (c)"),
+            "1/2 (a + b) + x^2 (c)"
+        );
     }
 
     #[test]
@@ -396,11 +437,16 @@ mod tests {
         assert_eq!(read("\\sqrt{x}"), "sqrt(x)");
         assert_eq!(read("\\sqrt[3]{x + 1}"), "root(3, x + 1)");
         assert_eq!(read("\\tilde{x}"), "tilde(x)");
+        assert_eq!(read("\\hat{\\theta}"), "accent(θ, ^)");
         assert_eq!(read("\\overline{a b}"), "overline(a b)");
         assert_eq!(read("\\mathbf{x}"), "bold(x)");
         assert_eq!(
             read("\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}"),
             "mat(1, 2; 3, 4)"
+        );
+        assert_eq!(
+            read("\\begin{vmatrix} 1 & 2 \\\\ -3 & 4 \\end{vmatrix}"),
+            "mat(delim: \"|\"; 1, 2; −3, 4)"
         );
     }
 
@@ -422,6 +468,7 @@ mod tests {
     #[test]
     fn lines_are_separated_and_labels_left_out() {
         assert_eq!(read("a &= b \\\\ c &= d"), "a = b; c = d");
+        assert_eq!(read("a = b \\\\ -c = (d)"), "a = b; −c = (d)");
     }
 
     #[test]
