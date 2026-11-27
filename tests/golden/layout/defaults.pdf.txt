@@ -147,16 +147,28 @@ page 2 595.28 × 841.89, 24 line(s)
             text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 26 of the filler that brings the next figure to the foot of the page."
           box (0.00, 645.88) 481.89 × 19.16 main.fol:77:1 baselines 15.97..15.97
             text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 27 of the filler that brings the next figure to the foot of the page."
-page 3 595.28 × 841.89, 3 line(s)
-  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 30.00..90.98
-    box (0.00, 0.00) 481.89 × 94.17 main.fol:1:2 baselines 30.00..90.98
-      box (0.00, 0.00) 481.89 × 94.17 main.fol:3:1 baselines 30.00..90.98
-        box (0.00, 0.00) 481.89 × 94.17 main.fol:21:1 baselines 30.00..90.98
+page 3 595.28 × 841.89, 4 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 30.00..140.58
+    box (0.00, 0.00) 481.89 × 143.77 main.fol:1:2 baselines 30.00..140.58
+      box (0.00, 0.00) 481.89 × 143.77 main.fol:3:1 baselines 30.00..140.58
+        box (0.00, 0.00) 481.89 × 143.77 main.fol:21:1 baselines 30.00..140.58
           box (0.00, 0.00) 481.89 × 64.01 main.fol:79:2 baselines 30.00..57.25
             box (0.00, 0.00) 481.89 × 35.78 main.fol:79:10 baselines 30.00..30.00
               box (210.94, 0.00) 60.00 × 30.00 main.fol:79:10
                 image (0.00, 0.00) 60.00 × 30.00 PNG 5ec2ff3884fea4d9 main.fol:79:10
             box (0.00, 41.28) 481.89 × 22.74 main.fol:79:2 baselines 15.97..15.97
               text (96.34, 15.97) NewCM10-Regular 11.00 w 289.21 60 glyph(s) "A figure that would end the page; its caption is kept with it"
-          box (0.00, 75.01) 481.89 × 19.16 main.fol:81:1 baselines 15.97..15.97
+          box (0.00, 75.01) 481.89 × 22.74 main.fol:81:1 baselines 15.97..15.97
             text (0.00, 15.97) NewCM10-Regular 11.00 w 120.35 24 glyph(s) "The text after the figure."
+          box (0.00, 103.25) 481.89 × 40.52 main.fol:83:1 baselines 15.97..37.33
+            box (16.50, 0.00) 465.39 × 22.74 main.fol:83:1 baselines 15.97..15.97
+              box (0.00, 0.00) 465.39 × 22.74 main.fol:83:3 baselines 15.97..15.97
+                text (0.00, 15.97) NewCM10-Regular 11.00 w 14.06 3 glyph(s) "1.\u{a0}"
+                text (14.06, 15.97) NewCM10-Regular 11.00 w 90.44 18 glyph(s) "An item with text."
+            box (16.50, 24.94) 465.39 × 15.59 main.fol:84:1 baselines 12.40..12.40
+              box (0.00, 0.00) 465.39 × 15.59 main.fol:84:3 baselines 12.40..12.40
+                text (0.00, 12.40) NewCM10-Regular 11.00 w 14.06 3 glyph(s) "2.\u{a0}"
+                text (213.35, 12.40) NewCMMath-Regular 11.00 w 8.55 1 glyph(s) "𝐹"
+                text (224.95, 12.40) NewCMMath-Regular 11.00 w 8.56 1 glyph(s) "="
+                text (236.56, 12.40) NewCMMath-Regular 11.00 w 9.66 1 glyph(s) "𝑚"
+                text (246.22, 12.40) NewCMMath-Regular 11.00 w 5.82 1 glyph(s) "𝑎"

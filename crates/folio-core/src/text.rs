@@ -119,6 +119,12 @@ pub struct TextMath {
     pub location: Location,
     /// Whether it is a display.
     pub display: bool,
+    /// For a display that starts an element with a marker and no paragraph
+    /// before it, such as a list item that holds only an equation: the
+    /// paragraph of the markers, as an index into [`Text::paragraphs`],
+    /// which is in no block. Layout sets it beside the display, at its
+    /// first line (SPEC §4.5, D-326-1).
+    pub lead: Option<usize>,
 }
 
 /// What a formula is set with, from its element's style.
@@ -485,6 +491,8 @@ struct Pending {
     text: EcoString,
     style: ComputedStyle,
     span: Span,
+    /// The instance of the element whose marker it is.
+    location: Location,
 }
 
 /// A paragraph's text as it is collected.
@@ -562,12 +570,40 @@ impl Collector<'_> {
                 text: marker.text.clone(),
                 style: node.style.clone(),
                 span: element.span,
+                location: element.location,
             });
         }
         self.element_content(element, node);
+        if self.markers.len() > markers {
+            // No paragraph or display of the element took its marker.
+            self.report_once(
+                eco_format!("marker-not-set:{:?}", element.location),
+                Diagnostic::warning(
+                    element.span,
+                    "this element's marker is not set, as it holds no text or display to \
+                     start",
+                )
+                .with_hint("start it with text, or hide the marker with `marker: none`"),
+            );
+        }
         self.markers.truncate(markers);
         self.owner = owner;
         self.close();
+    }
+
+    /// The paragraph of the markers waiting for one, beside a display: in
+    /// no block, as a display's block holds no paragraphs, and the content
+    /// of the innermost marker's element, in its style, whose number it is
+    /// (SPEC §4.5, D-326-1). `None` when no marker waits.
+    fn lead(&mut self) -> Option<usize> {
+        let owner = self.markers.last()?;
+        let (style, span, location) = (owner.style.clone(), owner.span, owner.location);
+        let builder = self.builder();
+        let blocks = std::mem::take(&mut self.blocks);
+        let index = self.pending.len();
+        self.finish_as(builder, &style, span, location);
+        self.blocks = blocks;
+        (self.pending.len() > index).then_some(index)
     }
 
     /// Makes an element the owner of text without a node of its own,
@@ -603,8 +639,10 @@ impl Collector<'_> {
                 .any(|(_, value)| matches!(value, eval::Value::Content(_)))
         {
             // A display is laid out by math layout, as its block's
-            // content; images are reported as such.
-            if self.formula(element, node, true).is_some() {
+            // content; images are reported as such. The markers waiting
+            // for a paragraph go beside it.
+            if let Some(index) = self.formula(element, node, true) {
+                self.maths[index].lead = self.lead();
                 return;
             }
             // An image where blocks stand is a paragraph of its own.
@@ -668,6 +706,7 @@ impl Collector<'_> {
                         text: marker.text.clone(),
                         style: part_node.style.clone(),
                         span: element.span,
+                        location: element.location,
                     });
                 }
                 self.content(content, &part_node.style, element, &mut part_kids);
@@ -1024,6 +1063,7 @@ impl Collector<'_> {
             span: element.span,
             location: node.location,
             display,
+            lead: None,
         });
         Some(self.maths.len() - 1)
     }
@@ -1082,7 +1122,19 @@ impl Collector<'_> {
 
     /// Turns a collected paragraph into segments, with fonts by fallback.
     /// `style` is that of the element whose content it is, `owner`.
-    fn finish(&mut self, mut builder: Builder, style: &ComputedStyle, owner: &Element) {
+    fn finish(&mut self, builder: Builder, style: &ComputedStyle, owner: &Element) {
+        self.finish_as(builder, style, owner.span, owner.location);
+    }
+
+    /// As [`Self::finish`], for the content of the element instance at
+    /// `location`, written at `span`.
+    fn finish_as(
+        &mut self,
+        mut builder: Builder,
+        style: &ComputedStyle,
+        span: Span,
+        location: Location,
+    ) {
         builder.flush_quote(None);
         if builder.text.is_empty() {
             return;
@@ -1135,8 +1187,8 @@ impl Collector<'_> {
                 segments,
             },
             style: style.clone(),
-            span: owner.span,
-            location: owner.location,
+            span,
+            location,
             segments: styles,
             sources: builder.sources.into_iter().collect(),
             objects: builder.objects.into_iter().collect(),

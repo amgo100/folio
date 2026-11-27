@@ -79,3 +79,6 @@ Line 27 of the filler that brings the next figure to the foot of the page.
 #figure[#image("assets/wave.png", alt: "A transverse wave", width: 60pt)][A figure that would end the page; its caption is kept with it]
 
 The text after the figure.
+
++ An item with text.
++ $ F = m a $
