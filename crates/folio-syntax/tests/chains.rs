@@ -7,9 +7,9 @@ use folio_syntax::{Source, SyntaxNode};
 /// The stack of the compile threads, the watcher and the language server.
 const STACK: usize = 2 * 1024 * 1024;
 
-/// How tall a tree may get: a few levels per level of the parser's depth
-/// limit (256).
-const MAX_HEIGHT: usize = 3 * 256;
+/// How tall a tree may get: the chain limit (4 × 256) and a few levels per
+/// level of the parser's depth limit (256) around it.
+const MAX_HEIGHT: usize = 4 * 256 + 3 * 256;
 
 /// Runs `f` on a thread with a 2 MiB stack.
 fn small_stack(f: impl FnOnce() + Send + 'static) {
@@ -126,10 +126,10 @@ fn long_code_chains_give_one_error() {
                 "{op:?} chains of 100,000"
             );
         }
-        // A right-associative chain recurses to the limit first: one error
-        // there and one for the rest.
+        // A right-associative chain recurses to the depth limit, where the
+        // rest of it becomes the one error.
         let text = format!("#{{x{}}}\n", "+=x".repeat(100_000));
-        assert_eq!(check(text), ["maximum parsing depth exceeded"; 2]);
+        assert_eq!(check(text), ["maximum parsing depth exceeded"]);
     });
 }
 
@@ -206,4 +206,59 @@ fn reparsing_in_the_last_operand_matches_a_full_parse() {
             assert!(source.root().spanless_eq(fresh.root()), "{op:?} × {n}");
         }
     }
+}
+
+#[test]
+fn a_chain_on_a_deeply_nested_operand_parses() {
+    // Nesting within the depth limit makes operands up to about 766 levels
+    // tall; a short chain on one is no error.
+    for text in [
+        format!("${}x{}/y/z$\n", "(".repeat(130), ")".repeat(130)),
+        format!("#f({}x{}).a.b + 1\n", "f(".repeat(250), ")".repeat(250)),
+    ] {
+        assert_eq!(check(text), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn code_in_a_bracketed_operand_is_parsed_as_code() {
+    small_stack(|| {
+        for inner in ["#[a $y$ b]", "#[it's \"so]", "#f b"] {
+            let text = format!("A ${}({inner}) + c$ and *strong* text.\n", "x^".repeat(300));
+            let source = Source::detached(text);
+            assert_eq!(
+                errors(&source),
+                ["maximum parsing depth exceeded"],
+                "{inner:?}"
+            );
+            let root = source.root();
+            assert_eq!(
+                root.children()
+                    .filter(|n| n.kind() == folio_syntax::SyntaxKind::Equation)
+                    .count(),
+                1,
+                "{inner:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn the_error_leaves_looser_operators_to_the_enclosing_expression() {
+    small_stack(|| {
+        // The `^` chain stops at the depth limit; `/y` belongs to the fraction
+        // around it, which takes it without an error.
+        let text = format!("${}x/y$\n", "x^".repeat(300));
+        let source = Source::detached(text);
+        assert_eq!(errors(&source), ["maximum parsing depth exceeded"]);
+        let mut stack = vec![source.root()];
+        let mut error = None;
+        while let Some(node) = stack.pop() {
+            if node.kind() == folio_syntax::SyntaxKind::Error {
+                error = Some(node.leaf_text().to_string());
+            }
+            stack.extend(node.children());
+        }
+        assert!(error.unwrap().ends_with("^x"));
+    });
 }
