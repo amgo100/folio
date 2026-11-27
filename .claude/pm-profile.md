@@ -26,12 +26,14 @@ In the **folio** environment these are already installed. Elsewhere, run them fi
 - For the PDF/UA check: Java, Poppler's `pdftotext`, and veraPDF 1.28.2 (`org.verapdf.apps:greenfield-apps` from Maven Central, run through `org.verapdf.apps.GreenfieldCliWrapper`).
 
 ## gate
-- commands, in order, on the final head commit:
-  1. `scripts/check.sh`, which must end with "all checks passed" (iterate with `scripts/check.sh --fast` and narrow `cargo test -p <crate> --test <name>`; the full script before every push).
-  2. `scripts/bench.sh` when the change may affect performance (fails above 3%); `scripts/bench.sh --wall` for preview and typing figures.
+- commands, in order, on the final head commit of the PR's own changes:
+  1. `scripts/check.sh`, which must end with "all checks passed" (iterate with `scripts/check.sh --fast` and narrow `cargo test -p <crate> --test <name>`). Never push a commit of the PR's own changes before it passes.
+  2. `scripts/bench.sh` only when the change touches a measured hot path (the compile stages, shaping, layout, the preview path, the PDF writer); never for changes to docs, the spec, tests or tooling only (fails above 3%). `scripts/bench.sh --wall` for preview and typing figures when the preview path changes.
   3. `python tests/pdf/corpus.py` after changes to `folio-pdf` or to what layout draws (veraPDF is on `PATH` in the folio environment).
-  4. `scripts/fuzz.sh 60` for changes to the parser, the style matcher or a fuzz target.
-- docsOnly: none. Spec-only and documentation changes run the full gate too (CLAUDE.md).
+  4. Fuzzing only for the targets the change touches, 60 s each: `cargo +nightly fuzz run <target> -- -max_total_time=60` (the parser, the style matcher, a fuzz target's own code). `scripts/fuzz.sh 60` (every target) only when the change reaches most of them.
+- mergeOnly: after merging the default branch into a PR's branch, when the manager's test merge was clean and the merge brings in nothing the branch's own changes touch, run `scripts/check.sh --fast` plus the branch's own affected tests instead of the full gate; say so in the PR body. A merge that conflicts, or that touches the branch's files, runs the full gate.
+- build: keep incremental builds on; set `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and `CARGO_PROFILE_TEST_DEBUG=line-tables-only` (they do not change output), and before each full gate delete `target/debug/incremental` and check `df -h .`. Delete `target/release` after benchmarks and `fuzz/target` after fuzzing.
+- docsOnly: none. Spec-only and documentation changes run `scripts/check.sh` too (CLAUDE.md), but not the benchmarks or fuzzing.
 - codeReview: yes. CLAUDE.md requires `/code-review` on the branch's diff against its base before the PR is opened and before every later push.
 - ciRuns: no. There is no hosted CI. The PR body says which gate commands passed on which commit.
 
@@ -53,7 +55,7 @@ In the **folio** environment these are already installed. Elsewhere, run them fi
 - `fuzz/Cargo.toml`, `crates/folio-testkit/src/fuzz.rs`: every fuzz target is listed in both.
 - `docs/SPEC.md`: owned per section (§n.m). Two unfinished items never edit the same section.
 - `CLAUDE.md`: its project-status paragraph is one physical line, so any two branches that edit it conflict. Workers do not edit it. They put the proposed wording in the PR body, and one consolidating PR applies it.
-- `tests/golden/layout/`, `crates/folio-text/tests/golden/`, `crates/folio/tests/determinism/digests.txt`: one item that changes output at a time. Every other item must leave them unchanged and reports `blocked` if they move.
+- `tests/golden/layout/`, `crates/folio-text/tests/golden/`, `crates/folio/tests/determinism/digests.txt`: items that change output may bless them in parallel. They are regenerated, never hand-merged: whichever PR merges second merges the default branch in, takes the default branch's version of every conflicting golden file, re-runs `scripts/bless.sh` (and `FOLIO_BLESS=1 cargo test -p folio --test determinism`), reviews that the diff is only its own change, and re-runs the gate. The PR body lists which golden files and digests moved and why.
 - `crates/folio-testkit/src/refdoc.rs`: changing it changes every benchmark's workload.
 - `crates/folio-core/src/style/tree.rs`, `style/rules.rs`: the styled tree, matching and the cascade.
 - `crates/folio-core/src/text.rs`: collection, pairing by location, shaping; touched by most text, layout and diagnostics work.
