@@ -27,8 +27,9 @@
 //!   the element's first paragraph, or in its caption.
 //! - **References**: each `@label` as the text it shows, by its target's
 //!   `ref-format`: the target's reference word in the reference's language
-//!   ([`crate::locale`]) and its number, trimmed of the pattern's text
-//!   before and after (`Figure 3`, `Section 2.1`). An element without
+//!   ([`crate::locale`]) and its number in the pattern it was numbered
+//!   with (an item's own, or its enum's), trimmed of the pattern's text
+//!   before and after (`Figure 3`, `Section 2.1`, `b` for an item `(b)`). An element without
 //!   `numbering` still counts, and a reference to it shows the values as
 //!   `1.1` would. A reference to a label that no shown element has, or to
 //!   an element without a counter, is a warning, and shows [`UNRESOLVED`].
@@ -439,6 +440,7 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
         out: Resolution::default(),
         refs: Vec::new(),
         styles: HashMap::new(),
+        patterns: HashMap::new(),
     };
     walk.out.footnotes_per_page = page_resets(db, build, styled);
     walk.element(&doc.root, &styled.root);
@@ -585,6 +587,10 @@ struct Walk<'a> {
     refs: Vec<PendingRef>,
     /// The style of each target, for its `ref-format`.
     styles: HashMap<Location, ComputedStyle>,
+    /// The pattern each element instance was numbered with, where it has
+    /// one: its own `numbering`, or, for an item, its enum's. A reference
+    /// shows the number as the target does.
+    patterns: HashMap<Location, Pattern>,
 }
 
 /// The counters that components' elements declare `within` another
@@ -774,6 +780,9 @@ impl Walk<'_> {
                 line: Some(line),
             };
             let number = pattern.as_ref().map(|p| p.format(&values));
+            if let Some(pattern) = &pattern {
+                self.patterns.insert(element.location, pattern.clone());
+            }
             self.out.numbers.push(Number {
                 target,
                 counter: name.clone(),
@@ -795,6 +804,9 @@ impl Walk<'_> {
         pattern: Option<&Pattern>,
     ) {
         let number = pattern.map(|p| p.format(&values));
+        if let Some(pattern) = pattern {
+            self.patterns.insert(element.location, pattern.clone());
+        }
         self.out.numbers.push(Number {
             target: Target::element(element.location),
             counter,
@@ -983,10 +995,12 @@ impl Walk<'_> {
             return UNRESOLVED.into();
         };
         let style = self.styles.get(&labelled.target.location).cloned();
-        let pattern = style.as_ref().and_then(|s| self.pattern(s));
+        // The pattern the target was numbered with: an item's own, or its
+        // enum's (#325).
+        let pattern = self.patterns.get(&labelled.target.location);
         // An element without `numbering` still has its counter's values:
         // the reference shows them as `1.1` would.
-        let shown = match &pattern {
+        let shown = match pattern {
             Some(pattern) => pattern.format_trimmed(&number.values),
             None => Pattern::parse("1.1").format(&number.values),
         };

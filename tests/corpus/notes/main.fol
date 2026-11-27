@@ -30,10 +30,14 @@ A progressive wave transfers energy, but not matter, from one place to another. 
 
 To measure the speed of sound in air, follow these steps:
 
-+ set up a loudspeaker and two microphones connected to an oscilloscope;
-+ move one microphone until the two traces are in phase again;
++ set up a loudspeaker and two microphones connected to an oscilloscope; <step:setup>
++ move one microphone until the two traces are in phase again:
+  + watch the traces as the microphone moves away; <step:watch>
+  + stop where the peaks first line up again; <step:stop>
 + record the distance moved, which is one wavelength;
 + multiply the wavelength by the frequency of the signal generator.
+
+If the peaks never line up in part (@step:stop[]) of step 2, check the connections made in step @step:setup[]; the traces should move apart as in part (@step:watch[]).
 
 The calculation can be checked with a short program:
 

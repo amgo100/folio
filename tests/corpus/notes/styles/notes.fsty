@@ -5,3 +5,5 @@ heading[level=1] { font-size: 15pt; }
 heading[level=2] { font-size: 12.5pt; }
 raw { font: "Source Code Pro"; font-size: 9pt; }
 figure { space-before: 8pt; space-after: 8pt; }
+enum { numbering: "1."; }
+enum enum { numbering: "(a)"; }

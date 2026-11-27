@@ -407,3 +407,30 @@ fn the_resolution_is_public() {
     assert_eq!(reference.text, "Figure\u{a0}1");
     assert_eq!(resolution.reference(reference.location), Some(reference));
 }
+
+#[test]
+fn references_to_items_show_the_pattern_they_were_numbered_with() {
+    // An item takes its enum's pattern, and a reference to it shows the
+    // number as the item does, trimmed of the pattern's brackets (#325).
+    let world = world(
+        "en",
+        "enum { numbering: \"(a)\"; }\n\
+         enum enum { numbering: \"(i)\"; }\n\
+         enum-item:nth(4) { numbering: \"A.\"; }\n",
+        "+ One <q1>\n+ Two\n  + Sub a <sa>\n  + Sub b <sb>\n+ Three <q3>\n+ Four <q4>\n\n\
+         See @q1, @q3, @sa, @sb, @q3[part] and @q4.\n",
+    );
+    assert_eq!(
+        paragraphs(&world),
+        [
+            "(a)~One",
+            "(b)~Two",
+            "(i)~Sub a",
+            "(ii)~Sub b",
+            "(c)~Three",
+            "D.~Four",
+            "See a, c, i, ii, part~c and D.",
+        ]
+    );
+    assert!(messages(&world).is_empty(), "{:?}", messages(&world));
+}
