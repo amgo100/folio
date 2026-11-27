@@ -100,11 +100,27 @@ impl Value {
     /// `"text"`, `(1, 2)`, `12pt`.
     pub fn repr(&self) -> EcoString {
         let mut out = EcoString::new();
-        self.write_repr(&mut out);
+        let _ = self.write_repr(&mut out, usize::MAX);
         out
     }
 
-    fn write_repr(&self, out: &mut EcoString) {
+    /// The value as [`Value::repr`] writes it, or [`TooLong`] as soon as it
+    /// is longer than `limit` bytes.
+    ///
+    /// A value can hold one part many times, as `(a, a)` does, so its
+    /// representation can be exponentially longer than the memory it takes.
+    /// Every part writes at least one byte, so the work this does is bounded
+    /// by the limit too.
+    pub(crate) fn repr_within(&self, limit: usize) -> Result<EcoString, TooLong> {
+        let mut out = EcoString::new();
+        self.write_repr(&mut out, limit)?;
+        Ok(out)
+    }
+
+    pub(crate) fn write_repr(&self, out: &mut EcoString, limit: usize) -> Result<(), TooLong> {
+        if out.len() > limit {
+            return Err(TooLong);
+        }
         match self {
             Self::None => out.push_str("none"),
             Self::Auto => out.push_str("auto"),
@@ -126,14 +142,14 @@ impl Value {
             Self::Str(s) => write!(out, "{s:?}").unwrap(),
             Self::Label(l) => write!(out, "<{l}>").unwrap(),
             Self::Date(d) => write!(out, "date({d})").unwrap(),
-            Self::Content(c) => out.push_str(&c.repr()),
+            Self::Content(c) => c.write_repr(out, limit)?,
             Self::Array(items) => {
                 out.push('(');
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    item.write_repr(out);
+                    item.write_repr(out, limit)?;
                 }
                 if items.len() == 1 {
                     out.push(',');
@@ -143,7 +159,7 @@ impl Value {
             Self::Dict(dict) => {
                 if dict.is_empty() {
                     out.push_str("(:)");
-                    return;
+                    return Ok(());
                 }
                 out.push('(');
                 for (i, (key, value)) in dict.iter().enumerate() {
@@ -156,7 +172,7 @@ impl Value {
                         write!(out, "{key:?}").unwrap();
                     }
                     out.push_str(": ");
-                    value.write_repr(out);
+                    value.write_repr(out, limit)?;
                 }
                 out.push(')');
             }
@@ -170,13 +186,27 @@ impl Value {
                     if let Some(name) = &arg.name {
                         write!(out, "{name}: ").unwrap();
                     }
-                    arg.value.write_repr(out);
+                    arg.value.write_repr(out, limit)?;
                 }
                 out.push(')');
             }
             Self::Module(m) => write!(out, "<module {}>", m.name()).unwrap(),
-            Self::Math(formula) => write!(out, "formula({})", formula.repr()).unwrap(),
+            Self::Math(formula) => {
+                // Every node of the formula writes at least one byte.
+                let size = formula
+                    .lines()
+                    .iter()
+                    .fold(0u64, |size, line| size.saturating_add(line.row.size()));
+                if size > (limit.saturating_sub(out.len())) as u64 {
+                    return Err(TooLong);
+                }
+                write!(out, "formula({})", formula.repr()).unwrap()
+            }
         }
+        if out.len() > limit {
+            return Err(TooLong);
+        }
+        Ok(())
     }
 
     /// How deeply the value nests (SPEC §4.4): `0` for a value that holds
@@ -201,21 +231,38 @@ impl Value {
 
     /// The number of bytes a value takes, as the memory limit counts them
     /// (SPEC §4.4): the length of a string, and a fixed size per item of an
-    /// array, dictionary or content sequence. Items are not counted
-    /// recursively, because they are shared rather than copied.
+    /// array ([`ITEM`]) or of a dictionary, content sequence or arguments
+    /// ([`NODE`]). Items are not counted recursively, because they are
+    /// shared rather than copied.
     pub(crate) fn shallow_size(&self) -> u64 {
-        const ITEM: u64 = 16;
-        let len = match self {
+        let (len, size) = match self {
             Self::Str(s) => return s.len() as u64,
-            Self::Array(a) => a.len(),
-            Self::Dict(d) => d.len(),
-            Self::Content(c) => c.len(),
-            Self::Args(a) => a.items.len(),
-            _ => 1,
+            Self::Array(a) => (a.len(), ITEM),
+            Self::Dict(d) => (d.len(), NODE),
+            Self::Content(c) => (c.len(), NODE),
+            Self::Args(a) => (a.items.len(), NODE),
+            _ => (1, ITEM),
         };
-        len as u64 * ITEM
+        len as u64 * size
     }
 }
+
+/// The bytes an item of an array counts against the memory limit
+/// ([`Value::shallow_size`]): at least what a value takes.
+///
+/// The sizes are fixed rather than measured, so that whether a document is
+/// within the limit does not depend on the platform.
+pub(crate) const ITEM: u64 = 64;
+
+/// The bytes a node of content, a pair of a dictionary or an argument
+/// counts against the memory limit ([`Value::shallow_size`]): at least what
+/// each takes.
+pub(crate) const NODE: u64 = 128;
+
+/// A representation that would be longer than its limit
+/// ([`Value::repr_within`]).
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub(crate) struct TooLong;
 
 /// A cached depth, which equality and hashing ignore: it follows from the
 /// value that holds it.
@@ -311,6 +358,8 @@ pub(crate) enum Equality {
     Strict,
     /// The language's `==`, which compares `1` and `1.0` as equal.
     Loose,
+    /// The order of `<` and sorting: the pairs it found equal.
+    Order,
 }
 
 /// The comparisons running on a thread, and the pairs of containers they
@@ -1484,6 +1533,19 @@ pub struct Arg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sizes the memory limit counts are at least what the values take
+    /// on a 64-bit platform, so that the limit bounds what is allocated.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn counted_sizes_bound_the_real_ones() {
+        use std::mem::size_of;
+        assert!(size_of::<Value>() as u64 <= ITEM);
+        assert!(size_of::<Arg>() as u64 <= NODE);
+        assert!(size_of::<super::super::content::Node>() as u64 <= NODE);
+        assert!(size_of::<(EcoString, Value)>() as u64 + 32 <= NODE);
+        assert!(size_of::<folio_math::Node>() as u64 <= 64);
+    }
 
     /// An array nested `depth` deep: `((..),)`.
     fn nested(depth: u32) -> Value {

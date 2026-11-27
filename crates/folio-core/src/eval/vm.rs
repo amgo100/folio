@@ -16,7 +16,8 @@ use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::library;
 use super::ops::{self, a_type};
 use super::value::{
-    Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module, Scope, Value,
+    Angle, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, ITEM, Length, Module, NODE,
+    Scope, Value,
 };
 use super::{Cost, Limits, MAX_NESTING, Memo, Mode, eval_file_for, globals, reachable, today};
 use crate::component::Reason;
@@ -95,6 +96,10 @@ pub(crate) struct Vm<'a> {
 
 /// What an error marker shows (SPEC §12.2).
 const MARKER: &str = "[error]";
+
+/// The bytes a call of a closure counts against the memory limit: at least
+/// what the memo tables keep for it.
+const CALL: u64 = 1024;
 
 /// Whether an element is an error marker.
 fn is_marker(element: &super::content::Element) -> bool {
@@ -184,6 +189,53 @@ impl<'a> Vm<'a> {
             return Err(memory_exceeded(span, self.limits).into());
         }
         Ok(())
+    }
+
+    /// The bytes that may still be allocated before the memory limit.
+    fn remaining(&self) -> u64 {
+        self.limits.memory.saturating_sub(self.cost.bytes)
+    }
+
+    /// A value's representation ([`Value::repr`]), counted against the
+    /// memory limit. A value that holds one part many times can have a
+    /// representation far longer than the memory it takes, so writing it
+    /// stops as soon as it would exceed the limit.
+    pub(crate) fn repr(&mut self, value: &Value, span: Span) -> EvalResult<EcoString> {
+        // The text is written into a buffer that doubles as it grows, so
+        // writing it takes up to three times its length for a moment.
+        let limit = usize::try_from(self.remaining() / 3).unwrap_or(usize::MAX);
+        let Ok(repr) = value.repr_within(limit) else {
+            return Err(memory_exceeded(span, self.limits).into());
+        };
+        self.alloc(repr.len() as u64, span)?;
+        Ok(repr)
+    }
+
+    /// A value shown in markup: content as is, strings as text, `none` as
+    /// nothing, and anything else as its code representation, counted
+    /// against the memory limit. Text of the content that records no node,
+    /// such as a string joined to content with `+`, is the text of the
+    /// expression that shows it.
+    fn display(&mut self, value: Value, span: Span) -> EvalResult<Content> {
+        Ok(match value {
+            Value::None => Content::new(),
+            Value::Content(content) => content
+                .nodes()
+                .iter()
+                .map(|node| match node {
+                    Node::Text { text, span: own } if own.is_detached() => Node::Text {
+                        text: text.clone(),
+                        span,
+                    },
+                    other => other.clone(),
+                })
+                .collect(),
+            Value::Str(text) => Content::node(Node::Text { text, span }),
+            other => Content::node(Node::Text {
+                text: self.repr(&other, span)?,
+                span,
+            }),
+        })
     }
 
     /// Counts what a call or import cost against the limits.
@@ -346,6 +398,8 @@ impl<'a> Vm<'a> {
                 Ok(content) => content,
                 Err(stop) => self.recover_from(stop, expr)?,
             };
+            // Content placed here is copied node by node.
+            self.alloc(NODE * content.len() as u64, expr.span())?;
             out.extend(content);
             if self.flow.is_some() {
                 break;
@@ -564,7 +618,7 @@ impl<'a> Vm<'a> {
                 match value? {
                     // A formula shows as an inline equation.
                     Value::Math(formula) => self.math_content(formula, false, span)?,
-                    value => display(value, span),
+                    value => self.display(value, span)?,
                 }
             }
         })
@@ -883,10 +937,17 @@ impl<'a> Vm<'a> {
         let mut out = Array::new();
         for item in array.items() {
             match item {
-                ast::ArrayItem::Pos(expr) => out.push(self.expr(expr)?),
+                ast::ArrayItem::Pos(expr) => {
+                    let value = self.expr(expr)?;
+                    self.alloc(ITEM, expr.span())?;
+                    out.push(value);
+                }
                 ast::ArrayItem::Spread(spread) => match self.expr(spread.expr())? {
                     Value::None => {}
-                    Value::Array(items) => out.extend(items),
+                    Value::Array(items) => {
+                        self.alloc(ITEM * items.len() as u64, spread.span())?;
+                        out.extend(items);
+                    }
                     v => bail!(
                         spread.span(),
                         "cannot spread {} into an array",
@@ -895,10 +956,6 @@ impl<'a> Vm<'a> {
                 },
             }
         }
-        self.alloc(
-            Value::Array(Array::new()).shallow_size() * out.len() as u64,
-            array.span(),
-        )?;
         Ok(Value::Array(out))
     }
 
@@ -937,7 +994,7 @@ impl<'a> Vm<'a> {
                 },
             }
         }
-        self.alloc(16 * out.len() as u64, dict.span())?;
+        self.alloc(NODE * out.len() as u64, dict.span())?;
         Ok(Value::Dict(out))
     }
 
@@ -1196,7 +1253,7 @@ impl<'a> Vm<'a> {
                 // copy all of it.
                 drop(target);
                 let args = self.args(call.args(), span, false)?;
-                self.alloc(16, span)?;
+                self.alloc(NODE, span)?;
                 // What the method adds is at most as deep as its arguments.
                 let incoming = args.depth();
                 return self.mutate(access.target(), false, incoming, span, |target| {
@@ -1297,6 +1354,7 @@ impl<'a> Vm<'a> {
                 ast::Arg::Spread(spread) => match self.expr(spread.expr())? {
                     Value::None => {}
                     Value::Array(values) => {
+                        self.alloc(NODE * values.len() as u64, spread.span())?;
                         items.extend(values.into_iter().map(|value| Arg {
                             span: spread.span(),
                             name: None,
@@ -1305,6 +1363,7 @@ impl<'a> Vm<'a> {
                         }));
                     }
                     Value::Dict(dict) => {
+                        self.alloc(NODE * dict.len() as u64, spread.span())?;
                         items.extend(dict.iter().map(|(key, value)| Arg {
                             span: spread.span(),
                             name: Some(key.clone()),
@@ -1312,7 +1371,10 @@ impl<'a> Vm<'a> {
                             value: value.clone(),
                         }));
                     }
-                    Value::Args(args) => items.extend(args.items),
+                    Value::Args(args) => {
+                        self.alloc(NODE * args.items.len() as u64, spread.span())?;
+                        items.extend(args.items);
+                    }
                     v => bail!(
                         spread.span(),
                         "cannot spread {} into arguments",
@@ -1362,6 +1424,9 @@ impl<'a> Vm<'a> {
     /// again with them, so that its errors point at the arguments.
     fn call_closure(&mut self, closure: Closure, args: Args, span: Span) -> EvalResult<Value> {
         let depth = self.deeper(span)?;
+        // The memo tables keep every call: its arguments, its result and
+        // what it read. Each call counts that, whether it runs or is reused.
+        self.alloc(CALL, span)?;
         let key = self.depth_key(depth, false);
         let name = closure.name().cloned();
         let (db, project, mode) = (self.db, self.project, self.mode.clone());
@@ -1876,32 +1941,6 @@ fn labelled(mut content: Content, label: Option<ast::Label<'_>>) -> Content {
         element.label = Some(label.get().into());
     }
     content
-}
-
-/// A value shown in markup: content as is, strings as text, `none` as
-/// nothing, and anything else as its code representation. Text of the
-/// content that records no node, such as a string joined to content with
-/// `+`, is the text of the expression that shows it.
-fn display(value: Value, span: Span) -> Content {
-    match value {
-        Value::None => Content::new(),
-        Value::Content(content) => content
-            .nodes()
-            .iter()
-            .map(|node| match node {
-                Node::Text { text, span: own } if own.is_detached() => Node::Text {
-                    text: text.clone(),
-                    span,
-                },
-                other => other.clone(),
-            })
-            .collect(),
-        Value::Str(text) => Content::node(Node::Text { text, span }),
-        other => Content::node(Node::Text {
-            text: other.repr(),
-            span,
-        }),
-    }
 }
 
 impl Vm<'_> {

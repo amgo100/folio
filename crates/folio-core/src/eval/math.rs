@@ -33,8 +33,20 @@ use super::ops::a_type;
 use super::value::{Arg, Args, Value};
 use super::vm::{Vm, nesting_exceeded};
 
-/// The bytes a node of the math tree counts against the memory limit.
-const NODE: u64 = 16;
+/// The bytes a node of the math tree counts against the memory limit: at
+/// least what a node and its share of the row that holds it take.
+const NODE: u64 = 64;
+
+/// The most nodes a formula may hold, counting a part as often as it
+/// occurs (SPEC §4.4), as [`Row::size`] counts them.
+///
+/// A formula placed in another is shared, not copied, so a script that
+/// places a formula twice in each of its steps doubles the formula's tree
+/// at little cost. Text collection and layout walk the whole tree, at
+/// about a microsecond a node, so the limit keeps one formula's layout
+/// within a tenth of a second. A page of display maths holds a few hundred
+/// nodes.
+pub(crate) const MAX_FORMULA_NODES: u64 = 100_000;
 
 /// Where a math expression stands, which decides whether it may hold an
 /// alignment point.
@@ -94,7 +106,11 @@ impl Vm<'_> {
                 span: start.unwrap_or(span),
             });
         }
-        Ok(Formula::new(lines))
+        let formula = Formula::new(lines);
+        if formula_size(&formula) > MAX_FORMULA_NODES {
+            return Err(too_large(span).into());
+        }
+        Ok(formula)
     }
 
     /// Reads a LaTeX equation's body into a formula (SPEC §8.1). Its nodes
@@ -133,10 +149,10 @@ impl Vm<'_> {
         if formula.depth() > MAX_NESTING {
             return Err(nesting_exceeded(body.span(), "math is").into());
         }
-        let size = formula
-            .lines()
-            .iter()
-            .fold(0u64, |size, line| size.saturating_add(line.row.size()));
+        let size = formula_size(&formula);
+        if size > MAX_FORMULA_NODES {
+            return Err(too_large(body.span()).into());
+        }
         self.alloc(size.saturating_mul(NODE), span)?;
         Ok(formula)
     }
@@ -157,12 +173,16 @@ impl Vm<'_> {
         Ok(Content::node(Node::Element(element)))
     }
 
-    /// A row of nodes, which may nest at most [`MAX_NESTING`] deep.
+    /// A row of nodes, which may nest at most [`MAX_NESTING`] deep and hold
+    /// at most [`MAX_FORMULA_NODES`] nodes.
     fn row_of(&mut self, nodes: Vec<math::Node>, span: Span) -> EvalResult<Row> {
         self.alloc(nodes.len() as u64 * NODE, span)?;
         let row = Row::new(nodes);
         if row.depth() > MAX_NESTING {
             return Err(nesting_exceeded(span, "math is").into());
+        }
+        if row.size() > MAX_FORMULA_NODES {
+            return Err(too_large(span).into());
         }
         Ok(row)
     }
@@ -913,10 +933,32 @@ impl Vm<'_> {
                 .with_hint("this formula holds an alignment point `&`")
                 .into());
         }
-        self.alloc(row.nodes().len() as u64 * NODE, span)?;
+        // The row is shared, not copied, but the stages after evaluation
+        // walk every node of it, each time it is placed.
+        if row.size() > MAX_FORMULA_NODES {
+            return Err(too_large(span).into());
+        }
+        self.alloc(row.size().saturating_mul(NODE), span)?;
         out.extend(row.nodes().iter().cloned());
         Ok(())
     }
+}
+
+/// The number of nodes in a formula's lines ([`Row::size`]).
+fn formula_size(formula: &Formula) -> u64 {
+    formula
+        .lines()
+        .iter()
+        .fold(0u64, |size, line| size.saturating_add(line.row.size()))
+}
+
+/// A formula of more than [`MAX_FORMULA_NODES`] nodes.
+fn too_large(span: Span) -> EvalError {
+    EvalError::new(
+        span,
+        eco_format!("a formula holds more than {MAX_FORMULA_NODES} nodes"),
+    )
+    .with_hint("a formula placed in another counts as often as it is placed")
 }
 
 /// The part of a LaTeX formula an error is about: its range, or, for an
