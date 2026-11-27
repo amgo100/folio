@@ -378,10 +378,14 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
     let mut broadcast = shared.broadcast.subscribe();
     let mut known = Known::new();
     let mut visible: Vec<usize> = Vec::new();
-    let id = shared.visible.join();
+    // Forgets what the client shows however its task ends.
+    let seen = Seen {
+        visible: shared.visible.clone(),
+        id: shared.visible.join(),
+    };
+    let id = seen.id;
     let current = published.borrow_and_update().clone();
     if send(&mut ws, &current, &mut known, &visible).await.is_err() {
-        shared.visible.leave(id);
         return;
     }
     loop {
@@ -428,8 +432,19 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
             _ = stop.changed() => break,
         }
     }
-    shared.visible.leave(id);
     let _ = ws.close(None).await;
+}
+
+/// A client's record of the pages it shows, forgotten when it is dropped.
+struct Seen {
+    visible: Arc<Visible>,
+    id: u64,
+}
+
+impl Drop for Seen {
+    fn drop(&mut self) {
+        self.visible.leave(self.id);
+    }
 }
 
 /// Answers a click on a page with the source it shows, and tells the hook
@@ -528,6 +543,7 @@ struct UpdateMessage<'a> {
     diagnostics: &'a [folio::diag::Resolved],
     overlays: &'a [Overlay],
     fonts: u64,
+    partial: bool,
 }
 
 /// Sends a client what it does not have of a revision: the `update`
@@ -573,6 +589,7 @@ async fn send(
         diagnostics: &published.diagnostics,
         overlays: &published.overlays,
         fonts: published.font_generation,
+        partial: published.partial,
     };
     let text = serde_json::to_string(&update).expect("the update serialises");
     ws.feed(Message::text(text)).await?;

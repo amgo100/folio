@@ -509,7 +509,18 @@ fn build_pages(
         fonts,
         master,
     } = *input;
-    let now = cache.tick();
+    // The first pages are laid out on the clock of the `pages` call before
+    // them, and forget nothing, so that they do not age the pages that only
+    // the `pages` calls ask for.
+    let now = match last {
+        None => cache.tick(),
+        Some(_) => cache.now(),
+    };
+    let sweep = |now| {
+        if last.is_none() {
+            cache.sweep(now);
+        }
+    };
     let caches = Caches {
         cache: layout_cache,
         shared: &cache.shared,
@@ -570,7 +581,7 @@ fn build_pages(
         // The cache still forgets what it would have when `check` unwinds.
         let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut *check));
         if let Err(cancelled) = checked {
-            cache.sweep(now);
+            sweep(now);
             std::panic::resume_unwind(cancelled);
         }
         // `break-before: odd-page` and `even-page` pad with a blank page.
@@ -619,7 +630,7 @@ fn build_pages(
         };
         queue = out.queue.clone();
     }
-    cache.sweep(now);
+    sweep(now);
     let pages = Pages {
         master,
         pages,
@@ -1611,6 +1622,11 @@ impl PageCache {
     /// Starts a call of `pages`.
     fn tick(&self) -> u64 {
         self.clock.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// The clock of the last call of `pages`.
+    fn now(&self) -> u64 {
+        self.clock.load(Ordering::Relaxed)
     }
 
     /// Forgets the pages that no call has asked for in a while.

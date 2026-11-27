@@ -49,12 +49,12 @@
 //! | `/glyphs/<n>?size=<px>&g=<id>.<sub>,..` | Glyphs of font `n` rasterised at `px` pixels to the em (at most 2048), for a client that draws display lists itself (SPEC §12.4); see below |
 //!
 //! On the websocket, the server sends, for every revision the client has
-//! not seen:
+//! not seen, or the rest of one whose first pages it was sent:
 //!
 //! 1. a text message, a JSON object `{"type": "update", "protocol": 1,
 //!    "revision": r, "variant": v | null, "target": "pdf", "pages": n,
 //!    "lists": [..], "spans": [..], "banner": text | null, "diagnostics":
-//!    [..], "overlays": [..], "fonts": g}`: `pages` is how many pages the document has now (pages the
+//!    [..], "overlays": [..], "fonts": g, "partial": p}`: `pages` is how many pages the document has now (pages the
 //!    client had beyond it are gone), `lists` the indices of the pages
 //!    whose display lists follow, `spans` those whose span maps follow,
 //!    `banner` why the pages shown are not of this revision, if they are
@@ -66,7 +66,8 @@
 //!    in points from the page's top-left corner, for the first hundred
 //!    diagnostics, and `fonts` a number that changes whenever the font ids
 //!    of glyph runs may name other fonts, when a client drops the glyphs it
-//!    has. The pages are sent before they are indexed: the overlays follow
+//!    has, and `partial` whether only the first pages are of this
+//!    revision (see below). The pages are sent before they are indexed: the overlays follow
 //!    in a second `update` of the same revision, which sends no pages, and
 //!    until then reveals find nothing (clicks work at once). While neither
 //!    the pages nor the diagnostics change, the first `update` keeps the
@@ -83,9 +84,9 @@
 //! whenever that changes. They are also laid out first (SPEC §12.2): once
 //! any client has said what it shows, a revision whose document has pages
 //! after the last visible one, as the revision before had, may come in two
-//! updates, the first with the
-//! pages through it that changed, and the pages after them and the
-//! diagnostics still those of the revision before, then one with the
+//! updates: the first, with `partial` true, sends the pages through it
+//! that changed, while the pages after them, the diagnostics and the marks
+//! on other pages stay those of the revision before; the second sends the
 //! rest. A client applies each update as it comes; a click on a page after
 //! those laid out first finds no source until the second.
 //!

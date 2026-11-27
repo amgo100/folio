@@ -798,7 +798,13 @@ fn the_visible_pages_are_laid_out_first() {
     while sent.len() < early.len() + next.lists.len() {
         let received = receive_from(&mut ws, revision);
         assert_eq!(received.update["revision"], revision);
-        sent.extend(received.frames.iter().map(|(i, _)| *i as usize));
+        let frames: Vec<usize> = received.frames.iter().map(|(i, _)| *i as usize).collect();
+        if received.update["partial"] == true {
+            assert!(frames.iter().all(|&i| i < laid), "{frames:?}");
+        } else {
+            assert_eq!(received.update["partial"], false);
+        }
+        sent.extend(frames);
     }
     let mut expected = early.clone();
     expected.extend(&next.lists);

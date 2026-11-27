@@ -98,6 +98,9 @@ pub(crate) struct Published {
     /// The areas of the pages that the diagnostics point at, once the
     /// pages are indexed.
     pub(crate) overlays: Arc<Vec<Overlay>>,
+    /// Whether only the first pages are of this revision, sent before the
+    /// rest (SPEC §12.2).
+    pub(crate) partial: bool,
 }
 
 /// The sources of the pages a client is shown: the files they were made
@@ -740,15 +743,20 @@ impl Engine {
             .collect();
         let count = pages.len();
         // Pages kept from an earlier revision are not synced with the
-        // source, which has changed since.
-        let layout = frame.pages.as_ref().map(|_| {
-            Arc::new(Layout {
+        // source, which has changed since; those laid out first in this
+        // revision are.
+        let layout = match &frame.pages {
+            Some(_) => Some(Arc::new(Layout {
                 revision,
                 laid: count,
                 files: frame.files.clone(),
                 index: None,
-            })
-        });
+            })),
+            None => old
+                .layout
+                .clone()
+                .filter(|layout| layout.revision == revision),
+        };
         let font_generation = old.font_generation + u64::from(frame.fonts_changed);
         // The marks stay, rather than blink, while the pages are indexed,
         // when neither the pages nor the diagnostics changed.
@@ -776,6 +784,7 @@ impl Engine {
             font_generation,
             layout,
             overlays,
+            partial: false,
         }));
         self.settings.emit(Event::Updated(Arc::new(Update {
             revision,
@@ -833,6 +842,13 @@ impl Engine {
         let old = self.publish.borrow().clone();
         let mut pages = old.pages.clone();
         let (lists, spans) = self.place(&mut pages, first.lists);
+        // The marks on the pages sent now marked them as they were.
+        let overlays: Vec<Overlay> = old
+            .overlays
+            .iter()
+            .filter(|o| !lists.contains(&o.page) && !spans.contains(&o.page))
+            .cloned()
+            .collect();
         self.last = Some(first.pages);
         self.redraw = false;
         let count = pages.len();
@@ -851,8 +867,8 @@ impl Engine {
                 files: first.files,
                 index: None,
             })),
-            // They marked the pages as they were.
-            overlays: Arc::new(Vec::new()),
+            overlays: Arc::new(overlays),
+            partial: true,
         }));
         self.settings.emit(Event::FirstPages {
             revision,
@@ -1003,7 +1019,7 @@ fn check(
     // When the pages sent before end by the last visible one, so will
     // these most likely: laying them out first would only add work.
     if let Some(last) = visible
-        && published.pages.len() > last + 1
+        && last < published.pages.len().saturating_sub(1)
         && let Some(laid) = folio::pages_through(world, target, variant.as_ref(), last).ok()?
         && !laid.complete
     {
@@ -1026,22 +1042,26 @@ fn check(
             for index in remapped {
                 lists.push((index, entry(&pages, index), true));
             }
+            // Nothing to show before the check: it sends what it finds.
+            let shows = !lists.is_empty() || fonts_changed;
             let merged = merge(&pages, before.as_ref());
-            first(First {
-                revision: 0,
-                variant: name.clone(),
-                target: target.as_str(),
-                pages: merged.clone(),
-                laid: count,
-                lists,
-                banner: banner.clone(),
-                files: files.clone(),
-                fonts: fonts.clone(),
-                fonts_changed,
-            });
-            before = Some(merged);
-            fonts_before = fonts;
-            redraw = false;
+            if shows {
+                first(First {
+                    revision: 0,
+                    variant: name.clone(),
+                    target: target.as_str(),
+                    pages: merged.clone(),
+                    laid: count,
+                    lists,
+                    banner: banner.clone(),
+                    files: files.clone(),
+                    fonts: fonts.clone(),
+                    fonts_changed,
+                });
+                before = Some(merged);
+                fonts_before = fonts;
+                redraw = false;
+            }
         }
     }
     let checked = folio::check(world, target, variant.as_ref()).ok()?;

@@ -139,7 +139,8 @@ fn stages(source: &str) -> Vec<(&'static str, Duration, Duration)> {
 /// An edit made in the middle of each long query of a compilation of a
 /// hundred-page document stops it within a few paragraphs or a page: within a
 /// few milliseconds in an optimised build, and within a small part of the
-/// query's time in any build.
+/// query's time in any build. So does one made while the preview lays out
+/// the first pages.
 #[test]
 fn an_edit_stops_a_long_query_within_milliseconds() {
     let source = document();
@@ -158,24 +159,20 @@ fn an_edit_stops_a_long_query_within_milliseconds() {
             );
         }
     }
-}
 
-/// An edit made while the preview lays out the first pages of a
-/// hundred-page document, all of them asked for, stops it between pages
-/// as it stops the `pages` query.
-#[test]
-fn an_edit_stops_laying_out_the_first_pages() {
-    let source = document();
+    // The preview lays out the first pages, all of them asked for here,
+    // as `pages` does, and an edit stops it between pages alike. Measured
+    // after the others, never beside them. `lines` is the first query it
+    // runs, and it runs `text` before its own work, so the delay counts
+    // from its start as `pages`' does.
     let (_, took, delay) = stages(&source)
         .into_iter()
         .find(|(query, ..)| *query == "pages")
         .unwrap();
-    // `lines` is the first query it runs, and it runs `text` before its
-    // own work, so the delay counts from its start as `pages`' does.
     let waited = wait_for(&source, "lines", delay, |world| {
         folio::pages_through(world, Target::Pdf, None, usize::MAX).map(drop)
     });
-    eprintln!("pages through the last: took {took:?}, an edit waited {waited:?}");
+    eprintln!("the first pages: took {took:?}, an edit in the middle waited {waited:?}");
     assert!(
         waited < (took / 4).max(Duration::from_millis(50)),
         "an edit in the middle of laying out the first pages, which takes {took:?}, \
