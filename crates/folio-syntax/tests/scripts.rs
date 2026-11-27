@@ -1,5 +1,5 @@
 //! A sign after `^` or `_` binds to the operand directly after it (SPEC §8.1,
-//! D-323-1, #323): `10^-3` raises `-3`, as `10^(-3)` does.
+//! D-323-1 to D-323-3, #323): `10^-3` raises `-3`, as `10^(-3)` does.
 
 use folio_syntax::ast::{AstNode, Expr, MathAttach};
 use folio_syntax::{SyntaxKind, SyntaxNode, parse};
@@ -46,6 +46,10 @@ fn a_sign_binds_to_the_operand_after_it() {
     assert_eq!(scripts("x^-alpha").0, "-alpha");
     assert_eq!(scripts("x^-sqrt(2)").0, "-sqrt(2)");
     assert_eq!(scripts("x^-(a+b)").0, "-(a+b)");
+    assert_eq!(scripts("e^-(x^2/2)").0, "-(x^2/2)");
+    // `±` and `∓` are signs too (D-323-3).
+    assert_eq!(scripts("x^±1").0, "±1");
+    assert_eq!(scripts("e^∓i omega t").0, "∓i");
     assert_eq!(scripts("x^-#n").0, "-#n");
     assert_eq!(scripts("x^-∞").0, "-∞");
     // A large operator binds as its name does; the `_i` after it is `e`'s
@@ -89,7 +93,11 @@ fn a_sign_alone_is_the_script() {
     assert_eq!(scripts("e^|x|").0, "|");
     // Other symbols than signs keep taking one atom.
     assert_eq!(scripts("x^*1").0, "*");
-    assert_eq!(scripts("x^±1").0, "±");
+    assert_eq!(scripts("x^± 1").0, "±");
+    // An ion with a state symbol: a space keeps the bracket on the baseline
+    // (D-323-2).
+    assert_eq!(scripts("\"Na\"^+ (\"aq\")").0, "+");
+    assert_eq!(scripts("\"Na\"^+(\"aq\")").0, "+(\"aq\")");
 }
 
 #[test]

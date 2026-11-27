@@ -572,9 +572,10 @@ fn math_chain_group(p: &mut Parser<'_>) {
 ///
 /// A sign directly followed by an operand binds to it, so that `10^-3`,
 /// `e^-x` and `x_+1` take the signed operand as their script, as
-/// `10^(-3)` does (SPEC §8.1, D-323-1). A sign with a space or nothing
-/// after it is the script alone, as in the electron `e^-` or the ion
-/// `Cl^- + Na^+`.
+/// `10^(-3)` does (SPEC §8.1, D-323-1), and so does a bracket after the
+/// sign: `e^-(x^2/2)` (D-323-2). `±` and `∓` are signs too: `x^±1`
+/// (D-323-3). A sign with a space or nothing after it is the script alone,
+/// as in the electron `e^-` or the ion `Cl^- + Na^+`.
 fn math_script(p: &mut Parser<'_>, prec: u8, stop_set: SyntaxSet) {
     let m = p.marker();
     if math_sign_binds(p) {
@@ -587,7 +588,8 @@ fn math_script(p: &mut Parser<'_>, prec: u8, stop_set: SyntaxSet) {
     }
 }
 
-/// Whether the parser is at a sign (`-`, `+` or `−`) directly followed by
+/// Whether the parser is at a sign (`-`, `+`, `−`, `±` or `∓`) directly
+/// followed by
 /// something that starts an operand: a name, a number or letter, a large
 /// operator such as `∑`, a bracket, a root, a string, an escape or embedded
 /// code. A fence such as `|` or a `.` starts no operand of a script, signed or
@@ -595,7 +597,7 @@ fn math_script(p: &mut Parser<'_>, prec: u8, stop_set: SyntaxSet) {
 fn math_sign_binds(p: &Parser<'_>) -> bool {
     let sign = match p.current() {
         SyntaxKind::MathShorthand => p.current_text() == "-",
-        SyntaxKind::MathText => matches!(p.current_text(), "+" | "−"),
+        SyntaxKind::MathText => matches!(p.current_text(), "+" | "−" | "±" | "∓"),
         _ => false,
     };
     if !sign {
