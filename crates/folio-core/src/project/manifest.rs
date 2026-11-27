@@ -1,7 +1,7 @@
 //! The project manifest, `folio.toml` (SPEC §4.1).
 
 use ecow::{EcoString, eco_format};
-use folio_syntax::FileId;
+use folio_syntax::{DiagSpan, DiagSpanKind, FileId};
 
 use super::de::{Cx, Invalid, Table, Value, list, suggest};
 use super::values::{
@@ -10,6 +10,7 @@ use super::values::{
     parse_qualified_name, parse_target,
 };
 use super::{ProjectError, Spanned};
+use crate::diag::Diagnostic;
 
 /// A parsed `folio.toml`: the project's entry point, pinned versions,
 /// components, variants, numbering groups, formatting mode and output naming.
@@ -394,6 +395,51 @@ impl Manifest {
             output,
         });
         cx.finish(manifest)
+    }
+
+    /// Warnings for keys that this compiler reads but does not act on yet,
+    /// at each key that is given: strict mode, which checks no overrides yet
+    /// (SPEC §5.5), the other keys of strict mode, and numbering groups
+    /// (SPEC §6.1). A declared component that cannot be hosted is reported
+    /// with the components ([`crate::component::unhosted`]).
+    pub fn not_implemented(&self) -> Vec<Diagnostic> {
+        let given = |span: DiagSpan| !matches!(span.get(), DiagSpanKind::Detached);
+        let mut out = Vec::new();
+        let formatting = &self.formatting;
+        if formatting.mode.v == FormattingMode::Strict && given(formatting.mode.span) {
+            out.push(
+                Diagnostic::warning(
+                    formatting.mode.span,
+                    "strict mode is not implemented yet, so overrides in content are not checked",
+                )
+                .with_hint("until it is, strict mode only makes an unpinned system font an error"),
+            );
+        }
+        if let Some(first) = formatting.strict_paths.first() {
+            out.push(unread(first.span, "strict-paths"));
+        }
+        for (key, value) in [
+            ("allow-overrides-sheet", &formatting.allow_overrides_sheet),
+            ("allow-local-packages", &formatting.allow_local_packages),
+        ] {
+            if given(value.span) {
+                out.push(unread(value.span, key));
+            }
+        }
+        for group in &self.numbering_groups {
+            out.push(
+                Diagnostic::warning(
+                    group.name.span,
+                    eco_format!(
+                        "numbering groups are not implemented yet, so the variants of `{}` \
+                         number their content separately",
+                        group.name.v
+                    ),
+                )
+                .with_hint("each variant counts only the content it shows"),
+            );
+        }
+        out
     }
 
     /// The variant with the given name.
@@ -851,6 +897,15 @@ fn reserved_output(file: &str, entry: &ProjectPath, components: &Components) -> 
         return None;
     };
     Some(Invalid::new(message).with_hint(HINT))
+}
+
+/// A warning that a manifest key is read but has no effect yet.
+fn unread(span: DiagSpan, key: &str) -> Diagnostic {
+    Diagnostic::warning(
+        span,
+        eco_format!("`{key}` is not implemented yet, so it has no effect"),
+    )
+    .with_hint("strict mode does not check content for overrides yet")
 }
 
 /// The manifest's file name, in the project directory.

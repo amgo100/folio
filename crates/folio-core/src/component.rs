@@ -18,7 +18,36 @@ use folio_component::{
 use folio_syntax::ast::{self, AstNode, StyleItem};
 use folio_syntax::{DiagSpanKind, Source};
 
-use crate::project::{Bindings, Components};
+use crate::diag::Diagnostic;
+use crate::project::{Bindings, ComponentSource, Components};
+
+/// Errors for the components a project declares in `[components]` that the
+/// compiler cannot host, at each one's key: only registered components can
+/// be, and loading a component from a path or a published version is not
+/// implemented yet (SPEC §3.6). A build fails, as for a locked version
+/// that is not available (SPEC §2.4), rather than at the first use of one
+/// of its names.
+pub fn unhosted(registry: &Registry, components: &Components) -> Vec<Diagnostic> {
+    components
+        .declared
+        .iter()
+        .filter(|decl| registry.get(decl.name.v.as_str()).is_none())
+        .map(|decl| {
+            let from = match decl.source {
+                ComponentSource::Path(_) => "from a path",
+                ComponentSource::Version(_) => "by version",
+            };
+            Diagnostic::error(
+                decl.name.span,
+                eco_format!("component `{}` cannot be loaded", decl.name.v),
+            )
+            .with_hint(eco_format!(
+                "loading components {from} is not implemented yet; only first-party \
+                 components are available, without a declaration"
+            ))
+        })
+        .collect()
+}
 
 /// The components a project uses, with their templates parsed.
 #[derive(Debug, Clone, Eq, PartialEq)]

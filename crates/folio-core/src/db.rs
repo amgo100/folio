@@ -453,6 +453,11 @@ pub fn build_files(db: &dyn Db, build: Build<'_>) -> EcoVec<SourceFile> {
 /// edit to a source does not re-run or even re-validate it.
 #[salsa::tracked(returns(ref))]
 pub fn component_host(db: &dyn Db, project: Project) -> Option<ComponentHost> {
+    for error in
+        crate::component::unhosted(project.components(db), &project.manifest(db).components)
+    {
+        diag::report(db, error);
+    }
     let host = ComponentHost::new(
         project.components(db),
         &project.manifest(db).components,
@@ -477,6 +482,9 @@ pub fn component_host(db: &dyn Db, project: Project) -> Option<ComponentHost> {
 pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     let project = build.project(db);
     for diagnostic in check_build(project.manifest(db), build.target(db), build.variant(db)) {
+        diag::report(db, diagnostic);
+    }
+    for diagnostic in project.manifest(db).not_implemented() {
         diag::report(db, diagnostic);
     }
 
