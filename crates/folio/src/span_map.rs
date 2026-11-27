@@ -44,7 +44,7 @@ use std::ops::Range;
 
 use ecow::EcoString;
 use folio_component::{Fragment, FragmentItem, Glyph, GlyphRun, ObjectBox, Point, Size, SourceRef};
-use folio_syntax::{DiagSpan, FileId, Source};
+use folio_syntax::{DiagSpan, FileId, LinkedNode, Source, SyntaxKind};
 
 pub use folio_core::span_map::{source_ref, span, text_range};
 
@@ -111,11 +111,17 @@ pub struct Found {
 /// finds the glyph whose text holds the byte after it, or else the glyph
 /// whose text ends there, at the end of a word. A glyph's area reaches from
 /// its pen position to the next and from a font size above its baseline to
-/// a quarter of it below, as a click finds it. Where no glyph shows the
-/// bytes, as in the markup of an element's call, the boxes of the
-/// fragments and objects whose nodes hold them, and hold the fewest bytes,
-/// are found instead; pages themselves, and the root nodes of files, are
-/// not.
+/// a quarter of it below, as a click finds it. A glyph that stands for a
+/// whole element, such as a list item's marker or a heading's number, is
+/// left out for bytes that start in the element's body (from the start of
+/// its markup to the end, or a call's arguments) where other glyphs show
+/// them, unless they hold the whole element: a cursor in an item's text
+/// marks that text, not the item's label, which a cursor at the item's `+`
+/// marks. Where only such glyphs show the bytes, those of the innermost
+/// element are found. Where no glyph shows the bytes, as in the markup of
+/// an element's call, the boxes of the fragments and objects whose nodes
+/// hold them, and hold the fewest bytes, are found instead; pages
+/// themselves, and the root nodes of files, are not.
 ///
 /// To look up many places in the same pages, build an [`Index`] once.
 ///
@@ -376,7 +382,9 @@ impl Index {
                 }
             })
         };
-        let resolved: Vec<(usize, &GlyphEntry, Range<usize>)> = self
+        // Each glyph with the bytes it shows, and whether it maps to its
+        // whole node, as the glyphs of an element's marker do.
+        let resolved: Vec<(usize, &GlyphEntry, Range<usize>, bool)> = self
             .glyphs
             .iter()
             .enumerate()
@@ -385,15 +393,15 @@ impl Index {
             })
             .filter_map(|(i, g)| {
                 if inside(&g.whole) {
-                    return Some((i, g, g.whole.clone()));
+                    return Some((i, g, g.whole.clone(), false));
                 }
                 let within = g.within.start as usize..g.within.end as usize;
-                let range = match mapping(g) {
-                    Mapping::Whole => g.whole.clone(),
-                    Mapping::Shift(at) => at + within.start..at + within.end,
-                    Mapping::Each => text_range(source, span(g.node), within)?,
+                let (range, whole) = match mapping(g) {
+                    Mapping::Whole => (g.whole.clone(), true),
+                    Mapping::Shift(at) => (at + within.start..at + within.end, false),
+                    Mapping::Each => (text_range(source, span(g.node), within)?, false),
                 };
-                Some((i, g, range))
+                Some((i, g, range, whole))
             })
             .collect();
         let overlaps = |r: &Range<usize>| {
@@ -405,17 +413,56 @@ impl Index {
                 r.start < bytes.end && bytes.start < r.end
             }
         };
-        let mut hits: Vec<(usize, &GlyphEntry)> = resolved
-            .iter()
-            .filter(|(_, _, r)| overlaps(r))
-            .map(|&(i, g, _)| (i, g))
-            .collect();
-        if hits.is_empty() && bytes.is_empty() {
-            hits = resolved
-                .iter()
-                .filter(|(_, _, r)| !r.is_empty() && r.end == bytes.start)
-                .map(|&(i, g, _)| (i, g))
-                .collect();
+        // A glyph that stands for a whole element, such as a list item's
+        // marker or a heading's number, is not found for bytes that start
+        // in the element's body where other glyphs show them: there the
+        // reveal marks the body's glyphs alone (#417). It is found for
+        // bytes that start in the element's own markup, as at an item's
+        // `+`, for bytes that hold the whole element, and where no other
+        // glyph shows the bytes, as at a label.
+        let mut bodies: HashMap<SourceRef, Option<Range<usize>>> = HashMap::new();
+        let mut shown = |&(_, g, ref r, whole): &(usize, &GlyphEntry, Range<usize>, bool)| {
+            if !whole || (bytes.start <= r.start && r.end <= bytes.end) {
+                return true;
+            }
+            let found = bodies
+                .entry(g.node)
+                .or_insert_with(|| source.find(span(g.node)).and_then(|node| body(&node)));
+            found
+                .as_ref()
+                .is_none_or(|b| !(b.start <= bytes.start && bytes.start <= b.end))
+        };
+        // The glyphs that show the bytes, or for a cursor that no glyph's
+        // text holds, those whose text ends there; without the glyphs of
+        // whole elements whose bodies hold the place where any other glyph
+        // shows it, and with them where none does.
+        let mut pick = |hide: bool| {
+            let mut found = |at: &dyn Fn(&Range<usize>) -> bool| -> Vec<(usize, &GlyphEntry)> {
+                resolved
+                    .iter()
+                    .filter(|(_, _, r, _)| at(r))
+                    .filter(|entry| !hide || shown(entry))
+                    .map(|&(i, g, _, _)| (i, g))
+                    .collect()
+            };
+            let hits = found(&overlaps);
+            if hits.is_empty() && bytes.is_empty() {
+                found(&|r| !r.is_empty() && r.end == bytes.start)
+            } else {
+                hits
+            }
+        };
+        let mut hits = pick(true);
+        if hits.is_empty() {
+            // Only whole elements show the place: the innermost of them,
+            // not a label around it.
+            hits = pick(false);
+            let wholes: Vec<Range<usize>> = hits.iter().map(|(_, g)| g.whole.clone()).collect();
+            hits.retain(|(_, g)| {
+                !wholes.iter().any(|inner| {
+                    *inner != g.whole && g.whole.start <= inner.start && inner.end <= g.whole.end
+                })
+            });
         }
         if !hits.is_empty() {
             return merge(&hits);
@@ -443,6 +490,27 @@ impl Index {
             })
             .collect()
     }
+}
+
+/// The bytes of an element's body: its markup, from the start of the first
+/// part to the end of the last (an item's or heading's text, a term and its
+/// description), an equation's formula, or the arguments of a call. `None`
+/// for a node with none of them, or whose body is empty.
+fn body(node: &LinkedNode<'_>) -> Option<Range<usize>> {
+    let parts: Vec<Range<usize>> = node
+        .children()
+        .filter(|child| matches!(child.kind(), SyntaxKind::Markup | SyntaxKind::Math))
+        .map(|child| child.range())
+        .collect();
+    let body = match (parts.first(), parts.last()) {
+        (Some(first), Some(last)) => first.start..last.end,
+        _ if node.kind() == SyntaxKind::FuncCall => node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::Args)?
+            .range(),
+        _ => return None,
+    };
+    (!body.is_empty()).then_some(body)
 }
 
 /// The areas of glyphs, one for each run of glyphs that follow each other

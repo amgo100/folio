@@ -4,6 +4,7 @@
 //! the nodes they come from keep their identity across edits elsewhere.
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 
 use folio::span_map::{self, Placed};
 use folio::{Fragment, FragmentItem, NodeId, Pages, Source, Target, World};
@@ -80,7 +81,7 @@ fn check_glyph(
     kind: SyntaxKind,
     written: &str,
     source: &Source,
-    bytes: std::ops::Range<usize>,
+    bytes: Range<usize>,
     seen: &mut Seen,
 ) {
     let shown = placed.text();
@@ -301,4 +302,289 @@ fn node_ids_are_stable_across_edits_elsewhere() {
 
     // The pages after the edits resolve as before.
     check_glyphs(&world, &pages(&world));
+}
+
+/// A glyph of a marker: its page, pen position and where a click on it
+/// leads.
+type Marker = (usize, f64, f64, Range<usize>);
+
+/// The glyphs whose source is the element written at `at`, such as a list
+/// item's marker: glyphs of a node that is not text, and maps as a whole.
+/// Each with its page, pen position and where a click on it leads.
+fn marker_glyphs(world: &World, pages: &Pages, at: usize) -> Vec<Marker> {
+    let source = world.source("main.fol").unwrap();
+    let mut out = Vec::new();
+    for (index, page) in pages.pages.iter().enumerate() {
+        for placed in span_map::glyphs(&page.fragment) {
+            let Some(location) = span_map::locate_glyph(world, placed.glyph) else {
+                continue;
+            };
+            let Some(node) = source.find(span_map::span(placed.glyph.source.0)) else {
+                continue;
+            };
+            let element = !matches!(node.kind(), SyntaxKind::Text | SyntaxKind::Space);
+            if element && node.range() == location.bytes && location.bytes.start == at {
+                let (x, y) = (placed.pos.x.to_pt(), placed.pos.y.to_pt());
+                out.push((index, x, y, location.bytes));
+            }
+        }
+    }
+    out
+}
+
+/// Whether a found area covers a glyph whose pen position is at `x`, `y`.
+fn covers(found: &span_map::Found, page: usize, x: f64, y: f64) -> bool {
+    let (left, top) = (found.pos.x.to_pt(), found.pos.y.to_pt());
+    found.page == page
+        && left <= x
+        && x < left + found.size.width.to_pt()
+        && top <= y
+        && y <= top + found.size.height.to_pt()
+}
+
+/// Revealing the editor's cursor in a list item marks the text under it,
+/// not the item's label, whose glyphs stand for the whole item (#417);
+/// clicking the label still selects the item.
+#[test]
+fn a_cursor_in_a_list_item_marks_its_text_not_its_label() {
+    let text = "+ First item, with words.\n+ Second item.\n  - A nested bullet item.\n";
+    let world = world("", text);
+    let pages = pages(&world);
+    let fragments: Vec<_> = pages.pages.iter().map(|p| &p.fragment).collect();
+    let index = span_map::Index::new(&world, &fragments);
+
+    for (item, inside) in [
+        ("+ First", "with"),
+        ("+ Second", "item."),
+        ("- A", "bullet"),
+    ] {
+        let at = text.find(item).unwrap();
+        let markers = marker_glyphs(&world, &pages, at);
+        assert!(!markers.is_empty(), "{item:?} has no marker");
+        // Click-to-source on the label selects the whole item, the nested
+        // list of the second one included.
+        let whole = markers[0].3.clone();
+        assert!(markers.iter().all(|m| m.3 == whole), "{markers:?}");
+        let end = text[at..].find('\n').unwrap() + at;
+        assert!(
+            whole.end >= end,
+            "{item:?} selects {:?}",
+            &text[whole.clone()]
+        );
+
+        // A cursor and a selection inside the item's text, and a cursor at
+        // the end of it, mark that text alone.
+        let word = text[at..].find(inside).unwrap() + at;
+        for bytes in [word + 1..word + 1, word..word + inside.len(), end..end] {
+            let found = index.find("main.fol", bytes.clone());
+            assert!(!found.is_empty(), "{item:?} at {bytes:?} finds nothing");
+            assert!(found.iter().all(|f| f.glyphs), "{found:?}");
+            for &(page, x, y, _) in &markers {
+                assert!(
+                    !found.iter().any(|f| covers(f, page, x, y)),
+                    "{item:?} at {bytes:?} marks the label: {found:?}"
+                );
+            }
+        }
+
+        // At the item's own marker syntax, for bytes from it into the
+        // item's text, and for the whole item, as a diagnostic on it would,
+        // the label is marked.
+        let (page, x, y, _) = markers[0];
+        for bytes in [at..at, at..at + item.len(), whole] {
+            let found = index.find("main.fol", bytes.clone());
+            assert!(
+                found.iter().any(|f| covers(f, page, x, y)),
+                "{item:?} at {bytes:?} does not mark the label: {found:?}"
+            );
+        }
+    }
+}
+
+/// Finds `bytes` in the pages of `text`, and the markers of the elements
+/// written at `at`.
+fn find_with_markers(
+    text: &str,
+    at: usize,
+    bytes: Range<usize>,
+) -> (Vec<span_map::Found>, Vec<Marker>) {
+    find_styled("", text, at, bytes)
+}
+
+/// As [`find_with_markers`], with a stylesheet.
+fn find_styled(
+    style: &str,
+    text: &str,
+    at: usize,
+    bytes: Range<usize>,
+) -> (Vec<span_map::Found>, Vec<Marker>) {
+    let world = world(style, text);
+    let laid = pages(&world);
+    let fragments: Vec<_> = laid.pages.iter().map(|p| &p.fragment).collect();
+    let found = span_map::Index::new(&world, &fragments).find("main.fol", bytes);
+    (found, marker_glyphs(&world, &laid, at))
+}
+
+/// Whether any found area of glyphs covers any of the markers. (Where no
+/// glyph shows the bytes, the innermost box that holds them is found, which
+/// may be the item's block around its label.)
+fn marks(found: &[span_map::Found], markers: &[Marker]) -> bool {
+    markers
+        .iter()
+        .any(|&(page, x, y, _)| found.iter().any(|f| f.glyphs && covers(f, page, x, y)))
+}
+
+/// A cursor before a one-letter word of a list item marks that word alone,
+/// as in a paragraph: neither the label nor the space before it.
+#[test]
+fn a_cursor_before_a_short_word_in_an_item_marks_that_word() {
+    let text = "+ go a way\n";
+    let (item, markers) = find_with_markers(text, 0, 5..5);
+    let (plain, _) = find_with_markers("go a way\n", 0, 3..3);
+    assert_eq!(item.len(), 1, "{item:?}");
+    assert_eq!(plain.len(), 1, "{plain:?}");
+    assert_eq!(item[0].size, plain[0].size, "{item:?} {plain:?}");
+    assert!(!marks(&item, &markers), "{item:?}");
+    // The area starts where `a` is drawn.
+    let world = world("", text);
+    let laid = pages(&world);
+    let a = span_map::glyphs(&laid.pages[0].fragment)
+        .into_iter()
+        .find(|p| p.text() == "a")
+        .unwrap();
+    assert_eq!(item[0].pos.x, a.pos.x, "{item:?}");
+}
+
+/// Selections of inline markup in an item, and places in the text of an
+/// element inside it, do not mark its label; bytes that start at the item's
+/// marker, or before the next item's, do. Markup that no glyph shows finds
+/// what a paragraph's would, the glyph whose text ends there, and where
+/// none does, as at a call's name or a `*` that opens the item's text, the
+/// label.
+#[test]
+fn inline_markup_and_selections_in_an_item_leave_its_label() {
+    let text = "+ See *bold* and #emph[x] now.\n+ Second item.\n";
+    let bold = text.find("*bold*").unwrap();
+    let x = text.find("x]").unwrap();
+    for bytes in [bold..bold + 6, x..x, x..x + 1] {
+        let (found, markers) = find_with_markers(text, 0, bytes.clone());
+        assert!(!markers.is_empty());
+        assert!(!found.is_empty(), "{bytes:?} finds nothing");
+        assert!(
+            !marks(&found, &markers),
+            "{bytes:?} marks the label: {found:?}"
+        );
+    }
+    let name = text.find("emph").unwrap() + 2;
+    for (text, bytes) in [(text, name..name), ("+ *bold* rest\n", 2..2)] {
+        let (found, markers) = find_with_markers(text, 0, bytes.clone());
+        assert!(marks(&found, &markers), "{bytes:?} in {text:?}: {found:?}");
+    }
+    // From the first item's text into the second item: the second label is
+    // in the bytes, the first is not.
+    let second = text.find("+ Second").unwrap();
+    let bytes = text.find("now").unwrap()..second + 8;
+    let (found, first) = find_with_markers(text, 0, bytes.clone());
+    assert!(!marks(&found, &first), "{found:?}");
+    let (_, labels) = find_with_markers(text, second, bytes);
+    assert!(marks(&found, &labels), "{found:?}");
+}
+
+/// A heading's number stands for the whole heading: a cursor in its title
+/// marks the title alone, one at its `=` marks the number.
+#[test]
+fn a_cursor_in_a_numbered_heading_marks_its_title_not_its_number() {
+    let text = "= Forces and motion\n\nText.\n";
+    let world = world("heading { numbering: \"1.\"; }\n", text);
+    let pages = pages(&world);
+    let fragments: Vec<_> = pages.pages.iter().map(|p| &p.fragment).collect();
+    let index = span_map::Index::new(&world, &fragments);
+    let markers = marker_glyphs(&world, &pages, 0);
+    assert!(!markers.is_empty(), "the heading has no number");
+    let word = text.find("and").unwrap();
+    for bytes in [word + 1..word + 1, word..word + 3] {
+        let found = index.find("main.fol", bytes.clone());
+        assert!(!found.is_empty(), "{bytes:?} finds nothing");
+        for &(page, x, y, _) in &markers {
+            assert!(
+                !found.iter().any(|f| covers(f, page, x, y)),
+                "{bytes:?} marks the number: {found:?}"
+            );
+        }
+    }
+    let (page, x, y, _) = markers[0];
+    let found = index.find("main.fol", 0..0);
+    assert!(found.iter().any(|f| covers(f, page, x, y)), "{found:?}");
+}
+
+/// A footnote's anchor stands for the whole footnote: a cursor in the
+/// note's text marks that text alone, one just after the call, at the end
+/// of its paragraph, marks the anchor.
+#[test]
+fn a_footnote_anchor_is_found_after_its_call_not_inside_its_note() {
+    let text = "A claim.#footnote[Source text.]\n\nMore.\n";
+    let at = text.find("#footnote").unwrap() + 1;
+    let after = text.find("]\n").unwrap() + 1;
+    let (found, markers) = find_with_markers(text, at, after..after);
+    assert!(!markers.is_empty(), "the footnote has no anchor");
+    assert!(marks(&found, &markers), "{found:?}");
+    let inside = text.find("text.").unwrap() + 1;
+    let (found, markers) = find_with_markers(text, at, inside..inside);
+    assert!(
+        found.iter().all(|f| f.glyphs) && !found.is_empty(),
+        "{found:?}"
+    );
+    assert!(!marks(&found, &markers), "{found:?}");
+}
+
+/// A figure's number stands for the whole figure: a cursor in its caption
+/// marks the caption's text alone.
+#[test]
+fn a_cursor_in_a_caption_marks_its_text_not_the_figure_number() {
+    let text = "#figure([Figured body.], caption: [A caption of words.])\n";
+    let at = text.find("figure").unwrap();
+    let inside = text.find("caption of").unwrap() + 1;
+    let style = "figure { numbering: \"1\"; }\n";
+    let (found, markers) = find_styled(style, text, at, inside..inside);
+    assert!(!markers.is_empty(), "the figure has no number");
+    assert!(
+        found.iter().all(|f| f.glyphs) && !found.is_empty(),
+        "{found:?}"
+    );
+    assert!(!marks(&found, &markers), "{found:?}");
+}
+
+/// A cursor in the arguments of an element inside an item, whose glyphs
+/// stand for the whole element, marks that element, not the item's label.
+#[test]
+fn a_cursor_in_an_inner_elements_arguments_marks_it_not_the_label() {
+    let text = "+ The speed is #qty(3, \"m/s\") here.\n";
+    let three = text.find("3,").unwrap();
+    let (found, markers) = find_with_markers(text, 0, three..three);
+    assert!(!markers.is_empty());
+    assert!(
+        !found.is_empty() && found.iter().all(|f| f.glyphs),
+        "{found:?}"
+    );
+    assert!(!marks(&found, &markers), "{found:?}");
+}
+
+/// A display equation's number stands for the whole equation: a cursor in
+/// the formula marks the formula's glyphs alone.
+#[test]
+fn a_cursor_in_a_numbered_display_marks_its_formula_not_its_number() {
+    let text = "Text.\n\n$ F = m a $\n";
+    let style = "math { numbering: \"(1)\"; }\n";
+    let m = text.find("m a").unwrap();
+    let at = text.find("$ F").unwrap();
+    let (found, markers) = find_styled(style, text, at, m..m);
+    assert!(!markers.is_empty(), "the display has no number");
+    assert!(
+        !found.is_empty() && found.iter().all(|f| f.glyphs),
+        "{found:?}"
+    );
+    assert!(!marks(&found, &markers), "{found:?}");
+    // At its opening `$`, the number.
+    let (found, markers) = find_styled(style, text, at, at..at);
+    assert!(marks(&found, &markers), "{found:?}");
 }

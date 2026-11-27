@@ -10,7 +10,7 @@ The repository has finished M0 "Skeleton" and has the work of **M1 "Math, previe
 
 ## Build, lint and test
 
-Rust edition 2024, MSRV 1.95 (`rust-version` in `Cargo.toml`). There is no hosted CI: checks run locally. Before every push, run `scripts/check.sh` and push only if it ends with "all checks passed" (`--fast` skips the MSRV check and cargo-deny while iterating, not before a push). It runs:
+Rust edition 2024, MSRV 1.95 (`rust-version` in `Cargo.toml`). There is no hosted CI: checks run locally. Before every push, run `scripts/check.sh` and push only if it ends with "all checks passed" (`--fast` skips the MSRV check and cargo-deny while iterating, not before a push). One exception: a push that only merges the default branch into a PR's branch, cleanly and without touching the branch's own changes, may run `scripts/check.sh --fast` plus the branch's affected tests instead, and says so in the PR body. It runs:
 
 ```bash
 cargo fmt --all --check
