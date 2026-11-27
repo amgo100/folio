@@ -15,6 +15,12 @@ publish.workspace = true
 folio-component.workspace = true
 ecow.workspace = true
 png.workspace = true
+gif.workspace = true
+hayro-svg.workspace = true
+image-webp.workspace = true
+resvg.workspace = true
+usvg.workspace = true
+zune-jpeg.workspace = true
 skrifa.workspace = true
 tiny-skia.workspace = true
 

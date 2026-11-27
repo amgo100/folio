@@ -313,8 +313,9 @@ fn navigation(resolution: &Resolution) -> Navigation {
 /// The structure of a document for the PDF writer: a node for every block
 /// of the text stage, whose boxes the page builder's fragments are, with
 /// the role of its element or part (SPEC §11.1), and a node for every
-/// inline formula, whose chunks are boxes too. A formula's text is its
-/// alternate description: `alt` gives the source of the formula at a span.
+/// inline formula, whose chunks are boxes too, and every image. A formula's
+/// text is its alternate description: `alt` gives the source of the
+/// formula at a span. An image's is its `alt` text.
 pub(crate) fn structure(
     block: &TextBlock,
     text: &Text,
@@ -333,17 +334,21 @@ pub(crate) fn structure(
             TextFlow::Block(block) => tag.children.push(structure(block, text, alt)),
             TextFlow::Paragraph(index) => {
                 let paragraph = &text.paragraphs[*index];
-                // A formula's first chunk; the others continue it.
-                let formulas = paragraph
-                    .objects
-                    .iter()
-                    .filter(|object| object.math.is_some_and(|m| m.chunk == 0))
-                    .map(|object| {
-                        let mut formula = Tag::new(Role::Formula, source_ref(object.span));
-                        formula.instance = object.location.instance;
-                        formula.text = formula_alt(text, object.span, alt);
-                        (object.at, formula)
-                    });
+                // A formula's first chunk, as the others continue it, and
+                // each image, with its alt text as its description.
+                let objects = paragraph.objects.iter().filter_map(|object| {
+                    let (role, description) = if object.math.is_some_and(|m| m.chunk == 0) {
+                        (Role::Formula, formula_alt(text, object.span, alt))
+                    } else if let Some(image) = &object.image {
+                        (Role::Figure, image.alt.clone().and_then(clean))
+                    } else {
+                        return None;
+                    };
+                    let mut child = Tag::new(role, source_ref(object.span));
+                    child.instance = object.location.instance;
+                    child.text = description;
+                    Some((object.at, child))
+                });
                 // A footnote's note, whose boxes the page builder draws
                 // inside the paragraph's on the page of its anchor
                 // (SPEC §7.8, §11.1).
@@ -353,7 +358,7 @@ pub(crate) fn structure(
                         structure(&text.notes[anchor.note], text, alt),
                     )
                 });
-                let mut children: Vec<(usize, Tag)> = formulas.chain(notes).collect();
+                let mut children: Vec<(usize, Tag)> = objects.chain(notes).collect();
                 children.sort_by_key(|(at, _)| *at);
                 tag.children
                     .extend(children.into_iter().map(|(_, child)| child));

@@ -202,6 +202,13 @@ impl<'db> Build<'db> {
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub struct Bytes(Arc<[u8]>);
 
+impl Bytes {
+    /// The bytes, shared rather than copied.
+    pub fn shared(&self) -> Arc<[u8]> {
+        self.0.clone()
+    }
+}
+
 impl Deref for Bytes {
     type Target = [u8];
 

@@ -484,6 +484,9 @@ fn boxes_in(fragment: &Fragment, at: Point, out: &mut Vec<(SourceRef, Point, Siz
             FragmentItem::Object(object) => {
                 out.push((object.location.source, origin, object.size));
             }
+            FragmentItem::Image(image) => {
+                out.push((image.location.source, origin, image.size));
+            }
             FragmentItem::Text(_) | FragmentItem::Shape { .. } => {}
         }
     }
@@ -532,7 +535,7 @@ pub fn glyphs(fragment: &Fragment) -> Vec<Placed<'_>> {
                         x += glyph.x_advance.at(run.size);
                     }
                 }
-                FragmentItem::Shape { .. } | FragmentItem::Object(_) => {}
+                FragmentItem::Shape { .. } | FragmentItem::Object(_) | FragmentItem::Image(_) => {}
             }
         }
     }

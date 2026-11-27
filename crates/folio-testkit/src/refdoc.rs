@@ -128,6 +128,7 @@ pub fn generate(spec: &Spec) -> Project {
             ("main.fol".to_string(), Generator::new(false).document(spec)),
             ("styles/reference.fsty".to_string(), STYLESHEET.to_string()),
         ]),
+        files: BTreeMap::new(),
     }
 }
 

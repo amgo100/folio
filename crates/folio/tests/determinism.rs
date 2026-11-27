@@ -105,7 +105,40 @@ fn world(dir: &Path, sources: &BTreeMap<String, String>) -> World {
     for (path, text) in sources {
         world.set_source(path, text).unwrap();
     }
+    for (path, bytes) in data_files(dir) {
+        world.set_file(&path, bytes).unwrap();
+    }
     world
+}
+
+/// The data files of a project, such as images: its files other than
+/// sources, the manifest and outputs, by path as [`sources`] gives them.
+fn data_files(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut out = BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        for entry in fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let relative = path
+                .strip_prefix(dir)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .replace('\\', "/");
+            let source = matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("fol" | "fsty")
+            );
+            if !source && relative != "folio.toml" && !relative.starts_with("out/") {
+                out.insert(relative, fs::read(&path).unwrap());
+            }
+        }
+    }
+    out
 }
 
 /// The name of a build's output, as `folio build` names it (SPEC §6.4),

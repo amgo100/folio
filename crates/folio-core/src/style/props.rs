@@ -243,9 +243,11 @@ impl Properties {
 /// with variants and visibility (SPEC §6.3), `template` with render
 /// templates (§5.3), and the others with pages and running elements
 /// (§7.1, §7.8), the baseline grid (§7.3), tables (§7.4), floats (§7.5),
-/// margin notes (§7.6) and text wrap (§7.7). Properties of other targets (slides, animation,
-/// export) and of drawings are not listed: a static or PDF build ignores
-/// them by design.
+/// margin notes (§7.6) and text wrap (§7.7). Properties of other targets
+/// (slides, animation, export) and of drawings are not listed: a static or
+/// PDF build ignores them by design. Nor is `width`: images read it, and
+/// the text stage warns of it on the elements that do not
+/// ([`crate::text`]).
 pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Option<&'static str> {
     if property.name.namespace.is_some() {
         return None;
@@ -263,7 +265,6 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
         "display" | "show-only" => "showing and hiding content",
         // Markers are set inside the first line until layout hangs them.
         "marker-position" => "hanging markers",
-        "width" => "block widths",
         "trailer" => "block trailers",
         "column-tracks" => "tables",
         "grid-snap" | "baseline-grid" => "the baseline grid",

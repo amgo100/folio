@@ -1,0 +1,61 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 595.28 × 841.89, 2 page(s)
+page 1 595.28 × 841.89, 12 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 23.52..663.05
+    box (0.00, 0.00) 481.89 × 666.24 main.fol:1:2 baselines 23.52..663.05
+      box (0.00, 0.00) 481.89 × 32.28 main.fol:1:2 baselines 23.52..23.52 keep penalty 10000
+        text (0.00, 23.52) NewCM10-Bold 17.60 w 166.23 18 glyph(s) "Figures in the flow"
+      box (0.00, 50.76) 481.89 × 615.48 main.fol:3:1 baselines 21.02..612.29
+        box (0.00, 0.00) 481.89 × 29.14 main.fol:3:1 baselines 21.02..21.02 keep penalty 10000
+          text (0.00, 21.02) NewCM10-Bold 15.40 w 138.69 17 glyph(s) "Waves on a string"
+        box (0.00, 36.84) 481.89 × 45.47 main.fol:5:1 baselines 15.97..38.71
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 433.09 90 glyph(s) "A transverse wave on a string is drawn below as a graph of displacement against distance ("
+          text (433.09, 15.97) NewCM10-Regular 11.00 w 41.46 8 glyph(s) "Figure\u{a0}1"
+          text (474.55, 15.97) NewCM10-Regular 11.00 w 7.34 2 glyph(s) ")."
+          text (0.00, 38.71) NewCM10-Regular 11.00 w 251.42 54 glyph(s) "Its amplitude is the height of a crest above the axis."
+        box (0.00, 93.32) 481.89 × 127.57 main.fol:7:2 baselines 93.58..120.80
+          box (0.00, 0.00) 481.89 × 99.35 main.fol:7:10 baselines 93.58..93.58
+            box (150.94, 3.58) 180.00 × 90.00 main.fol:7:10
+              image (0.00, 0.00) 180.00 × 90.00 PNG 5ec2ff3884fea4d9 main.fol:7:10
+          box (0.00, 104.85) 481.89 × 22.72 main.fol:7:2 baselines 15.95..15.95
+            text (142.74, 15.95) NewCM10-Italic 11.00 w 196.42 39 glyph(s) "Figure\u{a0}1: A displacement–distance graph"
+        box (0.00, 231.88) 481.89 × 45.47 main.fol:9:1 baselines 15.97..38.71
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 69.70 15 glyph(s) "The circuit in "
+          text (69.70, 15.97) NewCM10-Regular 11.00 w 42.06 8 glyph(s) "Figure\u{a0}2"
+          text (111.76, 15.97) NewCM10-Regular 11.00 w 328.07 68 glyph(s) " is drawn as an SVG file, so it stays sharp at any zoom; the field in "
+          text (439.83, 15.97) NewCM10-Regular 11.00 w 42.06 8 glyph(s) "Figure\u{a0}3"
+          text (0.00, 38.71) NewCM10-Regular 11.00 w 111.45 21 glyph(s) "comes from a PDF file."
+        box (0.00, 288.35) 481.89 × 182.13 main.fol:11:2 baselines 148.14..175.37
+          box (0.00, 0.00) 481.89 × 153.92 main.fol:11:10 baselines 148.14..148.14
+            box (96.38, 3.58) 289.13 × 144.57 main.fol:11:10
+              image (0.00, 0.00) 289.13 × 144.57 SVG 9152bac75d928406 main.fol:11:10
+          box (0.00, 159.42) 481.89 × 22.72 main.fol:11:2 baselines 15.95..15.95
+            text (179.48, 15.95) NewCM10-Italic 11.00 w 122.92 26 glyph(s) "Figure\u{a0}2: A series circuit"
+        box (0.00, 481.49) 481.89 × 133.99 main.fol:13:2 baselines 103.57..130.80
+          box (0.00, 0.00) 481.89 × 109.35 main.fol:13:10 baselines 103.57..103.57
+            box (140.94, 3.57) 200.00 × 100.00 main.fol:13:10
+              image (0.00, 0.00) 200.00 × 100.00 PDF a320838240560ede main.fol:13:10
+          box (0.00, 114.85) 481.89 × 19.14 main.fol:13:2 baselines 15.95..15.95
+            text (145.42, 15.95) NewCM10-Italic 11.00 w 191.05 38 glyph(s) "Figure\u{a0}3: The field between two charges"
+page 2 595.28 × 841.89, 5 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 17.45..216.58
+    box (0.00, 0.00) 481.89 × 219.77 main.fol:1:2 baselines 17.45..216.58
+      box (0.00, 0.00) 481.89 × 219.77 main.fol:15:1 baselines 17.45..216.58
+        box (0.00, 0.00) 481.89 × 25.57 main.fol:15:1 baselines 17.45..17.45 keep penalty 10000
+          text (0.00, 17.45) NewCM10-Bold 15.40 w 64.02 8 glyph(s) "Pictures"
+        box (0.00, 33.27) 481.89 × 22.74 main.fol:17:1 baselines 15.97..15.97
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 192.95 39 glyph(s) "A photograph is kept as the JPEG it is:"
+        box (0.00, 67.00) 481.89 × 122.60 main.fol:19:2 baselines 88.61..115.84
+          box (0.00, 0.00) 481.89 × 94.39 main.fol:19:10 baselines 88.61..88.61
+            box (184.25, 3.58) 113.39 × 85.04 main.fol:19:10
+              image (0.00, 0.00) 113.39 × 85.04 JPEG 1f4d42dec29fdebf main.fol:19:10
+          box (0.00, 99.89) 481.89 × 22.72 main.fol:19:2 baselines 15.95..15.95
+            text (184.49, 15.95) NewCM10-Italic 11.00 w 112.91 22 glyph(s) "Figure\u{a0}4: A photograph"
+        box (0.00, 200.61) 481.89 × 19.16 main.fol:21:1 baselines 15.97..15.97
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 288.45 61 glyph(s) "Small pictures can stand in a line of text, such as a marker "
+          box (288.45, 7.97) 8.00 × 8.00 main.fol:21:63
+            image (0.00, 0.00) 8.00 × 8.00 WebP 7f16b6eda51126a7 main.fol:21:63
+          text (296.45, 15.97) NewCM10-Regular 11.00 w 59.40 13 glyph(s) " or a spring "
+          box (355.85, 3.97) 24.00 × 12.00 main.fol:21:135
+            image (0.00, 0.00) 24.00 × 12.00 GIF 9a6002d11bb95d18 main.fol:21:135
+          text (379.85, 15.97) NewCM10-Regular 11.00 w 77.08 15 glyph(s) " between words."

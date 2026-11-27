@@ -82,9 +82,9 @@ page 2 419.53 × 595.28, 19 line(s)
           box (0.00, 0.00) 328.82 × 42.44 main.fol:29:9 baselines 14.29..35.51
             text (0.00, 14.29) SourceSerif4-Regular 10.50 w 325.54 66 glyph(s) "A displacement–distance graph of a transverse wave shows its ampli"
             text (325.54, 14.29) SourceSerif4-Regular 10.50 w 3.28 1 glyph(s) "-"
-            text (0.00, 35.51) SourceSerif4-Regular 10.50 w 310.66 64 glyph(s) "tude and wavelength; a displacement–time graph shows its period."
+            text (9.08, 35.51) SourceSerif4-Regular 10.50 w 310.66 64 glyph(s) "tude and wavelength; a displacement–time graph shows its period."
           box (0.00, 47.69) 328.82 × 21.22 main.fol:29:2 baselines 14.29..14.29
-            text (0.00, 14.29) SourceSerif4-Regular 10.50 w 105.84 21 glyph(s) "Two views of one wave"
+            text (111.49, 14.29) SourceSerif4-Regular 10.50 w 105.84 21 glyph(s) "Two views of one wave"
         box (0.00, 180.54) 328.82 × 17.81 main.fol:31:1 baselines 14.29..14.29
           text (0.00, 14.29) SourceSerif4-Regular 10.50 w 262.62 57 glyph(s) "To measure the speed of sound in air, follow these steps:"
 page 3 419.53 × 595.28, 20 line(s)

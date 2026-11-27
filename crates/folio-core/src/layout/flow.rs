@@ -50,7 +50,7 @@ use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
 use super::master::{BlockBox, BreakBefore, length};
-use super::math::{Display, Maths, display_content};
+use super::math::{Display, Maths, display_content, laid_image};
 use super::page::{SizeBlock, SizeObject};
 use super::paragraph::{
     LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
@@ -58,7 +58,7 @@ use super::paragraph::{
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{Text, TextBlock, TextFlow, TextSource};
+use crate::text::{Text, TextBlock, TextFlow, TextImage, TextSource};
 
 /// The cost of a break that leaves a widow or an orphan (TeX's
 /// `\widowpenalty` and `\clubpenalty`).
@@ -76,11 +76,13 @@ pub const UNBREAKABLE: f64 = 100_000.0;
 /// [`Text::maths`](crate::text::Text::maths). One walk of the blocks gives
 /// both.
 pub(super) fn slots(
-    text: &Text,
+    root: &TextBlock,
+    notes: &[TextBlock],
     props: &Properties,
     width: Abs,
+    count: usize,
+    maths: &[crate::text::TextMath],
 ) -> (Vec<LineSlot>, Vec<(usize, Abs)>) {
-    let (root, count, maths) = (&text.root, text.paragraphs.len(), &text.maths);
     struct Walk<'a> {
         props: &'a Properties,
         displays: HashMap<Location, usize>,
@@ -125,7 +127,7 @@ pub(super) fn slots(
     let root_box = BlockBox::of(&root.style, props, root.span, Abs::zero(), width);
     walk(root, &root_box, &mut w);
     // A footnote's block is as wide as the body (SPEC §7.8).
-    for note in &text.notes {
+    for note in notes {
         let note_box = BlockBox::of(&note.style, props, note.span, Abs::zero(), width);
         walk(note, &note_box, &mut w);
     }
@@ -205,8 +207,11 @@ pub(super) struct InlineObject {
     /// Its size; `None` for an object whose content is not laid out yet.
     pub metrics: Option<ObjectMetrics>,
     /// What it draws, from the start of its baseline: a chunk of an inline
-    /// formula. `None` for an object drawn as its box.
+    /// formula or an image. `None` for an object drawn as its box.
     pub content: Option<EcoVec<(Point, FragmentItem)>>,
+    /// For an image, the image, which is sized again in lines of another
+    /// width, as its size can depend on theirs.
+    pub image: Option<TextImage>,
 }
 
 /// The sizes of a paragraph's objects as the paragraph builder reads them:
@@ -303,11 +308,30 @@ impl ParagraphInfo {
             offset: self.slot.offset,
             width: (self.slot.width + (width - body)).max(Abs::zero()),
         };
+        // Images are sized again in lines of the new width.
+        let objects: EcoVec<InlineObject> = if self.objects.iter().any(|o| o.image.is_some()) {
+            self.objects
+                .iter()
+                .map(|o| match &o.image {
+                    Some(image) => {
+                        let laid = laid_image(image, o.location, slot.width, self.indent);
+                        InlineObject {
+                            metrics: Some(laid.metrics),
+                            content: Some(laid.items),
+                            ..o.clone()
+                        }
+                    }
+                    None => o.clone(),
+                })
+                .collect()
+        } else {
+            self.objects.clone()
+        };
         let input = ParagraphInput {
             shaped: &self.shaped,
             style: self.style,
             segments: self.metrics.clone(),
-            objects: object_metrics(&self.objects),
+            objects: object_metrics(&objects),
         };
         let layout = caches.cache.layout(
             &input,
@@ -322,6 +346,7 @@ impl ParagraphInfo {
             layout,
             slot,
             segments,
+            objects,
             ..(**self).clone()
         };
         (caches.shared.paragraph(info, caches.now), true)
@@ -751,7 +776,7 @@ fn intern<T: Eq>(map: &Interned<T>, key: u64, value: T, now: u64) -> Arc<T> {
 /// hash differently; bytes are mixed in with their length, so byte strings
 /// of different lengths do not run together.
 #[derive(Debug, Copy, Clone)]
-pub(super) struct Fx(u64);
+pub(crate) struct Fx(u64);
 
 impl Default for Fx {
     fn default() -> Self {
@@ -993,7 +1018,7 @@ impl Builder<'_> {
             .sizes
             .inline
             .is_some_and(|size| paragraph.objects.iter().any(|o| size(o).is_some()));
-        if hooked || paragraph.objects.iter().any(|o| o.math.is_some()) {
+        if hooked || paragraph.objects.iter().any(super::math::sized) {
             objects = paragraph
                 .objects
                 .iter()
@@ -1008,6 +1033,11 @@ impl Builder<'_> {
                             None
                         } else {
                             math.map(|(_, items)| items.clone())
+                        },
+                        image: if hook.is_some() {
+                            None
+                        } else {
+                            o.image.clone()
                         },
                     }
                 })

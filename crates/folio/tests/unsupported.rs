@@ -78,7 +78,10 @@ fn lists_the_warnings_for_what_is_not_supported() {
                 + Item\n";
     let mut world = world(style, text);
     world
-        .set_file("ball.png", b"not read yet".to_vec())
+        .set_file(
+            "ball.png",
+            include_bytes!("../../../tests/corpus/figures/assets/wave.png").to_vec(),
+        )
         .unwrap();
     let compiled = compile(&world, Target::Pdf);
     let not_implemented =
@@ -115,17 +118,16 @@ fn lists_the_warnings_for_what_is_not_supported() {
         ),
         // The `header` of the ignored `page:first` rule is not reported.
         warning(&not_implemented("display"), "display: hidden;"),
-        warning(&not_implemented("width"), "width: 50%;"),
+        // Only images read `width`: at the element, once per kind.
+        warning(
+            "`width` is not implemented yet for `paragraph`, so it has no effect",
+            "See",
+        ),
         warning(&not_implemented("grid-snap"), "grid-snap: false;"),
         warning(&not_implemented("baseline-grid"), "baseline-grid: 12pt;"),
         warning(&not_implemented("header"), "header: \"Exam\";"),
         warning(&not_implemented("placement"), "placement: top;"),
         warning(&not_implemented("template"), "template: \"bold\";"),
-        // Once per build and kind, at the first.
-        warning(
-            "images are not laid out yet, so the output leaves them out",
-            "image(\"ball.png\")",
-        ),
     ];
     let mut got = located(&world, &compiled);
     got.sort();
