@@ -433,13 +433,16 @@ impl<'a> Walker<'a> {
             self.root_style = Some(style.clone());
         }
         // A footnote's note inherits from the document, not from its
-        // anchor, so that every note on a page looks alike; the footnote
+        // anchor, so that every note on a page looks alike, but keeps the
+        // language and font of the passage it is anchored in; the footnote
         // itself, which styles the marker at its anchor, inherits from the
-        // anchor (SPEC §7.8, D-327-1, D-327-3).
-        let note = match child {
-            Child::Element(element) if is_footnote(element) => {
-                let root = self.root_style.clone();
-                Some(self.compute(root.as_ref(), &matched, &local))
+        // anchor (SPEC §7.8, D-327-1, D-327-3, D-327-4).
+        let note = match (child, parent, self.root_style.clone()) {
+            (Child::Element(element), Some(anchor), Some(root)) if is_footnote(element) => {
+                let props = &self.cascade.properties;
+                let kept = [props.builtin("lang"), props.builtin("font")];
+                let base = self.styler.adopt(&root, anchor, &kept);
+                Some(self.compute(Some(&base), &matched, &local))
             }
             _ => None,
         };
