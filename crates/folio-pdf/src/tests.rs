@@ -1103,7 +1103,12 @@ fn mcids(nodes: &[Node], role: &str, inside: bool, out: &mut Vec<i32>) {
         match node {
             Node::Leaf(id) if inside => {
                 let debug = format!("{id:?}");
-                let at = debug.find("mcid: ").expect("a page's content") + 6;
+                // krilla shows no accessor: its derived `Debug` form names
+                // the id, `PageTagIdentifier { page_index: 0, mcid: 3 }`.
+                let at = debug
+                    .find("mcid: ")
+                    .unwrap_or_else(|| panic!("no `mcid: ` in krilla's {debug}"))
+                    + 6;
                 let digits: String = debug[at..]
                     .chars()
                     .take_while(char::is_ascii_digit)
@@ -1170,4 +1175,79 @@ fn footnotes_are_written_after_their_page() {
         notes.iter().all(|n| n > last_body),
         "body {body:?}, notes {notes:?}"
     );
+}
+
+/// The destination and the top of each link annotation, as the PDF
+/// writes them.
+fn annotations(pdf: &str) -> Vec<(String, f64)> {
+    pdf.split("endobj")
+        .filter(|object| object.contains("/Subtype/Link"))
+        .map(|object| {
+            let dest = object.split("/Dest(").nth(1).unwrap();
+            let dest = dest[..dest.find(')').unwrap()].to_string();
+            let rect = object.split("/Rect[").nth(1).unwrap();
+            let rect = &rect[..rect.find(']').unwrap()];
+            let top: f64 = rect.split_whitespace().nth(3).unwrap().parse().unwrap();
+            (dest, top)
+        })
+        .collect()
+}
+
+/// Drawing a footnote after its page leaves each link where its text is:
+/// three references from one source, the middle one in a note, go to
+/// their own destinations in document order (#308).
+#[test]
+fn links_in_footnotes_keep_their_destinations() {
+    let note = Tag {
+        foot: true,
+        ..tag(Role::Note, 4, vec![tag(Role::Paragraph, 5, vec![])])
+    };
+    let structure = tag(Role::Document, 1, vec![tag(Role::Paragraph, 2, vec![note])]);
+    let pages = [page(vec![boxed(
+        1,
+        vec![boxed(
+            2,
+            vec![
+                run("see", 30),
+                boxed(4, vec![boxed(5, vec![run("see", 30)])]),
+                run("see", 30),
+            ],
+        )],
+    )])];
+    let at = Location {
+        source: SourceRef(2),
+        instance: Location::UNKNOWN_INSTANCE,
+    };
+    let navigation = Navigation {
+        destinations: ["a", "b", "c"]
+            .into_iter()
+            .map(|name| Destination {
+                name: name.into(),
+                location: at,
+            })
+            .collect(),
+        links: ["a", "b", "c"]
+            .into_iter()
+            .map(|name| Link {
+                source: SourceRef(30),
+                destination: Some(name.into()),
+                text: "see".into(),
+            })
+            .collect(),
+        page_labels: Vec::new(),
+    };
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    let mut found = annotations(&text(&written.bytes));
+    assert_eq!(found.len(), 3, "{found:?}");
+    // From the top of the page down: the body's first reference, its
+    // last, then the note's, whose run lies lowest (its box is the second
+    // item, with a box inside it). Drawn last, the note would take the
+    // last reference's link, and the last reference the note's.
+    found.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let order: Vec<&str> = found.iter().map(|(d, _)| d.as_str()).collect();
+    assert_eq!(order, ["a", "c", "b"]);
 }

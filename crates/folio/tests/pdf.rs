@@ -190,8 +190,9 @@ fn collect_notes(fragment: &Fragment, notes: &HashSet<Location>, at: Point, out:
 }
 
 /// The glyph runs in `fragment`, at `at`, in drawing order, each with the
-/// baseline of the line it is on, to a tenth of a point (a raised marker
-/// is on the line of the text after it).
+/// line it is on: its baseline in buckets of 4pt, a run within one bucket
+/// of the run before it on that run's line, so that a raised marker is on
+/// the line of the text after it.
 fn positioned(fragment: &Fragment, at: Point, out: &mut Vec<(i64, String)>) {
     for (pos, item) in fragment.items.iter() {
         let pos = Point::new(at.x + pos.x, at.y + pos.y);
