@@ -62,6 +62,21 @@ pub struct ComponentManifest {
 }
 
 impl ComponentManifest {
+    /// The manifest of a component with a name, version and targets, that
+    /// targets this crate's [`INTERFACE_VERSION`].
+    pub fn new(
+        name: ComponentName,
+        version: semver::Version,
+        targets: impl IntoIterator<Item = Target>,
+    ) -> Self {
+        Self {
+            name,
+            version,
+            interface: INTERFACE_VERSION,
+            targets: targets.into_iter().collect(),
+        }
+    }
+
     /// The namespace of the component's elements and properties.
     pub fn namespace(&self) -> Name {
         self.name.namespace()
@@ -90,4 +105,11 @@ pub struct Declarations {
     /// ones, whatever the project's lockfile binds; another component's
     /// names must be qualified. It may not `@import`.
     pub stylesheet: Option<EcoString>,
+}
+
+impl Declarations {
+    /// Declarations that add nothing; a component sets the fields it needs.
+    pub fn new() -> Self {
+        Self::default()
+    }
 }

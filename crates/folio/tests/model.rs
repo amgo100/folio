@@ -8,7 +8,7 @@ use folio::model::Document;
 use folio::{Name, Registry, Target, World};
 use folio_component::{
     Body, Component, ComponentManifest, ComponentName, ContentKind, CounterDecl, Declarations,
-    ElementKind, ElementSchema, FieldDecl, FieldType, INTERFACE_VERSION, LocaleString, SlotDecl,
+    ElementKind, ElementSchema, FieldDecl, FieldType, LocaleString, SlotDecl,
 };
 
 const MANIFEST: &str = "\
@@ -34,12 +34,11 @@ struct Exam;
 
 impl Component for Exam {
     fn manifest(&self) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new("exam").unwrap(),
-            version: semver::Version::new(0, 0, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
     }
 
     fn declarations(&self) -> Declarations {
@@ -105,15 +104,14 @@ impl Component for Exam {
             },
         ]));
 
-        Declarations {
-            elements: EcoVec::from([question, answer, mark, example]),
-            locale_strings: EcoVec::from([LocaleString {
-                lang: "en".into(),
-                key: name("question"),
-                text: "Question".into(),
-            }]),
-            ..Declarations::default()
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([question, answer, mark, example]);
+        declarations.locale_strings = EcoVec::from([LocaleString {
+            lang: "en".into(),
+            key: name("question"),
+            text: "Question".into(),
+        }]);
+        declarations
     }
 }
 

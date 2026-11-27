@@ -10,7 +10,7 @@ use folio::eval::{Content, Value};
 use folio::{Date, Event, Limits, Name, Registry, Target, World};
 use folio_component::{
     Body, Component, ComponentManifest, ComponentName, Declarations, ElementKind, ElementSchema,
-    FieldDecl, FieldType, INTERFACE_VERSION,
+    FieldDecl, FieldType,
 };
 
 const MANIFEST: &str = "\
@@ -1201,12 +1201,11 @@ struct Exam(&'static str);
 
 impl Component for Exam {
     fn manifest(&self) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new(self.0).unwrap(),
-            version: semver::Version::new(0, 0, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new(self.0).unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
     }
 
     fn declarations(&self) -> Declarations {
@@ -1216,10 +1215,9 @@ impl Component for Exam {
             FieldType::Int,
         )]);
         question.body = Body::Content(folio_component::ContentKind::Blocks);
-        Declarations {
-            elements: EcoVec::from([question]),
-            ..Declarations::default()
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([question]);
+        declarations
     }
 }
 

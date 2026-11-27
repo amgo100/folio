@@ -22,3 +22,24 @@ pub struct TemplateDecl {
     /// `render` block, such as `body: slot(statement) rule(0.4pt);`.
     pub parts: EcoString,
 }
+
+impl TemplateDecl {
+    /// The default template of an element.
+    pub fn new(element: Name, parts: impl Into<EcoString>) -> Self {
+        Self {
+            element,
+            name: None,
+            parts: parts.into(),
+        }
+    }
+
+    /// A named template of an element, which stylesheets select with
+    /// `template: <name>`.
+    pub fn named(element: Name, name: Name, parts: impl Into<EcoString>) -> Self {
+        Self {
+            element,
+            name: Some(name),
+            parts: parts.into(),
+        }
+    }
+}

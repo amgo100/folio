@@ -5,9 +5,8 @@
 use ecow::EcoVec;
 use folio_component::{
     BODY, Body, Component, ComponentManifest, ComponentName, ContentKind, Declarations,
-    ElementKind, ElementSchema, FieldDecl, FieldType, INTERFACE_VERSION, Instance, InstanceTree,
-    LintDiagnostic, Location, Name, Part, QualifiedName, Registry, Severity, SourceRef, Target,
-    Value,
+    ElementKind, ElementSchema, FieldDecl, FieldType, Instance, InstanceTree, LintDiagnostic,
+    Location, Name, Part, QualifiedName, Registry, Severity, SourceRef, Target, Value,
 };
 
 fn name(text: &str) -> Name {
@@ -21,12 +20,11 @@ struct Marks;
 
 impl Component for Marks {
     fn manifest(&self) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new("exam").unwrap(),
-            version: semver::Version::new(0, 0, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
     }
 
     fn declarations(&self) -> Declarations {
@@ -36,15 +34,14 @@ impl Component for Marks {
             schema.body = Body::Content(ContentKind::Blocks);
             schema
         };
-        Declarations {
-            elements: EcoVec::from([element("question"), element("part")]),
-            stylesheet: Some(
-                "question { space-before: 1em; }\n\
-                 @variant exam { part { indent: 1em; } }\n"
-                    .into(),
-            ),
-            ..Declarations::default()
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([element("question"), element("part")]);
+        declarations.stylesheet = Some(
+            "question { space-before: 1em; }\n\
+             @variant exam { part { indent: 1em; } }\n"
+                .into(),
+        );
+        declarations
     }
 
     fn lint(&self, view: &InstanceTree) -> EcoVec<LintDiagnostic> {

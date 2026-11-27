@@ -4,8 +4,8 @@ use ecow::EcoVec;
 use folio::style::{NodeName, Styled, StyledNode};
 use folio::{Name, Registry, Target, World};
 use folio_component::{
-    Abs, Body, Component, ComponentManifest, ComponentName, ContentKind, Declarations, Effect,
-    ElementKind, ElementSchema, INTERFACE_VERSION, PropertyDecl, PropertyType, Value,
+    Abs, Body, Component, ComponentManifest, ComponentName, ContentKind, Declarations, ElementKind,
+    ElementSchema, PropertyDecl, PropertyType, Value,
 };
 
 const MANIFEST: &str = r#"
@@ -35,29 +35,25 @@ struct Sheet {
 
 impl Component for Sheet {
     fn manifest(&self) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new(self.namespace).unwrap(),
-            version: semver::Version::new(0, 0, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new(self.namespace).unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
     }
 
     fn declarations(&self) -> Declarations {
         let mut item = ElementSchema::new(name("item"), ElementKind::Block);
         item.body = Body::Content(ContentKind::Blocks);
-        Declarations {
-            elements: EcoVec::from([item]),
-            properties: EcoVec::from([PropertyDecl {
-                name: name("gap"),
-                ty: PropertyType::Length,
-                initial: Value::Length(Abs::zero()),
-                inherited: false,
-                effect: Effect::Layout,
-            }]),
-            stylesheet: Some(self.stylesheet.into()),
-            ..Declarations::default()
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([item]);
+        declarations.properties = EcoVec::from([PropertyDecl::new(
+            name("gap"),
+            PropertyType::Length,
+            Value::Length(Abs::zero()),
+        )]);
+        declarations.stylesheet = Some(self.stylesheet.into());
+        declarations
     }
 }
 

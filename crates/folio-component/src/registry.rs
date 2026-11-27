@@ -242,6 +242,19 @@ fn check_elements(cx: &mut Checker, elements: &[ElementSchema], strings: &[Local
     }
 }
 
+/// Whether a field type holds content inside an array or dictionary, at any
+/// depth, which the core does not locate or style (SPEC §3.2).
+fn holds_collected_content(ty: &FieldType) -> bool {
+    fn holds(ty: &FieldType) -> bool {
+        match ty {
+            FieldType::Content => true,
+            FieldType::Array(item) | FieldType::Dict(item) => holds(item),
+            _ => false,
+        }
+    }
+    matches!(ty, FieldType::Array(item) | FieldType::Dict(item) if holds(item))
+}
+
 fn check_element(cx: &mut Checker, element: &ElementSchema, strings: &[LocaleString]) {
     let name = &element.name;
     let fields: Vec<_> = element.fields.iter().map(|f| &f.name).collect();
@@ -277,6 +290,14 @@ fn check_element(cx: &mut Checker, element: &ElementSchema, strings: &[LocaleStr
                     "field `{field_name}` of element `{name}` lists option {o:?} more than once"
                 )
             });
+        }
+        if holds_collected_content(&field.ty) {
+            cx.error(eco_format!(
+                "field `{field_name}` of element `{name}` has type `{}`: arrays and dictionaries \
+                 of content are not supported; hold several pieces of content as child elements \
+                 of the body",
+                field.ty
+            ));
         }
         if field.ty.is_presentational() && !field.layout_data {
             cx.error(eco_format!(
@@ -436,7 +457,6 @@ mod tests {
     use crate::element::{ContentKind, ElementKind, FieldDecl, SlotDecl};
     use crate::geom::Abs;
     use crate::names::Target;
-    use crate::property::Effect;
     use crate::value::Value;
 
     fn name(text: &str) -> Name {
@@ -456,12 +476,11 @@ mod tests {
     }
 
     fn manifest(name: &str) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new(name).unwrap(),
-            version: semver::Version::new(0, 1, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new(name).unwrap(),
+            semver::Version::new(0, 1, 0),
+            [Target::Pdf],
+        )
     }
 
     fn example() -> Declarations {
@@ -485,27 +504,23 @@ mod tests {
             },
         ]));
         element.ref_key = Some(name("example"));
-        Declarations {
-            elements: EcoVec::from([element]),
-            properties: EcoVec::from([PropertyDecl {
-                name: name("example-gap"),
-                ty: PropertyType::Length,
-                initial: Value::Length(Abs::pt(6.0)),
-                inherited: false,
-                effect: Effect::Layout,
-            }]),
-            templates: EcoVec::from([TemplateDecl {
-                element: name("example"),
-                name: None,
-                parts: "body: slot(statement) rule(0.4pt) slot(solution);".into(),
-            }]),
-            locale_strings: EcoVec::from([LocaleString {
-                lang: "en".into(),
-                key: name("example"),
-                text: "Example".into(),
-            }]),
-            stylesheet: None,
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([element]);
+        declarations.properties = EcoVec::from([PropertyDecl::new(
+            name("example-gap"),
+            PropertyType::Length,
+            Value::Length(Abs::pt(6.0)),
+        )]);
+        declarations.templates = EcoVec::from([TemplateDecl::new(
+            name("example"),
+            "body: slot(statement) rule(0.4pt) slot(solution);",
+        )]);
+        declarations.locale_strings = EcoVec::from([LocaleString {
+            lang: "en".into(),
+            key: name("example"),
+            text: "Example".into(),
+        }]);
+        declarations
     }
 
     fn messages(result: Result<(), Vec<RegistryError>>) -> Vec<String> {
@@ -552,6 +567,39 @@ mod tests {
     }
 
     #[test]
+    fn rejects_content_in_arrays_and_dictionaries() {
+        let mut decls = example();
+        let element = &mut decls.elements.make_mut()[0];
+        element.fields.push(FieldDecl::with_default(
+            name("options"),
+            FieldType::Array(Box::new(FieldType::Content)),
+            Value::None,
+        ));
+        element.fields.push(FieldDecl::with_default(
+            name("cells"),
+            FieldType::Dict(Box::new(FieldType::Array(Box::new(FieldType::Content)))),
+            Value::None,
+        ));
+        element.fields.push(FieldDecl::with_default(
+            name("tags"),
+            FieldType::Array(Box::new(FieldType::Str)),
+            Value::None,
+        ));
+        let result = Registry::new().register(&Test(manifest("blocks"), decls));
+        assert_eq!(
+            messages(result),
+            [
+                "field `options` of element `example` has type `array(content)`: arrays and \
+                 dictionaries of content are not supported; hold several pieces of content as \
+                 child elements of the body",
+                "field `cells` of element `example` has type `dict(array(content))`: arrays and \
+                 dictionaries of content are not supported; hold several pieces of content as \
+                 child elements of the body",
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_bad_declarations() {
         let mut decls = example();
         let element = &mut decls.elements.make_mut()[0];
@@ -584,18 +632,14 @@ mod tests {
             Value::None,
         ));
         decls.properties.make_mut()[0].initial = Value::Int(1);
-        decls.properties.push(PropertyDecl {
-            name: name("example-fill"),
-            ty: PropertyType::Keyword(EcoVec::from([name("balance"), name("auto")])),
-            initial: Value::Keyword(name("balance")),
-            inherited: false,
-            effect: Effect::Layout,
-        });
-        decls.templates.push(TemplateDecl {
-            element: name("figure"),
-            name: Some(name("wide")),
-            parts: " ".into(),
-        });
+        decls.properties.push(PropertyDecl::new(
+            name("example-fill"),
+            PropertyType::Keyword(EcoVec::from([name("balance"), name("auto")])),
+            Value::Keyword(name("balance")),
+        ));
+        decls
+            .templates
+            .push(TemplateDecl::named(name("figure"), name("wide"), " "));
         decls.locale_strings.push(LocaleString {
             lang: "EN".into(),
             key: name("example"),

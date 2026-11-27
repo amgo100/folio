@@ -20,6 +20,31 @@ pub struct PropertyDecl {
     pub effect: Effect,
 }
 
+impl PropertyDecl {
+    /// A property that does not inherit and affects layout.
+    pub fn new(name: Name, ty: PropertyType, initial: Value) -> Self {
+        Self {
+            name,
+            ty,
+            initial,
+            inherited: false,
+            effect: Effect::Layout,
+        }
+    }
+
+    /// The property, inheriting or not.
+    pub fn with_inherited(mut self, inherited: bool) -> Self {
+        self.inherited = inherited;
+        self
+    }
+
+    /// The property, with what a change to its value can change.
+    pub fn with_effect(mut self, effect: Effect) -> Self {
+        self.effect = effect;
+        self
+    }
+}
+
 /// What a change to a property's value can change (SPEC §3.5, §10.2).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Effect {
