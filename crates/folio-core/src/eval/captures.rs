@@ -177,9 +177,14 @@ impl Visitor {
         }
     }
 
+    /// Visits a node's children, on a new stack segment if the stack is
+    /// running low: a chain of a math operator such as `1/1/…/x` nests the
+    /// syntax as deeply as it is long.
     fn children(&mut self, node: &SyntaxNode) {
-        for child in node.children() {
-            self.visit(child);
-        }
+        stacker::maybe_grow(64 * 1024, 1024 * 1024, || {
+            for child in node.children() {
+                self.visit(child);
+            }
+        });
     }
 }

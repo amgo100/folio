@@ -188,10 +188,22 @@ impl Vm<'_> {
     }
 
     /// Evaluates one math expression into a row.
+    ///
+    /// The row is checked against [`MAX_NESTING`] before its expression is
+    /// evaluated: a chain such as `1/1/…/x` nests as deeply as it is long,
+    /// and a check on the way back up would come after the stack ran out.
     fn math_row(&mut self, expr: ast::Expr<'_>, level: Level) -> EvalResult<Row> {
-        let mut nodes = Vec::new();
-        self.math_expr(expr, level, &mut nodes)?;
-        self.row_of(nodes, expr.span())
+        if self.math_depth >= MAX_NESTING {
+            return Err(nesting_exceeded(expr.span(), "math is").into());
+        }
+        self.math_depth += 1;
+        let row = self.nest(|vm| {
+            let mut nodes = Vec::new();
+            vm.math_expr(expr, level, &mut nodes)?;
+            vm.row_of(nodes, expr.span())
+        });
+        self.math_depth -= 1;
+        row
     }
 
     /// Evaluates one math expression, appending its nodes to `out`.
@@ -208,7 +220,7 @@ impl Vm<'_> {
             // A group: what parentheses held, or a base and its arguments.
             ast::Expr::Math(group) => {
                 for child in group.exprs() {
-                    self.math_expr(child, level, out)?;
+                    self.nest(|vm| vm.math_expr(child, level, out))?;
                 }
             }
             ast::Expr::MathText(text) => out.push(match text.get() {

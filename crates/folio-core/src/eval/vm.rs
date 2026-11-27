@@ -92,6 +92,9 @@ pub(crate) struct Vm<'a> {
     /// bound. Reading one fails without another error, since the failure
     /// was reported where it happened.
     poisoned: BTreeSet<EcoString>,
+    /// How many rows of an equation enclose the math expression being
+    /// evaluated, which may be at most [`MAX_NESTING`].
+    pub(super) math_depth: u32,
 }
 
 /// What an error marker shows (SPEC §12.2).
@@ -170,6 +173,7 @@ impl<'a> Vm<'a> {
             recover: false,
             recovered: IndexSet::new(),
             poisoned: BTreeSet::new(),
+            math_depth: 0,
         }
     }
 
@@ -645,10 +649,12 @@ impl<'a> Vm<'a> {
 
     /// Runs `f`, which recurses into a nested expression, on a new stack
     /// segment if the stack is running low. Calls nest at most
-    /// [`Limits::depth`] deep and expressions at most as deep as the parser
-    /// allows, but deep expressions in deep calls would exhaust a thread's
-    /// stack.
-    fn nest<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+    /// [`Limits::depth`] deep, code expressions at most as deep as the
+    /// parser allows, and math expressions at most [`MAX_NESTING`] deep
+    /// (the parser does not limit a chain of `/`, `^` or `_`, which wraps
+    /// without nesting the parser's own calls), but deep expressions in
+    /// deep calls would exhaust a thread's stack.
+    pub(super) fn nest<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         stacker::maybe_grow(STACK_RED_ZONE, STACK_SEGMENT, || f(self))
     }
 
