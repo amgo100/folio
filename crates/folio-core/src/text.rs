@@ -274,6 +274,10 @@ pub struct TextSource {
     /// [`TextSource::WHOLE`] for text that the node gave in no way the span
     /// map can follow.
     pub within: Range<usize>,
+    /// The innermost element instance the text is in, for provenance (SPEC
+    /// §6.4), or [`Location::DETACHED`] for text of the paragraph's own
+    /// element ([`TextParagraph::location`]).
+    pub location: Location,
 }
 
 impl TextSource {
@@ -504,6 +508,9 @@ struct Builder {
     anchors: Vec<TextAnchor>,
     /// A quotation mark whose form waits for the character after it.
     quote: Option<Quote>,
+    /// The innermost inline element instance that text appended now is
+    /// in, or [`Location::DETACHED`] for the paragraph's own element.
+    within: Location,
 }
 
 /// A quotation mark of markup, in a style and its language.
@@ -853,7 +860,27 @@ impl Collector<'_> {
         }
     }
 
+    /// Collects an inline element: its text comes from its instance.
     fn inline_element<'a>(
+        &mut self,
+        element: &'a Element,
+        node: &'a StyledNode,
+        out: &mut Builder,
+        anchored: &mut Vec<Anchored<'a>>,
+    ) {
+        // A node without a location, such as generated text, is in the
+        // instance around it.
+        let within = if node.location == Location::DETACHED {
+            out.within
+        } else {
+            node.location
+        };
+        let outer = std::mem::replace(&mut out.within, within);
+        self.inline_instance(element, node, out, anchored);
+        out.within = outer;
+    }
+
+    fn inline_instance<'a>(
         &mut self,
         element: &'a Element,
         node: &'a StyledNode,
@@ -1302,6 +1329,7 @@ impl Builder {
                 range: start..end,
                 span,
                 within,
+                location: self.within,
             });
         }
         let report = if implied { Span::detached() } else { span };

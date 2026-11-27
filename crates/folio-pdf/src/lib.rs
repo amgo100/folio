@@ -150,8 +150,7 @@ pub struct Destination {
     pub name: EcoString,
     /// The element instance at whose first box it is: the top left corner
     /// of the first group or object of it that the pages draw, or else of
-    /// the first glyph run of its source.
-    /// [`Location::UNKNOWN_INSTANCE`] matches a box of any instance.
+    /// the first glyph run of its instance.
     pub location: Location,
 }
 
@@ -342,8 +341,7 @@ pub struct Tag {
     /// Which instance of the source's element the node is, as its
     /// fragments name it ([`Fragment::location`]): the blocks that a loop
     /// or the calls of a closure make share a source and differ here.
-    /// [`Location::UNKNOWN_INSTANCE`] matches a box of any instance.
-    pub instance: u32,
+    pub instance: u64,
     /// The node's text where the writer needs it whole: a heading's, for
     /// its structure element's title and its bookmark; a formula's
     /// source, for its alternate description.
@@ -359,13 +357,13 @@ pub struct Tag {
 }
 
 impl Tag {
-    /// A node without text or children, of any instance of `source`
-    /// ([`Location::UNKNOWN_INSTANCE`]).
-    pub fn new(role: Role, source: SourceRef) -> Self {
+    /// A node without text or children, of the element instance at
+    /// `location`.
+    pub fn new(role: Role, location: Location) -> Self {
         Self {
             role,
-            source,
-            instance: Location::UNKNOWN_INSTANCE,
+            source: location.source,
+            instance: location.instance,
             text: None,
             children: Vec::new(),
             foot: false,
@@ -1015,7 +1013,7 @@ impl<'a> Links<'a> {
 
 /// Where each named destination of a document is: the top left corner of
 /// the first group or object of its element instance that the pages draw,
-/// or else of the first glyph run of its source.
+/// or else of the first glyph that names the instance.
 fn places(document: &Document<'_>) -> HashMap<EcoString, XyzDestination> {
     let destinations = &document.navigation.destinations;
     let mut places = HashMap::new();
@@ -1044,14 +1042,20 @@ fn places(document: &Document<'_>) -> HashMap<EcoString, XyzDestination> {
                 }
                 FragmentItem::Object(object) => find(object.location, true, at),
                 FragmentItem::Image(image) => find(image.location, true, at),
+                // The first glyph of each instance in the run.
                 FragmentItem::Text(run) => {
-                    if let Some(glyph) = run.glyphs.first() {
-                        let location = Location {
-                            source: glyph.source.0,
-                            instance: Location::UNKNOWN_INSTANCE,
+                    let mut x = at.x;
+                    let mut last = None;
+                    for (i, glyph) in run.glyphs.iter().enumerate() {
+                        let location = match run.instance(i) {
+                            Location::DETACHED => fragment.location(),
+                            instance => instance,
                         };
-                        let top = Point::new(at.x, at.y - run.size);
-                        find(location, false, top);
+                        if last != Some(location) {
+                            last = Some(location);
+                            find(location, false, Point::new(x, at.y - run.size));
+                        }
+                        x += glyph.x_advance.at(run.size);
                     }
                 }
                 FragmentItem::Shape { .. } => {}
@@ -1064,10 +1068,7 @@ fn places(document: &Document<'_>) -> HashMap<EcoString, XyzDestination> {
                 return;
             };
             for &i in candidates {
-                let wanted = destinations[i].location.instance;
-                let matches = wanted == location.instance
-                    || wanted == Location::UNKNOWN_INSTANCE
-                    || location.instance == Location::UNKNOWN_INSTANCE;
+                let matches = destinations[i].location.instance == location.instance;
                 let slot = if boxed { &mut boxes[i] } else { &mut runs[i] };
                 if matches && slot.is_none() {
                     *slot = Some((index, at));
@@ -1809,6 +1810,7 @@ mod preflight_tests {
                     source: (SourceRef(source), range.clone()),
                 })
                 .collect(),
+            instances: Default::default(),
         })
     }
 
@@ -1821,9 +1823,17 @@ mod preflight_tests {
         run(text, source, &glyphs)
     }
 
+    /// The first instance of node `source`.
+    fn at(source: u64) -> Location {
+        Location {
+            source: SourceRef(source),
+            instance: 0,
+        }
+    }
+
     fn boxed(source: u64, items: Vec<FragmentItem>) -> FragmentItem {
         let mut fragment =
-            Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(100.0))).with_source(SourceRef(source));
+            Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(100.0))).with_location(at(source));
         for (i, item) in items.into_iter().enumerate() {
             fragment.push(
                 Point::new(Abs::zero(), Abs::pt(12.0 * i as f64 + 10.0)),
@@ -1835,7 +1845,7 @@ mod preflight_tests {
 
     fn page(items: Vec<FragmentItem>) -> Fragment {
         let mut page =
-            Fragment::new(Size::new(Abs::pt(400.0), Abs::pt(600.0))).with_source(SourceRef(1));
+            Fragment::new(Size::new(Abs::pt(400.0), Abs::pt(600.0))).with_location(at(1));
         page.push(Point::new(Abs::pt(50.0), Abs::pt(50.0)), boxed(1, items));
         page
     }
@@ -1846,11 +1856,11 @@ mod preflight_tests {
     /// warnings, in the validator's order, and that the document is then
     /// written once.
     fn check(ua: bool, heading: Option<&str>, body: FragmentItem) {
-        let mut head = Tag::new(Role::Heading, SourceRef(2));
+        let mut head = Tag::new(Role::Heading, at(2));
         head.text = heading.map(Into::into);
-        let mut section = Tag::new(Role::Section, SourceRef(2));
-        section.children = vec![head, Tag::new(Role::Paragraph, SourceRef(3))];
-        let mut root = Tag::new(Role::Document, SourceRef(1));
+        let mut section = Tag::new(Role::Section, at(2));
+        section.children = vec![head, Tag::new(Role::Paragraph, at(3))];
+        let mut root = Tag::new(Role::Document, at(1));
         root.children = vec![section];
         let section = boxed(
             2,

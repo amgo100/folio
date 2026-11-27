@@ -47,18 +47,20 @@ impl SourceRef {
 /// A span is not enough to say that: every iteration of a loop, and every
 /// call of a closure, makes its elements from the same source node. A
 /// location is that node's reference with a number that tells apart the
-/// instances it made, counted in the order of the document tree. It stays
-/// the same across edits that leave its node's span and the instances made
-/// before it from the same node alone, such as an edit to another
-/// paragraph. Locations are compared, never ordered or written to output:
-/// a reparse may renumber spans (SPEC §2.3, §2.4).
+/// instances it made: a key of the instance's origin, the loop iterations
+/// and closure calls that made it, so that the instance made by the same
+/// iteration pairs across the variants of a numbering group (SPEC §6.1).
+/// It stays the same across edits that leave its node's span and origin
+/// alone, such as an edit to another paragraph or an inserted call.
+/// Locations are compared, never ordered or written to output: a reparse
+/// may renumber spans (SPEC §2.3, §2.4).
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Location {
     /// The node that made the instance: its markup or its call.
     pub source: SourceRef,
-    /// Which of the node's instances it is: a number that only the core
+    /// Which of the node's instances it is: a key that only the core
     /// interprets.
-    pub instance: u32,
+    pub instance: u64,
 }
 
 impl Location {
@@ -67,12 +69,6 @@ impl Location {
         source: SourceRef::DETACHED,
         instance: 0,
     };
-
-    /// The instance of a box whose maker knew only its node's
-    /// [`SourceRef`], not which instance of it the box is
-    /// ([`crate::Fragment::with_source`]). The core issues no location
-    /// with it.
-    pub const UNKNOWN_INSTANCE: u32 = u32::MAX;
 }
 
 /// A run of glyphs in one font, size and paint, on one baseline.
@@ -91,9 +87,27 @@ pub struct GlyphRun {
     pub text: EcoString,
     /// The glyphs, in visual order.
     pub glyphs: EcoVec<Glyph>,
+    /// Which element instance each glyph comes from, for provenance (SPEC
+    /// §6.4): the index of the first glyph from an instance, with its
+    /// location, in the order of the glyphs, wherever the instance changes.
+    /// A glyph before the first entry, or of an entry with
+    /// [`Location::DETACHED`], comes from the instance of the box around
+    /// the run. A run in one instance, such as a run of a formula, has no
+    /// entries.
+    pub instances: EcoVec<(u32, Location)>,
 }
 
 impl GlyphRun {
+    /// The element instance the glyph at `index` comes from, or
+    /// [`Location::DETACHED`] for that of the box around the run.
+    pub fn instance(&self, index: usize) -> Location {
+        let i = self
+            .instances
+            .partition_point(|&(first, _)| first as usize <= index);
+        i.checked_sub(1)
+            .map_or(Location::DETACHED, |i| self.instances[i].1)
+    }
+
     /// The width of the run: the sum of the glyph advances.
     pub fn width(&self) -> Abs {
         self.glyphs.iter().fold(Abs::zero(), |width, glyph| {
