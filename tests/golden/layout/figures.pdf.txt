@@ -64,10 +64,10 @@ page 2 595.28 × 841.89, 8 line(s)
               image (0.00, 0.00) 385.51 × 192.76 PDF 6c79c3476daac8b5 main.fol:21:10
           box (0.00, 207.61) 481.89 × 19.14 main.fol:21:2 baselines 15.95..15.95
             text (150.19, 15.95) NewCM10-Italic 11.00 w 181.50 36 glyph(s) "Figure\u{a0}5: Colour swatches and blends"
-page 3 595.28 × 841.89, 5 line(s)
-  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 17.45..216.58
-    box (0.00, 0.00) 481.89 × 219.77 main.fol:1:2 baselines 17.45..216.58
-      box (0.00, 0.00) 481.89 × 219.77 main.fol:23:1 baselines 17.45..216.58
+page 3 595.28 × 841.89, 13 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 17.45..430.38
+    box (0.00, 0.00) 481.89 × 433.57 main.fol:1:2 baselines 17.45..430.38
+      box (0.00, 0.00) 481.89 × 433.57 main.fol:23:1 baselines 17.45..430.38
         box (0.00, 0.00) 481.89 × 25.57 main.fol:23:1 baselines 17.45..17.45 keep penalty 10000
           text (0.00, 17.45) NewCM10-Bold 15.40 w 64.02 8 glyph(s) "Pictures"
         box (0.00, 33.27) 481.89 × 22.74 main.fol:25:1 baselines 15.97..15.97
@@ -78,7 +78,7 @@ page 3 595.28 × 841.89, 5 line(s)
               image (0.00, 0.00) 113.39 × 85.04 JPEG 1f4d42dec29fdebf main.fol:27:10
           box (0.00, 99.89) 481.89 × 22.72 main.fol:27:2 baselines 15.95..15.95
             text (184.49, 15.95) NewCM10-Italic 11.00 w 112.91 22 glyph(s) "Figure\u{a0}6: A photograph"
-        box (0.00, 200.61) 481.89 × 19.16 main.fol:29:1 baselines 15.97..15.97
+        box (0.00, 200.61) 481.89 × 22.74 main.fol:29:1 baselines 15.97..15.97
           text (0.00, 15.97) NewCM10-Regular 11.00 w 288.45 61 glyph(s) "Small pictures can stand in a line of text, such as a marker "
           box (288.45, 7.97) 8.00 × 8.00 main.fol:29:63
             image (0.00, 0.00) 8.00 × 8.00 WebP 7f16b6eda51126a7 main.fol:29:63
@@ -86,3 +86,38 @@ page 3 595.28 × 841.89, 5 line(s)
           box (355.85, 3.97) 24.00 × 12.00 main.fol:29:135
             image (0.00, 0.00) 24.00 × 12.00 GIF 9a6002d11bb95d18 main.fol:29:135
           text (379.85, 15.97) NewCM10-Regular 11.00 w 77.08 15 glyph(s) " between words."
+        box (0.00, 228.84) 481.89 × 22.74 main.fol:31:1 baselines 15.97..15.97
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 198.13 39 glyph(s) "To compare the spectrum with the trace:"
+        box (0.00, 257.08) 481.89 × 129.08 main.fol:33:1 baselines 15.97..122.32
+          box (16.50, 0.00) 465.39 × 22.74 main.fol:33:1 baselines 15.97..15.97
+            box (0.00, 0.00) 465.39 × 22.74 main.fol:33:3 baselines 15.97..15.97
+              text (0.00, 15.97) NewCM10-Regular 11.00 w 19.56 4 glyph(s) "(a)\u{a0}"
+              text (19.56, 15.97) NewCM10-Regular 11.00 w 197.75 40 glyph(s) "Find the brightest band of the spectrum."
+          box (16.50, 24.94) 465.39 × 75.91 main.fol:34:1 baselines 15.97..69.15
+            box (0.00, 0.00) 465.39 × 22.74 main.fol:34:3 baselines 15.97..15.97
+              text (0.00, 15.97) NewCM10-Regular 11.00 w 20.17 4 glyph(s) "(b)\u{a0}"
+              text (20.17, 15.97) NewCM10-Regular 11.00 w 166.29 34 glyph(s) "Read its colour from the swatches:"
+            box (0.00, 28.24) 465.39 × 47.67 main.fol:35:3 baselines 15.97..40.91
+              box (16.50, 0.00) 448.89 × 22.74 main.fol:35:3 baselines 15.97..15.97
+                box (0.00, 0.00) 448.89 × 22.74 main.fol:35:5 baselines 15.97..15.97
+                  text (0.00, 15.97) NewCM10-Regular 11.00 w 17.12 4 glyph(s) "(i)\u{a0}"
+                  text (17.12, 15.97) NewCM10-Regular 11.00 w 215.26 43 glyph(s) "match the band against each swatch in turn;"
+              box (16.50, 24.94) 448.89 × 22.74 main.fol:36:3 baselines 15.97..15.97
+                box (0.00, 0.00) 448.89 × 22.74 main.fol:36:5 baselines 15.97..15.97
+                  text (0.00, 15.97) NewCM10-Regular 11.00 w 20.17 5 glyph(s) "(ii)\u{a0}"
+                  text (20.17, 15.97) NewCM10-Regular 11.00 w 179.82 37 glyph(s) "note the swatch that matches it best."
+          box (16.50, 106.35) 465.39 × 22.74 main.fol:37:1 baselines 15.97..15.97
+            box (0.00, 0.00) 465.39 × 22.74 main.fol:37:3 baselines 15.97..15.97
+              text (0.00, 15.97) NewCM10-Regular 11.00 w 18.94 4 glyph(s) "(c)\u{a0}"
+              text (18.94, 15.97) NewCM10-Regular 11.00 w 148.10 31 glyph(s) "Record the colour in the table."
+        box (0.00, 391.67) 481.89 × 41.90 main.fol:39:1 baselines 15.97..38.71
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 151.58 30 glyph(s) "If no swatch matches in part ("
+          text (151.58, 15.97) NewCM10-Regular 11.00 w 6.12 2 glyph(s) "ii"
+          text (157.70, 15.97) NewCM10-Regular 11.00 w 75.94 16 glyph(s) "), repeat part ("
+          text (233.64, 15.97) NewCM10-Regular 11.00 w 5.50 1 glyph(s) "a"
+          text (239.14, 15.97) NewCM10-Regular 11.00 w 242.75 46 glyph(s) ") with the next band. The bands are matched as"
+          text (0.00, 38.71) NewCM10-Regular 11.00 w 61.51 13 glyph(s) "described in "
+          text (61.51, 38.71) NewCM10-Regular 11.00 w 28.77 6 glyph(s) "part\u{a0}i"
+          text (90.28, 38.71) NewCM10-Regular 11.00 w 87.09 19 glyph(s) ", and the table of "
+          text (177.36, 38.71) NewCM10-Regular 11.00 w 30.59 6 glyph(s) "part\u{a0}c"
+          text (207.96, 38.71) NewCM10-Regular 11.00 w 82.09 19 glyph(s) " lists the colours."
