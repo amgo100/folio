@@ -27,6 +27,7 @@ fn qualified(text: &str) -> QualifiedName {
 
 /// A component built from plain data, as a WebAssembly component would hand
 /// it over.
+#[derive(Clone, Copy)]
 struct TestComponent {
     name: &'static str,
     element: &'static str,
@@ -94,7 +95,7 @@ const CIRCUITS: TestComponent = TestComponent {
 fn registry(components: &[&TestComponent]) -> Registry {
     let mut registry = Registry::new();
     for component in components {
-        registry.register(*component).unwrap();
+        registry.register(**component).unwrap();
     }
     registry
 }
@@ -358,7 +359,7 @@ fn default_stylesheets_are_parsed_when_hosted() {
     let manifest = manifest("");
     let host = |sheet: &'static str| {
         let mut registry = Registry::new();
-        registry.register(&Sheeted(sheet)).unwrap();
+        registry.register(Sheeted(sheet)).unwrap();
         ComponentHost::new(&registry, &manifest.components, &Default::default()).unwrap()
     };
 

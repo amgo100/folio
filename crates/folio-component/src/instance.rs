@@ -59,8 +59,8 @@ pub struct Instance {
     /// Its fields that do not hold content, with the values they have after
     /// defaults are applied, in declaration order.
     pub fields: EcoVec<(Name, Value)>,
-    /// Its body, slots and content fields, in declaration order, the body
-    /// first and named [`crate::BODY`].
+    /// Its body, slots and content fields, in the order the element stores
+    /// its fields; the body is named [`crate::BODY`].
     pub parts: EcoVec<Part>,
 }
 

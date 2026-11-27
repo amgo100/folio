@@ -118,7 +118,7 @@ impl Component for Exam {
 /// A world with the exam component and the given files.
 fn world(files: &[(&str, &str)]) -> World {
     let mut registry = Registry::new();
-    registry.register(&Exam).unwrap();
+    registry.register(Exam).unwrap();
     let mut world = World::builder()
         .components(registry)
         .build(MANIFEST, None)

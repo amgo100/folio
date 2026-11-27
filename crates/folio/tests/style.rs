@@ -77,7 +77,7 @@ impl Component for Exam {
 /// A world with the exam component, a content file and stylesheets.
 fn world(main: &str, sheets: &[(&str, &str)]) -> World {
     let mut registry = Registry::new();
-    registry.register(&Exam).unwrap();
+    registry.register(Exam).unwrap();
     let mut world = World::builder()
         .components(registry)
         .build(MANIFEST, None)

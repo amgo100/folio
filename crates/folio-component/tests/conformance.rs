@@ -101,7 +101,7 @@ fn instance(element: &str, source: u64, marks: i64, parts: Vec<Instance>) -> Ins
 #[test]
 fn a_component_with_a_default_stylesheet_registers() {
     let mut registry = Registry::new();
-    registry.register(&Marks).unwrap();
+    registry.register(Marks).unwrap();
     let registered = registry.components().next().unwrap();
     assert!(registered.declarations.stylesheet.is_some());
 }

@@ -62,13 +62,13 @@ impl Component for Sheet {
 fn project(exam: &'static str, plot: &'static str, project: &str) -> World {
     let mut registry = Registry::new();
     registry
-        .register(&Sheet {
+        .register(Sheet {
             namespace: "exam",
             stylesheet: exam,
         })
         .unwrap();
     registry
-        .register(&Sheet {
+        .register(Sheet {
             namespace: "plot",
             stylesheet: plot,
         })
@@ -198,5 +198,109 @@ fn a_component_sheet_cannot_import() {
             .any(|d| d.message.contains("cannot import")),
         "{:?}",
         compiled.diagnostics
+    );
+}
+
+/// A component with questions and parts, and the lint that a question's
+/// marks are the sum of its parts' (SPEC §13.1).
+struct Marks;
+
+impl Component for Marks {
+    fn manifest(&self) -> ComponentManifest {
+        ComponentManifest::new(
+            ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
+    }
+
+    fn declarations(&self) -> Declarations {
+        let element = |n: &str| {
+            let mut schema = ElementSchema::new(name(n), ElementKind::Block);
+            schema.fields = EcoVec::from([folio_component::FieldDecl::required(
+                name("marks"),
+                folio_component::FieldType::Int,
+            )]);
+            schema.body = Body::Content(ContentKind::Blocks);
+            schema
+        };
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([element("question"), element("part")]);
+        declarations
+    }
+
+    fn lint(
+        &self,
+        view: &folio_component::InstanceTree,
+    ) -> EcoVec<folio_component::LintDiagnostic> {
+        let marks = |i: &folio_component::Instance| match i.field("marks") {
+            Some(Value::Int(m)) => *m,
+            _ => 0,
+        };
+        let mut out = EcoVec::new();
+        for question in view.iter().filter(|i| i.name.name.as_str() == "question") {
+            let parts: Vec<_> = question.children().collect();
+            let sum: i64 = parts.iter().map(|p| marks(p)).sum();
+            if !parts.is_empty() && sum != marks(question) {
+                let mut found = folio_component::LintDiagnostic::warning(
+                    name("marks-sum"),
+                    question.location,
+                    format!(
+                        "the question has {} marks, but its parts have {sum}",
+                        marks(question)
+                    ),
+                )
+                .with_hint(format!("set `marks: {sum}`"));
+                for part in parts {
+                    found = found.with_related(part.location, "a part");
+                }
+                out.push(found);
+            }
+        }
+        out
+    }
+}
+
+#[test]
+fn component_lints_report_at_their_instances() {
+    const MAIN: &str = "#exam.question(marks: 5)[\n  #exam.part(marks: 2)[A]\n  #exam.part(marks: 2)[B]\n]\n\n\
+                        #exam.question(marks: 3)[\n  #exam.part(marks: 3)[C]\n]\n";
+    let mut registry = Registry::new();
+    registry.register(Marks).unwrap();
+    let mut world = World::builder()
+        .components(registry)
+        .build(MANIFEST, None)
+        .unwrap();
+    world.set_source("main.fol", MAIN).unwrap();
+    world.set_source("styles/main.fsty", "").unwrap();
+
+    let compiled = folio::compile(&world, Target::Pdf, Some(&name("exam"))).unwrap();
+    let found: Vec<_> = compiled
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.as_deref() == Some("exam.marks-sum"))
+        .collect();
+    assert_eq!(found.len(), 1, "{:?}", compiled.diagnostics);
+    let found = found[0];
+    assert_eq!(found.severity, folio::Severity::Warning);
+    assert_eq!(
+        found.message,
+        "the question has 5 marks, but its parts have 4"
+    );
+    assert_eq!(found.hints.as_slice(), ["set `marks: 4`"]);
+    let text = |span| {
+        let location = folio::diag::locate(&world, span).expect("a span in main.fol");
+        MAIN[location.bytes].to_string()
+    };
+    assert!(
+        text(found.span).starts_with("exam.question(marks: 5)"),
+        "{}",
+        text(found.span)
+    );
+    let related: Vec<_> = found.related.iter().map(|r| text(r.span)).collect();
+    assert_eq!(related.len(), 2);
+    assert!(
+        related[0].starts_with("exam.part(marks: 2)[A]"),
+        "{related:?}"
     );
 }

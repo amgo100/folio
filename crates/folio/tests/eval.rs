@@ -1224,7 +1224,7 @@ impl Component for Exam {
 #[test]
 fn component_elements_make_instances() {
     let mut registry = Registry::new();
-    registry.register(&Exam("exam")).unwrap();
+    registry.register(Exam("exam")).unwrap();
     let logged = Logged::with(
         World::builder().components(registry),
         MANIFEST,
@@ -1253,8 +1253,8 @@ fn component_elements_make_instances() {
 #[test]
 fn element_calls_report_why_a_name_does_not_resolve() {
     let mut registry = Registry::new();
-    registry.register(&Exam("exam")).unwrap();
-    registry.register(&Exam("quiz")).unwrap();
+    registry.register(Exam("exam")).unwrap();
+    registry.register(Exam("quiz")).unwrap();
     let manifest = format!("{MANIFEST}\n[components]\nquiz = {{ version = \"0.0.0\" }}\n");
     let logged = Logged::with(
         World::builder().components(registry.clone()),

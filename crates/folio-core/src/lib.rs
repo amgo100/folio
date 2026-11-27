@@ -19,6 +19,7 @@ pub mod eval;
 pub mod fonts;
 pub mod image;
 pub mod layout;
+pub mod lint;
 pub mod locale;
 pub mod locate;
 pub mod model;

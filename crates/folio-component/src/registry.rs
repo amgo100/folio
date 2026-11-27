@@ -1,15 +1,18 @@
 //! The component registry: the components a compiler hosts, checked when
 //! they are registered (SPEC §2.2, §3).
 
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use ecow::{EcoString, eco_format};
+use ecow::{EcoString, EcoVec, eco_format};
 
 use crate::component::{
     Component, ComponentManifest, Declarations, INTERFACE_VERSION, SUPPORTED_INTERFACES,
 };
 use crate::element::{BODY, Body, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
+use crate::instance::InstanceTree;
+use crate::lint::LintDiagnostic;
 use crate::names::{ComponentName, Name};
 use crate::property::PropertyDecl;
 use crate::template::TemplateDecl;
@@ -34,7 +37,13 @@ impl Registry {
     }
 
     /// Checks a component and adds it, or returns every problem found.
-    pub fn register(&mut self, component: &dyn Component) -> Result<(), Vec<RegistryError>> {
+    ///
+    /// The registry keeps the component, so that the core can call the
+    /// extension points that run code, such as its lints.
+    pub fn register(
+        &mut self,
+        component: impl Component + 'static,
+    ) -> Result<(), Vec<RegistryError>> {
         let manifest = component.manifest();
         let declarations = component.declarations();
         let errors = self.check(&manifest, &declarations);
@@ -44,6 +53,7 @@ impl Registry {
         self.components.push(Arc::new(Registered {
             manifest,
             declarations,
+            component: Arc::new(component),
         }));
         Ok(())
     }
@@ -90,16 +100,51 @@ impl Registry {
     }
 }
 
-/// A registered component: its manifest and its checked declarations.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+/// A registered component: its manifest, its checked declarations, and the
+/// component itself, for the extension points that run code.
+///
+/// Registered components are equal, and hash alike, when their manifests
+/// and declarations are: a component's calls are pure (SPEC §3.5).
+#[derive(Clone)]
 pub struct Registered {
     /// The component's manifest.
     pub manifest: ComponentManifest,
     /// What it adds through the extension points.
     pub declarations: Declarations,
+    component: Arc<dyn Component>,
+}
+
+impl Debug for Registered {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Registered")
+            .field("manifest", &self.manifest)
+            .field("declarations", &self.declarations)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for Registered {
+    fn eq(&self, other: &Self) -> bool {
+        self.manifest == other.manifest && self.declarations == other.declarations
+    }
+}
+
+impl Eq for Registered {}
+
+impl Hash for Registered {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.manifest.hash(state);
+        self.declarations.hash(state);
+    }
 }
 
 impl Registered {
+    /// Runs the component's lints over the instances of its elements
+    /// ([`Component::lint`]).
+    pub fn lint(&self, view: &InstanceTree) -> EcoVec<LintDiagnostic> {
+        self.component.lint(view)
+    }
+
     /// The component's name.
     pub fn name(&self) -> &ComponentName {
         &self.manifest.name
@@ -536,7 +581,7 @@ mod tests {
     fn registers_and_looks_up() {
         let mut registry = Registry::new();
         registry
-            .register(&Test(manifest("@school/blocks"), example()))
+            .register(Test(manifest("@school/blocks"), example()))
             .unwrap();
         let component = registry.by_namespace("blocks").unwrap();
         assert_eq!(component.name().as_str(), "@school/blocks");
@@ -551,15 +596,15 @@ mod tests {
     fn rejects_clashing_components() {
         let mut registry = Registry::new();
         registry
-            .register(&Test(manifest("blocks"), example()))
+            .register(Test(manifest("blocks"), example()))
             .unwrap();
-        let again = registry.register(&Test(manifest("blocks"), Declarations::default()));
+        let again = registry.register(Test(manifest("blocks"), Declarations::default()));
         assert_eq!(
             messages(again),
             ["a component named `blocks` is already registered"]
         );
         let same_namespace =
-            registry.register(&Test(manifest("@school/blocks"), Declarations::default()));
+            registry.register(Test(manifest("@school/blocks"), Declarations::default()));
         assert_eq!(
             messages(same_namespace),
             ["namespace `blocks` is already used by component `blocks`"]
@@ -585,7 +630,7 @@ mod tests {
             FieldType::Array(Box::new(FieldType::Str)),
             Value::None,
         ));
-        let result = Registry::new().register(&Test(manifest("blocks"), decls));
+        let result = Registry::new().register(Test(manifest("blocks"), decls));
         assert_eq!(
             messages(result),
             [
@@ -649,7 +694,7 @@ mod tests {
         manifest.interface = 2;
         manifest.targets.push(Target::Pdf);
 
-        let result = Registry::new().register(&Test(manifest, decls));
+        let result = Registry::new().register(Test(manifest, decls));
         assert_eq!(
             messages(result),
             [
