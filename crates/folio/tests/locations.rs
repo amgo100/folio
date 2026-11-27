@@ -312,3 +312,84 @@ fn glyphs_name_the_instance_they_come_from() {
     // The glyphs of each `bold` name their own `strong`.
     assert_eq!(bold, ["bold", "bold"]);
 }
+
+/// A world with variants `exam` and `markscheme` in numbering group
+/// `paper`, which shares the heading counter.
+fn grouped(text: &str) -> World {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\nstyles = [\"styles/main.fsty\"]\n\n\
+                    [variants.exam]\ntargets = [\"pdf\"]\n\n\
+                    [variants.markscheme]\ntargets = [\"pdf\"]\n\n\
+                    [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
+                    shared-counters = [\"heading\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world.set_source("styles/main.fsty", STYLE).unwrap();
+    world.set_source("main.fol", text).unwrap();
+    world
+}
+
+const BANK: &str = "#let bank = ((t: \"Forces\", hidden: false), \
+                    (t: \"Energy\", hidden: true), (t: \"Waves\", hidden: false))\n";
+
+/// The location of each heading of a variant, by its text.
+fn headings(world: &World, variant: &str) -> Vec<(String, Location)> {
+    let variant = folio::Name::new(variant).unwrap();
+    let doc = folio::document(world, Some(&variant)).unwrap().unwrap();
+    elements(&doc)
+        .into_iter()
+        .filter(|(name, ..)| name == "heading")
+        .map(|(_, text, location)| (text, location))
+        .collect()
+}
+
+/// The `variant-loop-differs` errors of a variant's build.
+fn loop_errors(world: &World, variant: &str) -> Vec<String> {
+    let variant = folio::Name::new(variant).unwrap();
+    folio::check(world, Target::Pdf, Some(&variant))
+        .unwrap()
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.as_deref() == Some("variant-loop-differs"))
+        .map(|d| d.message.to_string())
+        .collect()
+}
+
+#[test]
+fn a_variant_dependent_iteration_pairs_across_variants() {
+    // SPEC §6.1: the mark scheme shows a question the exam leaves out, and
+    // the questions after it still pair by the iteration that made them.
+    let world = grouped(&format!(
+        "{BANK}#bank.map(q => if variant == \"markscheme\" or not q.hidden \
+         [= #q.t\n\n]).join()\n"
+    ));
+    let exam = headings(&world, "exam");
+    let markscheme = headings(&world, "markscheme");
+    let texts = |h: &[(String, Location)]| h.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>();
+    assert_eq!(texts(&exam), ["Forces", "Waves"]);
+    assert_eq!(texts(&markscheme), ["Forces", "Energy", "Waves"]);
+    assert_eq!(exam[0].1, markscheme[0].1);
+    assert_eq!(exam[1].1, markscheme[2].1);
+    assert_ne!(markscheme[1].1, markscheme[2].1);
+    assert!(loop_errors(&world, "exam").is_empty());
+}
+
+#[test]
+fn a_loop_over_different_items_is_an_error() {
+    // Filtering before the loop changes what iteration 1 is, so the
+    // shared numbering cannot pair: the build says so at the loop.
+    let world = grouped(&format!(
+        "{BANK}#bank.filter(q => variant == \"markscheme\" or not q.hidden)\
+         .map(q => [= #q.t\n\n]).join()\n"
+    ));
+    for variant in ["exam", "markscheme"] {
+        let errors = loop_errors(&world, variant);
+        assert_eq!(errors.len(), 1, "{variant}: {errors:?}");
+        assert!(errors[0].contains("`heading` numbering"), "{errors:?}");
+    }
+    // A loop that makes nothing a shared counter counts may differ.
+    let world = grouped(&format!(
+        "{BANK}#bank.filter(q => variant == \"markscheme\" or not q.hidden)\
+         .map(q => [*#q.t*\n\n]).join()\n"
+    ));
+    assert!(loop_errors(&world, "exam").is_empty());
+}

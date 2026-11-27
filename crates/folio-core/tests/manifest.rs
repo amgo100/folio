@@ -4,6 +4,7 @@
 
 use std::num::NonZeroU16;
 
+use folio_core::diag::Severity;
 use folio_core::project::{
     ComponentSource, FormattingMode, Lockfile, Manifest, Name, ProjectError, Target,
 };
@@ -577,6 +578,152 @@ fn invalid_output() {
         "`../{stem}.{ext}` leaves the project @ \"../{stem}.{ext}\"\n  \
          hint: Folio reads files only inside the project directory\n  \
          hint: outputs are written inside the project directory\n"
+    );
+}
+
+#[test]
+fn output_that_replaces_a_project_file() {
+    const HINT: &str = "  hint: an output may not replace the manifest, the lockfile, a content \
+                        file, a stylesheet, a hidden file, a file in the font directory or a \
+                        file of a component\n";
+    let output = |path: &str| errors(&format!("\n[output]\npath = \"{path}\"\n"));
+    for (path, message) in [
+        (
+            "folio.toml",
+            "the output `folio.toml` would replace the manifest",
+        ),
+        (
+            "Folio.TOML",
+            "the output `Folio.TOML` would replace the manifest",
+        ),
+        (
+            "./folio.lock",
+            "the output `folio.lock` would replace the lockfile",
+        ),
+        ("{stem}.fol", "the output `main.fol` is the entry file"),
+        ("MAIN.fol", "the output `MAIN.fol` is the entry file"),
+        ("notes.fol", "the output `notes.fol` is a content file"),
+        (
+            "styles/out.FSTY",
+            "the output `styles/out.FSTY` is a stylesheet",
+        ),
+        (".git/HEAD", "the output `.git/HEAD` is a hidden path"),
+        (
+            "out/.{stem}.{ext}",
+            "the output `out/.main.pdf` is a hidden path",
+        ),
+        (
+            "fonts/{stem}.{ext}",
+            "the output `fonts/main.pdf` is in the font directory `fonts/`",
+        ),
+    ] {
+        assert_eq!(
+            output(path),
+            format!("{message} @ \"{path}\"\n{HINT}"),
+            "{path}"
+        );
+    }
+
+    // Every build's file is checked: here only the second variant's is
+    // in the font directory.
+    assert_eq!(
+        errors(
+            "\n[variants.exam]\ntargets = [\"pdf\"]\n\n[variants.fonts]\ntargets = [\"pdf\"]\n\n\
+             [output]\npath = \"{variant}/{stem}.{ext}\"\n"
+        ),
+        format!(
+            "the output `fonts/main.pdf` is in the font directory `fonts/` \
+             @ \"{{variant}}/{{stem}}.{{ext}}\"\n{HINT}"
+        )
+    );
+
+    // The path is checked as it is written to, once a placeholder that
+    // brings in `..` is resolved.
+    assert_eq!(
+        errors(
+            "[project]\nentry = \"...fol\"\nedition = \"2027\"\ncompiler = \"1.2.0\"\n\n\
+             [output]\npath = \"out/{stem}/folio.toml\"\n"
+        ),
+        format!(
+            "the output `folio.toml` would replace the manifest \
+             @ \"out/{{stem}}/folio.toml\"\n{HINT}"
+        )
+    );
+
+    // A component declared by a path inside the project.
+    assert_eq!(
+        errors(
+            "\n[components]\nhouse = { path = \"./styles/house\" }\n\n\
+             [output]\npath = \"styles/House/{stem}.{ext}\"\n"
+        ),
+        format!(
+            "the output `styles/House/main.pdf` is in the component directory `styles/house/` \
+             @ \"styles/House/{{stem}}.{{ext}}\"\n{HINT}"
+        )
+    );
+
+    // Files that are only alike are fine.
+    for path in [
+        "out/folio.toml.pdf",
+        "out/fonts/{stem}.{ext}",
+        "out/{stem}.fol.{ext}",
+        "fontsx/{stem}.{ext}",
+    ] {
+        let text = format!("{PROJECT}\n[output]\npath = \"{path}\"\n");
+        assert!(Manifest::parse(&text, file()).is_ok(), "{path}");
+    }
+}
+
+/// Keys this compiler reads but does not act on yet are warned about at
+/// each key that is given, and only then (#330).
+#[test]
+fn keys_that_are_not_implemented_yet() {
+    let warnings_for = |text: &str, variant: Option<&str>| -> String {
+        let text = format!("{PROJECT}{text}");
+        let manifest = Manifest::parse(&text, file()).unwrap();
+        let variant = variant.map(|v| manifest.variant(v).unwrap().name.v.clone());
+        let mut out = String::new();
+        for d in manifest.not_implemented(variant.as_ref()) {
+            let DiagSpanKind::Range { range, .. } = d.span.get() else {
+                panic!("detached {d:?}")
+            };
+            assert_eq!(d.severity, Severity::Warning);
+            out.push_str(&format!("{} @ {}\n", d.message, &text[range]));
+            for hint in &d.hints {
+                out.push_str(&format!("  hint: {hint}\n"));
+            }
+        }
+        out
+    };
+    let warnings = |text: &str| warnings_for(text, None);
+    assert_eq!(warnings(""), "");
+    assert_eq!(warnings("\n[formatting]\nmode = \"local\"\n"), "");
+    assert_eq!(
+        warnings(
+            "\n[formatting]\nmode = \"strict\"\nstrict-paths = [\"questions/**\", \"a/**\"]\n\
+             allow-overrides-sheet = true\nallow-local-packages = false\n"
+        ),
+        "strict mode is not implemented yet, so overrides in content are not checked \
+         @ \"strict\"\n  \
+         hint: until it is, strict mode only makes an unpinned system font an error\n\
+         `strict-paths` is not implemented yet, so it has no effect @ \"questions/**\"\n  \
+         hint: strict mode does not check content for overrides yet\n\
+         `allow-overrides-sheet` is not implemented yet, so it has no effect @ true\n  \
+         hint: strict mode does not check content for overrides yet\n\
+         `allow-local-packages` is not implemented yet, so it has no effect @ false\n  \
+         hint: strict mode does not check content for overrides yet\n"
+    );
+    // A numbering group is warned about in the builds of its variants.
+    let grouped = "\n[variants.exam]\ntargets = [\"pdf\"]\n\n[variants.markscheme]\n\
+                   targets = [\"pdf\"]\n\n[variants.slides]\ntargets = [\"pdf\"]\n\n\
+                   [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
+                   shared-counters = [\"question\"]\n";
+    assert_eq!(warnings_for(grouped, Some("slides")), "");
+    assert_eq!(
+        warnings_for(grouped, Some("markscheme")),
+        "numbering groups are not implemented yet, so the variants of `paper` number their \
+         content separately @ paper\n  \
+         hint: each variant counts only the content it shows\n"
     );
 }
 

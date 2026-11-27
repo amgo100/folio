@@ -1,0 +1,3 @@
+#let a = range(1000)
+#let i = 0
+#while i < 6 { a = a.map(x => a).flatten(); i += 1 }

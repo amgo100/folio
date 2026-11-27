@@ -75,7 +75,7 @@ impl Origin {
     /// the frame comes before the frames already recorded.
     #[must_use]
     pub fn within(self, frame: Frame) -> Self {
-        Self::keyed(mix(frame.key(), self.0))
+        Self::keyed(pair(frame.key(), self.0))
     }
 
     /// The origin of an element whose own origin is `own`, inside the
@@ -87,7 +87,7 @@ impl Origin {
         } else if self == Self::ROOT {
             own
         } else {
-            Self::keyed(mix(self.0, own.0))
+            Self::keyed(pair(self.0, own.0))
         }
     }
 
@@ -121,19 +121,27 @@ impl Frame {
     /// The frame's key.
     fn key(self) -> u64 {
         match self {
-            Self::Iteration { span, index } => mix(mix(1, span.into_raw().get()), index),
-            Self::Call { span } => mix(2, span.into_raw().get()),
+            Self::Iteration { span, index } => pair(pair(1, span.into_raw().get()), index),
+            Self::Call { span } => pair(2, span.into_raw().get()),
         }
     }
 }
 
-/// Mixes a word into a key: a step of SplitMix64's finaliser, a bijection
-/// of the word, so different words give different keys for one state.
+/// Mixes a word into a key: SplitMix64's finaliser of the two, a
+/// bijection of the word for a given state, so different words give
+/// different keys for one state.
 fn mix(state: u64, word: u64) -> u64 {
     let mut z = (state ^ word).wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     z ^ (z >> 31)
+}
+
+/// A key of an ordered pair: the first word mixed before the second, so
+/// that a pair of equal words, or the same words in the other order, does
+/// not cancel out as in a plain [`mix`] of the two.
+fn pair(first: u64, second: u64) -> u64 {
+    mix(mix(0x243f_6a88_85a3_08d3, first), second)
 }
 
 /// Gives the element instances of one document tree their locations.
@@ -336,8 +344,12 @@ mod tests {
         // Nesting under the root, or the root under anything, changes
         // nothing.
         let x = root.within(call);
+        let y = root.within(iteration(0));
         assert_eq!(root.nested(x), x);
         assert_eq!(x.nested(root), x);
+        // An origin nested in itself keeps what tells it apart.
         assert_ne!(x.nested(x), x);
+        assert_ne!(x.nested(x), y.nested(y));
+        assert_ne!(x.nested(y), y.nested(x));
     }
 }
