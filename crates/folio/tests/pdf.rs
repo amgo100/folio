@@ -198,9 +198,9 @@ fn positioned(fragment: &Fragment, at: Point, out: &mut Vec<(i64, String)>) {
         match item {
             FragmentItem::Text(run) => {
                 let y = (pos.y.to_pt() / 4.0).round() as i64;
-                let y =
-                    out.last()
-                        .map_or(y, |(last, _)| if (last - y).abs() <= 1 { *last } else { y });
+                let y = out
+                    .last()
+                    .map_or(y, |(last, _)| if (last - y).abs() <= 1 { *last } else { y });
                 out.push((y, run.text.to_string()));
             }
             FragmentItem::Group(group) => positioned(group, pos, out),
