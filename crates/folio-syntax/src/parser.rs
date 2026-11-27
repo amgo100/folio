@@ -27,10 +27,10 @@ const MAX_DEPTH: u32 = 256;
 /// a formula make it up to about five (`a(…)^2/x` nested). This leaves room
 /// for both, so in practice only a long chain reaches it; math that deep is
 /// past the evaluator's limit of 100 rows in any case. The bound depends on
-/// nothing around the chain, only on its operands; an edit that changes
-/// where a chain is cut lies deep in the tree, where the reparser parses in
-/// full (`reparser::DEPTH_GUARD`), so an incremental reparse decides as a
-/// full parse does.
+/// nothing around the chain, only on its operands. A cut chain is an error,
+/// and the reparser parses in full an edit to a tree with an error or one
+/// that makes one (`reparser::reusable`), so an incremental reparse decides
+/// as a full parse does.
 const MAX_CHAIN_HEIGHT: usize = 8 * MAX_DEPTH as usize;
 
 /// Parses a source file as top-level markup.
@@ -308,7 +308,7 @@ fn math_expr(p: &mut Parser<'_>) {
 fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
     if p.depth >= MAX_DEPTH {
         // An operand at the limit: the operand of `^` in a long `x^x^…`.
-        math_chain_error(p, None, min_prec);
+        math_chain_error(p, None, min_prec, stop_set);
         return;
     }
     let Some(p) = &mut p.increase_depth() else {
@@ -395,7 +395,7 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
         // wrap is free, as for any construct, so that a single operator
         // never fails.
         if wrapped && p.too_tall(m) {
-            math_chain_error(p, Some(m), min_prec);
+            math_chain_error(p, Some(m), min_prec, stop_set);
             break;
         }
 
@@ -465,10 +465,11 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
 /// alignment point. The chain ends before anything else, a label or the end
 /// of the equation, which the enclosing sequence then parses, and before an
 /// operator that binds less tightly than `min_prec`, which an enclosing
-/// operator takes. Operators that
-/// would end a nested operand in a regular parse, such as the `_` after
-/// `b` in `a^b_c`, are part of the chain here: the error takes them too.
-fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8) {
+/// operator takes. At the depth limit, operators that would end a nested
+/// operand in a regular parse, such as the `_` after `b` in `a^b_c`, are
+/// part of the chain: the error takes them too. A chain cut by its height
+/// stops before them (`stop_set`), as a regular parse does.
+fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8, stop_set: SyntaxSet) {
     let m = from.unwrap_or_else(|| p.marker());
     if from.is_none() && !math_chain_operand(p) {
         // Nothing here can be an operand (a label or the end of the
@@ -476,7 +477,13 @@ fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8) {
         p.expected("expression");
         return;
     }
-    while let Some((_, assoc, prec)) = math_op(p.current(), p.had_trivia())
+    // Cut by its height, the chain is where the parser has room, so what
+    // ends its operand in a regular parse (the `^` after `b` in `a_b!!…^c`)
+    // ends the error too. At the depth limit, the error takes such operators
+    // in: the enclosing operator would take them with another operand at
+    // the limit, and give another error.
+    while from.is_none_or(|_| !p.at_set(stop_set))
+        && let Some((_, assoc, prec)) = math_op(p.current(), p.had_trivia())
         && prec >= min_prec
     {
         if p.at(SyntaxKind::Bang) {
@@ -488,8 +495,21 @@ fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8) {
             break;
         }
     }
-    p.wrap_error(m, "maximum parsing depth exceeded");
+    p.wrap_error(
+        m,
+        if from.is_some() {
+            CHAIN_TOO_LONG
+        } else {
+            TOO_DEEP
+        },
+    );
 }
+
+/// The error of a chain cut by its height ([`MAX_CHAIN_HEIGHT`]).
+const CHAIN_TOO_LONG: &str = "operator chain is too long";
+
+/// The error of what is parsed past the depth limit ([`MAX_DEPTH`]).
+const TOO_DEEP: &str = "maximum parsing depth exceeded";
 
 /// Eats one operand of a chain for [`math_chain_error`]: a token or a
 /// bracketed group, then the groups directly after it. Returns `false`, having
@@ -821,17 +841,18 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
     // flat. The whole chain then becomes one error, which stands where the
     // expression stands, if anything follows there.
     let mut chain_error = None;
-    let wrap = |p: &mut Parser<'_>, kind: SyntaxKind, chain_error: &mut Option<Marker>| {
-        if chain_error.is_some() {
-            return;
-        }
-        p.wrap(m, kind);
-        if p.too_tall(m) {
-            // The next wrap would make the tree too tall: parse the rest
-            // flat.
-            *chain_error = Some(p.marker());
-        }
-    };
+    let wrap =
+        |p: &mut Parser<'_>, kind: SyntaxKind, chain_error: &mut Option<(Marker, &'static str)>| {
+            if chain_error.is_some() {
+                return;
+            }
+            p.wrap(m, kind);
+            if p.too_tall(m) {
+                // The next wrap would make the tree too tall: parse the rest
+                // flat.
+                *chain_error = Some((p.marker(), CHAIN_TOO_LONG));
+            }
+        };
 
     loop {
         // In a stylesheet value, a name directly followed by an attribute
@@ -857,7 +878,7 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
                 && p.depth >= MAX_DEPTH
                 && p.nodes.get(start.0).is_some_and(|n| n.diagnosis().errors)
             {
-                chain_error = Some(start);
+                chain_error = Some((start, TOO_DEEP));
             }
             wrap(p, SyntaxKind::FuncCall, &mut chain_error);
             continue;
@@ -916,7 +937,7 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
             // `x = x = …` there: parse the rest flat, rather than give an
             // error for each operator.
             if chain_error.is_none() && p.depth >= MAX_DEPTH {
-                chain_error = Some(op_start);
+                chain_error = Some((op_start, TOO_DEEP));
             }
 
             p.eat();
@@ -928,10 +949,10 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
         break;
     }
 
-    if let Some(start) = chain_error
+    if let Some((start, message)) = chain_error
         && p.before_trivia().0 > start.0
     {
-        p.wrap_error(m, "maximum parsing depth exceeded");
+        p.wrap_error(m, message);
     }
 }
 

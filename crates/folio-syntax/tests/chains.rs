@@ -11,6 +11,14 @@ const STACK: usize = 2 * 1024 * 1024;
 /// level of the parser's depth limit (256) around it.
 const MAX_HEIGHT: usize = 8 * 256 + 6 * 256;
 
+/// The error of what is parsed past the depth limit: a right-associative
+/// chain such as `x^x^…`, which nests the parser's calls.
+const DEEP: &str = "maximum parsing depth exceeded";
+
+/// The error of a chain that makes the tree too tall: a left-associative or
+/// postfix chain such as `x/x/…`.
+const LONG: &str = "operator chain is too long";
+
 /// Runs `f` on a thread with a 2 MiB stack.
 fn small_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
@@ -56,13 +64,15 @@ fn check(text: String) -> Vec<String> {
 #[test]
 fn long_chains_give_one_error() {
     small_stack(|| {
-        for op in ["/", "^", "_", " / ", "!/"] {
+        for (op, error) in [
+            ("/", LONG),
+            ("^", DEEP),
+            ("_", DEEP),
+            (" / ", LONG),
+            ("!/", LONG),
+        ] {
             let errors = check(chain(op, 100_000));
-            assert_eq!(
-                errors,
-                ["maximum parsing depth exceeded"],
-                "{op:?} chain of 100,000 terms"
-            );
+            assert_eq!(errors, [error], "{op:?} chain of 100,000 terms");
         }
     });
 }
@@ -120,16 +130,12 @@ fn long_code_chains_give_one_error() {
                 format!("{op}{operand}").repeat(100_000),
                 format!("{op}{operand}").repeat(100_000),
             );
-            assert_eq!(
-                check(text),
-                ["maximum parsing depth exceeded"; 2],
-                "{op:?} chains of 100,000"
-            );
+            assert_eq!(check(text), [LONG; 2], "{op:?} chains of 100,000");
         }
         // A right-associative chain recurses to the depth limit, where the
         // rest of it becomes the one error.
         let text = format!("#{{x{}}}\n", "+=x".repeat(100_000));
-        assert_eq!(check(text), ["maximum parsing depth exceeded"]);
+        assert_eq!(check(text), [DEEP]);
     });
 }
 
@@ -346,11 +352,7 @@ fn a_cut_chain_keeps_the_shape_of_its_parent() {
             format!("#(a + f{})\n", "()".repeat(3000)),
         ] {
             let source = Source::detached(text.clone());
-            assert_eq!(
-                errors(&source),
-                ["maximum parsing depth exceeded"],
-                "{text:.12}"
-            );
+            assert_eq!(errors(&source), [LONG], "{text:.12}");
             let mut stack = vec![source.root()];
             while let Some(node) = stack.pop() {
                 if matches!(
@@ -421,4 +423,21 @@ fn reparsing_in_an_early_operand_matches_a_full_parse() {
             }
         }
     }
+}
+
+#[test]
+fn a_chain_cut_by_its_height_leaves_the_enclosing_scripts() {
+    small_stack(|| {
+        // The subscript's postfix chain is cut; `^c` still attaches to `a`.
+        let text = format!("$a_x{}^c$\n", "!".repeat(2100));
+        let source = Source::detached(text);
+        assert_eq!(errors(&source), [LONG]);
+        let mut stack = vec![source.root()];
+        while let Some(node) = stack.pop() {
+            if node.kind() == folio_syntax::SyntaxKind::Error {
+                assert!(node.leaf_text().ends_with('!'));
+            }
+            stack.extend(node.children());
+        }
+    });
 }
