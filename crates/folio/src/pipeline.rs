@@ -336,16 +336,7 @@ fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
     let mut tag = Tag::new(role, located(block.span, block.location));
     match role {
         Role::Heading => tag.text = block_text(block, text),
-        Role::Formula => {
-            // The display of this instance: each instance of a formula
-            // made in a loop or by a closure reads as evaluation made it.
-            let math = text
-                .maths
-                .iter()
-                .find(|m| m.span == block.span && m.location == block.location)
-                .or_else(|| text.maths.iter().find(|m| m.span == block.span));
-            tag.text = math.and_then(formula_alt);
-        }
+        Role::Formula => tag.text = display_math(block, text).and_then(formula_alt),
         _ => {}
     }
     for child in &block.children {
@@ -390,6 +381,16 @@ fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
     tag
 }
 
+/// The formula of a display, a block of a `math` element: that of its
+/// instance, so that each instance of a formula made in a loop or by a
+/// closure reads as evaluation made it.
+fn display_math<'a>(block: &TextBlock, text: &'a Text) -> Option<&'a TextMath> {
+    text.maths
+        .iter()
+        .find(|m| m.span == block.span && m.location == block.location)
+        .or_else(|| text.maths.iter().find(|m| m.span == block.span))
+}
+
 /// The alternate description of a formula: a reading of its evaluated
 /// math tree, with its quantities in the number format of its text
 /// ([`folio_math::Formula::reading`]). It is never read from the source,
@@ -402,8 +403,8 @@ fn formula_alt(math: &TextMath) -> Option<EcoString> {
 /// The text of the paragraphs a block holds directly, as [`clean`] gives
 /// it: its inline formulas as their alternate descriptions
 /// ([`formula_alt`]) and its images as their `alt` text, without the
-/// anchors of footnotes. A heading's title and bookmark are this text
-/// (SPEC §11.1).
+/// anchors of footnotes. A heading's title and bookmark are
+/// this text (SPEC §11.1).
 fn block_text(block: &TextBlock, text: &Text) -> Option<EcoString> {
     let mut words = String::new();
     for child in &block.children {
