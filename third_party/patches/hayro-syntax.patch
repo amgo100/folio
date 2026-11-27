@@ -1,7 +1,7 @@
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 14:41:34.756970858 +0000
-@@ -0,0 +1,39 @@
++++ b/FOLIO.md	2026-11-27 14:55:46.037335574 +0000
+@@ -0,0 +1,42 @@
 +# hayro-syntax 0.7.2, patched for Folio
 +
 +This is the crates.io release of `hayro-syntax` 0.7.2
@@ -35,6 +35,9 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +  that 100,000 nested `[` no longer overflow the stack.
 +- `src/object/array.rs`, `src/object/dict.rs`: skipping an array or a
 +  dictionary, and reading a dictionary whole, go through `Reader::nest`.
++- `src/object/array.rs`: an array item that cannot be read ends the
++  iteration instead of panicking (an input found by Folio's `image` fuzz
++  target, through `hayro-write`).
 +- `src/filter/jpx.rs`: a JPEG 2000 image whose header says it would take
 +  more than `MAX_IMAGE_BYTES` decoded is not decoded.
 +
@@ -43,7 +46,7 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +the patch, and `third_party/README.md` says how to move to a new release.
 diff -ruN a/src/byte_reader.rs b/src/byte_reader.rs
 --- a/src/byte_reader.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/byte_reader.rs	2026-11-27 14:41:34.756876383 +0000
++++ b/src/byte_reader.rs	2026-11-27 14:55:46.037315667 +0000
 @@ -9,19 +9,42 @@
      pub data: &'a [u8],
      /// The current byte-offset.
@@ -91,7 +94,7 @@ diff -ruN a/src/byte_reader.rs b/src/byte_reader.rs
      /// Returns `true` if the reader has reached the end of the data.
 diff -ruN a/src/filter/jpx.rs b/src/filter/jpx.rs
 --- a/src/filter/jpx.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/filter/jpx.rs	2026-11-27 14:41:34.752397079 +0000
++++ b/src/filter/jpx.rs	2026-11-27 14:55:46.036675516 +0000
 @@ -48,6 +48,15 @@
          },
      };
@@ -110,7 +113,7 @@ diff -ruN a/src/filter/jpx.rs b/src/filter/jpx.rs
      let (mut data, mut alpha) = if !has_alpha {
 diff -ruN a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/lib.rs	2026-11-27 14:41:34.754096494 +0000
++++ b/src/lib.rs	2026-11-27 14:55:46.036304840 +0000
 @@ -111,3 +111,12 @@
  pub use data::PdfData;
  pub use filter::*;
@@ -126,7 +129,7 @@ diff -ruN a/src/lib.rs b/src/lib.rs
 +pub const MAX_NESTING: u32 = 256;
 diff -ruN a/src/math.rs b/src/math.rs
 --- a/src/math.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/math.rs	2026-11-27 14:41:34.754186218 +0000
++++ b/src/math.rs	2026-11-27 14:55:46.036839860 +0000
 @@ -40,11 +40,8 @@
  
  #[inline(always)]
@@ -143,7 +146,7 @@ diff -ruN a/src/math.rs b/src/math.rs
          let mut base = x;
 diff -ruN a/src/object/array.rs b/src/object/array.rs
 --- a/src/object/array.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/object/array.rs	2026-11-27 14:41:34.754627578 +0000
++++ b/src/object/array.rs	2026-11-27 14:55:46.036906638 +0000
 @@ -70,6 +70,14 @@
  
  impl Skippable for Array<'_> {
@@ -159,9 +162,31 @@ diff -ruN a/src/object/array.rs b/src/object/array.rs
          r.forward_tag(b"[")?;
  
          loop {
+@@ -125,12 +133,17 @@
+         self.reader.skip_white_spaces_and_comments();
+ 
+         if !self.reader.at_end() {
+-            // Objects are already guaranteed to be valid.
++            // Folio: an item that cannot be read ends the iteration. The
++            // array was checked when it was skipped, but an item read on its
++            // own can still fail (found by Folio's `image` fuzz target), and
++            // unwrapping it panicked.
+             let item = self
+                 .reader
+-                .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx)
+-                .unwrap();
+-            return Some(item);
++                .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx);
++            if item.is_none() {
++                self.reader.jump_to_end();
++            }
++            return item;
+         }
+ 
+         None
 diff -ruN a/src/object/dict.rs b/src/object/dict.rs
 --- a/src/object/dict.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/object/dict.rs	2026-11-27 14:41:34.754726288 +0000
++++ b/src/object/dict.rs	2026-11-27 14:55:46.036927078 +0000
 @@ -158,6 +158,14 @@
  
  impl Skippable for Dict<'_> {

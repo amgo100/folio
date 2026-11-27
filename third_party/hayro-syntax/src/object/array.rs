@@ -133,12 +133,17 @@ impl<'a> Iterator for ArrayIter<'a> {
         self.reader.skip_white_spaces_and_comments();
 
         if !self.reader.at_end() {
-            // Objects are already guaranteed to be valid.
+            // Folio: an item that cannot be read ends the iteration. The
+            // array was checked when it was skipped, but an item read on its
+            // own can still fail (found by Folio's `image` fuzz target), and
+            // unwrapping it panicked.
             let item = self
                 .reader
-                .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx)
-                .unwrap();
-            return Some(item);
+                .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx);
+            if item.is_none() {
+                self.reader.jump_to_end();
+            }
+            return item;
         }
 
         None

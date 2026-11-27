@@ -31,6 +31,9 @@ Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
   that 100,000 nested `[` no longer overflow the stack.
 - `src/object/array.rs`, `src/object/dict.rs`: skipping an array or a
   dictionary, and reading a dictionary whole, go through `Reader::nest`.
+- `src/object/array.rs`: an array item that cannot be read ends the
+  iteration instead of panicking (an input found by Folio's `image` fuzz
+  target, through `hayro-write`).
 - `src/filter/jpx.rs`: a JPEG 2000 image whose header says it would take
   more than `MAX_IMAGE_BYTES` decoded is not decoded.
 

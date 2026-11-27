@@ -1,6 +1,7 @@
-//! Replays the seed inputs of the `image` fuzz target
-//! (`folio_testkit::fuzz_image`): every corpus image and the hostile
-//! figures of #333, embedded and converted, finish without a panic.
+//! Replays the inputs of the `image` fuzz target
+//! (`folio_testkit::fuzz_image`): its seeds (every corpus image and the
+//! hostile figures of #333, embedded and converted) and the inputs that
+//! once failed (`fuzz/regressions/image/`) finish without a panic.
 
 #[test]
 fn image_seeds() {
@@ -9,5 +10,20 @@ fn image_seeds() {
     for (name, input) in seeds {
         eprintln!("{name}");
         folio_testkit::fuzz_image::image(&input);
+    }
+}
+
+#[test]
+fn image_regressions() {
+    let dir = folio_testkit::root().join("fuzz/regressions/image");
+    let mut paths: Vec<_> = std::fs::read_dir(&dir)
+        .expect("the regressions of the image target")
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    paths.sort();
+    assert!(!paths.is_empty());
+    for path in paths {
+        eprintln!("{}", path.display());
+        folio_testkit::fuzz_image::image(&std::fs::read(&path).unwrap());
     }
 }
