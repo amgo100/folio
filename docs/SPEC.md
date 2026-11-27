@@ -528,7 +528,7 @@ heading + paragraph { indent: 0; }
 | --- | --- | --- |
 | Text | `font`, `font-size`, `font-weight`, `font-style`, `tracking`, `baseline-shift`, `features`, `lang`, `color` | Inline and block |
 | Paragraph | `leading`, `indent`, `align`, `justify`, `hyphenate`, `protrusion`, `widows`, `orphans`, `grid-snap` | Blocks containing text |
-| Block | `space-before/after`, `padding`, `border`, `background`, `keep-with-next`, `keep-together`, `break-before`, `breakable`, `trailer` | Blocks |
+| Block | `space-before/after`, `padding`, `border`, `background`, `keep-with-next`, `keep-together`, `break-before`, `breakable`, `trailer`, `min-height`, `rule-lines`, `rule-spacing`, `rule-stroke`, `rule-breakable` (§6.3) | Blocks |
 | Numbering | `numbering`, `counter-reset`, `marker`, `marker-position`, `ref-format` | Numbered elements |
 | Visibility | `display`, `show-only` (which slots or child elements are shown) | Any element |
 | Templates | `template` (selects a named render template) | Elements with templates |
