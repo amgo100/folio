@@ -81,6 +81,11 @@ pub struct Text {
     /// order of their anchors (SPEC §7.8). They are in no block of
     /// [`Text::root`]: the page builder places them at the foot of a page.
     pub notes: EcoVec<TextBlock>,
+    /// For each footnote, the paragraph of the mark that starts the part of
+    /// it that runs onto the next page (*(cont.)*), in the style and
+    /// language of its first paragraph; `None` for a note without
+    /// paragraphs. It is in no block either.
+    pub continued: EcoVec<Option<usize>>,
 }
 
 /// The anchor of a footnote in a paragraph: its marker, or an object
@@ -319,6 +324,7 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
         root: collected.root.clone(),
         maths: collected.maths.clone(),
         notes: collected.notes.clone(),
+        continued: collected.continued.clone(),
     })
 }
 
@@ -333,6 +339,8 @@ pub struct Collected {
     pub maths: EcoVec<TextMath>,
     /// The footnotes, as [`Text::notes`].
     pub notes: EcoVec<TextBlock>,
+    /// The marks of continued footnotes, as [`Text::continued`].
+    pub continued: EcoVec<Option<usize>>,
 }
 
 /// A paragraph of a build, split into segments set in their fonts, before
@@ -396,6 +404,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         maths: Vec::new(),
         notes: Vec::new(),
         in_note: false,
+        continued: Vec::new(),
     };
     collector.element(&doc.root, &styled.root);
 
@@ -409,6 +418,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
             .into_iter()
             .map(|note| note.expect("every footnote is collected"))
             .collect(),
+        continued: collector.continued.into_iter().collect(),
     })
 }
 
@@ -455,6 +465,9 @@ struct Collector<'a> {
     notes: Vec<Option<TextBlock>>,
     /// Whether it collects a footnote's blocks.
     in_note: bool,
+    /// The paragraph of each footnote's continuation mark, as
+    /// [`Text::continued`].
+    continued: Vec<Option<usize>>,
 }
 
 /// An element anchored in a paragraph whose content is blocks, and for a
@@ -702,10 +715,35 @@ impl Collector<'_> {
         self.element(element, node);
         self.in_note = in_note;
         let note = self.root.take();
+        let mark = note
+            .as_ref()
+            .and_then(|note| self.continuation(note, element));
+        self.continued[index] = mark;
         self.root = root;
         self.blocks = blocks;
         self.markers = markers;
         self.notes[index] = note;
+    }
+
+    /// The paragraph of the mark that starts the part of a footnote that
+    /// runs onto the next page: the word `continued` in the language and
+    /// style of the note's first paragraph (SPEC §7.8). Called with no
+    /// block open, so that the paragraph is in none.
+    fn continuation(&mut self, note: &TextBlock, element: &Element) -> Option<usize> {
+        fn first(block: &TextBlock) -> Option<usize> {
+            block.children.iter().find_map(|child| match child {
+                TextFlow::Paragraph(i) => Some(*i),
+                TextFlow::Block(b) => first(b),
+            })
+        }
+        let style = self.pending.get(first(note)?)?.style.clone();
+        let lang = self.settings(&style, element.span).lang;
+        let word = crate::locale::word(&lang, "continued")?;
+        let mut builder = Builder::default();
+        builder.push_part(word.text, &style, element.span, TextSource::WHOLE, false);
+        let index = self.pending.len();
+        self.finish(builder, &style, element);
+        (self.pending.len() > index).then_some(index)
     }
 
     /// Adds inline content to a paragraph. Elements anchored in it whose
@@ -790,6 +828,7 @@ impl Collector<'_> {
                 }
                 let index = self.notes.len();
                 self.notes.push(None);
+                self.continued.push(None);
                 let marker = self
                     .resolution
                     .marker(element.location)

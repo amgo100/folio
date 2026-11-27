@@ -39,10 +39,10 @@ emph { font-style: italic; }
 // font, sets the characters Source Code Pro lacks.
 raw { font: "Source Code Pro", "New Computer Modern"; font-size: 0.9em; }
 
-// Footnotes (SPEC §7.8): numbered through the document, with superior
-// figures from the font's `sups` feature at the anchor and before the
-// note, whose text is smaller.
-footnote { numbering: "1"; features: "sups"; space-before: 0.3em; }
+// Footnotes (SPEC §7.8, decisions D-46-1 and D-46-2): numbered through
+// the document, with small raised numbers at the anchor and before the
+// note, whose text is 0.8 of the body's size (1.143 times the markers').
+footnote { numbering: "1"; font-size: 0.7em; baseline-shift: 0.35em; space-before: 0.4em; }
 footnote paragraph {
-  font-size: 0.8em; leading: 0.65em; features: none; space-before: 0pt; space-after: 0pt;
+  font-size: 1.143em; baseline-shift: 0pt; leading: 0.65em; space-before: 0pt; space-after: 0pt;
 }

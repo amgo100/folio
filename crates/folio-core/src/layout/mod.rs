@@ -255,11 +255,15 @@ fn input_with<'a>(
                     .face
                     .and_then(|face| metrics.get(face))
                     .unwrap_or((FALLBACK_ASCENT, FALLBACK_DESCENT));
+                // Raised text makes its line reach higher, lowered text
+                // lower (SPEC §5.2).
+                let shift = length(&s.style, props, "baseline-shift");
                 SegmentMetrics {
                     size,
                     tracking: length(&s.style, props, "tracking"),
-                    ascent: size * ascent,
-                    descent: size * descent,
+                    ascent: (size * ascent + shift).max(Abs::zero()),
+                    descent: (size * descent - shift).max(Abs::zero()),
+                    shift,
                 }
             })
             .collect(),

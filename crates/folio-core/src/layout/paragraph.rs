@@ -52,6 +52,9 @@ pub struct SegmentMetrics {
     pub ascent: Abs,
     /// How far it reaches below the baseline, as a positive length.
     pub descent: Abs,
+    /// How far its text is raised above the baseline (`baseline-shift`),
+    /// or lowered where it is negative. `ascent` and `descent` include it.
+    pub shift: Abs,
 }
 
 /// The size of an inline object (SPEC §7.2): content that is not text,

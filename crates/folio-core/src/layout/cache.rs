@@ -479,6 +479,7 @@ mod tests {
                 tracking: Abs::zero(),
                 ascent: Abs::pt(8.0),
                 descent: Abs::pt(2.0),
+                shift: Abs::zero(),
             }]),
             objects: EcoVec::from([ObjectMetrics {
                 width: Abs::pt(20.0),

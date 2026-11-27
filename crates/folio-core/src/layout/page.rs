@@ -887,6 +887,28 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// Starts the leaves read with the line of `mark`, the mark of a
+    /// continued footnote (SPEC §7.8): inside the blocks the first leaf
+    /// starts in, a leading above it.
+    pub(super) fn prepend(&mut self, mark: &Arc<ParagraphInfo>) {
+        let Some(first) = self.leaves.first_mut() else {
+            return;
+        };
+        let before = std::mem::take(&mut first.before);
+        first.before.parts.push(Part::Lead(mark.leading));
+        let item = first.item;
+        self.leaves.insert(
+            0,
+            Placed {
+                before,
+                item,
+                line: Some((mark.clone(), 0)),
+                object: None,
+                rebroken: false,
+            },
+        );
+    }
+
     /// Adds the leaves of leaf `k` of the flow, from line `from` of its
     /// paragraph broken in a region `width` wide.
     fn read(&mut self, k: usize, width: Abs, from: usize) {

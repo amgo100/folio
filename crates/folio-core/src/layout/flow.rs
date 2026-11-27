@@ -194,6 +194,9 @@ pub(super) struct Note {
     pub span: Span,
     /// Its blocks flattened, the footnote's own block the outermost.
     pub flow: Flow,
+    /// The mark that starts the part of it that runs onto the next page,
+    /// a paragraph of one line (*(cont.)*), if it has one.
+    pub mark: Option<Arc<ParagraphInfo>>,
 }
 
 /// An object of a paragraph: where it is, the element instance it stands
@@ -282,6 +285,8 @@ pub(super) struct SegmentPaint {
     pub tracking: Abs,
     /// The paint of its glyphs.
     pub fill: Paint,
+    /// How far its glyphs are raised above the baseline.
+    pub shift: Abs,
     /// The hyphens its lines need, inserted ones (`-`) and the explicit
     /// ones Polish repeats: each with its glyphs in the segment's font, in
     /// font units of the units per em they come with.
@@ -914,8 +919,8 @@ impl Builder<'_> {
     /// Its origins are left out, as paragraphs' indices in the build's
     /// text move with edits elsewhere, and a note is the same wherever it
     /// is.
-    fn note(&self, block: &TextBlock) -> Arc<Note> {
-        let builder = Builder {
+    fn note(&self, block: &TextBlock, continued: Option<usize>) -> Arc<Note> {
+        let mut builder = Builder {
             sizes: self.sizes,
             displays: self.displays.clone(),
             text: self.text,
@@ -935,12 +940,14 @@ impl Builder<'_> {
             origins: Vec::new(),
             in_note: true,
         };
+        let mark = continued.and_then(|i| builder.paragraph_info(i));
         let mut flow = builder.flow(block);
         flow.origins.clear();
         Arc::new(Note {
             location: block.location,
             span: block.span,
             flow,
+            mark,
         })
     }
     fn block(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) {
@@ -1004,11 +1011,19 @@ impl Builder<'_> {
     }
 
     fn paragraph(&mut self, index: usize) {
+        if let Some(info) = self.paragraph_info(index) {
+            self.leaf(Leaf::Paragraph(info), Origin::Paragraph(index));
+        }
+    }
+
+    /// Paragraph `index` of the text broken into lines, or `None` when it
+    /// has none.
+    fn paragraph_info(&mut self, index: usize) -> Option<Arc<ParagraphInfo>> {
         let text = self.text;
         let paragraph = &text.paragraphs[index];
         let layout = self.layouts[index].clone();
         if layout.lines.is_empty() {
-            return;
+            return None;
         }
         let mut input = input_with(paragraph, self.props, &mut self.metrics);
         let style = paragraph_style(&paragraph.style, self.props);
@@ -1070,6 +1085,7 @@ impl Builder<'_> {
                 size: metrics.size,
                 tracking: metrics.tracking,
                 fill: fill(&seg.style, self.props),
+                shift: metrics.shift,
                 hyphens: EcoVec::new(),
             })
             .collect();
@@ -1082,7 +1098,10 @@ impl Builder<'_> {
                 .iter()
                 .map(|anchor| Anchor {
                     range: anchor.range.clone(),
-                    note: self.note(&text.notes[anchor.note]),
+                    note: self.note(
+                        &text.notes[anchor.note],
+                        text.continued.get(anchor.note).copied().flatten(),
+                    ),
                 })
                 .collect()
         };
@@ -1106,7 +1125,7 @@ impl Builder<'_> {
             },
             self.now,
         );
-        self.leaf(Leaf::Paragraph(info), Origin::Paragraph(index));
+        Some(info)
     }
 
     fn leaf(&mut self, leaf: Leaf, origin: Origin) {

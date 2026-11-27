@@ -104,6 +104,9 @@ pub(super) struct NoteRun<'a> {
     heights: Vec<Abs>,
     /// The space between it and the note before it on the page.
     gap: Abs,
+    /// Whether its first leaf is the mark of a continued note, which is
+    /// never placed alone.
+    marked: bool,
 }
 
 /// How much of each note of a set a page places.
@@ -165,6 +168,12 @@ impl<'a> NoteSet<'a> {
         while run.get(n).is_some() {
             n += 1;
         }
+        // What is left of a note carried over starts with its mark.
+        let marked = anchor.is_none() && n > 0 && note.mark.is_some();
+        if let Some(mark) = note.mark.as_ref().filter(|_| marked) {
+            run.prepend(mark);
+            n += 1;
+        }
         let mut heights = Vec::with_capacity(n);
         let mut y = match run.leaves.first() {
             Some(first) => first.before.walk(Walk::Top, |_, _| {}),
@@ -188,6 +197,7 @@ impl<'a> NoteSet<'a> {
             run,
             heights,
             gap,
+            marked,
         });
     }
 
@@ -255,6 +265,9 @@ impl<'a> NoteSet<'a> {
             while m + 1 < n && fits(run.heights[m]) {
                 m += 1;
             }
+            if run.marked && m == 1 {
+                m = 0;
+            }
             if m == 0 && !carried {
                 if overflow {
                     m = 1;
@@ -280,15 +293,17 @@ impl<'a> NoteSet<'a> {
     /// else must take even where it overflows the page, `space` high.
     pub(super) fn place_first(&self, space: Abs) -> Placement {
         let mut leaves = vec![0; self.runs.len()];
-        let Some(first) = self.runs.first().and_then(|r| r.heights.first()) else {
+        let Some(run) = self.runs.first().filter(|r| !r.heights.is_empty()) else {
             return Placement {
                 ok: true,
                 leaves,
                 ..Placement::default()
             };
         };
-        leaves[0] = 1;
-        let height = SKIP + *first;
+        // A mark goes with the line after it.
+        let take = if run.marked { 2 } else { 1 }.min(run.heights.len());
+        leaves[0] = take;
+        let height = SKIP + run.heights[take - 1];
         Placement {
             leaves,
             height,

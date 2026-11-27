@@ -422,3 +422,132 @@ fn the_pdf_tags_each_note() {
         "the PDF claims PDF/UA-1"
     );
 }
+
+/// The glyph runs of a fragment and those inside it, with where they
+/// start from the fragment's top-left, and their text.
+fn runs(fragment: &Fragment, at: folio::Point, out: &mut Vec<(folio::Point, String)>) {
+    for (pos, item) in &fragment.items {
+        let pos = folio::Point::new(at.x + pos.x, at.y + pos.y);
+        match item {
+            FragmentItem::Group(group) => runs(group, pos, out),
+            FragmentItem::Text(run) => out.push((pos, run.text.to_string())),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn baseline_shift_raises_text_and_makes_its_line_taller() {
+    let plain = world("", "Up *here* and on.\n");
+    let raised = world("strong { baseline-shift: 3pt; }\n", "Up *here* and on.\n");
+    let line = |w: &World| {
+        folio::lines(w, Target::Pdf, None)
+            .unwrap()
+            .unwrap()
+            .paragraphs[0]
+            .lines[0]
+            .clone()
+    };
+    let (a, b) = (line(&plain), line(&raised));
+    assert!(((b.ascent - a.ascent).to_pt() - 3.0).abs() < 1e-6);
+    assert!(b.descent <= a.descent);
+    let mut found = Vec::new();
+    runs(
+        &pages(&raised).pages[0].fragment,
+        folio::Point::zero(),
+        &mut found,
+    );
+    let y = |text: &str| {
+        found
+            .iter()
+            .find(|(_, t)| t.contains(text))
+            .unwrap_or_else(|| panic!("no run of {text:?} in {found:?}"))
+            .0
+            .y
+    };
+    assert!(((y("Up") - y("here")).to_pt() - 3.0).abs() < 1e-6);
+    // A negative shift lowers it.
+    let lowered = world("strong { baseline-shift: -2pt; }\n", "Up *here* and on.\n");
+    let c = line(&lowered);
+    assert!(((c.descent - a.descent).to_pt() - 2.0).abs() < 1e-6);
+    assert!(diagnostics(&raised).is_empty());
+}
+
+#[test]
+fn baseline_shift_is_a_length_within_the_limit() {
+    let world = world("strong { baseline-shift: 2e6pt; }\n", "Up *here*.\n");
+    let diags = diagnostics(&world);
+    assert!(
+        diags.iter().any(|d| d.severity == folio::Severity::Error
+            && d.message.contains("`baseline-shift`")
+            && d.message.contains("beyond ±1000000pt")),
+        "{diags:?}"
+    );
+    let world2 = world_with("strong { baseline-shift: red; }\n");
+    let diags = diagnostics(&world2);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("wrong value for `baseline-shift`")),
+        "{diags:?}"
+    );
+}
+
+fn world_with(style: &str) -> World {
+    world(style, "Up *here*.\n")
+}
+
+#[test]
+fn the_footnote_markers_are_raised_by_default() {
+    let world = world("", "A ball.#footnote[A note.] It falls.\n");
+    let mut found = Vec::new();
+    runs(
+        &pages(&world).pages[0].fragment,
+        folio::Point::zero(),
+        &mut found,
+    );
+    let at = |text: &str| {
+        found
+            .iter()
+            .find(|(_, t)| t == text)
+            .unwrap_or_else(|| panic!("no run {text:?} in {found:?}"))
+            .0
+    };
+    let marker = at("1");
+    let before = found
+        .iter()
+        .find(|(_, t)| t.starts_with("A ball"))
+        .unwrap()
+        .0;
+    assert!(marker.y < before.y, "the marker is raised: {found:?}");
+}
+
+#[test]
+fn a_continued_note_starts_with_its_mark() {
+    for (lang, mark) in [("en", "(cont.)"), ("pl", "(cd.)")] {
+        let source = format!(
+            "{}\n\n{}#footnote[{}] {}\n\n{}\n",
+            prose(1, 120),
+            prose(2, 20),
+            prose(3, 220),
+            prose(4, 10),
+            prose(5, 60)
+        );
+        let world = world(&format!("doc {{ lang: \"{lang}\"; }}\n"), &source);
+        let pages = pages(&world);
+        let note = text(&world).notes[0].location;
+        let shown = pages_showing(&pages, note);
+        assert_eq!(shown.len(), 2, "{lang}");
+        let on = |page: usize| {
+            let mut found = Vec::new();
+            runs(
+                &pages.pages[page].fragment,
+                folio::Point::zero(),
+                &mut found,
+            );
+            found.iter().filter(|(_, t)| t == mark).count()
+        };
+        assert_eq!(on(shown[0]), 0, "{lang}");
+        assert_eq!(on(shown[1]), 1, "{lang}");
+    }
+}
