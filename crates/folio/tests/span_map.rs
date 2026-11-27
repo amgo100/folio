@@ -455,15 +455,16 @@ fn a_cursor_before_a_short_word_in_an_item_marks_that_word() {
     assert_eq!(item[0].pos.x, a.pos.x, "{item:?}");
 }
 
-/// Markup inside an item that shows no glyphs of its own, and places inside
-/// it, do not mark the label either; bytes that start at the item's marker,
-/// or before the next item's, do.
+/// Selections of inline markup in an item, and places in the text of an
+/// element inside it, do not mark its label; bytes that start at the item's
+/// marker, or before the next item's, do. Markup that no glyph shows, such
+/// as a call's name or a `*`, finds the label, as nothing else shows it.
 #[test]
 fn inline_markup_and_selections_in_an_item_leave_its_label() {
     let text = "+ See *bold* and #emph[x] now.\n+ Second item.\n";
     let bold = text.find("*bold*").unwrap();
-    let emph = text.find("emph").unwrap() + 2;
-    for bytes in [bold..bold + 6, emph..emph] {
+    let x = text.find("x]").unwrap();
+    for bytes in [bold..bold + 6, x..x, x..x + 1] {
         let (found, markers) = find_with_markers(text, 0, bytes.clone());
         assert!(!markers.is_empty());
         assert!(!found.is_empty(), "{bytes:?} finds nothing");
@@ -472,10 +473,11 @@ fn inline_markup_and_selections_in_an_item_leave_its_label() {
             "{bytes:?} marks the label: {found:?}"
         );
     }
-    // An item whose text starts with markup: a cursor on its `*`.
-    let (found, markers) = find_with_markers("+ *bold* rest\n", 0, 2..2);
-    assert!(!markers.is_empty());
-    assert!(!marks(&found, &markers), "{found:?}");
+    let name = text.find("emph").unwrap() + 2;
+    for (text, bytes) in [(text, name..name), ("+ *bold* rest\n", 2..2)] {
+        let (found, markers) = find_with_markers(text, 0, bytes.clone());
+        assert!(marks(&found, &markers), "{bytes:?} in {text:?}: {found:?}");
+    }
     // From the first item's text into the second item: the second label is
     // in the bytes, the first is not.
     let second = text.find("+ Second").unwrap();

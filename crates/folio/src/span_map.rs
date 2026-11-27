@@ -114,9 +114,10 @@ pub struct Found {
 /// a quarter of it below, as a click finds it. A glyph that stands for a
 /// whole element, such as a list item's marker or a heading's number, is
 /// left out for bytes that start in the element's body (from the start of
-/// its markup to the end, separators between its parts included), unless
-/// they hold the whole element: a cursor in an item's text marks that text,
-/// not the item's label, which a cursor at the item's `+` marks. Where no
+/// its markup to the end, or a call's arguments) where other glyphs show
+/// them, unless they hold the whole element: a cursor in an item's text
+/// marks that text, not the item's label, which a cursor at the item's `+`
+/// marks. Where no
 /// glyph shows the bytes, as in the markup of an element's call, the boxes
 /// of the fragments and objects whose nodes hold them, and hold the fewest
 /// bytes, are found instead; pages themselves, and the root nodes of files,
@@ -414,10 +415,11 @@ impl Index {
         };
         // A glyph that stands for a whole element, such as a list item's
         // marker or a heading's number, is not found for bytes that start
-        // in the element's body: there the reveal marks the body's glyphs
-        // alone (#417). It is found for bytes that start in the element's
-        // own markup, as at an item's `+`, and for bytes that hold the
-        // whole element.
+        // in the element's body where other glyphs show them: there the
+        // reveal marks the body's glyphs alone (#417). It is found for
+        // bytes that start in the element's own markup, as at an item's
+        // `+`, for bytes that hold the whole element, and where no other
+        // glyph shows the bytes, as at a label.
         let mut bodies: HashMap<SourceRef, Option<Range<usize>>> = HashMap::new();
         let mut shown = |&(_, g, ref r, whole): &(usize, &GlyphEntry, Range<usize>, bool)| {
             if !whole || (bytes.start <= r.start && r.end <= bytes.end) {
@@ -430,19 +432,29 @@ impl Index {
                 .as_ref()
                 .is_none_or(|b| !(b.start <= bytes.start && bytes.start <= b.end))
         };
-        let mut hits: Vec<(usize, &GlyphEntry)> = resolved
-            .iter()
-            .filter(|(_, _, r, _)| overlaps(r))
-            .filter(|entry| shown(entry))
-            .map(|&(i, g, _, _)| (i, g))
-            .collect();
-        if hits.is_empty() && bytes.is_empty() {
-            hits = resolved
-                .iter()
-                .filter(|(_, _, r, _)| !r.is_empty() && r.end == bytes.start)
-                .filter(|entry| shown(entry))
-                .map(|&(i, g, _, _)| (i, g))
-                .collect();
+        // The glyphs that show the bytes, or for a cursor that no glyph's
+        // text holds, those whose text ends there; without the glyphs of
+        // whole elements whose bodies hold the place where any other glyph
+        // shows it, and with them where none does.
+        let mut pick = |hide: bool| {
+            let mut found = |at: &dyn Fn(&Range<usize>) -> bool| -> Vec<(usize, &GlyphEntry)> {
+                resolved
+                    .iter()
+                    .filter(|(_, _, r, _)| at(r))
+                    .filter(|entry| !hide || shown(entry))
+                    .map(|&(i, g, _, _)| (i, g))
+                    .collect()
+            };
+            let hits = found(&overlaps);
+            if hits.is_empty() && bytes.is_empty() {
+                found(&|r| !r.is_empty() && r.end == bytes.start)
+            } else {
+                hits
+            }
+        };
+        let mut hits = pick(true);
+        if hits.is_empty() {
+            hits = pick(false);
         }
         if !hits.is_empty() {
             return merge(&hits);
@@ -474,35 +486,22 @@ impl Index {
 
 /// The bytes of an element's body: its markup, from the start of the first
 /// part to the end of the last (an item's or heading's text, a term and its
-/// description), or the markup in the content blocks of a call, named
-/// arguments such as a caption included. `None` for a node with neither,
-/// or whose body is empty.
+/// description), or the arguments of a call. `None` for a node with
+/// neither, or whose body is empty.
 fn body(node: &LinkedNode<'_>) -> Option<Range<usize>> {
-    let markup = |node: &LinkedNode<'_>| {
-        node.children()
-            .filter(|child| child.kind() == SyntaxKind::Markup)
-            .map(|child| child.range())
-            .collect::<Vec<_>>()
+    let parts: Vec<Range<usize>> = node
+        .children()
+        .filter(|child| child.kind() == SyntaxKind::Markup)
+        .map(|child| child.range())
+        .collect();
+    let body = match (parts.first(), parts.last()) {
+        (Some(first), Some(last)) => first.start..last.end,
+        _ if node.kind() == SyntaxKind::FuncCall => node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::Args)?
+            .range(),
+        _ => return None,
     };
-    let mut parts = markup(node);
-    if parts.is_empty()
-        && node.kind() == SyntaxKind::FuncCall
-        && let Some(args) = node.children().find(|c| c.kind() == SyntaxKind::Args)
-    {
-        for arg in args.children() {
-            let block = match arg.kind() {
-                SyntaxKind::ContentBlock => Some(arg),
-                SyntaxKind::Named => arg
-                    .children()
-                    .find(|child| child.kind() == SyntaxKind::ContentBlock),
-                _ => None,
-            };
-            if let Some(block) = block {
-                parts.extend(markup(&block));
-            }
-        }
-    }
-    let body = parts.first()?.start..parts.last()?.end;
     (!body.is_empty()).then_some(body)
 }
 
