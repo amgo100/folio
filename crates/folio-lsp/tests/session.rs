@@ -5,6 +5,7 @@
 //! compiler version gets a notice; the errors of `folio.toml` are shown
 //! until it is fixed on disk.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,6 +64,12 @@ struct Client {
     /// `window/showDocument` requests the server sent, in order.
     shown: Vec<Value>,
     next_id: i32,
+    /// The revision the server checks next, from its last `Edited` event.
+    latest: u64,
+    /// The revisions whose checks have started and not yet ended.
+    running: BTreeSet<u64>,
+    /// The checks that ended since [`Self::settle`] last returned.
+    ended: Vec<(u64, Outcome)>,
 }
 
 impl Client {
@@ -99,6 +106,9 @@ impl Client {
             notifications: Vec::new(),
             shown: Vec::new(),
             next_id: 0,
+            latest: 0,
+            running: BTreeSet::new(),
+            ended: Vec::new(),
         };
         let response = client.request(
             "initialize",
@@ -172,35 +182,48 @@ impl Client {
         message
     }
 
-    /// Waits for an event of the server.
+    /// Waits for an event of the server. Every event it reads, wanted or
+    /// not, is accounted for in the checks [`Self::settle`] waits for.
     fn event(&mut self, wanted: impl Fn(&Event) -> bool) -> Event {
         loop {
             let event = self
                 .events
                 .recv_timeout(TIMEOUT)
                 .expect("the server reports");
+            match event {
+                Event::Edited { revision } => self.latest = revision,
+                Event::Started { revision } => {
+                    self.running.insert(revision);
+                }
+                Event::Checked { revision, outcome } => {
+                    self.running.remove(&revision);
+                    self.ended.push((revision, outcome));
+                }
+                _ => {}
+            }
             if wanted(&event) {
                 return event;
             }
         }
     }
 
-    /// Waits until the check of the latest revision has been published, and
-    /// returns the outcomes of every check that ended meanwhile.
+    /// Waits until the check of the latest revision has been published and
+    /// every check that started has ended, and returns the outcomes of the
+    /// checks that ended since the last call.
+    ///
+    /// A cancelled check reports its end from its own thread, so its
+    /// `Checked` can come after that of the check that overtook it: waiting
+    /// for the latest revision alone would miss it.
     fn settle(&mut self) -> Vec<(u64, Outcome)> {
-        let mut latest = 0;
-        let mut outcomes = Vec::new();
         loop {
-            match self.event(|_| true) {
-                Event::Edited { revision } => latest = revision,
-                Event::Checked { revision, outcome } => {
-                    outcomes.push((revision, outcome));
-                    if revision == latest && outcome == Outcome::Published {
-                        break;
-                    }
-                }
-                _ => {}
+            let published = self
+                .ended
+                .iter()
+                .any(|&ended| ended == (self.latest, Outcome::Published));
+            if published && self.running.is_empty() {
+                break;
             }
+            self.event(|_| true);
         }
         // Every notification of that check is sent before the event; take
         // them in.
@@ -209,7 +232,7 @@ impl Client {
                 self.notifications.push(notification);
             }
         }
-        outcomes
+        std::mem::take(&mut self.ended)
     }
 
     /// The diagnostics published last for a file, if any were.
