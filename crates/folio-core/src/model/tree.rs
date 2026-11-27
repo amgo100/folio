@@ -13,7 +13,7 @@ use super::{is_block, schema};
 use crate::db::{Db, Project, source_file};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Content, Dict, Element, Node, Value, canonical_fields, evaluate};
-use crate::locate::{Locator, Made};
+use crate::locate::{Locator, Made, Origin};
 
 /// The typed document tree of one variant (SPEC §2.1): what every stage
 /// after evaluation reads.
@@ -399,7 +399,7 @@ fn made<'f>(name: &str, fields: impl IntoIterator<Item = (&'f str, Value)>, span
 /// locations, in document order: an element before the elements of its
 /// fields, and those in the order of the fields.
 fn locate(locator: &mut Locator, element: &mut Element) {
-    element.location = locator.locate(element.span, made_by(&element.name));
+    element.location = locator.locate(element.span, made_by(&element.name), Origin::ROOT);
     let keys: Vec<EcoString> = element
         .fields
         .iter()

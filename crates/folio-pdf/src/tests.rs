@@ -76,7 +76,7 @@ fn boxed(source: u64, items: Vec<FragmentItem>) -> FragmentItem {
 
 /// A box of instance `instance` of node `source` holding `items`, as
 /// the page builder makes it for a block whose location it knows.
-fn located(source: u64, instance: u32, items: Vec<FragmentItem>) -> FragmentItem {
+fn located(source: u64, instance: u64, items: Vec<FragmentItem>) -> FragmentItem {
     let FragmentItem::Group(fragment) = boxed(source, items) else {
         unreachable!()
     };
@@ -370,8 +370,8 @@ Section
 /// structure element and bookmark, not a continuation (#251).
 #[test]
 fn loop_made_blocks_at_the_top_of_a_page_are_new() {
-    let at = |tag: Tag, instance: u32| Tag { instance, ..tag };
-    let section = |instance: u32, title: &str| {
+    let at = |tag: Tag, instance: u64| Tag { instance, ..tag };
+    let section = |instance: u64, title: &str| {
         at(
             tag(
                 Role::Section,
@@ -389,7 +389,7 @@ fn loop_made_blocks_at_the_top_of_a_page_are_new() {
         1,
         vec![section(1, "Forces"), section(2, "Energy")],
     );
-    let block = |instance: u32, title: &str, body: &str| {
+    let block = |instance: u64, title: &str, body: &str| {
         located(
             2,
             instance,

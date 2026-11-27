@@ -47,18 +47,20 @@ impl SourceRef {
 /// A span is not enough to say that: every iteration of a loop, and every
 /// call of a closure, makes its elements from the same source node. A
 /// location is that node's reference with a number that tells apart the
-/// instances it made, counted in the order of the document tree. It stays
-/// the same across edits that leave its node's span and the instances made
-/// before it from the same node alone, such as an edit to another
-/// paragraph. Locations are compared, never ordered or written to output:
-/// a reparse may renumber spans (SPEC §2.3, §2.4).
+/// instances it made: a key of the instance's origin, the loop iterations
+/// and closure calls that made it, so that the instance made by the same
+/// iteration pairs across the variants of a numbering group (SPEC §6.1).
+/// It stays the same across edits that leave its node's span and origin
+/// alone, such as an edit to another paragraph or an inserted call.
+/// Locations are compared, never ordered or written to output: a reparse
+/// may renumber spans (SPEC §2.3, §2.4).
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Location {
     /// The node that made the instance: its markup or its call.
     pub source: SourceRef,
-    /// Which of the node's instances it is: a number that only the core
+    /// Which of the node's instances it is: a key that only the core
     /// interprets.
-    pub instance: u32,
+    pub instance: u64,
 }
 
 impl Location {
@@ -72,7 +74,7 @@ impl Location {
     /// [`SourceRef`], not which instance of it the box is
     /// ([`crate::Fragment::with_source`]). The core issues no location
     /// with it.
-    pub const UNKNOWN_INSTANCE: u32 = u32::MAX;
+    pub const UNKNOWN_INSTANCE: u64 = u64::MAX;
 }
 
 /// A run of glyphs in one font, size and paint, on one baseline.
