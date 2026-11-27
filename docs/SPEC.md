@@ -58,7 +58,7 @@ Folio is for documents whose structure matters and whose outputs must stay consi
 | Stylesheet | A separate file of rules that attach presentation to elements |
 | Token | A named stylesheet value (`$accent`), reused across rules and exported to Office themes |
 | Label | A name attached to an element in content (`<fig:ball>`), used by references and id selectors |
-| Location | The identity of one element instance in a build: the span of the markup or call that made it, and a number that tells apart the instances made from that span, such as the iterations of a loop (§2.3) |
+| Location | The identity of one element instance in a build: the span of the markup or call that made it, and its origin, the loop iterations and closure calls that made it, which tells apart the instances made from that span and pairs them across the variants of a numbering group (§2.3, §6.1) |
 | Hint, override | Per-instance layout or formatting written in content (§5.4) |
 | Layout data | A schema field holding a length or colour that is per-instance data rather than formatting, such as a drawing's scale; marked `layout-data` |
 | Variant | A named output of one source: exam, markscheme, slides |
@@ -650,6 +650,14 @@ shared-counters = ["question", "part", "figure", "equation"]
 
 A **numbering group** names variants that must agree on numbering; a variant belongs to at most one. Its shared counters are resolved on the group's *common tree*: the union of the nodes visible in each of its variants, styled with variant overlays but without target overlays, so that format-specific rules cannot change shared numbering. Other counters, and variants outside any group, number their own visible content. When a variant has no target overlays, the common-tree pass reuses its normal Style and Select results, so the extra cost arises only where target overlays exist. Sections 2.1, 4.5 and 6.4 rely on this rule.
 
+**Pairing instances.** The common tree pairs the element instances of a group's variants by location (§2.3). An instance's location is its span and its *origin*: the loop iterations and closure calls that made it, from the outermost inward, each iteration counted from 0 within its loop and each call named by its call site. Instances with the same span and origin, such as content inserted twice, are told apart by document order. Each variant evaluates its own document, so script that reads `variant` may make different content in each; an instance made by the same iteration of the same loop through the same calls is the same instance in every variant. In
+
+```
+#for q in bank { if variant == "markscheme" or not q.hidden { question(..) } }
+```
+
+the question of iteration 3 pairs with iteration 3 in every variant, whether or not iteration 2 made one in the exam. A loop is paired iteration by iteration only when it iterates over equal values in every variant of the group: a loop whose collection differs between them, as `#for q in bank.filter(q => variant == "markscheme" or not q.hidden)` does, is an error at the loop, `variant-loop-differs`, when an instance it makes is counted by a shared counter, with a hint to filter inside the loop or to hide by `display` or `in-variant` (§6.2) instead. Hiding by `display` or `in-variant` shares one evaluation and always pairs.
+
 ### 6.2 Selecting content
 
 Three mechanisms, from most to least preferred:
@@ -686,7 +694,7 @@ mark   { display: none; }
 - **Numbering and totals**: shared counters and `#total` are identical in all variants of a numbering group (§6.1). Steps never affect numbering.
 - **Per-variant lists**: outlines, figure lists and references never mention content hidden in the variant.
 - **No answer leakage**: content removed or replaced in a variant never reaches that variant's outputs in any form: text, PDF tags, alt text, bookmarks, metadata, hidden Word runs, comments, speaker notes, animation steps, data embedded in graphics, or data sent to live clients (animation time functions and display lists).
-- **Leak check by provenance**: every emitted glyph, tag, OOXML run and display-list item carries the id of its source node, and `folio check --leaks` fails if any of them comes from a node removed in the variant. A text search is the second line of defence: text is extracted as a reader would see it (ToUnicode maps in PDF, the OOXML text model with runs joined), normalised, and searched for word sequences of at least six words or 30 characters from hidden nodes, with a project allowlist. The check runs by default in strict and CI builds and covers every target.
+- **Leak check by provenance**: every emitted glyph, box, tag, OOXML run and display-list item carries its provenance: the span of its source node and the location (§2.3, §6.1) of the innermost element instance it comes from, so that of two instances made from one span, one hidden and one shown, each output names its own. `folio check --leaks` fails if any of them comes from an instance removed in the variant. A text search is the second line of defence: text is extracted as a reader would see it (ToUnicode maps in PDF, the OOXML text model with runs joined), normalised, and searched for word sequences of at least six words or 30 characters from hidden nodes, with a project allowlist. The check runs by default in strict and CI builds and covers every target.
 - **Shuffled versions**: `#shuffle(seed: "B")` reorders questions during evaluation, so each version is numbered in printed order; each version and its mark scheme form their own numbering group.
 - **Output naming**: `out/{stem}-{variant}.{ext}` by default, configurable with `[output] path` in the manifest (§4.1). A project without variants leaves out `{variant}` and one separator (`-`, `_`, `.` or `/`) next to it: the one after it when it starts a path segment, the one before it otherwise. Where that would leave a file name without a stem, as in `out/{variant}.{ext}`, `{variant}` becomes `{stem}`. Its output is `out/main.pdf`.
 
