@@ -59,6 +59,7 @@ Folio is for documents whose structure matters and whose outputs must stay consi
 | Token | A named stylesheet value (`$accent`), reused across rules and exported to Office themes |
 | Label | A name attached to an element in content (`<fig:ball>`), used by references and id selectors |
 | Location | The identity of one element instance in a build: the span of the markup or call that made it, and its origin, the loop iterations and closure calls that made it, which tells apart the instances made from that span and pairs them across the variants of a numbering group (§2.3, §6.1) |
+| Origin | The loop iterations and closure calls that made an element instance, from the outermost inward, with a fingerprint of the items those iterations iterated over; part of its location (§2.3, §6.1) |
 | Hint, override | Per-instance layout or formatting written in content (§5.4) |
 | Layout data | A schema field holding a length or colour that is per-instance data rather than formatting, such as a drawing's scale; marked `layout-data` |
 | Variant | A named output of one source: exam, markscheme, slides |
