@@ -190,6 +190,21 @@ fn a_missing_locked_font_fails() {
         )),
         "{messages:?}"
     );
+    // The hint says where the file goes, and names no command (#328).
+    let error = compiled
+        .diagnostics
+        .iter()
+        .find(|d| d.message.starts_with("the locked font"))
+        .unwrap();
+    assert_eq!(
+        error.hints[..],
+        [format!(
+            "put its file in the project's `fonts` directory, or copy it into the font cache \
+             as `fonts/{}` in Folio's cache directory (`$FOLIO_CACHE_DIR`, by default `folio` \
+             in the user's cache directory)",
+            FontHash::of(b"gone").hex()
+        )]
+    );
 }
 
 #[test]
@@ -214,6 +229,48 @@ fn takes_locked_fonts_from_the_font_cache() {
     // Without the cache, the locked font is missing.
     world.load_fonts(root.path(), None).unwrap();
     assert!(compile(&world).has_errors());
+}
+
+/// A file copied into the font cache by hand, as the hint for a missing
+/// locked font says, is read into memory rather than mapped: truncating it
+/// under a live world does not reach the compiles that use it (#328).
+#[test]
+fn a_copied_cache_file_truncated_under_a_live_world() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = FontCache::new(root.path().join("cache"));
+    let data = bundled(SERIF);
+    let hash = FontHash::of(&data);
+    fs::create_dir_all(cache.dir()).unwrap();
+    fs::write(cache.path(hash), &data).unwrap();
+    let lockfile = lock("SourceSerif4-Regular", hash);
+
+    let mut world = bare(MANIFEST, Some(&lockfile), BuildMode::Watch);
+    world.load_fonts(root.path(), Some(&cache)).unwrap();
+    let first = compile(&world);
+    assert!(first.diagnostics.is_empty(), "{:?}", first.diagnostics);
+    assert_eq!(
+        folio::fonts(&world).unwrap().faces()[0].origin,
+        FontOrigin::Cache
+    );
+
+    fs::File::options()
+        .write(true)
+        .open(cache.path(hash))
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    // New text in the same face, shaped and embedded from the bytes read
+    // before the file was truncated.
+    world
+        .set_source("main.fol", "= Energy\n\nThe ball, quickly, zigzags.\n")
+        .unwrap();
+    let second = compile(&world);
+    assert!(second.diagnostics.is_empty(), "{:?}", second.diagnostics);
+    assert_ne!(first.output, second.output);
+
+    // Loading the fonts again finds the file changed.
+    let error = world.load_fonts(root.path(), Some(&cache)).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
 
 /// A system font that is a copy of a bundled file in a directory of its own.
@@ -261,6 +318,27 @@ fn system_fonts_depend_on_the_build_mode() {
             assert_eq!(found.remove(at).0, Severity::Warning);
         }
         assert_eq!(found, expected, "{mode:?} {extra}");
+        // The hints say what to put in `folio.lock` and where the file
+        // goes, and name no command (#328).
+        if let Some(diagnostic) = compiled.diagnostics.iter().find(|d| d.message == message) {
+            assert_eq!(
+                diagnostic.hints[..],
+                [
+                    format!(
+                        "the system font `{}` is not locked: lock it with a `[[font]]` entry \
+                         in `folio.lock` (family `Source Serif 4`, postscript-name \
+                         `SourceSerif4-Regular` and the `sha256:` hash of its file), or put \
+                         the file in the project's `fonts` directory",
+                        system.path
+                    ),
+                    "a locked font is found among the system fonts, or, on a machine that does \
+                     not have it, in the font cache as `fonts/<the hash's 64 hex digits>` in \
+                     Folio's cache directory (`$FOLIO_CACHE_DIR`, by default `folio` in the \
+                     user's cache directory)"
+                        .to_string(),
+                ]
+            );
+        }
     }
 
     // A system font that `folio.lock` locks pins the build.
