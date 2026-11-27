@@ -153,6 +153,7 @@ impl Properties {
                     initial,
                     inherited,
                     effect,
+                    ..
                 } = decl.clone();
                 this.push(Property {
                     name: QualifiedName::qualified(namespace.clone(), name),

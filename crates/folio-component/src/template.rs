@@ -12,6 +12,7 @@ use crate::names::Name;
 /// to Office like any template a stylesheet writes. The core parses and
 /// checks it when the component is loaded.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct TemplateDecl {
     /// The element the template renders, within the component's namespace.
     pub element: Name,
@@ -21,4 +22,25 @@ pub struct TemplateDecl {
     /// The template's parts: the declarations between the braces of a
     /// `render` block, such as `body: slot(statement) rule(0.4pt);`.
     pub parts: EcoString,
+}
+
+impl TemplateDecl {
+    /// The default template of an element.
+    pub fn new(element: Name, parts: impl Into<EcoString>) -> Self {
+        Self {
+            element,
+            name: None,
+            parts: parts.into(),
+        }
+    }
+
+    /// A named template of an element, which stylesheets select with
+    /// `template: <name>`.
+    pub fn named(element: Name, name: Name, parts: impl Into<EcoString>) -> Self {
+        Self {
+            element,
+            name: Some(name),
+            parts: parts.into(),
+        }
+    }
 }

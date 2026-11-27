@@ -1,15 +1,18 @@
 //! The component registry: the components a compiler hosts, checked when
 //! they are registered (SPEC §2.2, §3).
 
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use ecow::{EcoString, eco_format};
+use ecow::{EcoString, EcoVec, eco_format};
 
 use crate::component::{
     Component, ComponentManifest, Declarations, INTERFACE_VERSION, SUPPORTED_INTERFACES,
 };
 use crate::element::{BODY, Body, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
+use crate::instance::InstanceTree;
+use crate::lint::LintDiagnostic;
 use crate::names::{ComponentName, Name};
 use crate::property::PropertyDecl;
 use crate::template::TemplateDecl;
@@ -34,7 +37,13 @@ impl Registry {
     }
 
     /// Checks a component and adds it, or returns every problem found.
-    pub fn register(&mut self, component: &dyn Component) -> Result<(), Vec<RegistryError>> {
+    ///
+    /// The registry keeps the component, so that the core can call the
+    /// extension points that run code, such as its lints.
+    pub fn register(
+        &mut self,
+        component: impl Component + 'static,
+    ) -> Result<(), Vec<RegistryError>> {
         let manifest = component.manifest();
         let declarations = component.declarations();
         let errors = self.check(&manifest, &declarations);
@@ -44,6 +53,7 @@ impl Registry {
         self.components.push(Arc::new(Registered {
             manifest,
             declarations,
+            component: Arc::new(component),
         }));
         Ok(())
     }
@@ -90,16 +100,53 @@ impl Registry {
     }
 }
 
-/// A registered component: its manifest and its checked declarations.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+/// A registered component: its manifest, its checked declarations, and the
+/// component itself, for the extension points that run code.
+///
+/// Registered components are equal, and hash alike, when their manifests
+/// and declarations are: a component's calls are pure (SPEC §3.5), and its
+/// version changes whenever its code does, so the core may keep results
+/// made by an equal component registered earlier.
+#[derive(Clone)]
 pub struct Registered {
     /// The component's manifest.
     pub manifest: ComponentManifest,
     /// What it adds through the extension points.
     pub declarations: Declarations,
+    component: Arc<dyn Component>,
+}
+
+impl Debug for Registered {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Registered")
+            .field("manifest", &self.manifest)
+            .field("declarations", &self.declarations)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for Registered {
+    fn eq(&self, other: &Self) -> bool {
+        self.manifest == other.manifest && self.declarations == other.declarations
+    }
+}
+
+impl Eq for Registered {}
+
+impl Hash for Registered {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.manifest.hash(state);
+        self.declarations.hash(state);
+    }
 }
 
 impl Registered {
+    /// Runs the component's lints over the instances of its elements
+    /// ([`Component::lint`]).
+    pub fn lint(&self, view: &InstanceTree) -> EcoVec<LintDiagnostic> {
+        self.component.lint(view)
+    }
+
     /// The component's name.
     pub fn name(&self) -> &ComponentName {
         &self.manifest.name
@@ -242,6 +289,19 @@ fn check_elements(cx: &mut Checker, elements: &[ElementSchema], strings: &[Local
     }
 }
 
+/// Whether a field type holds content inside an array or dictionary, at any
+/// depth, which the core does not locate or style (SPEC §3.2).
+fn holds_collected_content(ty: &FieldType) -> bool {
+    fn holds(ty: &FieldType) -> bool {
+        match ty {
+            FieldType::Content => true,
+            FieldType::Array(item) | FieldType::Dict(item) => holds(item),
+            _ => false,
+        }
+    }
+    matches!(ty, FieldType::Array(item) | FieldType::Dict(item) if holds(item))
+}
+
 fn check_element(cx: &mut Checker, element: &ElementSchema, strings: &[LocaleString]) {
     let name = &element.name;
     let fields: Vec<_> = element.fields.iter().map(|f| &f.name).collect();
@@ -277,6 +337,14 @@ fn check_element(cx: &mut Checker, element: &ElementSchema, strings: &[LocaleStr
                     "field `{field_name}` of element `{name}` lists option {o:?} more than once"
                 )
             });
+        }
+        if holds_collected_content(&field.ty) {
+            cx.error(eco_format!(
+                "field `{field_name}` of element `{name}` has type `{}`: arrays and dictionaries \
+                 of content are not supported; hold several pieces of content as child elements \
+                 of the body",
+                field.ty
+            ));
         }
         if field.ty.is_presentational() && !field.layout_data {
             cx.error(eco_format!(
@@ -436,7 +504,6 @@ mod tests {
     use crate::element::{ContentKind, ElementKind, FieldDecl, SlotDecl};
     use crate::geom::Abs;
     use crate::names::Target;
-    use crate::property::Effect;
     use crate::value::Value;
 
     fn name(text: &str) -> Name {
@@ -456,12 +523,11 @@ mod tests {
     }
 
     fn manifest(name: &str) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new(name).unwrap(),
-            version: semver::Version::new(0, 1, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new(name).unwrap(),
+            semver::Version::new(0, 1, 0),
+            [Target::Pdf],
+        )
     }
 
     fn example() -> Declarations {
@@ -475,36 +541,24 @@ mod tests {
             ),
         ]);
         element.body = Body::Slots(EcoVec::from([
-            SlotDecl {
-                name: name("statement"),
-                content: ContentKind::Blocks,
-            },
-            SlotDecl {
-                name: name("solution"),
-                content: ContentKind::Blocks,
-            },
+            SlotDecl::new(name("statement"), ContentKind::Blocks),
+            SlotDecl::new(name("solution"), ContentKind::Blocks),
         ]));
         element.ref_key = Some(name("example"));
-        Declarations {
-            elements: EcoVec::from([element]),
-            properties: EcoVec::from([PropertyDecl {
-                name: name("example-gap"),
-                ty: PropertyType::Length,
-                initial: Value::Length(Abs::pt(6.0)),
-                inherited: false,
-                effect: Effect::Layout,
-            }]),
-            templates: EcoVec::from([TemplateDecl {
-                element: name("example"),
-                name: None,
-                parts: "body: slot(statement) rule(0.4pt) slot(solution);".into(),
-            }]),
-            locale_strings: EcoVec::from([LocaleString {
-                lang: "en".into(),
-                key: name("example"),
-                text: "Example".into(),
-            }]),
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([element]);
+        declarations.properties = EcoVec::from([PropertyDecl::new(
+            name("example-gap"),
+            PropertyType::Length,
+            Value::Length(Abs::pt(6.0)),
+        )]);
+        declarations.templates = EcoVec::from([TemplateDecl::new(
+            name("example"),
+            "body: slot(statement) rule(0.4pt) slot(solution);",
+        )]);
+        declarations.locale_strings =
+            EcoVec::from([LocaleString::new("en", name("example"), "Example")]);
+        declarations
     }
 
     fn messages(result: Result<(), Vec<RegistryError>>) -> Vec<String> {
@@ -520,7 +574,7 @@ mod tests {
     fn registers_and_looks_up() {
         let mut registry = Registry::new();
         registry
-            .register(&Test(manifest("@school/blocks"), example()))
+            .register(Test(manifest("@school/blocks"), example()))
             .unwrap();
         let component = registry.by_namespace("blocks").unwrap();
         assert_eq!(component.name().as_str(), "@school/blocks");
@@ -535,18 +589,51 @@ mod tests {
     fn rejects_clashing_components() {
         let mut registry = Registry::new();
         registry
-            .register(&Test(manifest("blocks"), example()))
+            .register(Test(manifest("blocks"), example()))
             .unwrap();
-        let again = registry.register(&Test(manifest("blocks"), Declarations::default()));
+        let again = registry.register(Test(manifest("blocks"), Declarations::default()));
         assert_eq!(
             messages(again),
             ["a component named `blocks` is already registered"]
         );
         let same_namespace =
-            registry.register(&Test(manifest("@school/blocks"), Declarations::default()));
+            registry.register(Test(manifest("@school/blocks"), Declarations::default()));
         assert_eq!(
             messages(same_namespace),
             ["namespace `blocks` is already used by component `blocks`"]
+        );
+    }
+
+    #[test]
+    fn rejects_content_in_arrays_and_dictionaries() {
+        let mut decls = example();
+        let element = &mut decls.elements.make_mut()[0];
+        element.fields.push(FieldDecl::with_default(
+            name("options"),
+            FieldType::Array(Box::new(FieldType::Content)),
+            Value::None,
+        ));
+        element.fields.push(FieldDecl::with_default(
+            name("cells"),
+            FieldType::Dict(Box::new(FieldType::Array(Box::new(FieldType::Content)))),
+            Value::None,
+        ));
+        element.fields.push(FieldDecl::with_default(
+            name("tags"),
+            FieldType::Array(Box::new(FieldType::Str)),
+            Value::None,
+        ));
+        let result = Registry::new().register(Test(manifest("blocks"), decls));
+        assert_eq!(
+            messages(result),
+            [
+                "field `options` of element `example` has type `array(content)`: arrays and \
+                 dictionaries of content are not supported; hold several pieces of content as \
+                 child elements of the body",
+                "field `cells` of element `example` has type `dict(array(content))`: arrays and \
+                 dictionaries of content are not supported; hold several pieces of content as \
+                 child elements of the body",
+            ]
         );
     }
 
@@ -583,28 +670,22 @@ mod tests {
             Value::None,
         ));
         decls.properties.make_mut()[0].initial = Value::Int(1);
-        decls.properties.push(PropertyDecl {
-            name: name("example-fill"),
-            ty: PropertyType::Keyword(EcoVec::from([name("balance"), name("auto")])),
-            initial: Value::Keyword(name("balance")),
-            inherited: false,
-            effect: Effect::Layout,
-        });
-        decls.templates.push(TemplateDecl {
-            element: name("figure"),
-            name: Some(name("wide")),
-            parts: " ".into(),
-        });
-        decls.locale_strings.push(LocaleString {
-            lang: "EN".into(),
-            key: name("example"),
-            text: "Sample".into(),
-        });
+        decls.properties.push(PropertyDecl::new(
+            name("example-fill"),
+            PropertyType::Keyword(EcoVec::from([name("balance"), name("auto")])),
+            Value::Keyword(name("balance")),
+        ));
+        decls
+            .templates
+            .push(TemplateDecl::named(name("figure"), name("wide"), " "));
+        decls
+            .locale_strings
+            .push(LocaleString::new("EN", name("example"), "Sample"));
         let mut manifest = manifest("blocks");
         manifest.interface = 2;
         manifest.targets.push(Target::Pdf);
 
-        let result = Registry::new().register(&Test(manifest, decls));
+        let result = Registry::new().register(Test(manifest, decls));
         assert_eq!(
             messages(result),
             [

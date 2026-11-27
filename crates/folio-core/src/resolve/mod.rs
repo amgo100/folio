@@ -631,10 +631,10 @@ fn within_decls(db: &dyn Db, build: Build<'_>) -> Vec<WithinDecl> {
                 let name = QualifiedName::qualified(namespace.clone(), element.name.clone());
                 out.push(WithinDecl {
                     counter: name.to_string().into(),
-                    within: Within {
-                        element: own(component, &within.element),
-                        fields: within.fields.clone(),
-                    },
+                    within: Within::new(
+                        own(component, &within.element),
+                        within.fields.iter().cloned(),
+                    ),
                 });
             }
         }
