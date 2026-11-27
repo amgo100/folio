@@ -41,8 +41,15 @@ raw { font: "Source Code Pro", "New Computer Modern"; font-size: 0.9em; }
 
 // Footnotes (SPEC §7.8, decisions D-46-1 and D-46-2): numbered through
 // the document, with small raised numbers at the anchor and before the
-// note, whose text is 0.8 of the body's size (1.143 times the markers').
-footnote { numbering: "1"; font-size: 0.7em; baseline-shift: 0.35em; space-before: 0.4em; }
-footnote paragraph {
-  font-size: 1.143em; baseline-shift: 0pt; leading: 0.65em; space-before: 0pt; space-after: 0pt;
+// note, upright and of normal weight wherever the anchor is. The note's
+// blocks are 0.8 of the body's size (1.143 times the markers') and on
+// their baselines.
+footnote {
+  numbering: "1"; font-size: 0.7em; baseline-shift: 0.35em; font-weight: normal;
+  font-style: normal; space-before: 0.4em;
 }
+footnote > paragraph, footnote > list, footnote > enum, footnote > terms, footnote > heading,
+footnote > math, footnote > raw, footnote > figure {
+  font-size: 1.143em; baseline-shift: 0pt;
+}
+footnote paragraph { leading: 0.65em; space-before: 0pt; space-after: 0pt; }

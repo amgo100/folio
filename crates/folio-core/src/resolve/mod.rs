@@ -352,8 +352,25 @@ impl Resolution {
             let numbered = footnote.numbered_marker;
             if let Some(&n) = self.index.numbers.get(&target) {
                 let entry = &mut self.numbers.make_mut()[n];
+                // A reference to the footnote shows its number as the
+                // footnote does: the number, after its supplement if any.
+                let shown = |values: &[u64]| match &footnote.pattern {
+                    Some(pattern) => pattern.format_trimmed(values),
+                    None => Pattern::parse("1.1").format(values),
+                };
+                let (old, new) = (shown(&entry.values), shown(&[value]));
                 entry.values = EcoVec::from([value]);
                 entry.number = number.clone();
+                if old != new {
+                    for r in self.references.make_mut() {
+                        if r.page.is_none()
+                            && r.target == Some(target)
+                            && let Some(prefix) = r.text.strip_suffix(old.as_str())
+                        {
+                            r.text = eco_format!("{prefix}{new}");
+                        }
+                    }
+                }
             }
             if numbered
                 && let Some(number) = number

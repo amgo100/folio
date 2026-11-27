@@ -943,6 +943,18 @@ impl Builder<'_> {
         let mark = continued.and_then(|i| builder.paragraph_info(i));
         let mut flow = builder.flow(block);
         flow.origins.clear();
+        // The mark stands where the note's first paragraph does.
+        let first = flow.items.iter().find_map(|item| match &item.leaf {
+            Leaf::Paragraph(p) => Some(p.slot),
+            _ => None,
+        });
+        let mark = match (mark, first) {
+            (Some(mark), Some(slot)) if mark.slot != slot => Some(Arc::new(ParagraphInfo {
+                slot,
+                ..(*mark).clone()
+            })),
+            (mark, _) => mark,
+        };
         Arc::new(Note {
             location: block.location,
             span: block.span,

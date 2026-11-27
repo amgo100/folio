@@ -321,6 +321,18 @@ pub(crate) fn structure(
     text: &Text,
     alt: &dyn Fn(Span) -> Option<EcoString>,
 ) -> Tag {
+    structure_of(block, text, alt, false)
+}
+
+/// The structure of a block, as [`structure`] gives it; `in_note` for the
+/// blocks of a footnote, whose own footnotes are not placed, so they have
+/// no node (SPEC §7.8).
+fn structure_of(
+    block: &TextBlock,
+    text: &Text,
+    alt: &dyn Fn(Span) -> Option<EcoString>,
+    in_note: bool,
+) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
     let mut tag = Tag::new(role, source_ref(block.span));
     tag.instance = block.location.instance;
@@ -331,7 +343,9 @@ pub(crate) fn structure(
     }
     for child in &block.children {
         match child {
-            TextFlow::Block(block) => tag.children.push(structure(block, text, alt)),
+            TextFlow::Block(block) => {
+                tag.children.push(structure_of(block, text, alt, in_note));
+            }
             TextFlow::Paragraph(index) => {
                 let paragraph = &text.paragraphs[*index];
                 // A formula's first chunk, as the others continue it, and
@@ -352,10 +366,10 @@ pub(crate) fn structure(
                 // A footnote's note, whose boxes the page builder draws
                 // inside the paragraph's on the page of its anchor
                 // (SPEC §7.8, §11.1).
-                let notes = paragraph.notes.iter().map(|anchor| {
+                let notes = paragraph.notes.iter().filter(|_| !in_note).map(|anchor| {
                     (
                         anchor.range.start,
-                        structure(&text.notes[anchor.note], text, alt),
+                        structure_of(&text.notes[anchor.note], text, alt, true),
                     )
                 });
                 let mut children: Vec<(usize, Tag)> = objects.chain(notes).collect();

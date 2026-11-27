@@ -551,3 +551,47 @@ fn a_continued_note_starts_with_its_mark() {
         assert_eq!(on(shown[1]), 1, "{lang}");
     }
 }
+
+#[test]
+fn a_reference_to_a_footnote_shows_its_number_on_its_page() {
+    let mut source = noted(12, 40, 30, 20);
+    // Label the last footnote and refer to it.
+    let at = source.rfind("#footnote[").unwrap();
+    let close = at + source[at..].find(']').unwrap() + 1;
+    source.insert_str(close, " <fn:last>");
+    source.push_str("See note @fn:last[].\n");
+    let world = world("page { counter-reset: footnote; }\n", &source);
+    let numbers = numbers(&world);
+    let resolution = resolution(&world);
+    let reference = resolution.references.last().expect("the reference");
+    assert_ne!(numbers.last().unwrap(), "12", "numbered per page");
+    assert_eq!(reference.text.as_str(), numbers.last().unwrap().as_str());
+}
+
+#[test]
+fn a_note_does_not_take_the_style_around_its_anchor() {
+    let plain = world("", "A claim.#footnote[Source.] Done.\n");
+    let emph = world("", "_A claim.#footnote[Source.]_ Done.\n");
+    let face = |w: &World| {
+        let text = text(w);
+        let note = text
+            .paragraphs
+            .iter()
+            .find(|p| p.shaped.text().contains("Source"))
+            .unwrap();
+        note.segments.last().unwrap().face
+    };
+    assert_eq!(face(&plain), face(&emph), "the note is upright");
+}
+
+#[test]
+fn a_footnote_inside_a_footnote_has_no_structure() {
+    let world = world(
+        "",
+        "#doc(title: [Notes])\n\nText#footnote[Outer#footnote[Inner.].] here.\n",
+    );
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    let pdf = compiled.output.clone().expect("a PDF");
+    let bytes = String::from_utf8_lossy(&pdf);
+    assert_eq!(bytes.matches("/S/Note").count(), 1);
+}

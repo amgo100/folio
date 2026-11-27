@@ -1266,17 +1266,17 @@ fn assemble(run: &Run<'_>, notes: &NoteSet<'_>, found: &Break, first: bool) -> F
     let placed = &found.notes;
     let top = height - placed.height;
     let mut y = top + footnote::SKIP;
-    let mut any = false;
+    let mut last: Option<usize> = None;
     // Each note's items, with the leaf whose line anchors it.
     let mut sets: Vec<(Option<usize>, Items)> = Vec::new();
-    for (note, &m) in notes.runs.iter().zip(&placed.leaves) {
+    for (i, (note, &m)) in notes.runs.iter().zip(&placed.leaves).enumerate() {
         if m == 0 {
             continue;
         }
-        if any {
-            y += note.gap_before();
+        if let Some(prev) = last {
+            y += notes.gap(prev, i);
         }
-        any = true;
+        last = Some(i);
         let mut asm = new_asm();
         y = lay(&note.run, m, false, &mut asm, y, &mut |_, _| {});
         while !asm.open.is_empty() {
@@ -1303,7 +1303,7 @@ fn assemble(run: &Run<'_>, notes: &NoteSet<'_>, found: &Break, first: bool) -> F
     }
     // The separator, and the notes carried over, which no line on the page
     // anchors.
-    if any {
+    if last.is_some() {
         let (pos, rule) = footnote::separator(top, page.width);
         asm.items.push((pos, rule));
     }

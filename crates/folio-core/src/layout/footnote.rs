@@ -80,13 +80,6 @@ pub(super) struct NoteSet<'a> {
     carried: usize,
 }
 
-impl NoteRun<'_> {
-    /// The space between it and the note before it on the page.
-    pub(super) fn gap_before(&self) -> Abs {
-        self.gap
-    }
-}
-
 /// A note of a page, from where it starts on the page.
 pub(super) struct NoteRun<'a> {
     /// The note.
@@ -235,12 +228,13 @@ impl<'a> NoteSet<'a> {
             ..Placement::default()
         };
         let mut used = Abs::zero();
-        let mut any = false;
+        // The last note placed, which the next is spaced from.
+        let mut last: Option<usize> = None;
         for (i, run) in self.runs.iter().enumerate() {
             let carried = i < self.carried;
             if defer && carried {
+                // It waits for the next page; the notes anchored here start.
                 out.leaves.push(0);
-                out.split = true;
                 continue;
             }
             if out.split && (carried || !overflow) {
@@ -248,7 +242,7 @@ impl<'a> NoteSet<'a> {
                 out.ok &= carried;
                 continue;
             }
-            let gap = if any { run.gap } else { Abs::zero() };
+            let gap = last.map_or(Abs::zero(), |prev| self.gap(prev, i));
             let n = run.heights.len();
             let fits = |h: Abs| (used + gap + h).to_pt() <= avail.to_pt() + EPSILON;
             if n == 0 {
@@ -258,7 +252,7 @@ impl<'a> NoteSet<'a> {
             if fits(run.heights[n - 1]) {
                 used += gap + run.heights[n - 1];
                 out.leaves.push(n);
-                any = true;
+                last = Some(i);
                 continue;
             }
             let mut m = 0;
@@ -278,15 +272,32 @@ impl<'a> NoteSet<'a> {
             }
             if m > 0 {
                 used += gap + run.heights[m - 1];
-                any = true;
+                last = Some(i);
             }
             out.leaves.push(m);
             out.split = true;
         }
-        if any {
+        if defer && self.carried > 0 {
+            // The notes that wait leave the page no room for more lines.
+            out.split = true;
+        }
+        if last.is_some() {
             out.height = SKIP + used;
         }
         out
+    }
+
+    /// The space between note `prev` and note `next` of the set, both on
+    /// the page, `prev` whole: the gap computed against the note before
+    /// `next` when that is `prev`, else the two notes' boundaries joined.
+    pub(super) fn gap(&self, prev: usize, next: usize) -> Abs {
+        if prev + 1 == next {
+            return self.runs[next].gap;
+        }
+        match self.runs[next].run.leaves.first() {
+            Some(first) => between(&self.runs[prev].note.flow.end, &first.before),
+            None => Abs::zero(),
+        }
     }
 
     /// The first leaf of the first note, which a page that holds nothing
