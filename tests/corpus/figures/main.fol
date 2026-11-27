@@ -10,6 +10,10 @@ The circuit in @fig:circuit is drawn as an SVG file, so it stays sharp at any zo
 
 #figure[#image("assets/circuit.svg", alt: "A cell, a resistor and a lamp in series", width: 60%)][A series circuit] <fig:circuit>
 
+The forces on a block on a ramp are drawn in @fig:ramp, with a shadow under the block and arrowheads that follow their lines.
+
+#figure[#image("assets/ramp.svg", alt: "A block on a ramp, with its weight straight down, the normal force perpendicular to the ramp and the component of the weight down the slope", width: 70%)][Forces on a ramp] <fig:ramp>
+
 #figure[#image("assets/field.pdf", alt: "Field lines curving from a positive charge on the left to a negative charge on the right")][The field between two charges] <fig:field>
 
 = Pictures
