@@ -63,7 +63,10 @@ fn crates() -> Vec<(String, String)> {
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let mut entries: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let mut entries: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
     entries.sort();
     for path in entries {
         if path.is_dir() {
@@ -160,7 +163,11 @@ fn patched_crates_call_no_platform_maths() {
         rust_files(&dir.join("src"), &mut files);
         assert!(!files.is_empty(), "third_party/{name} has no sources");
         for file in files {
-            let rel = file.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/");
+            let rel = file
+                .strip_prefix(&dir)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             let text = fs::read_to_string(&file).unwrap();
             let mut counts: Vec<(&str, usize, usize)> = Vec::new();
             for (i, line) in code(&text).iter().enumerate() {
@@ -207,7 +214,10 @@ fn every_build_uses_the_patched_crates() {
             .unwrap_or_else(|| panic!("{manifest} has no [patch.crates-io] table"));
         for (name, version) in crates() {
             let entry = format!("{name} = {{ path = \"{prefix}/{name}\" }}");
-            assert!(table.contains(&entry), "{manifest} does not patch {name}: `{entry}`");
+            assert!(
+                table.contains(&entry),
+                "{manifest} does not patch {name}: `{entry}`"
+            );
             let package = format!("name = \"{name}\"\nversion = \"{version}\"\n");
             let at = lock_text
                 .find(&package)
