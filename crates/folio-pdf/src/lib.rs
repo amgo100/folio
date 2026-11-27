@@ -350,6 +350,12 @@ pub struct Tag {
     pub text: Option<EcoString>,
     /// The nodes it holds, in document order.
     pub children: Vec<Tag>,
+    /// Whether its boxes on a page are a footnote's note, set at the
+    /// page's foot (SPEC §7.8): the writer draws them after the rest of
+    /// the page, so content order, which text extraction follows, reads
+    /// the page's body before its notes. Its place in the structure, where
+    /// its anchor is, does not change.
+    pub foot: bool,
 }
 
 impl Tag {
@@ -362,6 +368,7 @@ impl Tag {
             instance: Location::UNKNOWN_INSTANCE,
             text: None,
             children: Vec::new(),
+            foot: false,
         }
     }
 }
@@ -862,6 +869,9 @@ struct Writer<'a> {
     ua: bool,
     /// Each image prepared, with the warning drawing it gives.
     images: HashMap<folio_component::Image, image::Prepared>,
+    /// The boxes of footnotes met on the page being drawn, each with where
+    /// it is and its structure node, drawn after the rest of the page.
+    deferred: Vec<(Fragment, Point, usize)>,
 }
 
 /// The links of a document as the pages draw them: which link each run of
@@ -1163,6 +1173,7 @@ impl<'a> Writer<'a> {
             }),
             ua: false,
             images: HashMap::new(),
+            deferred: Vec::new(),
         }
     }
 }
@@ -1174,6 +1185,10 @@ const OBJECT_FRAME: Abs = Abs::pt(0.5);
 impl Writer<'_> {
     /// Draws a page: its regions' content as boxes of the top of the
     /// structure.
+    ///
+    /// The boxes of footnotes are drawn last, after the body they are
+    /// anchored in, so that content order reads each page's body whole
+    /// and then its notes, as they are seen (SPEC §7.8, §11.1).
     fn page(&mut self, surface: &mut Surface<'_>, page: &Fragment) {
         for (offset, item) in page.items.iter() {
             match item {
@@ -1182,6 +1197,10 @@ impl Writer<'_> {
                 }
                 other => self.item(surface, other, *offset, Tagger::TOP),
             }
+        }
+        for (note, at, node) in std::mem::take(&mut self.deferred) {
+            self.fragment(surface, &note, at, node);
+            self.tagger.advance();
         }
     }
 
@@ -1204,7 +1223,11 @@ impl Writer<'_> {
         match item {
             FragmentItem::Group(group) => {
                 let child = self.tagger.enter(node, group.location(), at.y);
-                self.fragment(surface, group, at, child);
+                if child != node && self.tagger.is_foot(child) {
+                    self.deferred.push((group.clone(), at, child));
+                } else {
+                    self.fragment(surface, group, at, child);
+                }
                 self.tagger.advance();
             }
             FragmentItem::Text(run) => self.text(surface, run, at, node),

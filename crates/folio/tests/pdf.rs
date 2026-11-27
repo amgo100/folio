@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use folio::{
-    Diagnostic, Fragment, FragmentItem, Name, Severity, SourceRef, Target, Text, TextBlock,
+    Diagnostic, Fragment, FragmentItem, Name, Point, Severity, SourceRef, Target, Text, TextBlock,
     TextFlow, World,
 };
 
@@ -89,30 +89,64 @@ fn pdf_variants(world: &World) -> Vec<Option<Name>> {
 /// paragraph or display formula per line, without the objects that layout
 /// does not draw yet. A formula's text is the text of the glyphs drawn for
 /// it, in the order they are drawn: each inline chunk at its object
-/// character, a display's lines and their numbers as one line.
+/// character, a display's lines and their numbers as one line. Each
+/// page's footnotes follow its body, where the page ends (SPEC §7.8): the
+/// text drawn in their boxes, a line at a time, as the page shows them.
 fn expected_text(world: &World, variant: Option<&Name>) -> String {
     let text = folio::text(world, Target::Pdf, variant).unwrap().unwrap();
     let pages = folio::pages(world, Target::Pdf, variant).unwrap().unwrap();
+    let lines = folio::lines(world, Target::Pdf, variant).unwrap().unwrap();
     let maths: HashSet<Location> = text
         .maths
         .iter()
         .map(|m| (m.location.source, m.location.instance))
         .collect();
-    // The text of each box of a formula, by the formula, in drawing order.
+    let notes: HashSet<Location> = text
+        .notes
+        .iter()
+        .map(|n| (n.location.source, n.location.instance))
+        .collect();
+    // The text of each box of a formula, by the formula, in drawing order;
+    // the page each formula starts on; and the text of each page's notes.
     let mut drawn: HashMap<Location, Vec<String>> = HashMap::new();
-    for page in pages.pages.iter() {
-        collect_maths(&page.fragment, &maths, &mut drawn);
+    let mut first_page: HashMap<Location, usize> = HashMap::new();
+    let mut on_page = Vec::new();
+    for (i, page) in pages.pages.iter().enumerate() {
+        collect_maths(&page.fragment, &maths, &mut drawn, &mut |at| {
+            first_page.entry(at).or_insert(i);
+        });
+        let mut page_notes = String::new();
+        collect_notes(&page.fragment, &notes, Point::zero(), &mut page_notes);
+        on_page.push(page_notes);
     }
-    let mut out = String::new();
-    write_block(&text, &text.root, &drawn, &mut out);
-    out
+    let mut line_page = HashMap::new();
+    for (i, page) in pages.pages.iter().enumerate() {
+        for line in &page.lines {
+            line_page.insert((line.paragraph, line.line), i);
+        }
+    }
+    let mut w = Expected {
+        text: &text,
+        drawn: &drawn,
+        first_page: &first_page,
+        line_page: &line_page,
+        lines: &lines,
+        notes: &on_page,
+        page: 0,
+        out: String::new(),
+    };
+    w.block(&text.root);
+    w.reach(on_page.len());
+    w.out
 }
 
-/// The text of the boxes of formulas in `fragment`, by formula.
+/// The text of the boxes of formulas in `fragment`, by formula, calling
+/// `seen` with each.
 fn collect_maths(
     fragment: &Fragment,
     maths: &HashSet<Location>,
     drawn: &mut HashMap<Location, Vec<String>>,
+    seen: &mut dyn FnMut(Location),
 ) {
     for (_, item) in fragment.items.iter() {
         if let FragmentItem::Group(group) = item {
@@ -121,9 +155,56 @@ fn collect_maths(
                 let mut text = String::new();
                 runs(group, &mut text);
                 drawn.entry(location).or_default().push(text);
+                seen(location);
             } else {
-                collect_maths(group, maths, drawn);
+                collect_maths(group, maths, drawn, seen);
             }
+        }
+    }
+}
+
+/// The text of the boxes of notes in `fragment`, at `at`, each line of it
+/// on a line of its own.
+fn collect_notes(fragment: &Fragment, notes: &HashSet<Location>, at: Point, out: &mut String) {
+    for (pos, item) in fragment.items.iter() {
+        if let FragmentItem::Group(group) = item {
+            let pos = Point::new(at.x + pos.x, at.y + pos.y);
+            let location = (group.location().source, group.location().instance);
+            if notes.contains(&location) {
+                let mut found = Vec::new();
+                positioned(group, pos, &mut found);
+                let mut y = None;
+                for (line, run) in found {
+                    if y != Some(line) {
+                        out.push('\n');
+                        y = Some(line);
+                    }
+                    out.push_str(&run);
+                }
+                out.push('\n');
+            } else {
+                collect_notes(group, notes, pos, out);
+            }
+        }
+    }
+}
+
+/// The glyph runs in `fragment`, at `at`, in drawing order, each with the
+/// baseline of the line it is on, to a tenth of a point (a raised marker
+/// is on the line of the text after it).
+fn positioned(fragment: &Fragment, at: Point, out: &mut Vec<(i64, String)>) {
+    for (pos, item) in fragment.items.iter() {
+        let pos = Point::new(at.x + pos.x, at.y + pos.y);
+        match item {
+            FragmentItem::Text(run) => {
+                let y = (pos.y.to_pt() / 4.0).round() as i64;
+                let y =
+                    out.last()
+                        .map_or(y, |(last, _)| if (last - y).abs() <= 1 { *last } else { y });
+                out.push((y, run.text.to_string()));
+            }
+            FragmentItem::Group(group) => positioned(group, pos, out),
+            _ => {}
         }
     }
 }
@@ -139,51 +220,91 @@ fn runs(fragment: &Fragment, out: &mut String) {
     }
 }
 
-fn write_block(
-    text: &Text,
-    block: &TextBlock,
-    drawn: &HashMap<Location, Vec<String>>,
-    out: &mut String,
-) {
-    let location = (block.location.source, block.location.instance);
-    if let Some(boxes) = drawn.get(&location)
-        && text
-            .maths
-            .iter()
-            .any(|m| m.display && m.location == block.location)
-    {
-        out.push_str(&boxes.concat());
-        out.push('\n');
-        return;
+/// The expected text being written, and the page it has reached.
+struct Expected<'a> {
+    text: &'a Text,
+    drawn: &'a HashMap<Location, Vec<String>>,
+    first_page: &'a HashMap<Location, usize>,
+    line_page: &'a HashMap<(usize, usize), usize>,
+    lines: &'a folio::Lines,
+    notes: &'a [String],
+    page: usize,
+    out: String,
+}
+
+impl Expected<'_> {
+    /// Writes the notes of the pages before `page`, which the text has
+    /// reached.
+    fn reach(&mut self, page: usize) {
+        while self.page < page {
+            self.out.push_str(&self.notes[self.page]);
+            self.page += 1;
+        }
     }
-    for child in block.children.iter() {
-        match child {
-            TextFlow::Block(child) => write_block(text, child, drawn, out),
-            TextFlow::Paragraph(index) => {
-                let paragraph = &text.paragraphs[*index];
-                let mut line = String::new();
-                let mut objects = paragraph.objects.iter();
-                for c in paragraph.shaped.text().chars() {
-                    match c {
-                        '\u{FFFC}' => {
-                            let chunk = objects
-                                .next()
-                                .and_then(|o| {
-                                    Some(((o.location.source, o.location.instance), o.math?.chunk))
-                                })
-                                .and_then(|(at, chunk)| drawn.get(&at)?.get(chunk));
-                            if let Some(chunk) = chunk {
-                                line.push_str(chunk);
-                            }
-                        }
-                        '\u{2028}' => line.push(' '),
-                        c => line.push(c),
-                    }
-                }
-                out.push_str(line.trim());
-                out.push('\n');
+
+    fn block(&mut self, block: &TextBlock) {
+        let text = self.text;
+        let location = (block.location.source, block.location.instance);
+        if let Some(boxes) = self.drawn.get(&location)
+            && text
+                .maths
+                .iter()
+                .any(|m| m.display && m.location == block.location)
+        {
+            if let Some(&page) = self.first_page.get(&location) {
+                self.reach(page);
+            }
+            self.out.push_str(&boxes.concat());
+            self.out.push('\n');
+            return;
+        }
+        for child in block.children.iter() {
+            match child {
+                TextFlow::Block(child) => self.block(child),
+                TextFlow::Paragraph(index) => self.paragraph(*index),
             }
         }
+    }
+
+    fn paragraph(&mut self, index: usize) {
+        let text = self.text;
+        let paragraph = &text.paragraphs[index];
+        let starts: Vec<usize> = self.lines.paragraphs[index]
+            .lines
+            .iter()
+            .map(|l| l.range.start)
+            .collect();
+        let mut line = String::new();
+        let mut objects = paragraph.objects.iter();
+        for (at, c) in paragraph.shaped.text().char_indices() {
+            // A page that starts with this line ends the one before it.
+            if let Some(l) = starts.iter().position(|&s| s == at)
+                && let Some(&page) = self.line_page.get(&(index, l))
+                && page > self.page
+            {
+                self.out.push_str(line.trim());
+                self.out.push('\n');
+                line.clear();
+                self.reach(page);
+            }
+            match c {
+                '\u{FFFC}' => {
+                    let chunk = objects
+                        .next()
+                        .and_then(|o| {
+                            Some(((o.location.source, o.location.instance), o.math?.chunk))
+                        })
+                        .and_then(|(at, chunk)| self.drawn.get(&at)?.get(chunk));
+                    if let Some(chunk) = chunk {
+                        line.push_str(chunk);
+                    }
+                }
+                '\u{2028}' => line.push(' '),
+                c => line.push(c),
+            }
+        }
+        self.out.push_str(line.trim());
+        self.out.push('\n');
     }
 }
 
@@ -410,5 +531,78 @@ fn references_are_links() {
         fs::create_dir_all(&out).unwrap();
         fs::write(out.join("navigation.pdf"), &pdf).unwrap();
         fs::write(out.join("navigation.txt"), expected_text(&world, None)).unwrap();
+    }
+}
+
+/// A document with footnotes on small pages: a multi-line note in the
+/// middle of a paragraph, one long enough to continue on the next page,
+/// and notes numbered from 1 on each page (SPEC §7.8).
+const FOOTNOTES: &str = "#doc(title: [Footnotes])
+
+A ball is kicked at 35 degrees to the horizontal.#footnote[Treat the ball as a particle, and \
+ignore air resistance in every part of the question, as the mark scheme assumes.] Use the \
+equations of motion to find how far it goes, and how long it is in the air before it lands on \
+the ground again.
+
+The time of flight depends only on the height of the cliff and not on the speed \
+of the throw. A faster ball lands further away, but it lands at the same moment as a slower one \
+thrown at the same time, because both fall the same height from rest in the vertical direction. \
+This surprises many students when they first meet it, and a simple demonstration with two coins \
+shows it well.
+
+The range is the horizontal speed multiplied by the time of flight.#footnote[This holds only \
+while the ground below is level. On a slope the ball lands earlier or later, and the range must \
+be found from where the path meets the ground. The same method works for a ball thrown at an \
+angle, once its velocity has been resolved into horizontal and vertical components, each of \
+which is treated on its own as before. A worked example follows in the next lesson, with a table \
+of results to compare with the experiment, and a short set of exam questions to try at home. \
+The questions start with a ball thrown from a table, which is easy to film with a phone held at \
+the side, and end with a ball thrown up a slope, which needs both components at once. Bring a \
+calculator, a ruler and squared paper, and the notes from the last two lessons.] A \
+ball thrown at twice the speed travels twice as far before it lands.
+
+Another paragraph after it, which runs on for a while so that the page fills and the notes \
+must share it with the body text above them.
+";
+
+/// Each page's footnotes are written after its body (#308): the text a
+/// reader extracts in content order reads every sentence whole. With
+/// `FOLIO_PDF_OUT` set, the PDF and its expected text go there, for
+/// `tests/pdf/corpus.py` to check the order with `pdftotext`.
+#[test]
+fn footnotes_follow_their_page_in_content_order() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\nstyles = [\"main.fsty\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world.set_source("main.fol", FOOTNOTES).unwrap();
+    world
+        .set_source(
+            "main.fsty",
+            "page { page-size: 105mm 148mm; margin-top: 12mm; margin-bottom: 12mm; \
+             margin-inner: 12mm; margin-outer: 12mm; counter-reset: footnote; }\n",
+        )
+        .unwrap();
+    let (pdf, diagnostics) = build(&world);
+    let problems: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error || d.message.contains("PDF"))
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("<pdfuaid:part>1</pdfuaid:part>"));
+    let pages = folio::pages(&world, Target::Pdf, None).unwrap().unwrap();
+    assert!(pages.pages.len() >= 2, "the notes continue on another page");
+    // The expected text has the first note after the whole first
+    // sentence around its anchor, and the continued note's mark.
+    let expected = expected_text(&world, None);
+    let flat = expected.split_whitespace().collect::<Vec<_>>().join(" ");
+    let sentence = flat.find("Use the equations of motion").unwrap();
+    let note = flat.find("Treat the ball as a particle").unwrap();
+    assert!(sentence < note, "{flat}");
+    assert!(flat.contains("(cont.)"), "{flat}");
+    if let Some(out) = std::env::var_os("FOLIO_PDF_OUT").map(PathBuf::from) {
+        fs::create_dir_all(&out).unwrap();
+        fs::write(out.join("footnotes.pdf"), &pdf).unwrap();
+        fs::write(out.join("footnotes.txt"), expected).unwrap();
     }
 }

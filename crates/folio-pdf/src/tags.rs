@@ -196,6 +196,12 @@ impl<'a> Tagger<'a> {
         child
     }
 
+    /// Whether `node` is a footnote's note ([`Tag::foot`]), whose boxes are
+    /// drawn after the rest of their page.
+    pub(crate) fn is_foot(&self, node: usize) -> bool {
+        matches!(self.nodes[node].kind, Kind::Input(tag) if tag.foot)
+    }
+
     /// Adds marked content to `node`: to the `Link` of run `link` in it,
     /// if it is a link's text.
     pub(crate) fn content(&mut self, node: usize, id: Identifier, link: Option<usize>) {

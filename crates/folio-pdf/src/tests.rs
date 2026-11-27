@@ -1095,3 +1095,79 @@ fn detached_sources_neither_link_nor_land() {
     assert!(!pdf.contains("/Subtype/Link"));
     assert!(!pdf.contains("(nowhere)"));
 }
+
+/// The marked-content ids of the leaves of the elements named `role` in a
+/// tag tree, in tree order, by their debug form.
+fn mcids(nodes: &[Node], role: &str, inside: bool, out: &mut Vec<i32>) {
+    for node in nodes {
+        match node {
+            Node::Leaf(id) if inside => {
+                let debug = format!("{id:?}");
+                let at = debug.find("mcid: ").expect("a page's content") + 6;
+                let digits: String = debug[at..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                out.push(digits.parse().unwrap());
+            }
+            Node::Group(group) => {
+                let here = inside || name(&group.tag) == role;
+                mcids(&group.children, role, here, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A footnote's boxes, drawn inside the paragraph of its anchor, are
+/// written after the rest of the page (SPEC §7.8): content order, which
+/// text extraction follows, reads the paragraph whole and then the note,
+/// while the structure keeps the note where its anchor is.
+#[test]
+fn footnotes_are_written_after_their_page() {
+    let note = Tag {
+        foot: true,
+        ..tag(Role::Note, 4, vec![tag(Role::Paragraph, 5, vec![])])
+    };
+    let structure = tag(
+        Role::Document,
+        1,
+        vec![
+            tag(Role::Paragraph, 2, vec![note]),
+            tag(Role::Paragraph, 3, vec![]),
+        ],
+    );
+    let pages = [page(vec![boxed(
+        1,
+        vec![
+            boxed(
+                2,
+                vec![
+                    run("A ball is kicked.1", 12),
+                    boxed(4, vec![boxed(5, vec![run("1 Ignore air.", 15)])]),
+                    run("It flies.", 12),
+                ],
+            ),
+            boxed(3, vec![run("Another.", 13)]),
+        ],
+    )])];
+    let document = document(&pages, &structure);
+    let mut body = Vec::new();
+    let mut notes = Vec::new();
+    let rendered = render_with(&document, true, &mut |tree: &TagTree, _| {
+        mcids(&tree.children, "P", false, &mut body);
+        mcids(&tree.children, "Note", false, &mut notes);
+    });
+    assert!(rendered.result.is_ok(), "{:?}", rendered.result.err());
+    let (tree, _) = tagged(&document);
+    assert!(tree.contains("Note"), "{tree}");
+    assert!(!notes.is_empty());
+    // Every piece of the body's text comes before the note's.
+    let body: Vec<i32> = body.into_iter().filter(|id| !notes.contains(id)).collect();
+    assert!(body.len() >= 2, "{body:?}");
+    let last_body = body.iter().max().unwrap();
+    assert!(
+        notes.iter().all(|n| n > last_body),
+        "body {body:?}, notes {notes:?}"
+    );
+}
