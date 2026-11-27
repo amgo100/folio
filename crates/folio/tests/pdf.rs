@@ -629,12 +629,12 @@ const SECTIONED_FOOTNOTES: &str = "#doc(title: [Resistivity])
 
 = Resistivity
 
-A student makes a resistor from a wire of length $qty(1.50, \"m\")$. The resistivity of the \
+A student makes a resistor from a wire of length #qty(\"1.50\", \"m\"). The resistivity of the \
 metal#footnote[The resistivity of constantan at room temperature. It changes little with \
-temperature, which is why the alloy is used for resistors.] is $qty(4.9e-7, \"ohm m\")$.
+temperature, which is why the alloy is used for resistors.] is #qty(4.9e-7, \"ohm m\").
 
 + Show that the resistance of the wire is about 3.7 ohms.
-+ Calculate the current in the wire.
++ Calculate the current $I$ in the wire.
 
 = Progressive waves
 
