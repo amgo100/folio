@@ -143,6 +143,12 @@ fn receive_from(ws: &mut WebSocket<TcpStream>, revision: u64) -> Received {
 
 /// Sends a raw HTTP request and returns the status line and the body.
 fn get(preview: &Preview, target: &str, headers: &[(&str, &str)]) -> (String, Vec<u8>) {
+    let (head, body) = request(preview, target, headers);
+    (head.lines().next().unwrap().to_owned(), body)
+}
+
+/// Sends a raw HTTP request and returns the response's head and body.
+fn request(preview: &Preview, target: &str, headers: &[(&str, &str)]) -> (String, Vec<u8>) {
     let mut stream = TcpStream::connect(preview.addr()).unwrap();
     stream.set_read_timeout(Some(TIMEOUT)).unwrap();
     let mut request = format!("GET {target} HTTP/1.1\r\n");
@@ -161,8 +167,7 @@ fn get(preview: &Preview, target: &str, headers: &[(&str, &str)]) -> (String, Ve
         .position(|w| w == b"\r\n\r\n")
         .expect("a response head");
     let head = String::from_utf8_lossy(&response[..end]).into_owned();
-    let status = head.lines().next().unwrap().to_owned();
-    (status, response[end + 4..].to_vec())
+    (head, response[end + 4..].to_vec())
 }
 
 fn edit(root: &Path, path: &str, from: &str, to: &str) -> PathBuf {
@@ -315,6 +320,68 @@ fn wrong_tokens_hosts_and_origins_are_refused() {
         )
         .0,
         "HTTP/1.1 200 OK"
+    );
+}
+
+/// The value of a header in a response head, matching its name in any case.
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().skip(1).find_map(|line| {
+        let (n, v) = line.split_once(':')?;
+        n.eq_ignore_ascii_case(name).then(|| v.trim())
+    })
+}
+
+#[test]
+fn the_viewer_may_be_framed() {
+    // Editors show the preview beside the source in an iframe (decision
+    // D-332-1): the viewer's policy names no frame ancestors, and nothing
+    // else forbids framing.
+    let dir = project("exam");
+    let (preview, _events) = start(dir.path(), |o| o.watch(false));
+    let (head, _) = request(&preview, &format!("/?token={}", preview.token()), &[]);
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    let policy = header(&head, "Content-Security-Policy").expect("a policy");
+    assert!(!policy.contains("frame-ancestors"), "{policy}");
+    assert!(policy.contains("default-src 'none'"), "{policy}");
+    assert_eq!(header(&head, "X-Frame-Options"), None, "{head}");
+}
+
+/// Whether Node.js can load Playwright, which the browser test drives
+/// Chromium with.
+fn playwright() -> bool {
+    std::process::Command::new("node")
+        .args(["-e", "require('playwright')"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[test]
+fn the_viewer_draws_pages_inside_an_iframe() {
+    // A page on another origin frames the viewer as VS Code's Simple
+    // Browser does (`tests/iframe.cjs`), and Chromium must draw its pages.
+    // The test needs Node.js with Playwright and its Chromium; without
+    // them it says so and passes, and `the_viewer_may_be_framed` still
+    // checks the headers.
+    if !playwright() {
+        eprintln!("skipped: Node.js with Playwright is not installed");
+        return;
+    }
+    let dir = project("exam");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    updated(&events, |u| u.pages > 0);
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/iframe.cjs");
+    let output = std::process::Command::new("node")
+        .arg(&script)
+        .arg(preview.url())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
