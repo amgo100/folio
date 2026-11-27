@@ -32,7 +32,7 @@ const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 const RETRY_AFTER = 2000;
 
 // ---------------------------------------------------------------------
-// The wire format (`folio_render::wire`, version 1).
+// The wire format (`folio_render::wire`, version 2).
 
 class DecodeError extends Error {}
 
@@ -97,7 +97,7 @@ function decode(bytes) {
     throw new DecodeError("not a display list");
   }
   const version = r.u8();
-  if (version !== 1) throw new DecodeError(`display list format version ${version} is not supported`);
+  if (version !== 2) throw new DecodeError(`display list format version ${version} is not supported`);
   const kind = r.u8();
   if (kind === 1) return { kind: "spans" };
   if (kind !== 0) throw new DecodeError(`unknown display list message kind ${kind}`);

@@ -17,7 +17,7 @@ use folio::{
 };
 
 /// An element instance: its source and instance number.
-type Location = (SourceRef, u32);
+type Location = (SourceRef, u64);
 
 /// The corpus directory.
 fn corpus() -> PathBuf {

@@ -29,7 +29,7 @@ pub struct Fragment {
     /// `source`, the instance's [`Location`]. The boxes of an element's
     /// parts carry the element's location. `0` for a box that no node
     /// makes.
-    pub instance: u32,
+    pub instance: u64,
     /// The content, positioned relative to the top-left corner, in painting
     /// order.
     pub items: EcoVec<(Point, FragmentItem)>,

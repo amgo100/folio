@@ -343,7 +343,7 @@ pub struct Tag {
     /// fragments name it ([`Fragment::location`]): the blocks that a loop
     /// or the calls of a closure make share a source and differ here.
     /// [`Location::UNKNOWN_INSTANCE`] matches a box of any instance.
-    pub instance: u32,
+    pub instance: u64,
     /// The node's text where the writer needs it whole: a heading's, for
     /// its structure element's title and its bookmark; a formula's
     /// source, for its alternate description.
@@ -1809,6 +1809,7 @@ mod preflight_tests {
                     source: (SourceRef(source), range.clone()),
                 })
                 .collect(),
+            instances: Default::default(),
         })
     }
 

@@ -139,8 +139,11 @@ fn compile_now(world: &World, target: Target, variant: Option<&Name>) -> Compile
     let db = world.db();
     let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
     let built = pipeline::compile_build(db, build);
-    let diagnostics = collect(pipeline::compile_build::accumulated::<Reported>(db, build));
-    let files = files(pipeline::compile_build::accumulated::<Read>(db, build));
+    let mut diagnostics = collect(pipeline::compile_build::accumulated::<Reported>(db, build));
+    diagnostics.extend(pairing(world, variant));
+    let mut read = pipeline::compile_build::accumulated::<Read>(db, build);
+    read.extend(pairing_reads(world, variant));
+    let files = files(read);
     Compiled {
         sources: built.sources.clone(),
         files,
@@ -256,13 +259,36 @@ fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
     let db = world.db();
     let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
     let checked = pipeline::check_build(db, build);
-    let diagnostics = collect(pipeline::check_build::accumulated::<Reported>(db, build));
+    let mut diagnostics = collect(pipeline::check_build::accumulated::<Reported>(db, build));
+    diagnostics.extend(pairing(world, variant));
     Checked {
         sources: checked.sources.clone(),
-        files: files(pipeline::check_build::accumulated::<Read>(db, build)),
+        files: files({
+            let mut read = pipeline::check_build::accumulated::<Read>(db, build);
+            read.extend(pairing_reads(world, variant));
+            read
+        }),
         writes: checked.writes,
         diagnostics,
     }
+}
+
+/// The problems of pairing a variant's instances with those of the other
+/// variants of its numbering group (SPEC §6.1). The check reads the other
+/// variants' documents, so it runs beside the build, not in it: what
+/// evaluating them reports belongs to their own builds.
+fn pairing(world: &World, variant: Option<&Name>) -> EcoVec<Diagnostic> {
+    folio_core::variants::check_pairing(world.db(), world.project(), variant.cloned()).clone()
+}
+
+/// The files the pairing check read for the other variants of the group,
+/// so that a watcher checks the build again when one of them changes.
+fn pairing_reads<'a>(world: &'a World, variant: Option<&Name>) -> Vec<&'a Read> {
+    folio_core::variants::check_pairing::accumulated::<Read>(
+        world.db(),
+        world.project(),
+        variant.cloned(),
+    )
 }
 
 /// The diagnostics a query and the queries it depends on reported, each

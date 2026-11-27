@@ -29,3 +29,4 @@ pub mod resolve;
 pub mod span_map;
 pub mod style;
 pub mod text;
+pub mod variants;

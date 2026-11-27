@@ -13,7 +13,7 @@ use super::{is_block, schema};
 use crate::db::{Db, Project, source_file};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Content, Dict, Element, Node, Value, canonical_fields, evaluate};
-use crate::locate::{Locator, Made};
+use crate::locate::{Locator, Made, Origin};
 
 /// The typed document tree of one variant (SPEC §2.1): what every stage
 /// after evaluation reads.
@@ -60,7 +60,7 @@ pub fn document(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<
         .map_or(Span::detached(), |file| file.source(db).root().span());
     let mut model = Model { db, project };
     let mut root = model.root(content, span);
-    locate(&mut Locator::default(), &mut root);
+    locate(&mut Locator::default(), &mut root, Origin::ROOT);
     check_labels(db, &root);
     Some(Document { root })
 }
@@ -104,6 +104,7 @@ impl Model<'_> {
             label: None,
             span,
             location: Location::DETACHED,
+            origin: Origin::ROOT,
         });
         root.fields.remove(BODY);
         let body = self.blocks(&rest);
@@ -392,14 +393,18 @@ fn made<'f>(name: &str, fields: impl IntoIterator<Item = (&'f str, Value)>, span
         label: None,
         span,
         location: Location::DETACHED,
+        origin: Origin::ROOT,
     }
 }
 
 /// Gives an element and every element in its content fields their
 /// locations, in document order: an element before the elements of its
-/// fields, and those in the order of the fields.
-fn locate(locator: &mut Locator, element: &mut Element) {
-    element.location = locator.locate(element.span, made_by(&element.name));
+/// fields, and those in the order of the fields. `outer` is the origin of
+/// the element around it ([`Origin::ROOT`] for the root).
+fn locate(locator: &mut Locator, element: &mut Element, outer: Origin) {
+    let made = made_by(&element.name);
+    let (own, inner) = origins(element, outer);
+    element.location = locator.locate(element.span, made, own);
     let keys: Vec<EcoString> = element
         .fields
         .iter()
@@ -415,11 +420,65 @@ fn locate(locator: &mut Locator, element: &mut Element) {
                     .any(|n| matches!(n, Node::Element(_)))
             {
                 for child in content.elements_mut() {
-                    locate(locator, child);
+                    locate(locator, child, inner);
                 }
             }
         });
     }
+}
+
+/// The origin of an element inside one whose origin is `outer`, and the
+/// origin it gives the elements of its content.
+///
+/// An evaluated element nests its own origin in `outer`, and gives its
+/// content the result. The model makes paragraphs, lists and sections
+/// around evaluated content: such an element takes the origin of the first
+/// element it holds, the heading of a section, so that one made from an
+/// iteration's content is told apart from another iteration's, but passes
+/// `outer` on, so that what it holds does not depend on which element
+/// comes first.
+fn origins(element: &Element, outer: Origin) -> (Origin, Origin) {
+    match made_by(&element.name) {
+        Made::Evaluated => {
+            let origin = outer.nested(element.origin);
+            (origin, origin)
+        }
+        _ => (outer.nested(first_origin(element)), outer),
+    }
+}
+
+/// Calls `f` with every element of the tree under `root` and the origin
+/// its location was built from, in document order.
+pub(crate) fn visit_origins(root: &Element, f: &mut dyn FnMut(&Element, Origin)) {
+    fn walk(element: &Element, outer: Origin, f: &mut dyn FnMut(&Element, Origin)) {
+        let (own, inner) = origins(element, outer);
+        f(element, own);
+        for (_, value) in element.fields.iter() {
+            if let Value::Content(content) = value {
+                for node in content.nodes() {
+                    if let Node::Element(child) = node {
+                        walk(child, inner, f);
+                    }
+                }
+            }
+        }
+    }
+    walk(root, Origin::ROOT, f);
+}
+
+/// The origin of the first element in an element's body, as evaluation
+/// recorded it, or the root's if it holds none.
+fn first_origin(element: &Element) -> Origin {
+    let Some(Value::Content(body)) = element.field(BODY) else {
+        return Origin::ROOT;
+    };
+    body.nodes()
+        .iter()
+        .find_map(|node| match node {
+            Node::Element(child) => Some(child.origin),
+            _ => None,
+        })
+        .unwrap_or(Origin::ROOT)
 }
 
 /// What makes the elements of a name: the document model for its

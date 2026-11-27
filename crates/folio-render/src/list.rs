@@ -51,10 +51,10 @@ pub struct Item {
 pub struct Span {
     /// The node.
     pub source: SourceRef,
-    /// Which instance of the element made from `source`: a number only
+    /// Which instance of the element made from `source`: a key only
     /// the core interprets, [`Location::UNKNOWN_INSTANCE`] when the item
     /// names a node but not an instance, `0` for a detached item.
-    pub instance: u32,
+    pub instance: u64,
 }
 
 impl Span {

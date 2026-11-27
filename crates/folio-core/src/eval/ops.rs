@@ -364,6 +364,9 @@ pub(crate) fn equal(lhs: &V, rhs: &V) -> bool {
             }
             compare_once(a.storage(), b.storage(), Equality::Loose, compare)
         }
+        // Content compares strictly, but where it was made by a loop or a
+        // call does not count (SPEC §2.3).
+        (V::Content(a), V::Content(b)) => a.same_but_origins(b),
         (a, b) => a == b,
     }
 }

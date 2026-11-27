@@ -53,7 +53,7 @@ pub(crate) struct Tagger<'a> {
     links: Vec<Option<usize>>,
     /// The nodes of the input that are footnotes' notes ([`Tag::foot`]),
     /// by source, with their instances.
-    feet: HashMap<SourceRef, Vec<u32>>,
+    feet: HashMap<SourceRef, Vec<u64>>,
 }
 
 /// What the tagger gives: the tag tree, the headings for the outline, and
@@ -136,7 +136,7 @@ impl<'a> Tagger<'a> {
             links: Vec::new(),
             feet: HashMap::new(),
         };
-        fn feet(tag: &Tag, out: &mut HashMap<SourceRef, Vec<u32>>) {
+        fn feet(tag: &Tag, out: &mut HashMap<SourceRef, Vec<u64>>) {
             if tag.foot {
                 out.entry(tag.source).or_default().push(tag.instance);
             }

@@ -263,7 +263,7 @@ pub(crate) const ITEM: u64 = 64;
 /// The bytes a node of content, a pair of a dictionary or an argument
 /// counts against the memory limit ([`Value::shallow_size`]): at least what
 /// each takes.
-pub(crate) const NODE: u64 = 128;
+pub(crate) const NODE: u64 = 144;
 
 /// Writes a string as code writes it, or fails without writing it when it
 /// would make `out` longer than `limit` bytes: escaping can make a string
@@ -421,6 +421,9 @@ pub(crate) enum Equality {
     Loose,
     /// The order of `<` and sorting: the pairs it found equal.
     Order,
+    /// `==` on content: structural, but for the origins of elements
+    /// ([`super::content::Content::same_but_origins`]).
+    ButOrigins,
 }
 
 /// The comparisons running on a thread, and the pairs of containers they
