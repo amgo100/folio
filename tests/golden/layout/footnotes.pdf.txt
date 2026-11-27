@@ -27,13 +27,13 @@ page 1 297.64 × 419.53, 11 line(s)
               box (118.49, 7.48) 16.15 × 5.69 main.fol:5:238
                 text (0.00, 3.89) NewCMMath-Regular 8.80 w 4.42 1 glyph(s) "𝑔"
                 text (6.86, 3.89) NewCMMath-Regular 8.80 w 6.85 1 glyph(s) "="
-              box (134.64, 4.08) 43.69 × 7.49 main.fol:5:238
+              box (134.64, 4.08) 37.82 × 7.49 main.fol:5:238
                 text (0.00, 7.30) NewCMMath-Regular 8.80 w 15.65 4 glyph(s) "9.81"
-                text (20.05, 7.30) NewCMMath-Regular 8.80 w 7.40 1 glyph(s) "m"
-                text (31.85, 7.30) NewCMMath-Regular 8.80 w 3.47 1 glyph(s) "s"
-                text (35.32, 4.10) NewCMMath-Regular 6.16 w 4.79 1 glyph(s) "−"
-                text (40.11, 4.10) NewCMMath-Regular 6.16 w 3.08 1 glyph(s) "2"
-              text (178.33, 11.37) NewCM10-Regular 8.80 w 2.45 1 glyph(s) "."
+                text (17.12, 7.30) NewCMMath-Regular 8.80 w 7.40 1 glyph(s) "m"
+                text (25.98, 7.30) NewCMMath-Regular 8.80 w 3.47 1 glyph(s) "s"
+                text (29.45, 4.10) NewCMMath-Regular 6.16 w 4.79 1 glyph(s) "−"
+                text (34.24, 4.10) NewCMMath-Regular 6.16 w 3.08 1 glyph(s) "2"
+              text (172.46, 11.37) NewCM10-Regular 8.80 w 2.45 1 glyph(s) "."
           text (0.00, 84.18) NewCM10-Regular 11.00 w 106.19 23 glyph(s) "its path is a parabola."
         box (0.00, 133.29) 229.61 × 110.11 main.fol:7:1 baselines 15.97..106.92
           text (0.00, 15.97) NewCM10-Regular 11.00 w 229.61 44 glyph(s) "The time of flight depends only on the height"
@@ -91,13 +91,13 @@ page 3 297.64 × 419.53, 5 line(s)
               box (0.00, 0.00) 229.61 × 13.93 main.fol:13:75 baselines 11.37..11.37
                 text (0.00, 8.68) NewCM10-Regular 7.70 w 7.70 2 glyph(s) "1\u{a0}"
                 text (7.70, 11.37) NewCM10-Regular 8.80 w 166.52 42 glyph(s) "Give your answer to two significant figures."
-            text (0.00, 61.45) NewCM10-Regular 11.00 w 186.01 42 glyph(s) "of the cliff it lands when it is thrown at "
-            box (186.01, 52.32) 40.54 × 9.36 main.fol:13:196
+            text (0.00, 61.45) NewCM10-Regular 11.00 w 193.34 42 glyph(s) "of the cliff it lands when it is thrown at "
+            box (193.34, 52.32) 33.21 × 9.36 main.fol:13:196
               text (0.00, 9.12) NewCMMath-Regular 11.00 w 5.50 1 glyph(s) "5"
-              text (11.00, 9.12) NewCMMath-Regular 11.00 w 9.25 1 glyph(s) "m"
-              text (25.75, 9.12) NewCMMath-Regular 11.00 w 4.33 1 glyph(s) "s"
-              text (30.08, 5.13) NewCMMath-Regular 7.70 w 5.99 1 glyph(s) "−"
-              text (36.08, 5.13) NewCMMath-Regular 7.70 w 3.85 1 glyph(s) "1"
+              text (7.33, 9.12) NewCMMath-Regular 11.00 w 9.25 1 glyph(s) "m"
+              text (18.42, 9.12) NewCMMath-Regular 11.00 w 4.33 1 glyph(s) "s"
+              text (22.75, 5.13) NewCMMath-Regular 7.70 w 5.99 1 glyph(s) "−"
+              text (28.74, 5.13) NewCMMath-Regular 7.70 w 3.85 1 glyph(s) "1"
             text (226.55, 61.45) NewCM10-Regular 11.00 w 3.06 1 glyph(s) "."
     shape (0.00, 295.11) M(0.00, 0.00) L(76.54, 0.00) stroke #000000ff 0.50 Butt Miter
     box (0.00, 298.11) 229.61 × 30.66 main.fol:9:69 baselines 9.92..28.11
