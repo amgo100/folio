@@ -342,13 +342,13 @@ pub(super) fn write(
         ));
     };
     let message = |e: io::Error| format!("cannot write `{path}`: {e}");
-    read_by_build(&path, read).map_err(message)?;
+    refuse_read(root, &path, read).map_err(message)?;
     let path = path.as_str().to_owned();
     if compiled.has_errors() {
         return Ok(Written::Skipped(path));
     }
     let (root, file) = resolve(root, &path, true).map_err(message)?;
-    read_on_disk(&root, &file, read).map_err(message)?;
+    // Directories created on the way hold no file a build read.
     replace(&root, &file, bytes, None).map_err(message)?;
     Ok(Written::File(path))
 }
@@ -358,9 +358,10 @@ pub(super) fn write(
 /// anything: a path that is not in the project, and for a build without
 /// errors (`errors`), a directory on the way that a link places outside
 /// the project or that is not a directory. A file the builds checked
-/// together read (`files`) is refused as [`write`] refuses it. What only writing finds, such as a
-/// directory where the file would go or one that cannot be written to, is
-/// not checked. `path` is `None` when the build would write no file.
+/// together read (`files`) is refused as [`write`] refuses it, whether the
+/// build has errors or not. What only writing finds, such as a directory
+/// where the file would go or one that cannot be written to, is not
+/// checked. `path` is `None` when the build would write no file.
 fn check_write(
     root: &Path,
     path: Option<&str>,
@@ -376,18 +377,33 @@ fn check_write(
         ));
     };
     let message = |e: io::Error| format!("cannot write `{path}`: {e}");
-    read_by_build(&path, files).map_err(message)?;
+    refuse_read(root, &path, files).map_err(message)?;
     if errors {
         return Ok(());
     }
-    let (root, file) = resolve(root, path.as_str(), false).map_err(message)?;
-    read_on_disk(&root, &file, files).map_err(message)
+    resolve(root, path.as_str(), false)
+        .map(|_| ())
+        .map_err(message)
+}
+
+/// Refuses an output at the project path `path` in the project at `root`
+/// when it is a file a build read, or tried to read (`files`): by its path
+/// ([`read_by_build`]) or on disk ([`read_on_disk`]), as far as the
+/// directories on the way exist.
+fn refuse_read(root: &Path, path: &ProjectPath, files: &[FileRead]) -> io::Result<()> {
+    read_by_build(path, files)?;
+    match resolve(root, path.as_str(), false) {
+        Ok((root, file)) => read_on_disk(&root, &file, files),
+        // What stops the write is reported where it is written.
+        Err(_) => Ok(()),
+    }
 }
 
 /// Refuses an output at the project path `path` when a build read, or
 /// tried to read, a file of that path (`files`): writing it would replace
-/// one of the project's inputs. Paths are compared without regard to ASCII case, as
-/// file systems that ignore case would replace the file all the same.
+/// one of the project's inputs. Paths are compared without regard to ASCII
+/// case, as file systems that ignore case would replace the file all the
+/// same.
 fn read_by_build(path: &ProjectPath, files: &[FileRead]) -> io::Result<()> {
     match files
         .iter()
@@ -400,22 +416,30 @@ fn read_by_build(path: &ProjectPath, files: &[FileRead]) -> io::Result<()> {
 
 /// Refuses an output at `file`, on disk in the project at `root` (both as
 /// [`resolve`] gives them), when it is a file a build read (`files`),
-/// reached another way: through a symbolic link to a directory. The file
-/// names are compared without regard to ASCII case, as by
-/// [`read_by_build`].
+/// reached another way: through a symbolic link to a directory, or as the
+/// target of a symbolic link that the build read. The file names are
+/// compared without regard to ASCII case, as by [`read_by_build`].
 fn read_on_disk(root: &Path, file: &Path, files: &[FileRead]) -> io::Result<()> {
     let (Some(out_dir), Some(out_name)) = (file.parent(), file.file_name()) else {
         return Ok(());
     };
+    let is_output = |path: &Path| {
+        path.parent() == Some(out_dir)
+            && path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(out_name))
+    };
     for read in files {
         let path = root.join(read.path.as_str());
-        let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
-            continue;
-        };
-        if let Ok(dir) = dir.canonicalize()
-            && dir == out_dir
-            && name.eq_ignore_ascii_case(out_name)
-        {
+        // The file the build reads, through any link.
+        let target = path.canonicalize().ok();
+        // The path it reads, with only its directory resolved: the link
+        // itself, or a file that is missing.
+        let named = path
+            .parent()
+            .zip(path.file_name())
+            .and_then(|(dir, name)| Some(dir.canonicalize().ok()?.join(name)));
+        if target.iter().chain(&named).any(|p| is_output(p)) {
             return Err(read_error(read));
         }
     }
@@ -872,6 +896,28 @@ mod tests {
         assert_eq!(
             check_write(root, Some("out/marks.csv"), false, &ok.files).unwrap_err(),
             message
+        );
+        // A build with errors is told too.
+        assert_eq!(
+            check_write(root, Some("out/marks.csv"), true, &ok.files).unwrap_err(),
+            message
+        );
+        assert_eq!(fs::read(root.join("data/marks.csv")).unwrap(), b"keep");
+
+        // A file the build reads through a link to it.
+        std::os::unix::fs::symlink(root.join("data/marks.csv"), root.join("alias.csv")).unwrap();
+        let through = Compiled {
+            files: [FileRead {
+                path: ProjectPath::new("alias.csv").unwrap(),
+                kind: FileKind::Data,
+            }]
+            .into_iter()
+            .collect(),
+            ..ok.clone()
+        };
+        assert_eq!(
+            write(root, Some("data/marks.csv"), &through, &through.files).unwrap_err(),
+            "cannot write `data/marks.csv`: a build reads `alias.csv` as a data file"
         );
         assert_eq!(fs::read(root.join("data/marks.csv")).unwrap(), b"keep");
     }

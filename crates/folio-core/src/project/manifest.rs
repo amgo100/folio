@@ -822,7 +822,7 @@ fn reserved_output(file: &str, entry: &ProjectPath, components: &Components) -> 
             && file[..dir.len()].eq_ignore_ascii_case(dir)
     };
     let component = components.declared.iter().find_map(|c| match &c.source {
-        ComponentSource::Path(dir) if !dir.v.as_str().starts_with("..") => {
+        ComponentSource::Path(dir) if dir.v.as_str().split('/').next() != Some("..") => {
             within(dir.v.as_str()).then_some(dir.v.as_str())
         }
         _ => None,
