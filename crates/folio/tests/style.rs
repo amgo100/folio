@@ -53,14 +53,8 @@ impl Component for Exam {
         question.body = Body::Content(ContentKind::Blocks);
         let mut example = ElementSchema::new(name("example"), ElementKind::Block);
         example.body = Body::Slots(EcoVec::from([
-            SlotDecl {
-                name: name("statement"),
-                content: ContentKind::Blocks,
-            },
-            SlotDecl {
-                name: name("solution"),
-                content: ContentKind::Blocks,
-            },
+            SlotDecl::new(name("statement"), ContentKind::Blocks),
+            SlotDecl::new(name("solution"), ContentKind::Blocks),
         ]));
         let mut declarations = Declarations::new();
         declarations.elements = EcoVec::from([question, example]);

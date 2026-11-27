@@ -90,27 +90,15 @@ impl Component for Exam {
             FieldDecl::with_default(name("see"), FieldType::Ref, folio_component::Value::None),
         ]);
         example.body = Body::Slots(EcoVec::from([
-            SlotDecl {
-                name: name("statement"),
-                content: ContentKind::Blocks,
-            },
-            SlotDecl {
-                name: name("solution"),
-                content: ContentKind::Blocks,
-            },
-            SlotDecl {
-                name: name("hint"),
-                content: ContentKind::Inline,
-            },
+            SlotDecl::new(name("statement"), ContentKind::Blocks),
+            SlotDecl::new(name("solution"), ContentKind::Blocks),
+            SlotDecl::new(name("hint"), ContentKind::Inline),
         ]));
 
         let mut declarations = Declarations::new();
         declarations.elements = EcoVec::from([question, answer, mark, example]);
-        declarations.locale_strings = EcoVec::from([LocaleString {
-            lang: "en".into(),
-            key: name("question"),
-            text: "Question".into(),
-        }]);
+        declarations.locale_strings =
+            EcoVec::from([LocaleString::new("en", name("question"), "Question")]);
         declarations
     }
 }

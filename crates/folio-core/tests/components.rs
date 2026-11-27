@@ -51,14 +51,8 @@ impl Component for TestComponent {
             Value::Int(1),
         )]);
         element.body = Body::Slots(EcoVec::from([
-            SlotDecl {
-                name: name("stem"),
-                content: ContentKind::Blocks,
-            },
-            SlotDecl {
-                name: name("answer"),
-                content: ContentKind::Blocks,
-            },
+            SlotDecl::new(name("stem"), ContentKind::Blocks),
+            SlotDecl::new(name("answer"), ContentKind::Blocks),
         ]));
         element.counter = Some(CounterDecl::default());
         element.ref_key = Some(name(self.element));
@@ -71,11 +65,8 @@ impl Component for TestComponent {
         )]);
         declarations.templates =
             EcoVec::from([TemplateDecl::new(name(self.element), self.template)]);
-        declarations.locale_strings = EcoVec::from([LocaleString {
-            lang: "en".into(),
-            key: name(self.element),
-            text: "Question".into(),
-        }]);
+        declarations.locale_strings =
+            EcoVec::from([LocaleString::new("en", name(self.element), "Question")]);
         declarations
     }
 }

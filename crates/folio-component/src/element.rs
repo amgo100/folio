@@ -9,6 +9,7 @@ use crate::value::{FieldType, Value};
 /// The schema of an element a component provides: its fields, kind,
 /// content model and counter (SPEC §4.3).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct ElementSchema {
     /// The element's name within its component's namespace: `question`.
     pub name: Name,
@@ -92,6 +93,7 @@ pub enum ElementKind {
 
 /// A field of an element.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct FieldDecl {
     /// The field's name: `marks`.
     pub name: Name,
@@ -122,6 +124,48 @@ impl FieldDecl {
         Self {
             default: Some(default),
             ..Self::required(name, ty)
+        }
+    }
+
+    /// The field, marked as holding layout data or not (SPEC §5.5).
+    pub fn with_layout_data(mut self, layout_data: bool) -> Self {
+        self.layout_data = layout_data;
+        self
+    }
+}
+
+impl SlotDecl {
+    /// A slot with a name and a content model.
+    pub fn new(name: Name, content: ContentKind) -> Self {
+        Self { name, content }
+    }
+}
+
+impl CounterDecl {
+    /// A counter that nothing resets and that is scoped to no element.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Within {
+    /// The instances of an element, with the field values they must have:
+    /// none for every instance.
+    pub fn new(element: QualifiedName, fields: impl IntoIterator<Item = (Name, Value)>) -> Self {
+        Self {
+            element,
+            fields: fields.into_iter().collect(),
+        }
+    }
+}
+
+impl LocaleString {
+    /// A word in a language for a key.
+    pub fn new(lang: impl Into<EcoString>, key: Name, text: impl Into<EcoString>) -> Self {
+        Self {
+            lang: lang.into(),
+            key,
+            text: text.into(),
         }
     }
 }
@@ -180,6 +224,7 @@ pub enum ContentKind {
 
 /// A named slot of a body.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct SlotDecl {
     /// The slot's name: `solution`.
     pub name: Name,
@@ -191,6 +236,7 @@ pub struct SlotDecl {
 ///
 /// The counter is named after the element and steps once per instance.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct CounterDecl {
     /// The element whose instances reset the counter, if any: `within
     /// heading(level: 1)`.
@@ -207,6 +253,7 @@ pub struct CounterDecl {
 /// The element that resets a counter, optionally limited to instances whose
 /// fields have given values.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct Within {
     /// The element, qualified if it belongs to another component.
     pub element: QualifiedName,
@@ -217,6 +264,7 @@ pub struct Within {
 /// A word that generated text uses, in one language (SPEC §4.5): the
 /// English for `question` is *Question*.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct LocaleString {
     /// The language, as a BCP 47 tag: `en`, `pl`.
     pub lang: EcoString,

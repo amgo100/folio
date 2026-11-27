@@ -541,14 +541,8 @@ mod tests {
             ),
         ]);
         element.body = Body::Slots(EcoVec::from([
-            SlotDecl {
-                name: name("statement"),
-                content: ContentKind::Blocks,
-            },
-            SlotDecl {
-                name: name("solution"),
-                content: ContentKind::Blocks,
-            },
+            SlotDecl::new(name("statement"), ContentKind::Blocks),
+            SlotDecl::new(name("solution"), ContentKind::Blocks),
         ]));
         element.ref_key = Some(name("example"));
         let mut declarations = Declarations::new();
@@ -562,11 +556,8 @@ mod tests {
             name("example"),
             "body: slot(statement) rule(0.4pt) slot(solution);",
         )]);
-        declarations.locale_strings = EcoVec::from([LocaleString {
-            lang: "en".into(),
-            key: name("example"),
-            text: "Example".into(),
-        }]);
+        declarations.locale_strings =
+            EcoVec::from([LocaleString::new("en", name("example"), "Example")]);
         declarations
     }
 
@@ -687,11 +678,9 @@ mod tests {
         decls
             .templates
             .push(TemplateDecl::named(name("figure"), name("wide"), " "));
-        decls.locale_strings.push(LocaleString {
-            lang: "EN".into(),
-            key: name("example"),
-            text: "Sample".into(),
-        });
+        decls
+            .locale_strings
+            .push(LocaleString::new("EN", name("example"), "Sample"));
         let mut manifest = manifest("blocks");
         manifest.interface = 2;
         manifest.targets.push(Target::Pdf);
