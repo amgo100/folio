@@ -343,3 +343,51 @@ fn notes_keep_the_language_and_font_of_their_anchors() {
             .all(|s| s.lang.as_ref().map(|l| l.as_str()) == Some("pl"))
     );
 }
+
+#[test]
+fn notes_take_the_anchors_font_only_in_another_language() {
+    // A note in a sans heading of the document's language is set in the
+    // document's font; one in a Polish passage in the passage's font
+    // (SPEC §7.8, D-327-5 = B).
+    let mut world = world(
+        Some("styles/main.fsty"),
+        "heading { font: \"Source Sans 3\"; }\n\
+         .pl { lang: \"pl\"; font: \"Source Serif 4\"; }\n\
+         .en { lang: \"en-GB\"; font: \"Source Sans 3\"; }\n",
+    );
+    world
+        .set_source(
+            "main.fol",
+            "= Forces#footnote[In a sans heading.]\n\n\
+             Text.#footnote[In body text.]\n\n\
+             #emph(class: \"pl\")[Tekst.#footnote[W polskim fragmencie.]]\n\n\
+             #emph(class: \"en\")[British.#footnote[In British English.]]\n",
+        )
+        .unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(
+        compiled.diagnostics.is_empty(),
+        "{:?}",
+        compiled.diagnostics
+    );
+    let styled = styled(&world);
+    let font = |node| get(&styled, node, "font");
+    let notes: Vec<_> = all(&styled, "footnote")
+        .into_iter()
+        .map(|n| n.note_style().expect("a note part"))
+        .collect();
+    let document = font(&styled.root);
+    assert_ne!(font(first(&styled, "heading")), document);
+    assert_eq!(font(notes[0]), document, "a note in a heading");
+    assert_eq!(font(notes[1]), document, "a note in body text");
+    assert_eq!(
+        font(notes[2]),
+        font(all(&styled, "emph")[0]),
+        "a note in a Polish passage"
+    );
+    assert_ne!(font(notes[2]), document);
+    // English in another region is the same language: the document's font,
+    // the passage's tag.
+    assert_eq!(font(notes[3]), document, "a note in a British passage");
+    assert_eq!(get(&styled, notes[3], "lang"), Value::Str("en-GB".into()));
+}

@@ -16,6 +16,7 @@ use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{BODY, LAYOUT_HINTS, Location, Name, QualifiedName, Target};
 use folio_syntax::ast::{self, AstNode};
 use folio_syntax::{Span, SyntaxNode};
+use folio_text::Lang;
 
 use super::computed::{ComputedStyle, Styler};
 use super::props::Properties;
@@ -65,7 +66,8 @@ pub struct Styled {
 ///
 /// A `footnote` element has one more child too, the part [`NOTE_PART`]:
 /// the style of its note, matched as the footnote and inheriting from the
-/// `doc` element rather than from the anchor, except for `lang` and `font`,
+/// `doc` element rather than from the anchor, except for `lang`, and for
+/// `font` where the anchor's language is another than the document's,
 /// which follow the anchor, as the footnote's body does (SPEC §7.8). The text stage finds it with [`StyledNode::note_style`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StyledNode {
@@ -364,7 +366,8 @@ struct Walker<'a> {
     /// The document order of scoped rules.
     order: u32,
     /// The computed style of the `doc` element, which the notes of
-    /// footnotes inherit from, but for `lang` and `font` ([`NOTE_PART`]).
+    /// footnotes inherit from, but for `lang`, and `font` in another
+    /// language ([`NOTE_PART`]).
     root_style: Option<ComputedStyle>,
     variant: Option<Name>,
     target: Target,
@@ -434,15 +437,21 @@ impl<'a> Walker<'a> {
         }
         // A footnote's note inherits from the document, not from its
         // anchor, so that every note on a page looks alike, but keeps the
-        // language and font of the passage it is anchored in; the footnote
+        // language of the passage it is anchored in, and the passage's font
+        // where that is another language than the document's; the footnote
         // itself, which styles the marker at its anchor, inherits from the
-        // anchor (SPEC §7.8, D-327-1, D-327-3, D-327-4).
+        // anchor (SPEC §7.8, D-327-1, D-327-3, D-327-4, D-327-5).
         let note = match child {
             Child::Element(element) if is_footnote(element) => {
-                let props = &self.cascade.properties;
-                let kept = [props.builtin("lang"), props.builtin("font")];
                 let base = match (self.root_style.clone(), parent) {
-                    (Some(root), Some(anchor)) => Some(self.styler.adopt(&root, anchor, &kept)),
+                    (Some(root), Some(anchor)) => {
+                        let props = &self.cascade.properties;
+                        let mut kept = vec![props.builtin("lang")];
+                        if self.language(anchor) != self.language(&root) {
+                            kept.push(props.builtin("font"));
+                        }
+                        Some(self.styler.adopt(&root, anchor, &kept))
+                    }
                     (root, _) => root,
                 };
                 Some(self.compute(base.as_ref(), &matched, &local))
@@ -622,6 +631,22 @@ impl<'a> Walker<'a> {
                     .map(|(path, _)| path.clone())
             })
             .unwrap_or_else(|| project.manifest(self.db).project.entry.v.clone())
+    }
+
+    /// The language a style sets text in, by its primary subtag: its `lang`,
+    /// or the manifest's language where that is `auto` or not a language
+    /// tag, as the text stage reads it.
+    fn language(&self, style: &ComputedStyle) -> EcoString {
+        let props = &self.cascade.properties;
+        let tag = match style.value(props, props.builtin("lang")) {
+            Some(folio_component::Value::Str(tag)) => Lang::new(tag),
+            _ => None,
+        };
+        let lang = tag.unwrap_or_else(|| {
+            let manifest = self.build.project(self.db).manifest(self.db);
+            Lang::new(manifest.project.lang.v.as_str()).unwrap_or_else(Lang::english)
+        });
+        lang.primary().into()
     }
 
     /// The declarations an element makes for itself: its `override`
