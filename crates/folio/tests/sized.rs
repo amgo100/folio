@@ -206,12 +206,8 @@ fn ruled_after_prose(style: &str, rules: usize) -> World {
         source.push_str("\n\n");
     }
     source.push_str("#figure(class: \"answer\")[]\n\nAfter.\n");
-    // The base stylesheet keeps figures together; the answer space here
-    // stands for any block, so only its rules decide where it breaks.
     world(
-        &format!(
-            "figure.answer {{ rule-lines: {rules}; rule-spacing: 10mm; keep-together: false; }}\n{style}"
-        ),
+        &format!("figure.answer {{ rule-lines: {rules}; rule-spacing: 10mm; }}\n{style}"),
         &source,
     )
 }

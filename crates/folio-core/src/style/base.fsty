@@ -39,8 +39,11 @@ enum enum { numbering: "(a)"; }
 enum enum enum { numbering: "(i)"; }
 
 // Figures stand apart from the text, centred, and a page break does not
-// part a figure's body from its caption.
-figure { space-before: 1em; space-after: 1em; align: center; keep-together: true; }
+// part a figure's body from its caption. A figure without a caption, such
+// as an answer space, is not kept, so its ruled lines may break (SPEC
+// §6.3).
+figure { space-before: 1em; space-after: 1em; align: center; }
+figure[caption] { keep-together: true; }
 
 // `strong` and `emph` say what text is (SPEC §4.3); this is how it looks.
 strong { font-weight: bold; }

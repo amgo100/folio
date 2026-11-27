@@ -788,11 +788,10 @@ fn equal_styles_share_memory() {
         "= A\n\nOne.\n\nTwo.\n\n= B\n\nThree.\n\n#figure[] #figure(class: \"wide\")[]\n",
         &[(
             "styles/main.fsty",
-            // The figures' spaces and keep, which the base stylesheet
-            // sets, are reset to their initial values: an equal group is
-            // shared.
+            // The figures' spaces, which the base stylesheet sets, are
+            // reset to their initial values: an equal group is shared.
             "paragraph { indent: 1pt; color: #f00; } .wide { color: #f00; }\n\
-             figure { space-before: 0pt; space-after: 0pt; keep-together: false; }\n",
+             figure { space-before: 0pt; space-after: 0pt; }\n",
         )],
     );
     let styled = styled(&world, "exam", Target::Pdf);
