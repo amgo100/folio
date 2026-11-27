@@ -583,7 +583,8 @@ fn invalid_output() {
 #[test]
 fn output_that_replaces_a_project_file() {
     const HINT: &str = "  hint: an output may not replace the manifest, the lockfile, a content \
-                        file, a stylesheet, a hidden file or a file in the font directory\n";
+                        file, a stylesheet, a hidden file, a file in the font directory or a \
+                        file of a component\n";
     let output = |path: &str| errors(&format!("\n[output]\npath = \"{path}\"\n"));
     for (path, message) in [
         (
@@ -632,6 +633,31 @@ fn output_that_replaces_a_project_file() {
         format!(
             "the output `fonts/main.pdf` is in the font directory `fonts/` \
              @ \"{{variant}}/{{stem}}.{{ext}}\"\n{HINT}"
+        )
+    );
+
+    // The path is checked as it is written to, once a placeholder that
+    // brings in `..` is resolved.
+    assert_eq!(
+        errors(
+            "[project]\nentry = \"...fol\"\nedition = \"2027\"\ncompiler = \"1.2.0\"\n\n\
+             [output]\npath = \"out/{stem}/folio.toml\"\n"
+        ),
+        format!(
+            "the output `folio.toml` would replace the manifest \
+             @ \"out/{{stem}}/folio.toml\"\n{HINT}"
+        )
+    );
+
+    // A component declared by a path inside the project.
+    assert_eq!(
+        errors(
+            "\n[components]\nhouse = { path = \"./styles/house\" }\n\n\
+             [output]\npath = \"styles/House/{stem}.{ext}\"\n"
+        ),
+        format!(
+            "the output `styles/House/main.pdf` is in the component directory `styles/house/` \
+             @ \"styles/House/{{stem}}.{{ext}}\"\n{HINT}"
         )
     );
 

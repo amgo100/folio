@@ -403,7 +403,7 @@ fn outputs_never_replace_project_files() {
         ("{stem}.fol", "the output `main.fol` is the entry file"),
         (
             "keep.txt",
-            "cannot write `keep.txt`: the build reads `keep.txt` as a data file",
+            "cannot write `keep.txt`: a build reads `keep.txt` as a data file",
         ),
     ] {
         let manifest = format!("{MANIFEST}\n[output]\npath = \"{output}\"\n");

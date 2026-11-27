@@ -381,7 +381,7 @@ impl Manifest {
             .and_then(|v| v.table(&mut cx, "`[output]`".into()))
             .map(|table| {
                 let entry = project.as_ref().map(|p| &p.entry.v);
-                read_output(&mut cx, &table, &variants, entry)
+                read_output(&mut cx, &table, &variants, entry, &components)
             })
             .unwrap_or_default();
 
@@ -732,6 +732,7 @@ fn read_output(
     table: &Table<'_>,
     variants: &[Variant],
     entry: Option<&ProjectPath>,
+    components: &Components,
 ) -> Output {
     table.check_keys(cx, &["path"]);
     let Some(path) = table
@@ -789,7 +790,10 @@ fn read_output(
                 })
                 .collect()
         };
-        if let Some(invalid) = files.iter().find_map(|file| reserved_output(file, entry)) {
+        if let Some(invalid) = files
+            .iter()
+            .find_map(|file| reserved_output(file, entry, components))
+        {
             cx.invalid(range, invalid);
         }
     }
@@ -799,14 +803,30 @@ fn read_output(
 /// Why an output may not be written to `file`, a project path, when it would
 /// replace or be read as one of the project's own files (SPEC §4.1): the
 /// entry file, the manifest, the lockfile, a content file or stylesheet, a
-/// hidden file or one in a hidden directory, or a file in the font
-/// directory. Names are compared without regard to ASCII case, since file
+/// hidden file or one in a hidden directory, a file in the font directory,
+/// or one in the directory of a component declared by a path inside the
+/// project. Names are compared without regard to ASCII case, since file
 /// systems that ignore case would replace the file all the same.
-fn reserved_output(file: &str, entry: &ProjectPath) -> Option<Invalid> {
+fn reserved_output(file: &str, entry: &ProjectPath, components: &Components) -> Option<Invalid> {
     const HINT: &str = "an output may not replace the manifest, the lockfile, a content file, a \
-                        stylesheet, a hidden file or a file in the font directory";
-    let is = |name: &str| file.eq_ignore_ascii_case(name);
+                        stylesheet, a hidden file, a file in the font directory or a file of a \
+                        component";
+    // The path as it is written to, with any `.` or `..` that a placeholder
+    // brought in resolved.
     let path = ProjectPath::new(file)?;
+    let file = path.as_str();
+    let is = |name: &str| file.eq_ignore_ascii_case(name);
+    let within = |dir: &str| {
+        file.len() > dir.len()
+            && file.as_bytes()[dir.len()] == b'/'
+            && file[..dir.len()].eq_ignore_ascii_case(dir)
+    };
+    let component = components.declared.iter().find_map(|c| match &c.source {
+        ComponentSource::Path(dir) if !dir.v.as_str().starts_with("..") => {
+            within(dir.v.as_str()).then_some(dir.v.as_str())
+        }
+        _ => None,
+    });
     let ext = path.extension().map(str::to_ascii_lowercase);
     let message = if is(entry.as_str()) {
         eco_format!("the output `{file}` is the entry file")
@@ -816,16 +836,13 @@ fn reserved_output(file: &str, entry: &ProjectPath) -> Option<Invalid> {
         eco_format!("the output `{file}` would replace the lockfile")
     } else if file.split('/').any(|segment| segment.starts_with('.')) {
         eco_format!("the output `{file}` is a hidden path")
-    } else if file
-        .split('/')
-        .next()
-        .is_some_and(|dir| dir.eq_ignore_ascii_case(folio_fonts::PROJECT_FONT_DIR))
-        && file.contains('/')
-    {
+    } else if within(folio_fonts::PROJECT_FONT_DIR) {
         eco_format!(
             "the output `{file}` is in the font directory `{}/`",
             folio_fonts::PROJECT_FONT_DIR
         )
+    } else if let Some(dir) = component {
+        eco_format!("the output `{file}` is in the component directory `{dir}/`")
     } else if ext.as_deref() == Some("fol") {
         eco_format!("the output `{file}` is a content file")
     } else if ext.as_deref() == Some("fsty") {
