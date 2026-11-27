@@ -117,11 +117,11 @@ pub struct Found {
 /// its markup to the end, or a call's arguments) where other glyphs show
 /// them, unless they hold the whole element: a cursor in an item's text
 /// marks that text, not the item's label, which a cursor at the item's `+`
-/// marks. Where no
-/// glyph shows the bytes, as in the markup of an element's call, the boxes
-/// of the fragments and objects whose nodes hold them, and hold the fewest
-/// bytes, are found instead; pages themselves, and the root nodes of files,
-/// are not.
+/// marks. Where only such glyphs show the bytes, those of the innermost
+/// element are found. Where no glyph shows the bytes, as in the markup of
+/// an element's call, the boxes of the fragments and objects whose nodes
+/// hold them, and hold the fewest bytes, are found instead; pages
+/// themselves, and the root nodes of files, are not.
 ///
 /// To look up many places in the same pages, build an [`Index`] once.
 ///
@@ -454,7 +454,15 @@ impl Index {
         };
         let mut hits = pick(true);
         if hits.is_empty() {
+            // Only whole elements show the place: the innermost of them,
+            // not a label around it.
             hits = pick(false);
+            let wholes: Vec<Range<usize>> = hits.iter().map(|(_, g)| g.whole.clone()).collect();
+            hits.retain(|(_, g)| {
+                !wholes.iter().any(|inner| {
+                    *inner != g.whole && g.whole.start <= inner.start && inner.end <= g.whole.end
+                })
+            });
         }
         if !hits.is_empty() {
             return merge(&hits);

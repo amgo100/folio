@@ -457,8 +457,10 @@ fn a_cursor_before_a_short_word_in_an_item_marks_that_word() {
 
 /// Selections of inline markup in an item, and places in the text of an
 /// element inside it, do not mark its label; bytes that start at the item's
-/// marker, or before the next item's, do. Markup that no glyph shows, such
-/// as a call's name or a `*`, finds the label, as nothing else shows it.
+/// marker, or before the next item's, do. Markup that no glyph shows finds
+/// what a paragraph's would, the glyph whose text ends there, and where
+/// none does, as at a call's name or a `*` that opens the item's text, the
+/// label.
 #[test]
 fn inline_markup_and_selections_in_an_item_leave_its_label() {
     let text = "+ See *bold* and #emph[x] now.\n+ Second item.\n";
@@ -547,6 +549,21 @@ fn a_cursor_in_a_caption_marks_its_text_not_the_figure_number() {
     assert!(!markers.is_empty(), "the figure has no number");
     assert!(
         found.iter().all(|f| f.glyphs) && !found.is_empty(),
+        "{found:?}"
+    );
+    assert!(!marks(&found, &markers), "{found:?}");
+}
+
+/// A cursor in the arguments of an element inside an item, whose glyphs
+/// stand for the whole element, marks that element, not the item's label.
+#[test]
+fn a_cursor_in_an_inner_elements_arguments_marks_it_not_the_label() {
+    let text = "+ The speed is #qty(3, \"m/s\") here.\n";
+    let three = text.find("3,").unwrap();
+    let (found, markers) = find_with_markers(text, 0, three..three);
+    assert!(!markers.is_empty());
+    assert!(
+        !found.is_empty() && found.iter().all(|f| f.glyphs),
         "{found:?}"
     );
     assert!(!marks(&found, &markers), "{found:?}");
