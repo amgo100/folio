@@ -1,0 +1,11 @@
+= Measuring the speed of sound <q:sound>
+
+A loudspeaker connected to a signal generator faces two microphones, which are connected to an oscilloscope.
+
++ Set up the apparatus and set the signal generator to #qty(2.0, "kHz"). <part:setup>
++ Move one microphone away from the loudspeaker:
+  + watch the two traces on the screen as the microphone moves; <part:watch>
+  + stop where the peaks of the traces first line up again. <part:stop>
++ Record the distance moved, which is one wavelength. <part:record>
+
+If the peaks never line up in part (@part:stop[]), check the connections made in part (@part:setup[]). The traces should move apart as described in @part:watch[part], and the distance recorded in @part:record[part] gives the speed of sound in @q:sound[question].

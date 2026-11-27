@@ -1,0 +1,51 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 419.53 × 595.28, 1 page(s)
+page 1 419.53 × 595.28, 11 line(s)
+  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:1 baselines 32.01..279.94
+    box (0.00, 15.60) 328.82 × 267.86 main.fol:1:1 baselines 16.41..264.34
+      box (0.00, 0.00) 328.82 × 267.86 main.fol:1:1 baselines 16.41..264.34
+        box (0.00, 0.00) 328.82 × 24.06 main.fol:1:1 baselines 16.41..16.41 keep penalty 10000
+          text (0.00, 16.41) SourceSans3-Bold 13.00 w 179.58 30 glyph(s) "1\u{a0}Measuring the speed of sound"
+        box (0.00, 30.06) 328.82 × 42.44 main.fol:3:1 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 328.82 68 glyph(s) "A loudspeaker connected to a signal generator faces two microphones,"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 185.79 39 glyph(s) "which are connected to an oscilloscope."
+        box (0.00, 77.75) 328.82 × 124.60 main.fol:5:1 baselines 14.29..117.67
+          box (15.75, 0.00) 313.07 × 21.22 main.fol:5:1 baselines 14.29..14.29
+            box (0.00, 0.00) 313.07 × 21.22 main.fol:5:3 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 14.91 4 glyph(s) "(a)\u{a0}"
+              text (14.91, 14.29) SourceSerif4-Regular 10.50 w 241.00 53 glyph(s) "Set up the apparatus and set the signal generator to "
+              box (255.91, 7.00) 33.25 × 7.52 main.fol:5:57
+                text (0.00, 7.29) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "2.0"
+                text (15.17, 7.29) NewCMMath-Regular 10.50 w 18.08 3 glyph(s) "kHz"
+              text (289.16, 14.29) SourceSerif4-Regular 10.50 w 3.15 1 glyph(s) "."
+          box (15.75, 25.22) 313.07 × 72.91 main.fol:6:1 baselines 14.29..65.98
+            box (0.00, 0.00) 313.07 × 21.22 main.fol:6:3 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 15.51 4 glyph(s) "(b)\u{a0}"
+              text (15.51, 14.29) SourceSerif4-Regular 10.50 w 237.42 46 glyph(s) "Move one microphone away from the loudspeaker:"
+            box (0.00, 26.47) 313.07 × 46.44 main.fol:7:3 baselines 14.29..39.51
+              box (15.75, 0.00) 297.32 × 21.22 main.fol:7:3 baselines 14.29..14.29
+                box (0.00, 0.00) 297.32 × 21.22 main.fol:7:5 baselines 14.29..14.29
+                  text (0.00, 14.29) SourceSerif4-Regular 10.50 w 12.49 4 glyph(s) "(i)\u{a0}"
+                  text (12.49, 14.29) SourceSerif4-Regular 10.50 w 284.83 59 glyph(s) "watch the two traces on the screen as the microphone moves;"
+              box (15.75, 25.22) 297.32 × 21.22 main.fol:8:3 baselines 14.29..14.29
+                box (0.00, 0.00) 297.32 × 21.22 main.fol:8:5 baselines 14.29..14.29
+                  text (0.00, 14.29) SourceSerif4-Regular 10.50 w 15.82 5 glyph(s) "(ii)\u{a0}"
+                  text (15.82, 14.29) SourceSerif4-Regular 10.50 w 245.30 54 glyph(s) "stop where the peaks of the traces first line up again."
+          box (15.75, 103.38) 313.07 × 21.22 main.fol:9:1 baselines 14.29..14.29
+            box (0.00, 0.00) 313.07 × 21.22 main.fol:9:3 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 14.37 4 glyph(s) "(c)\u{a0}"
+              text (14.37, 14.29) SourceSerif4-Regular 10.50 w 249.66 51 glyph(s) "Record the distance moved, which is one wavelength."
+        box (0.00, 207.61) 328.82 × 60.25 main.fol:11:1 baselines 14.29..56.73
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 164.57 36 glyph(s) "If the peaks never line up in part ("
+          text (164.57, 14.29) SourceSerif4-Regular 10.50 w 6.26 2 glyph(s) "ii"
+          text (170.83, 14.29) SourceSerif4-Regular 10.50 w 157.99 32 glyph(s) "), check the connections made in"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 26.31 6 glyph(s) "part ("
+          text (26.31, 35.51) SourceSerif4-Regular 10.50 w 5.34 1 glyph(s) "a"
+          text (31.65, 35.51) SourceSerif4-Regular 10.50 w 228.89 48 glyph(s) "). The traces should move apart as described in "
+          text (260.54, 35.51) SourceSerif4-Regular 10.50 w 25.88 6 glyph(s) "part\u{a0}i"
+          text (286.42, 35.51) SourceSerif4-Regular 10.50 w 42.40 9 glyph(s) ", and the"
+          text (0.00, 56.73) SourceSerif4-Regular 10.50 w 98.20 21 glyph(s) "distance recorded in "
+          text (98.20, 56.73) SourceSerif4-Regular 10.50 w 27.04 6 glyph(s) "part\u{a0}c"
+          text (125.23, 56.73) SourceSerif4-Regular 10.50 w 130.48 29 glyph(s) " gives the speed of sound in "
+          text (255.72, 56.73) SourceSerif4-Regular 10.50 w 48.14 10 glyph(s) "question\u{a0}1"
+          text (303.86, 56.73) SourceSerif4-Regular 10.50 w 3.15 1 glyph(s) "."
