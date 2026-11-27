@@ -447,12 +447,19 @@ pub fn build_files(db: &dyn Db, build: Build<'_>) -> EcoVec<SourceFile> {
 
 /// The components a project uses, with their templates parsed and names
 /// resolved through the lockfile's bindings, or `None` after reporting why
-/// they cannot be hosted.
+/// they cannot be hosted. A declared component that is not registered is
+/// reported as an error ([`crate::component::unhosted`]) while the others
+/// are still hosted, so `Some` does not mean that nothing was reported.
 ///
 /// Reads only the registry (durable) and the manifest and lockfile, so an
 /// edit to a source does not re-run or even re-validate it.
 #[salsa::tracked(returns(ref))]
 pub fn component_host(db: &dyn Db, project: Project) -> Option<ComponentHost> {
+    for error in
+        crate::component::unhosted(project.components(db), &project.manifest(db).components)
+    {
+        diag::report(db, error);
+    }
     let host = ComponentHost::new(
         project.components(db),
         &project.manifest(db).components,
@@ -477,6 +484,12 @@ pub fn component_host(db: &dyn Db, project: Project) -> Option<ComponentHost> {
 pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     let project = build.project(db);
     for diagnostic in check_build(project.manifest(db), build.target(db), build.variant(db)) {
+        diag::report(db, diagnostic);
+    }
+    for diagnostic in project
+        .manifest(db)
+        .not_implemented(build.variant(db).as_ref())
+    {
         diag::report(db, diagnostic);
     }
 

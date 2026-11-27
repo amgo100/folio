@@ -7,12 +7,14 @@ use std::collections::BTreeMap;
 
 use ecow::{EcoString, eco_format};
 use folio_component::{Color, QualifiedName, Scalar};
-use folio_syntax::Span;
+use folio_syntax::{Span, ast};
 
 use super::content::Content;
 use super::error::{At, EvalError, EvalResult, StrResult, bail};
 use super::ops::{self, a_type};
-use super::value::{Applied, Arg, Args, Array, Dict, Func, Module, NativeFunc, Scope, Value};
+use super::value::{
+    Applied, Arg, Args, Array, Dict, Func, ITEM, Module, NODE, NativeFunc, Scope, Value,
+};
 use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
 use crate::db::{Bytes, FileKind, data_file, report_read, source_file};
@@ -35,6 +37,9 @@ pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
         "calc".into(),
         Value::Module(Module::new("calc", calc.into(), Content::new())),
     );
+    // `tok.warn` names a stylesheet token, which the style stage resolves
+    // for each build (SPEC §5.4).
+    scope.insert("tok".into(), Value::Module(Module::tokens()));
 
     // The built-in elements come before components' elements: a component
     // element named like one is reached only qualified (`exam.figure`).
@@ -224,9 +229,10 @@ fn type_(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 }
 
 /// `repr(value)`: the value as code writes it.
-fn repr(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+fn repr(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    let span = args.span;
     let value: Value = args.expect("value")?;
-    Ok(Value::Str(value.repr()))
+    Ok(Value::Str(vm.repr(&value, span)?))
 }
 
 /// `str(value)`: a number, label or string as a string.
@@ -294,7 +300,7 @@ fn assert(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 }
 
 /// `panic(..values)`: stops with an error.
-fn panic(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+fn panic(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let span = args.span;
     let mut message = EcoString::from("panicked");
     let mut first = true;
@@ -303,7 +309,7 @@ fn panic(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
         first = false;
         match arg.value {
             Value::Str(s) => message.push_str(&s),
-            v => message.push_str(&v.repr()),
+            v => message.push_str(&vm.repr(&v, arg.span)?),
         }
     }
     bail!(span, "{message}")
@@ -329,7 +335,7 @@ fn range(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
         0
     };
     vm.alloc(
-        u64::try_from(len.saturating_mul(16)).unwrap_or(u64::MAX),
+        u64::try_from(len.saturating_mul(ITEM.into())).unwrap_or(u64::MAX),
         span,
     )?;
     let mut out = Array::new();
@@ -900,10 +906,15 @@ pub(crate) fn call_method(
     mut args: Args,
     span: Span,
 ) -> EvalResult<Value> {
+    if let Value::Args(a) = &target
+        && matches!(name, "pos" | "named")
+    {
+        vm.alloc(NODE * a.items.len() as u64, span)?;
+    }
     let result = match target {
         Value::Str(s) => str_method(vm, s, name, &mut args, span)?,
         Value::Array(items) => array_method(vm, items, name, &mut args, span)?,
-        Value::Dict(dict) => dict_method(dict, name, &mut args, span)?,
+        Value::Dict(dict) => dict_method(vm, dict, name, &mut args, span)?,
         Value::Content(content) => match (name, content.as_element()) {
             ("fields", Some(element)) => Value::Dict(element.fields.clone()),
             ("at", Some(element)) => {
@@ -968,32 +979,33 @@ fn str_method(
     args: &mut Args,
     span: Span,
 ) -> EvalResult<Value> {
-    let chars: Vec<char> = s.chars().collect();
     Ok(match name {
         "len" => Value::Int(s.len() as i64),
         "first" | "last" => {
             let c = if name == "first" {
-                chars.first()
+                s.chars().next()
             } else {
-                chars.last()
+                s.chars().next_back()
             };
             match c {
-                Some(c) => Value::Str((*c).into()),
+                Some(c) => Value::Str(c.into()),
                 None => bail!(span, "the string is empty"),
             }
         }
         "at" => {
             let i: i64 = args.expect("index")?;
             let default: Option<Value> = args.named("default")?;
-            match (index(chars.len(), i), default) {
-                (Ok(i), _) => Value::Str(chars[i].into()),
+            match (index(s.chars().count(), i), default) {
+                (Ok(i), _) => Value::Str(s.chars().nth(i).unwrap_or_default().into()),
                 (Err(_), Some(d)) => d,
                 (Err(e), None) => return Err(EvalError::new(span, e).into()),
             }
         }
         "slice" => {
-            let (start, end) = slice_bounds(args, chars.len(), span)?;
-            Value::Str(chars[start..end].iter().collect::<String>().into())
+            let (start, end) = slice_bounds(args, s.chars().count(), span)?;
+            let chars = || s.chars().skip(start).take(end - start);
+            vm.alloc(chars().map(|c| c.len_utf8() as u64).sum(), span)?;
+            Value::Str(chars().collect::<String>().into())
         }
         "contains" => Value::Bool(s.contains(args.expect::<EcoString>("pattern")?.as_str())),
         "starts-with" => Value::Bool(s.starts_with(args.expect::<EcoString>("pattern")?.as_str())),
@@ -1015,26 +1027,45 @@ fn str_method(
         }
         "split" => {
             let sep: Option<EcoString> = args.find()?;
-            let parts: Array = match &sep {
+            let parts = match &sep {
                 Some(sep) if sep.is_empty() => {
                     bail!(span, "the separator must not be empty")
                 }
+                Some(sep) => s.matches(sep.as_str()).count() + 1,
+                None => s.split_whitespace().count(),
+            };
+            vm.alloc((ITEM * parts as u64).saturating_add(s.len() as u64), span)?;
+            Value::Array(match &sep {
                 Some(sep) => s
                     .split(sep.as_str())
                     .map(|p| Value::Str(p.into()))
                     .collect(),
                 None => s.split_whitespace().map(|p| Value::Str(p.into())).collect(),
-            };
-            vm.alloc(16 * parts.len() as u64, span)?;
-            Value::Array(parts)
+            })
         }
-        "trim" => Value::Str(s.trim().into()),
-        "upper" => Value::Str(s.to_uppercase()),
-        "lower" => Value::Str(s.to_lowercase()),
-        "rev" => Value::Str(chars.iter().rev().collect::<String>().into()),
+        "trim" => {
+            vm.alloc(s.trim().len() as u64, span)?;
+            Value::Str(s.trim().into())
+        }
+        "upper" | "lower" => {
+            // Changing case can lengthen a character to at most three.
+            vm.alloc(3 * s.len() as u64, span)?;
+            Value::Str(if name == "upper" {
+                s.to_uppercase()
+            } else {
+                s.to_lowercase()
+            })
+        }
+        "rev" => {
+            vm.alloc(s.len() as u64, span)?;
+            Value::Str(s.chars().rev().collect::<String>().into())
+        }
         "codepoints" => {
-            vm.alloc(16 * chars.len() as u64, span)?;
-            Value::Array(chars.iter().map(|c| Value::Str((*c).into())).collect())
+            vm.alloc(
+                (ITEM * s.chars().count() as u64).saturating_add(s.len() as u64),
+                span,
+            )?;
+            Value::Array(s.chars().map(|c| Value::Str(c.into())).collect())
         }
         "replace" => {
             let from: EcoString = args.expect("pattern")?;
@@ -1042,8 +1073,13 @@ fn str_method(
             if from.is_empty() {
                 bail!(span, "the pattern must not be empty");
             }
+            // The result is a new string, with each match replaced.
             let count = s.matches(from.as_str()).count() as u64;
-            vm.alloc(count.saturating_mul(to.len() as u64), span)?;
+            let kept = (s.len() as u64).saturating_sub(count.saturating_mul(from.len() as u64));
+            vm.alloc(
+                kept.saturating_add(count.saturating_mul(to.len() as u64)),
+                span,
+            )?;
             Value::Str(s.replace(from.as_str(), &to))
         }
         _ => bail!(span, "a string has no method `{name}`"),
@@ -1136,6 +1172,7 @@ fn array_method(
         }
         "slice" => {
             let (start, end) = slice_bounds(args, items.len(), span)?;
+            vm.alloc(ITEM * (end - start) as u64, span)?;
             Value::Array(items[start..end].iter().cloned().collect())
         }
         "contains" => {
@@ -1162,6 +1199,7 @@ fn array_method(
             let mut out = Array::new();
             for item in items.iter() {
                 if predicate(vm, &func, item, span)? {
+                    vm.alloc(ITEM, span)?;
                     out.push(item.clone());
                 }
             }
@@ -1169,6 +1207,7 @@ fn array_method(
         }
         "map" => {
             let func: Func = args.expect("function")?;
+            vm.alloc(ITEM * items.len() as u64, span)?;
             let mut out = Array::with_capacity(items.len());
             for item in items.iter() {
                 out.push(call_with(vm, &func, std::slice::from_ref(item), span)?);
@@ -1204,18 +1243,20 @@ fn array_method(
                     None => bail!(span, "cannot {name} an empty array without a default"),
                 };
             };
+            let op = if name == "sum" {
+                ast::BinOp::Add
+            } else {
+                ast::BinOp::Mul
+            };
             for item in iter {
-                acc = if name == "sum" {
-                    vm.alloc(item.shallow_size(), span)?;
-                    ops::add(acc, item)
-                } else {
-                    ops::mul(acc, item)
-                }
-                .at(span)?;
+                acc = vm.apply(op, acc, item, span)?;
             }
             acc
         }
-        "rev" => Value::Array(items.iter().rev().cloned().collect()),
+        "rev" => {
+            vm.alloc(ITEM * items.len() as u64, span)?;
+            Value::Array(items.iter().rev().cloned().collect())
+        }
         "join" => {
             let sep: Option<Value> = args.find()?;
             let mut acc = Value::None;
@@ -1233,6 +1274,8 @@ fn array_method(
         }
         "sorted" => {
             let key: Option<Func> = args.named("key")?;
+            // The items with their keys, and then the sorted array.
+            vm.alloc(3 * ITEM * items.len() as u64, span)?;
             let mut keyed = Vec::with_capacity(items.len());
             for item in items.iter() {
                 let k = match &key {
@@ -1255,7 +1298,7 @@ fn array_method(
         }
         "enumerate" => {
             let start: i64 = args.named("start")?.unwrap_or(0);
-            vm.alloc(32 * items.len() as u64, span)?;
+            vm.alloc(3 * ITEM * items.len() as u64, span)?;
             Value::Array(
                 items
                     .iter()
@@ -1271,7 +1314,7 @@ fn array_method(
         }
         "zip" => {
             let other: Array = args.expect("array")?;
-            vm.alloc(32 * items.len().min(other.len()) as u64, span)?;
+            vm.alloc(3 * ITEM * items.len().min(other.len()) as u64, span)?;
             Value::Array(
                 items
                     .iter()
@@ -1282,24 +1325,40 @@ fn array_method(
         }
         "flatten" => {
             let mut out = Array::new();
-            flatten(&items, &mut out);
-            vm.alloc(16 * out.len() as u64, span)?;
+            flatten(vm, &items, &mut out, span)?;
             Value::Array(out)
         }
         _ => bail!(span, "an array has no method `{name}`"),
     })
 }
 
-fn flatten(items: &Array, out: &mut Array) {
+/// Appends the items of `items` and of the arrays inside it to `out`.
+///
+/// An array can hold one array many times, as `(a, a)` does, so the walk
+/// can be exponentially longer than the memory the array takes. It counts
+/// every item it visits, arrays too, before it goes on.
+fn flatten(vm: &mut Vm<'_>, items: &Array, out: &mut Array, span: Span) -> EvalResult<()> {
     for item in items {
+        vm.alloc(ITEM, span)?;
         match item {
-            Value::Array(inner) => flatten(inner, out),
+            Value::Array(inner) => flatten(vm, inner, out, span)?,
             v => out.push(v.clone()),
         }
     }
+    Ok(())
 }
 
-fn dict_method(dict: Dict, name: &str, args: &mut Args, span: Span) -> EvalResult<Value> {
+fn dict_method(
+    vm: &mut Vm<'_>,
+    dict: Dict,
+    name: &str,
+    args: &mut Args,
+    span: Span,
+) -> EvalResult<Value> {
+    if matches!(name, "keys" | "values" | "pairs") {
+        let per = if name == "pairs" { 3 * ITEM } else { ITEM };
+        vm.alloc(per * dict.len() as u64, span)?;
+    }
     Ok(match name {
         "len" => Value::Int(dict.len() as i64),
         "at" => {

@@ -1,0 +1,5 @@
+#let a = ()
+#let i = 0
+#while i < 40 { a = (a, a); i += 1 }
+#a
+#repr(a).len()

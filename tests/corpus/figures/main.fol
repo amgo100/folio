@@ -27,3 +27,13 @@ A photograph is kept as the JPEG it is:
 #figure[#image("assets/photo.jpg", alt: "A yellow disc on a blue and green gradient", width: 4cm)][A photograph]
 
 Small pictures can stand in a line of text, such as a marker #image("assets/marker.webp", alt: "a red disc", width: 8pt) or a spring #image("assets/spring.gif", alt: "a zigzag spring", width: 24pt) between words.
+
+To compare the spectrum with the trace:
+
++ Find the brightest band of the spectrum. <part:band>
++ Read its colour from the swatches:
+  + match the band against each swatch in turn; <part:match>
+  + note the swatch that matches it best. <part:note>
++ Record the colour in the table. <part:record>
+
+If no swatch matches in part (@part:note[]), repeat part (@part:band[]) with the next band. The bands are matched as described in @part:match[part], and the table of @part:record[part] lists the colours.

@@ -2,14 +2,14 @@
 
 use std::cmp::Ordering;
 
-use ecow::eco_format;
+use ecow::{EcoString, eco_format};
 use folio_component::Scalar;
 
 use super::content::{Content, Node};
 use super::error::StrResult;
 use super::value::{Angle, Duration, Equality, Fraction, Length, Value as V, compare_once};
 
-fn mismatch(op: &str, lhs: &V, rhs: &V) -> ecow::EcoString {
+fn mismatch(op: &str, lhs: &V, rhs: &V) -> EcoString {
     let message = eco_format!(
         "cannot {op} {} and {}",
         a_type(lhs.type_name()),
@@ -22,9 +22,9 @@ fn mismatch(op: &str, lhs: &V, rhs: &V) -> ecow::EcoString {
 /// (SPEC §5.4): its value is known only when the document is styled, so it
 /// can be computed with only where the style stage evaluates values.
 fn with_token_advice<'a>(
-    message: ecow::EcoString,
+    message: EcoString,
     operands: impl IntoIterator<Item = &'a V>,
-) -> ecow::EcoString {
+) -> EcoString {
     match operands.into_iter().find_map(|v| match v {
         V::Token(name) => Some(name),
         _ => None,
@@ -38,7 +38,7 @@ fn with_token_advice<'a>(
 }
 
 /// The error of a unary operator that does not apply to a value.
-fn unary_mismatch(op: &str, value: &V) -> ecow::EcoString {
+fn unary_mismatch(op: &str, value: &V) -> EcoString {
     let message = eco_format!("cannot apply {op} to {}", a_type(value.type_name()));
     with_token_advice(message, [value])
 }
@@ -349,18 +349,44 @@ pub(crate) fn compare(lhs: &V, rhs: &V) -> StrResult<Ordering> {
         (V::Str(a), V::Str(b)) => a.cmp(b),
         (V::Date(a), V::Date(b)) => a.cmp(b),
         (V::Array(a), V::Array(b)) => {
-            for (a, b) in a.iter().zip(b) {
-                match compare(a, b)? {
-                    Ordering::Equal => {}
-                    order => return Ok(order),
+            let walk = || {
+                for (a, b) in a.iter().zip(b) {
+                    match compare(a, b)? {
+                        Ordering::Equal => {}
+                        order => return Ok(order),
+                    }
                 }
+                Ok(a.len().cmp(&b.len()))
+            };
+            if a.depth() < 2 {
+                return walk();
             }
-            a.len().cmp(&b.len())
+            // Arrays that hold one part many times are compared once per
+            // pair of parts, like `==` compares them.
+            let mut result = Ok(Ordering::Equal);
+            compare_once(a.storage(), b.storage(), Equality::Order, || {
+                result = walk();
+                result == Ok(Ordering::Equal)
+            });
+            return result;
         }
         (a, b) => {
-            return Err(eco_format!("cannot compare {} and {}", a.repr(), b.repr()));
+            return Err(eco_format!(
+                "cannot compare {} and {}",
+                short_repr(a),
+                short_repr(b)
+            ));
         }
     })
+}
+
+/// A value's representation for an error message, or the name of its type
+/// when the representation is long.
+pub(crate) fn short_repr(value: &V) -> EcoString {
+    match value.repr_within(80) {
+        Ok(repr) => repr,
+        Err(_) => a_type(value.type_name()).into(),
+    }
 }
 
 /// `a in b`.
