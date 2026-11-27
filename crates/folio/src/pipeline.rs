@@ -367,10 +367,10 @@ fn structure_of(
                 // inside the paragraph's on the page of its anchor
                 // (SPEC §7.8, §11.1).
                 let notes = paragraph.notes.iter().filter(|_| !in_note).map(|anchor| {
-                    (
-                        anchor.range.start,
-                        structure_of(&text.notes[anchor.note], text, alt, true),
-                    )
+                    let mut note = structure_of(&text.notes[anchor.note], text, alt, true);
+                    // Drawn after its page's body (SPEC §7.8).
+                    note.foot = true;
+                    (anchor.range.start, note)
                 });
                 let mut children: Vec<(usize, Tag)> = objects.chain(notes).collect();
                 children.sort_by_key(|(at, _)| *at);

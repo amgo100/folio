@@ -1095,3 +1095,253 @@ fn detached_sources_neither_link_nor_land() {
     assert!(!pdf.contains("/Subtype/Link"));
     assert!(!pdf.contains("(nowhere)"));
 }
+
+/// The marked-content ids of the leaves of the elements named `role` in a
+/// tag tree, in tree order, by their debug form.
+fn mcids(nodes: &[Node], role: &str, inside: bool, out: &mut Vec<i32>) {
+    for node in nodes {
+        match node {
+            Node::Leaf(id) if inside => {
+                let debug = format!("{id:?}");
+                // krilla shows no accessor: its derived `Debug` form names
+                // the id, `PageTagIdentifier { page_index: 0, mcid: 3 }`.
+                let at = debug
+                    .find("mcid: ")
+                    .unwrap_or_else(|| panic!("no `mcid: ` in krilla's {debug}"))
+                    + 6;
+                let digits: String = debug[at..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                out.push(digits.parse().unwrap());
+            }
+            Node::Group(group) => {
+                let here = inside || name(&group.tag) == role;
+                mcids(&group.children, role, here, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A footnote's boxes, drawn inside the paragraph of its anchor, are
+/// written after the rest of the page (SPEC §7.8): content order, which
+/// text extraction follows, reads the paragraph whole and then the note,
+/// while the structure keeps the note where its anchor is.
+#[test]
+fn footnotes_are_written_after_their_page() {
+    let note = Tag {
+        foot: true,
+        ..tag(Role::Note, 4, vec![tag(Role::Paragraph, 5, vec![])])
+    };
+    let structure = tag(
+        Role::Document,
+        1,
+        vec![
+            tag(Role::Paragraph, 2, vec![note]),
+            tag(Role::Paragraph, 3, vec![]),
+        ],
+    );
+    let pages = [page(vec![boxed(
+        1,
+        vec![
+            boxed(
+                2,
+                vec![
+                    run("A ball is kicked.1", 12),
+                    boxed(4, vec![boxed(5, vec![run("1 Ignore air.", 15)])]),
+                    run("It flies.", 12),
+                ],
+            ),
+            boxed(3, vec![run("Another.", 13)]),
+        ],
+    )])];
+    let document = document(&pages, &structure);
+    let mut body = Vec::new();
+    let mut notes = Vec::new();
+    let rendered = render_with(&document, true, &mut |tree: &TagTree, _| {
+        mcids(&tree.children, "P", false, &mut body);
+        mcids(&tree.children, "Note", false, &mut notes);
+    });
+    assert!(rendered.result.is_ok(), "{:?}", rendered.result.err());
+    let (tree, _) = tagged(&document);
+    assert!(tree.contains("Note"), "{tree}");
+    assert!(!notes.is_empty());
+    // Every piece of the body's text comes before the note's.
+    let body: Vec<i32> = body.into_iter().filter(|id| !notes.contains(id)).collect();
+    assert!(body.len() >= 2, "{body:?}");
+    let last_body = body.iter().max().unwrap();
+    assert!(
+        notes.iter().all(|n| n > last_body),
+        "body {body:?}, notes {notes:?}"
+    );
+}
+
+/// The destination and the top of each link annotation, as the PDF
+/// writes them.
+fn annotations(pdf: &str) -> Vec<(String, f64)> {
+    pdf.split("endobj")
+        .filter(|object| object.contains("/Subtype/Link"))
+        .map(|object| {
+            let dest = object.split("/Dest(").nth(1).unwrap();
+            let dest = dest[..dest.find(')').unwrap()].to_string();
+            let rect = object.split("/Rect[").nth(1).unwrap();
+            let rect = &rect[..rect.find(']').unwrap()];
+            let top: f64 = rect.split_whitespace().nth(3).unwrap().parse().unwrap();
+            (dest, top)
+        })
+        .collect()
+}
+
+/// Drawing a footnote after its page leaves each link where its text is:
+/// three references from one source, the middle one in a note, go to
+/// their own destinations in document order (#308).
+#[test]
+fn links_in_footnotes_keep_their_destinations() {
+    let note = Tag {
+        foot: true,
+        ..tag(Role::Note, 4, vec![tag(Role::Paragraph, 5, vec![])])
+    };
+    let structure = tag(Role::Document, 1, vec![tag(Role::Paragraph, 2, vec![note])]);
+    let pages = [page(vec![boxed(
+        1,
+        vec![boxed(
+            2,
+            vec![
+                run("see", 30),
+                boxed(4, vec![boxed(5, vec![run("see", 30)])]),
+                run("see", 30),
+            ],
+        )],
+    )])];
+    let at = Location {
+        source: SourceRef(2),
+        instance: Location::UNKNOWN_INSTANCE,
+    };
+    let navigation = Navigation {
+        destinations: ["a", "b", "c"]
+            .into_iter()
+            .map(|name| Destination {
+                name: name.into(),
+                location: at,
+            })
+            .collect(),
+        links: ["a", "b", "c"]
+            .into_iter()
+            .map(|name| Link {
+                source: SourceRef(30),
+                destination: Some(name.into()),
+                text: "see".into(),
+            })
+            .collect(),
+        page_labels: Vec::new(),
+    };
+    let document = Document {
+        navigation: &navigation,
+        ..document(&pages, &structure)
+    };
+    let written = write(&document).unwrap();
+    let mut found = annotations(&text(&written.bytes));
+    assert_eq!(found.len(), 3, "{found:?}");
+    // From the top of the page down: the body's first reference, its
+    // last, then the note's, whose run lies lowest (its box is the second
+    // item, with a box inside it). Drawn last, the note would take the
+    // last reference's link, and the last reference the note's.
+    found.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let order: Vec<&str> = found.iter().map(|(d, _)| d.as_str()).collect();
+    assert_eq!(order, ["a", "c", "b"]);
+}
+
+/// A footnote whose anchor has a formula after it on the same line, which
+/// the writer enters before the note's box (#308, the acceptance exam's
+/// question 4): the note is still its `Note`, and still written after the
+/// page's body, inside a section with a list and another section after it.
+#[test]
+fn a_note_after_a_formula_on_its_anchors_line_is_found_and_written_last() {
+    let formula = Tag {
+        instance: 0,
+        text: Some("4.9".into()),
+        ..tag(Role::Formula, 6, vec![])
+    };
+    let note = Tag {
+        foot: true,
+        ..tag(Role::Note, 4, vec![tag(Role::Paragraph, 5, vec![])])
+    };
+    let structure = tag(
+        Role::Document,
+        1,
+        vec![
+            tag(
+                Role::Section,
+                2,
+                vec![
+                    tag(Role::Paragraph, 3, vec![note, formula]),
+                    tag(
+                        Role::List(ListKind::Numbered),
+                        7,
+                        vec![tag(
+                            Role::ListItem,
+                            7,
+                            vec![tag(Role::Paragraph, 8, vec![])],
+                        )],
+                    ),
+                ],
+            ),
+            tag(Role::Section, 9, vec![tag(Role::Paragraph, 10, vec![])]),
+        ],
+    );
+    let pages = [page(vec![boxed(
+        1,
+        vec![
+            boxed(
+                2,
+                vec![
+                    boxed(
+                        3,
+                        vec![
+                            run("of the metal2 is", 13),
+                            located(6, 0, vec![run("4.9", 16)]),
+                            boxed(
+                                4,
+                                vec![
+                                    // A part of the note: a box of the note's
+                                    // own source, drawn once, with it.
+                                    boxed(4, vec![run("2", 14)]),
+                                    boxed(5, vec![run("The resistivity.", 15)]),
+                                ],
+                            ),
+                        ],
+                    ),
+                    boxed(
+                        7,
+                        vec![boxed(7, vec![boxed(8, vec![run("(a) Show that.", 18)])])],
+                    ),
+                ],
+            ),
+            boxed(9, vec![boxed(10, vec![run("5 Progressive waves.", 20)])]),
+        ],
+    )])];
+    let document = document(&pages, &structure);
+    let (tree, _) = tagged(&document);
+    // The note keeps its place before the formula, as in the source.
+    let (note, formula) = (tree.find("Note"), tree.find("Formula"));
+    assert!(
+        note.is_some() && formula.is_some() && note < formula,
+        "{tree}"
+    );
+    let mut body = Vec::new();
+    let mut notes = Vec::new();
+    let rendered = render_with(&document, true, &mut |tree: &TagTree, _| {
+        mcids(&tree.children, "P", false, &mut body);
+        mcids(&tree.children, "Note", false, &mut notes);
+    });
+    assert!(rendered.result.is_ok(), "{:?}", rendered.result.err());
+    let body: Vec<i32> = body.into_iter().filter(|id| !notes.contains(id)).collect();
+    // The note's part and its paragraph, both drawn.
+    assert!(notes.len() >= 2 && body.len() >= 3, "{body:?} {notes:?}");
+    let last_body = body.iter().max().unwrap();
+    assert!(
+        notes.iter().all(|n| n > last_body),
+        "body {body:?}, notes {notes:?}"
+    );
+}
