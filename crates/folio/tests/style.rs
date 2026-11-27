@@ -576,6 +576,17 @@ fn scoped_rules_take_stylesheet_values() {
     // declaration.
     let unknown = world("#rule paragraph { indent: $gpa; }\nText.\n", &[]);
     assert_eq!(messages(&unknown), ["unknown token `$gpa`"]);
+
+    // `tok.warn` is how content outside a scoped rule names a token; in a
+    // rule, as in a stylesheet, the error says to write `$warn`.
+    let content_form = world("#rule paragraph { color: tok.warn; }\nText.\n", &[]);
+    let compiled = folio::compile(&content_form, Target::Pdf, Some(&name("exam"))).unwrap();
+    let diagnostic = &compiled.diagnostics[0];
+    assert_eq!(
+        diagnostic.message,
+        "`tok.warn` names a token in content only"
+    );
+    assert_eq!(diagnostic.hints[0], "write `$warn` here");
 }
 
 #[test]

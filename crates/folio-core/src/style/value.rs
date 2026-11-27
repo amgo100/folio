@@ -373,6 +373,13 @@ impl<'a> Values<'a> {
         self.report(self.expr(expr))
     }
 
+    /// The value of the token `name`, as `$name` gives it, reporting
+    /// errors at `span`: for a token reference in content, `tok.name`
+    /// (SPEC §5.4).
+    pub(super) fn token(&self, name: &str, span: Span) -> Option<Declared> {
+        self.report(self.tokens.get(self, name, span))
+    }
+
     fn report(&self, result: VResult<Declared>) -> Option<Declared> {
         match result {
             Ok(value) => Some(value),
@@ -480,6 +487,17 @@ impl<'a> Values<'a> {
                 // A name before a dot is a module of the standard library:
                 // `calc.max`.
                 let target = match access.target() {
+                    // Content names a token `tok.warn`; a stylesheet, and a
+                    // scoped rule, write `$warn` (SPEC §5.4).
+                    ast::Expr::Ident(ident) if ident.get() == "tok" => {
+                        let name = access.field();
+                        return Err(EvalError::new(
+                            span,
+                            eco_format!("`tok.{}` names a token in content only", name.get()),
+                        )
+                        .with_hint(eco_format!("write `${}` here", name.get()))
+                        .into());
+                    }
                     ast::Expr::Ident(ident) => {
                         match eval::globals(self.db, self.project).get(ident.get()) {
                             Some(module @ eval::Value::Module(_)) => module.clone(),
