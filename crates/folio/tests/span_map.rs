@@ -378,10 +378,11 @@ fn a_cursor_in_a_list_item_marks_its_text_not_its_label() {
             }
         }
 
-        // At the item's own marker syntax, and for the whole item, as a
-        // diagnostic on it would, the label is marked.
+        // At the item's own marker syntax, for bytes from it into the
+        // item's text, and for the whole item, as a diagnostic on it would,
+        // the label is marked.
         let (page, x, y, _) = markers[0];
-        for bytes in [at..at, whole] {
+        for bytes in [at..at, at..at + item.len(), whole] {
             let found = index.find("main.fol", bytes.clone());
             assert!(
                 found.iter().any(|f| covers(f, page, x, y)),
@@ -389,4 +390,48 @@ fn a_cursor_in_a_list_item_marks_its_text_not_its_label() {
             );
         }
     }
+}
+
+/// A cursor before a one-letter word of a list item marks that word alone,
+/// as in a paragraph: neither the label nor the space before it.
+#[test]
+fn a_cursor_before_a_short_word_in_an_item_marks_that_word() {
+    let find = |text: &str, at: usize| {
+        let world = world("", text);
+        let laid = pages(&world);
+        let fragments: Vec<_> = laid.pages.iter().map(|p| &p.fragment).collect();
+        span_map::Index::new(&world, &fragments).find("main.fol", at..at)
+    };
+    let item = find("+ go a way\n", 5);
+    let plain = find("go a way\n", 3);
+    assert_eq!(item.len(), 1, "{item:?}");
+    assert_eq!(plain.len(), 1, "{plain:?}");
+    assert_eq!(item[0].size, plain[0].size, "{item:?} {plain:?}");
+}
+
+/// A heading's number stands for the whole heading: a cursor in its title
+/// marks the title alone, one at its `=` marks the number.
+#[test]
+fn a_cursor_in_a_numbered_heading_marks_its_title_not_its_number() {
+    let text = "= Forces and motion\n\nText.\n";
+    let world = world("heading { numbering: \"1.\"; }\n", text);
+    let pages = pages(&world);
+    let fragments: Vec<_> = pages.pages.iter().map(|p| &p.fragment).collect();
+    let index = span_map::Index::new(&world, &fragments);
+    let markers = marker_glyphs(&world, &pages, 0);
+    assert!(!markers.is_empty(), "the heading has no number");
+    let word = text.find("and").unwrap();
+    for bytes in [word + 1..word + 1, word..word + 3] {
+        let found = index.find("main.fol", bytes.clone());
+        assert!(!found.is_empty(), "{bytes:?} finds nothing");
+        for &(page, x, y, _) in &markers {
+            assert!(
+                !found.iter().any(|f| covers(f, page, x, y)),
+                "{bytes:?} marks the number: {found:?}"
+            );
+        }
+    }
+    let (page, x, y, _) = markers[0];
+    let found = index.find("main.fol", 0..0);
+    assert!(found.iter().any(|f| covers(f, page, x, y)), "{found:?}");
 }

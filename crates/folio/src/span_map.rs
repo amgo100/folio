@@ -113,13 +113,13 @@ pub struct Found {
 /// its pen position to the next and from a font size above its baseline to
 /// a quarter of it below, as a click finds it. A glyph that stands for a
 /// whole element, such as a list item's marker or a heading's number, is
-/// left out where glyphs of text inside the element show the bytes, unless
-/// the bytes hold the whole element: a cursor in an item's text marks that
-/// text, not the item's label. Where no glyph shows the
-/// bytes, as in the markup of an element's call, the boxes of the
-/// fragments and objects whose nodes hold them, and hold the fewest bytes,
-/// are found instead; pages themselves, and the root nodes of files, are
-/// not.
+/// left out where glyphs of text inside the element show all the bytes,
+/// unless the bytes hold the whole element: a cursor in an item's text
+/// marks that text, not the item's label, which a cursor at the item's `+`
+/// marks. Where no glyph shows the bytes, as in the markup of an element's
+/// call, the boxes of the fragments and objects whose nodes hold them, and
+/// hold the fewest bytes, are found instead; pages themselves, and the
+/// root nodes of files, are not.
 ///
 /// To look up many places in the same pages, build an [`Index`] once.
 ///
@@ -413,8 +413,9 @@ impl Index {
         // marker or a heading's number, is not found for a place inside
         // other text of the element that its glyphs show: there the reveal
         // marks that text alone (#417). It is found where nothing inside
-        // it shows the bytes, as at the item's `+`, and for bytes that hold
-        // the whole element.
+        // it shows the bytes, as at the item's `+`, where the bytes reach
+        // past what the text inside shows, and for bytes that hold the
+        // whole element.
         let whole = |g: &GlyphEntry, r: &Range<usize>| {
             *r == g.whole && !(bytes.start <= r.start && r.end <= bytes.end)
         };
@@ -423,17 +424,22 @@ impl Index {
         };
         let mut hits: Vec<&(usize, &GlyphEntry, Range<usize>)> =
             resolved.iter().filter(|(_, _, r)| overlaps(r)).collect();
-        if bytes.is_empty() && hits.iter().all(|(_, g, r)| whole(g, r)) {
-            // At the end of a word: the glyph whose text ends there, also
-            // where only whole elements hold the place.
-            let ends = resolved
+        if bytes.is_empty() {
+            // At the end of a word: the glyph whose text ends there, where
+            // nothing else holds the place, or only elements around it.
+            let ends: Vec<_> = resolved
                 .iter()
-                .filter(|(_, _, r)| !r.is_empty() && r.end == bytes.start);
+                .filter(|(_, _, r)| !r.is_empty() && r.end == bytes.start)
+                .collect();
+            let around = |(_, g, r): &&(usize, &GlyphEntry, Range<usize>)| {
+                whole(g, r) && ends.iter().any(|(_, _, end)| nested(end, r))
+            };
             if hits.is_empty() {
-                hits = ends.collect();
-            } else {
+                hits = ends;
+            } else if hits.iter().all(around) {
                 let inside: Vec<_> = ends
-                    .filter(|(_, _, r)| hits.iter().any(|(_, _, outer)| nested(r, outer)))
+                    .into_iter()
+                    .filter(|(_, _, end)| hits.iter().any(|(_, _, outer)| nested(end, outer)))
                     .collect();
                 hits.extend(inside);
                 hits.sort_by_key(|(i, _, _)| *i);
@@ -442,7 +448,16 @@ impl Index {
         let shadowed: Vec<Range<usize>> = hits
             .iter()
             .filter(|(_, g, r)| whole(g, r))
-            .filter(|(_, _, r)| hits.iter().any(|(_, _, inner)| nested(inner, r)))
+            .filter(|(_, _, r)| {
+                let inner = hits
+                    .iter()
+                    .map(|(_, _, inner)| inner)
+                    .filter(|inner| nested(inner, r));
+                let (start, end) = inner.fold((usize::MAX, 0), |(start, end), inner| {
+                    (start.min(inner.start), end.max(inner.end))
+                });
+                start <= bytes.start && bytes.end <= end
+            })
             .map(|(_, _, r)| r.clone())
             .collect();
         if !shadowed.is_empty() {
