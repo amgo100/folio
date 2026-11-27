@@ -4,7 +4,7 @@
 use folio_syntax::ast::{AstNode, Expr, MathAttach};
 use folio_syntax::{SyntaxKind, SyntaxNode, parse};
 
-/// The first attachment of the equation in `text`.
+/// The first attachment in `root`.
 fn attach(root: &SyntaxNode) -> MathAttach<'_> {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
@@ -48,6 +48,11 @@ fn a_sign_binds_to_the_operand_after_it() {
     assert_eq!(scripts("x^-(a+b)").0, "-(a+b)");
     assert_eq!(scripts("x^-#n").0, "-#n");
     assert_eq!(scripts("x^-∞").0, "-∞");
+    // A large operator binds as its name does; the `_i` after it is `e`'s
+    // subscript, as in `e^sum_i`.
+    assert_eq!(scripts("e^-sum_i x_i"), ("-sum".into(), "i".into()));
+    assert_eq!(scripts("e^-∑_i x_i"), ("-∑".into(), "i".into()));
+    assert_eq!(scripts("e^-∫").0, "-∫");
     // In a chain of scripts, each sign binds to its own operand.
     assert_eq!(scripts("x_1^-2"), ("-2".into(), "1".into()));
     assert_eq!(scripts("x^-2_-1"), ("-2".into(), "-1".into()));
@@ -79,6 +84,9 @@ fn a_sign_alone_is_the_script() {
     // Before an operator, a relation or punctuation, too.
     assert_eq!(scripts("x^-= y").0, "-");
     assert_eq!(scripts("x^-, y").0, "-");
+    // A fence starts no operand of a script, signed or not: write `abs(x)`.
+    assert_eq!(scripts("e^-|x|").0, "-");
+    assert_eq!(scripts("e^|x|").0, "|");
     // Other symbols than signs keep taking one atom.
     assert_eq!(scripts("x^*1").0, "*");
     assert_eq!(scripts("x^±1").0, "±");

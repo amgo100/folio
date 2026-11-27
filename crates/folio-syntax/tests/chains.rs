@@ -441,3 +441,11 @@ fn a_chain_cut_by_its_height_leaves_the_enclosing_scripts() {
         }
     });
 }
+
+#[test]
+fn a_chain_of_signed_scripts_gives_one_error() {
+    small_stack(|| {
+        let text = format!("${}x$\n", "x^-".repeat(5000));
+        assert_eq!(check(text), [DEEP]);
+    });
+}

@@ -521,6 +521,10 @@ fn math_chain_operand(p: &mut Parser<'_>) -> bool {
     if p.at_set(END) {
         return false;
     }
+    // A sign takes the operand after it, as in a regular parse: `x^-1`.
+    if math_sign_binds(p) {
+        p.eat();
+    }
     // A root takes the operand after it, as in a regular parse: `√x`.
     while p.at(SyntaxKind::Root) {
         p.eat();
@@ -584,8 +588,10 @@ fn math_script(p: &mut Parser<'_>, prec: u8, stop_set: SyntaxSet) {
 }
 
 /// Whether the parser is at a sign (`-`, `+` or `−`) directly followed by
-/// something that starts an operand: a name, a number or letter, a bracket,
-/// a root, a string, an escape or embedded code.
+/// something that starts an operand: a name, a number or letter, a large
+/// operator such as `∑`, a bracket, a root, a string, an escape or embedded
+/// code. A fence such as `|` or a `.` starts no operand of a script, signed or
+/// not: `x^|x|` raises only the `|`.
 fn math_sign_binds(p: &Parser<'_>) -> bool {
     let sign = match p.current() {
         SyntaxKind::MathShorthand => p.current_text() == "-",
@@ -610,7 +616,7 @@ fn math_sign_binds(p: &Parser<'_>) -> bool {
             c.is_alphanumeric()
                 || matches!(
                     default_math_class(c),
-                    Some(MathClass::Alphabetic | MathClass::Normal)
+                    Some(MathClass::Alphabetic | MathClass::Normal | MathClass::Large)
                 )
         }),
         _ => false,
