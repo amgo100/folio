@@ -79,7 +79,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
 
 /// Reads a font file into memory, or takes it from the files this process
 /// has read when it has not changed since.
-fn read(path: &Path, origin: FontOrigin) -> io::Result<FontFile> {
+pub(crate) fn read(path: &Path, origin: FontOrigin) -> io::Result<FontFile> {
     type Stamp = (u64, Option<SystemTime>);
     static READ: Mutex<Option<HashMap<PathBuf, (Stamp, FontFile)>>> = Mutex::new(None);
 

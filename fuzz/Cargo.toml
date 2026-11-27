@@ -105,6 +105,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+bench = false
+
 # The same patched crates as the main workspace (SPEC §2.4, D-300-1; see
 # the root Cargo.toml), so that the fuzz targets build what Folio ships.
 [patch.crates-io]

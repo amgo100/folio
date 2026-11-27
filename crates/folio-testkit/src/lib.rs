@@ -12,7 +12,7 @@
 //!   that the inputs that once failed are replayed on stable Rust by
 //!   `cargo test` (`tests/fuzz.rs`).
 //! - [`fuzz_image`] holds the body of the `image` fuzz target (image files
-//!   read, written to PDF and rendered), until it joins [`fuzz`].
+//!   read, written to PDF and rendered), which [`fuzz`] registers.
 //! - [`refdoc`] generates the reference document of SPEC §14.1 and smaller
 //!   documents of the same make-up.
 //!

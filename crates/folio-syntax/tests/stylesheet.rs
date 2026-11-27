@@ -902,14 +902,26 @@ fn reparse_of_top_level_items_is_local() {
 #[test]
 fn reparse_of_a_scoped_rule_in_a_stylesheet_value() {
     // The content block is lexed as content, but the declaration block of
-    // its scoped rule is lexed as a stylesheet again, also when reparsed:
+    // its scoped rule is lexed as a stylesheet again, also when reparsed
+    // (SPEC §5.4): `--x` is what a stylesheet makes of it there.
+    let text = "q { fallback: [#rule a { b: --x; }]; }";
+    let mut source = Source::detached_stylesheet(text);
+    let in_sheet = parse_stylesheet("q { b: --x; }");
+    assert_eq!(
+        count(source.root(), SyntaxKind::Unary),
+        count(&in_sheet, SyntaxKind::Unary)
+    );
+    let at = text.find("b:").unwrap();
+    let reparsed = source.edit(at..at, "b");
+    assert!(source.text()[reparsed].contains("bb: --x;"));
+    assert!(source.root().spanless_eq(&parse_stylesheet(source.text())));
+
     // `#fff` is a colour there.
     let text = "q { fallback: [#rule a { b: #fff; }]; }";
     let mut source = Source::detached_stylesheet(text);
     assert_eq!(count(source.root(), SyntaxKind::Color), 1);
     let at = text.find("b:").unwrap();
-    let reparsed = source.edit(at..at, "b");
-    assert_eq!(&source.text()[reparsed], "{ bb: #fff; }");
+    source.edit(at..at, "b");
     assert!(source.root().spanless_eq(&parse_stylesheet(source.text())));
     assert_eq!(count(source.root(), SyntaxKind::Color), 1);
 }

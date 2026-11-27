@@ -9,8 +9,7 @@ use folio::style::{NodeName, Styled, StyledNode};
 use folio::{Event, Name, Registry, Target, World};
 use folio_component::{
     Abs, Body, Color, Component, ComponentManifest, ComponentName, ContentKind, Declarations,
-    Effect, ElementKind, ElementSchema, FieldDecl, FieldType, INTERFACE_VERSION, PropertyDecl,
-    PropertyType, SlotDecl, Value,
+    ElementKind, ElementSchema, FieldDecl, FieldType, PropertyDecl, PropertyType, SlotDecl, Value,
 };
 
 const MANIFEST: &str = r#"
@@ -41,12 +40,11 @@ struct Exam;
 
 impl Component for Exam {
     fn manifest(&self) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new("exam").unwrap(),
-            version: semver::Version::new(0, 0, 0),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf]),
-        }
+        ComponentManifest::new(
+            ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
     }
 
     fn declarations(&self) -> Declarations {
@@ -55,33 +53,25 @@ impl Component for Exam {
         question.body = Body::Content(ContentKind::Blocks);
         let mut example = ElementSchema::new(name("example"), ElementKind::Block);
         example.body = Body::Slots(EcoVec::from([
-            SlotDecl {
-                name: name("statement"),
-                content: ContentKind::Blocks,
-            },
-            SlotDecl {
-                name: name("solution"),
-                content: ContentKind::Blocks,
-            },
+            SlotDecl::new(name("statement"), ContentKind::Blocks),
+            SlotDecl::new(name("solution"), ContentKind::Blocks),
         ]));
-        Declarations {
-            elements: EcoVec::from([question, example]),
-            properties: EcoVec::from([PropertyDecl {
-                name: name("mark-gap"),
-                ty: PropertyType::Length,
-                initial: Value::Length(Abs::pt(4.0)),
-                inherited: true,
-                effect: Effect::Layout,
-            }]),
-            ..Declarations::default()
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([question, example]);
+        declarations.properties = EcoVec::from([PropertyDecl::new(
+            name("mark-gap"),
+            PropertyType::Length,
+            Value::Length(Abs::pt(4.0)),
+        )
+        .with_inherited(true)]);
+        declarations
     }
 }
 
 /// A world with the exam component, a content file and stylesheets.
 fn world(main: &str, sheets: &[(&str, &str)]) -> World {
     let mut registry = Registry::new();
-    registry.register(&Exam).unwrap();
+    registry.register(Exam).unwrap();
     let mut world = World::builder()
         .components(registry)
         .build(MANIFEST, None)
