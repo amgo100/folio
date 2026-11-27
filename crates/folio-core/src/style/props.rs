@@ -452,6 +452,22 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
         Value::Auto,
         Layout,
     );
+    // SPEC §6.3: sized blocks. The height a block's content box has at
+    // least, and ruled lines after its content, as answer space has them:
+    // `rule-lines` of them `rule-spacing` apart, each a rule of
+    // `rule-stroke` at its foot (`auto`: 0.5pt solid black). They stay on
+    // one page unless `rule-breakable: true` lets a page break fall between
+    // two of them.
+    prop("min-height", Length, pt(0.0), Layout);
+    prop(
+        "rule-lines",
+        any_of([PropertyType::None, Int]),
+        Value::None,
+        Layout,
+    );
+    prop("rule-spacing", Length, mm(8.0), Layout);
+    prop("rule-stroke", Any, Value::Auto, Layout);
+    prop("rule-breakable", Bool, Value::Bool(false), Layout);
 
     group = GroupId::NUMBERING;
     let mut prop =

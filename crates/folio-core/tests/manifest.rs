@@ -581,6 +581,99 @@ fn invalid_output() {
 }
 
 #[test]
+fn output_that_replaces_a_project_file() {
+    const HINT: &str = "  hint: an output may not replace the manifest, the lockfile, a content \
+                        file, a stylesheet, a hidden file, a file in the font directory or a \
+                        file of a component\n";
+    let output = |path: &str| errors(&format!("\n[output]\npath = \"{path}\"\n"));
+    for (path, message) in [
+        (
+            "folio.toml",
+            "the output `folio.toml` would replace the manifest",
+        ),
+        (
+            "Folio.TOML",
+            "the output `Folio.TOML` would replace the manifest",
+        ),
+        (
+            "./folio.lock",
+            "the output `folio.lock` would replace the lockfile",
+        ),
+        ("{stem}.fol", "the output `main.fol` is the entry file"),
+        ("MAIN.fol", "the output `MAIN.fol` is the entry file"),
+        ("notes.fol", "the output `notes.fol` is a content file"),
+        (
+            "styles/out.FSTY",
+            "the output `styles/out.FSTY` is a stylesheet",
+        ),
+        (".git/HEAD", "the output `.git/HEAD` is a hidden path"),
+        (
+            "out/.{stem}.{ext}",
+            "the output `out/.main.pdf` is a hidden path",
+        ),
+        (
+            "fonts/{stem}.{ext}",
+            "the output `fonts/main.pdf` is in the font directory `fonts/`",
+        ),
+    ] {
+        assert_eq!(
+            output(path),
+            format!("{message} @ \"{path}\"\n{HINT}"),
+            "{path}"
+        );
+    }
+
+    // Every build's file is checked: here only the second variant's is
+    // in the font directory.
+    assert_eq!(
+        errors(
+            "\n[variants.exam]\ntargets = [\"pdf\"]\n\n[variants.fonts]\ntargets = [\"pdf\"]\n\n\
+             [output]\npath = \"{variant}/{stem}.{ext}\"\n"
+        ),
+        format!(
+            "the output `fonts/main.pdf` is in the font directory `fonts/` \
+             @ \"{{variant}}/{{stem}}.{{ext}}\"\n{HINT}"
+        )
+    );
+
+    // The path is checked as it is written to, once a placeholder that
+    // brings in `..` is resolved.
+    assert_eq!(
+        errors(
+            "[project]\nentry = \"...fol\"\nedition = \"2027\"\ncompiler = \"1.2.0\"\n\n\
+             [output]\npath = \"out/{stem}/folio.toml\"\n"
+        ),
+        format!(
+            "the output `folio.toml` would replace the manifest \
+             @ \"out/{{stem}}/folio.toml\"\n{HINT}"
+        )
+    );
+
+    // A component declared by a path inside the project.
+    assert_eq!(
+        errors(
+            "\n[components]\nhouse = { path = \"./styles/house\" }\n\n\
+             [output]\npath = \"styles/House/{stem}.{ext}\"\n"
+        ),
+        format!(
+            "the output `styles/House/main.pdf` is in the component directory `styles/house/` \
+             @ \"styles/House/{{stem}}.{{ext}}\"\n{HINT}"
+        )
+    );
+
+    // Files that are only alike are fine.
+    for path in [
+        "out/folio.toml.pdf",
+        "out/fonts/{stem}.{ext}",
+        "out/{stem}.fol.{ext}",
+        "fontsx/{stem}.{ext}",
+    ] {
+        let text = format!("{PROJECT}\n[output]\npath = \"{path}\"\n");
+        assert!(Manifest::parse(&text, file()).is_ok(), "{path}");
+    }
+}
+
+#[test]
 fn syntax_errors_and_several_errors_at_once() {
     let text = "[project]\nentry = \nedition = \"2027\"\nedition = \"2027\"\ncompiler = \"x\"\n";
     let errors = Manifest::parse(text, file()).unwrap_err();
