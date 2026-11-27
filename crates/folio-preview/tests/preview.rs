@@ -553,11 +553,21 @@ fn figures_are_served_as_svg() {
         get(&preview, &without_token, &[]).0,
         "HTTP/1.1 403 Forbidden"
     );
-    for bad in [
-        "/figure/0123.svg",
-        "/figure/zzzzzzzzzzzzzzzz.svg",
-        "/figure/0000000000000000.svg",
-    ] {
+    // The hash only as 16 lowercase digits: in capitals, or with a sign
+    // for its first digit, it names nothing.
+    let lower = format!("{:016x}", svg.content_hash());
+    let mut bad = vec![
+        "/figure/0123.svg".to_owned(),
+        "/figure/zzzzzzzzzzzzzzzz.svg".to_owned(),
+        "/figure/0000000000000000.svg".to_owned(),
+    ];
+    if lower.bytes().any(|b| b.is_ascii_alphabetic()) {
+        bad.push(format!("/figure/{}.svg", lower.to_uppercase()));
+    }
+    if lower.starts_with('0') {
+        bad.push(format!("/figure/+{}.svg", &lower[1..]));
+    }
+    for bad in &bad {
         let target = format!("{bad}?token={token}");
         assert_eq!(
             get(&preview, &target, &[]).0,
@@ -567,7 +577,7 @@ fn figures_are_served_as_svg() {
     }
 }
 
-/// This crate's `tests` directory, which holds `iframe.cjs`.
+/// This crate's `tests` directory, which holds the scripts `node` runs.
 fn tests_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests")
 }

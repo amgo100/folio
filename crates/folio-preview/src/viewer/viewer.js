@@ -240,13 +240,41 @@ function contentHash(bytes) {
 const RASTER_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 // Content hash → { source } once settled, `source` an ImageBitmap or an
-// <img> to draw, or null when the image cannot be shown; undefined while
-// it is decoded or fetched, or waits to be fetched again.
+// <img> to draw, or null when the image cannot be shown; { pending } while
+// it is decoded or fetched, or waits to be fetched again, `pending` an
+// object that names the request.
 let imageCache = new Map();
 // Content hash → how many times fetching a figure has failed.
 const imageFailures = new Map();
 // How many times a figure is fetched again after a failure that may pass.
 const IMAGE_RETRIES = 3;
+
+// A JPEG without its Exif segments (APP1 that starts with "Exif\0"): the
+// browser would turn the image by the orientation they give, which PDF
+// output and `folio-render` do not, as Folio sizes an image by its pixels
+// as stored.
+function withoutExif(bytes) {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return bytes;
+  const keep = [bytes.subarray(0, 2)];
+  let at = 2;
+  let dropped = false;
+  // Segments up to the start of the scan, each a marker and a length.
+  while (at + 4 <= bytes.length && bytes[at] === 0xff) {
+    const marker = bytes[at + 1];
+    if (marker === 0xda || marker === 0xd9) break;
+    const end = at + 2 + ((bytes[at + 2] << 8) | bytes[at + 3]);
+    if (end > bytes.length) break;
+    const exif = marker === 0xe1 && end - at >= 10 && bytes[at + 4] === 0x45
+      && bytes[at + 5] === 0x78 && bytes[at + 6] === 0x69 && bytes[at + 7] === 0x66
+      && bytes[at + 8] === 0;
+    if (exif) dropped = true;
+    else keep.push(bytes.subarray(at, end));
+    at = end;
+  }
+  if (!dropped) return bytes;
+  keep.push(bytes.subarray(at));
+  return new Blob(keep);
+}
 
 // The image of a list item to draw, or undefined while it is not ready
 // (the page is drawn again when it is); null when it cannot be shown.
@@ -255,14 +283,17 @@ const IMAGE_RETRIES = 3;
 function imageOf(item) {
   if (item.key === null) item.key = contentHash(item.bytes);
   const key = item.key;
-  if (imageCache.has(key)) {
-    const cached = imageCache.get(key);
-    return cached && cached.source;
-  }
-  imageCache.set(key, undefined);
-  // Settles the request, unless the image was dropped meanwhile.
+  const cached = imageCache.get(key);
+  if (cached) return cached.pending ? undefined : cached.source;
+  const request = {};
+  imageCache.set(key, { pending: request });
+  // Whether this request is still the one the cache waits for.
+  const current = () => {
+    const entry = imageCache.get(key);
+    return entry !== undefined && entry.pending === request;
+  };
   const settle = (source) => {
-    if (!imageCache.has(key) || imageCache.get(key) !== undefined) {
+    if (!current()) {
       if (source && source.close) source.close();
       return;
     }
@@ -270,7 +301,9 @@ function imageOf(item) {
     repaintImages();
   };
   if (item.format < RASTER_TYPES.length) {
-    createImageBitmap(new Blob([item.bytes], { type: RASTER_TYPES[item.format] })).then(
+    const type = RASTER_TYPES[item.format];
+    const bytes = item.format === 0 ? withoutExif(item.bytes) : item.bytes;
+    createImageBitmap(new Blob([bytes], { type })).then(
       (bitmap) => settle(bitmap),
       () => settle(null), // Bytes that do not decode never will.
     );
@@ -278,20 +311,21 @@ function imageOf(item) {
     const img = new Image();
     img.decoding = "async";
     img.onload = () => {
-      imageFailures.delete(key);
+      if (current()) imageFailures.delete(key);
       settle(img);
     };
     img.onerror = () => {
+      if (!current()) return;
       // A failure that may pass (the network, the server): fetched again
-      // after a while, a few times, waiting longer each time.
+      // after a while, a few times, waiting longer each time; after that,
+      // with the next revision.
       const failures = (imageFailures.get(key) || 0) + 1;
       imageFailures.set(key, failures);
       if (failures > IMAGE_RETRIES) return settle(null);
       setTimeout(() => {
-        if (imageCache.has(key) && imageCache.get(key) === undefined) {
-          imageCache.delete(key);
-          repaintImages();
-        }
+        if (!current()) return;
+        imageCache.delete(key);
+        repaintImages();
       }, RETRY_AFTER * 2 ** (failures - 1));
     };
     img.src = `/figure/${key}.svg?token=${encodeURIComponent(token)}`;
@@ -299,6 +333,16 @@ function imageOf(item) {
     imageCache.set(key, { source: null }); // A format of a later version.
   }
   return undefined;
+}
+
+// Figures that could not be fetched are asked for again with each
+// revision.
+function retryFailedImages() {
+  for (const key of imageFailures.keys()) {
+    const entry = imageCache.get(key);
+    if (entry && !entry.pending && entry.source === null) imageCache.delete(key);
+    imageFailures.delete(key);
+  }
 }
 
 // Draws again the pages with images, once one is ready or asked for again.
@@ -318,7 +362,7 @@ function pruneImages() {
   }
   for (const [key, entry] of imageCache) {
     if (used.has(key)) continue;
-    if (entry && entry.source && entry.source.close) entry.source.close();
+    if (entry.source && entry.source.close) entry.source.close();
     imageCache.delete(key);
     imageFailures.delete(key);
   }
@@ -516,12 +560,17 @@ function draw(page) {
       page.images = true;
       const source = imageOf(item);
       if (source === undefined) waiting = true;
-      else if (source) {
+      else if (source && item.rect.width > 0 && item.rect.height > 0) {
         const { x, y, width: w, height: h } = item.rect;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(source, x * scale, y * scale, w * scale, h * scale);
+        try {
+          ctx.drawImage(source, x * scale, y * scale, w * scale, h * scale);
+        } catch (e) {
+          // An image the browser cannot draw (an SVG without a size) is
+          // left out, and the rest of the page is drawn.
+        }
       }
     } else if (item.kind === "glyphs") {
       complete = drawGlyphs(ctx, item, scale) && complete;
@@ -898,6 +947,7 @@ function apply({ update, frames }) {
     }
     // A span map changes nothing that is drawn.
   }
+  retryFailedImages();
   if (fitting || !zoom) zoom = fitZoom();
   for (const page of pages) if (page) layoutPage(page);
   diagnostics = update.diagnostics || [];

@@ -255,7 +255,8 @@ const FIGURE_POLICY: &str = "default-src 'none'; img-src data:; style-src 'unsaf
 /// figure. Its root does not keep the aspect ratio, so that a client may
 /// stretch it to any other box, as the figure is stretched to its box.
 async fn figure(shared: &Shared, hash: &str) -> Vec<u8> {
-    let Some(hash) = (hash.len() == 16)
+    let digits = |s: &str| s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let Some(hash) = (hash.len() == 16 && digits(hash))
         .then(|| u64::from_str_radix(hash, 16).ok())
         .flatten()
     else {
@@ -269,17 +270,6 @@ async fn figure(shared: &Shared, hash: &str) -> Vec<u8> {
             svg.as_bytes(),
         )
     };
-    let kept = |figures: &Vec<(u64, Arc<str>)>| {
-        figures
-            .iter()
-            .find(|(h, _)| *h == hash)
-            .map(|(_, svg)| svg.clone())
-    };
-    // A figure is converted once while it is among the last ones asked for,
-    // whatever the revision: its content hash names its bytes.
-    if let Some(svg) = shared.figures.lock().ok().and_then(|f| kept(&f)) {
-        return answer(&svg);
-    }
     let published = shared.published.borrow().clone();
     let found = published.pages.iter().find_map(|entry| {
         entry
@@ -302,6 +292,18 @@ async fn figure(shared: &Shared, hash: &str) -> Vec<u8> {
     let Some(image) = found else {
         return http::error("404 Not Found");
     };
+    // A figure is converted once while it is among the last ones asked
+    // for: its content hash names its bytes. The one found moves to the end.
+    let kept = |figures: &mut Vec<(u64, Arc<str>)>| {
+        let i = figures.iter().position(|(h, _)| *h == hash)?;
+        let entry = figures.remove(i);
+        let svg = entry.1.clone();
+        figures.push(entry);
+        Some(svg)
+    };
+    if let Some(svg) = shared.figures.lock().ok().and_then(|mut f| kept(&mut f)) {
+        return answer(&svg);
+    }
     let fonts = published.fonts.clone();
     let converted = tokio::task::spawn_blocking(move || {
         let rect = folio_render::Rect {
@@ -331,7 +333,7 @@ async fn figure(shared: &Shared, hash: &str) -> Vec<u8> {
     };
     let svg: Arc<str> = svg.into();
     if let Ok(mut figures) = shared.figures.lock()
-        && kept(&figures).is_none()
+        && kept(&mut figures).is_none()
     {
         if figures.len() == FIGURES_KEPT {
             figures.remove(0);

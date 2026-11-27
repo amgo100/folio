@@ -140,7 +140,8 @@
 //! past it are left out, and the count says how many it holds.
 //!
 //! Images arrive in the display lists with their files' bytes. A client
-//! decodes JPEG, PNG, WebP and GIF itself, and asks for SVG and PDF
+//! decodes JPEG, PNG, WebP and GIF itself (a JPEG as stored, without
+//! turning it by its Exif orientation, which PDF output ignores), and asks for SVG and PDF
 //! figures as SVG through `/figure/<hash>.svg`: `<hash>` is the content
 //! hash of the file's bytes (`Image::content_hash` of `folio-component`)
 //! as 16 lowercase hexadecimal digits. The answer is the SVG that
