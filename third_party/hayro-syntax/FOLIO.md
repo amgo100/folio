@@ -19,6 +19,31 @@ a comment that starts with `Folio:`.
   did without the `std` feature, instead of calling `powi`, whose result
   the language leaves unspecified.
 
+Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
+#333). These changes bound what reading one may take:
+
+- `src/lib.rs`: `MAX_NESTING` (256), the deepest arrays and dictionaries
+  are read, and `MAX_IMAGE_BYTES` (256 MiB, 8,192 × 8,192 pixels at four
+  bytes), the most memory the images of one interpretation may take
+  decoded, which `hayro-interpret` and Folio's image reader apply.
+- `src/byte_reader.rs`: the reader counts how many arrays and dictionaries
+  it is inside, and `Reader::nest` refuses one more past `MAX_NESTING`, so
+  that 100,000 nested `[` no longer overflow the stack.
+- `src/object/array.rs`, `src/object/dict.rs`: skipping an array or a
+  dictionary, and reading a dictionary whole, go through `Reader::nest`.
+- `src/object/array.rs`: an array item that cannot be read ends the
+  iteration instead of panicking (an input found by Folio's `image` fuzz
+  target, through `hayro-write`).
+- `src/filter/jpx.rs`, `src/filter/jbig2.rs`, `src/filter/ccitt.rs`,
+  `src/filter/mod.rs`, `src/object/stream.rs`: an image whose own header
+  (JPEG 2000, JBIG2) or decode parameters (CCITT) say it would take more
+  than `MAX_IMAGE_BYTES` decoded, at four bytes a pixel or more, is not
+  decoded, and fails with a new `DecodeFailure::ImageTooLarge`; its size
+  there need not match the image dictionary's, which `hayro-interpret`
+  checks.
+- `src/object/dict.rs`: `Dict::entries` leaves out an entry that cannot be
+  read instead of panicking, as the array iterator does.
+
 The whole change is `third_party/patches/hayro-syntax.patch` in Folio's repository;
 `scripts/patch-third-party.sh` rebuilds this directory from the release and
 the patch, and `third_party/README.md` says how to move to a new release.

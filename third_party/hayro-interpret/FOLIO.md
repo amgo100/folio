@@ -31,6 +31,35 @@ a comment that starts with `Folio:`.
   `libm::ldexpf` instead of `powi`.
 - `Cargo.toml`: depends on `libm`.
 
+Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
+#333). These changes limit the work, nesting and image memory one
+interpretation of a page may take (decompressed streams are not limited
+yet, Folio #376), and report each limit reached through the settings'
+warning sink, so that Folio can refuse the figure:
+
+- `src/cache.rs`: the object cache, which every nested context of one
+  interpretation shares, carries a `Budget`: the work done (an operator
+  is one unit, a form XObject, pattern, soft mask, Type 3 glyph or image
+  drawing 50) up
+  to `MAX_WORK` (10,000,000), the bytes of the images decoded up to
+  `hayro_syntax::MAX_IMAGE_BYTES` (an image counts once, however often it
+  is drawn: an image object by its id, an inline image by its dictionary
+  and data; one refused takes nothing; every decoding also spends a unit
+  of work a kilobyte).
+- `src/interpret/mod.rs`: three new warnings, `FormCycle`, `TooComplex`
+  and `ImageTooLarge`; `interpret` spends a unit of work for each
+  operator and stops when the work is used up.
+- `src/context.rs`: a nested context and a form XObject spend work; each
+  context keeps the form XObjects it is drawing (`forms`).
+- `src/x_object.rs`: a form XObject that its context is already drawing,
+  one that draws itself, is not drawn again (`FormCycle`; a pattern or
+  soft mask starts a context of its own, whose depth hayro limits); before an image is
+  decoded, its size at four bytes a pixel or more (its components and bits
+  per component) is taken from what is left of `MAX_IMAGE_BYTES`, and an
+  image that does not fit is not drawn (`ImageTooLarge`, also sent when
+  `hayro-syntax` refuses an image by its own header); an image whose data
+  gives it more pixels than its dictionary takes the rest after decoding.
+
 The whole change is `third_party/patches/hayro-interpret.patch` in Folio's repository;
 `scripts/patch-third-party.sh` rebuilds this directory from the release and
 the patch, and `third_party/README.md` says how to move to a new release.

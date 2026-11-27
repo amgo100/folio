@@ -1,0 +1,4 @@
+#let a = range(200000)
+#let b = ()
+#let i = 0
+#while i < 3000 { b.push(a.rev()); i += 1 }
