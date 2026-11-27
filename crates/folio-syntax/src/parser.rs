@@ -21,6 +21,18 @@ pub(super) use self::style::{reparse_style_block, reparse_stylesheet_items};
 // Picked by gut feeling.
 const MAX_DEPTH: u32 = 256;
 
+/// How tall an operator chain may make the tree (#380). Nesting alone within
+/// `MAX_DEPTH` makes a tree about three levels tall per level of depth (766
+/// for `#f(` nested 255 times), and short operator chains at each level of
+/// a formula make it up to about five (`a(…)^2/x` nested). This leaves room
+/// for both, so in practice only a long chain reaches it; math that deep is
+/// past the evaluator's limit of 100 rows in any case. The bound depends on
+/// nothing around the chain, only on its operands. A cut chain is an error,
+/// and the reparser parses in full an edit to a tree with an error or one
+/// that makes one (`reparser::reusable`), so an incremental reparse decides
+/// as a full parse does.
+const MAX_CHAIN_HEIGHT: usize = 8 * MAX_DEPTH as usize;
+
 /// Parses a source file as top-level markup.
 pub fn parse(text: &str) -> SyntaxNode {
     let mut p = Parser::new(text, 0, SyntaxMode::Markup);
@@ -285,7 +297,20 @@ fn math_expr(p: &mut Parser<'_>) {
 
 /// Parses a math expression with at least the given precedence, possibly
 /// chaining with another operator by returning early.
+///
+/// Every operator the loop here wraps around its left operand makes the tree
+/// one level taller without a deeper call, so a chain such as `x/x/…/x`
+/// stops once what it has wrapped is [`MAX_CHAIN_HEIGHT`] tall, and the rest
+/// of the chain becomes one error ([`math_chain_error`]). A right-associative
+/// chain such as `x^x^…^x` nests calls and stops at the depth limit in the
+/// same way. The tree stays shallow, so the recursive walks of later stages
+/// (numbering, evaluation, dropping) do not overflow the stack.
 fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
+    if p.depth >= MAX_DEPTH {
+        // An operand at the limit: the operand of `^` in a long `x^x^…`.
+        math_chain_error(p, None, min_prec, stop_set);
+        return;
+    }
     let Some(p) = &mut p.increase_depth() else {
         return;
     };
@@ -359,12 +384,21 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
 
     // Parse infix and postfix operators. The general form of a parsed op looks
     // like: `MathAttach[ MathText("x"), Hat("^"), MathText("2") ]`.
+    let mut wrapped = false;
     while !p.at_set(stop_set)
         && let op_kind = p.current()
         && let had_trivia = p.had_trivia()
         && let Some((wrapper, infix_assoc, prec)) = math_op(op_kind, had_trivia)
         && prec >= min_prec
     {
+        // Another wrap would make the tree too tall: `x/x/…/x`. The first
+        // wrap is free, as for any construct, so that a single operator
+        // never fails.
+        if wrapped && p.too_tall(m) {
+            math_chain_error(p, Some(m), min_prec, stop_set);
+            break;
+        }
+
         // Prepare a chaining set for the attachment operators.
         let mut chain_set = if wrapper == SyntaxKind::MathAttach {
             // Hat can chain with Underscore, Underscore can chain with Hat, and
@@ -413,6 +447,117 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
 
         // Finish the operator by wrapping from its left operand.
         p.wrap(m, wrapper);
+        wrapped = true;
+    }
+}
+
+/// Parses the rest of a math operator chain that reached the depth limit as
+/// one error: from an operand here (`x^x^…`) or, when `from` is given, from
+/// the chain so far there, which the error takes in, to an operator here
+/// (`/x/x…`). Either way the error stands where an operand stands, so the
+/// nodes around it keep their shape.
+///
+/// It takes operators and their operands token by token without nesting, so
+/// the chain gives one error and the parser goes no deeper, however long the
+/// chain. An operand is one token, or a bracketed group with the brackets
+/// directly after it (`f(x)`), or embedded code, which is parsed as code. As
+/// in a regular parse, it may be a closing bracket, a line break or an
+/// alignment point. The chain ends before anything else, a label or the end
+/// of the equation, which the enclosing sequence then parses, and before an
+/// operator that binds less tightly than `min_prec`, which an enclosing
+/// operator takes. At the depth limit, operators that would end a nested
+/// operand in a regular parse, such as the `_` after `b` in `a^b_c`, are
+/// part of the chain: the error takes them too. A chain cut by its height
+/// stops before them (`stop_set`), as a regular parse does.
+fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8, stop_set: SyntaxSet) {
+    let m = from.unwrap_or_else(|| p.marker());
+    if from.is_none() && !math_chain_operand(p) {
+        // Nothing here can be an operand (a label or the end of the
+        // equation): a regular parse would say so too.
+        p.expected("expression");
+        return;
+    }
+    // Cut by its height, the chain is where the parser has room, so what
+    // ends its operand in a regular parse (the `^` after `b` in `a_b!!…^c`)
+    // ends the error too. At the depth limit, the error takes such operators
+    // in: the enclosing operator would take them with another operand at
+    // the limit, and give another error.
+    while from.is_none_or(|_| !p.at_set(stop_set))
+        && let Some((_, assoc, prec)) = math_op(p.current(), p.had_trivia())
+        && prec >= min_prec
+    {
+        if p.at(SyntaxKind::Bang) {
+            p.convert_and_eat(SyntaxKind::MathText);
+        } else {
+            p.eat();
+        }
+        if assoc.is_some() && !math_chain_operand(p) {
+            break;
+        }
+    }
+    p.wrap_error(
+        m,
+        if from.is_some() {
+            CHAIN_TOO_LONG
+        } else {
+            TOO_DEEP
+        },
+    );
+}
+
+/// The error of a chain cut by its height ([`MAX_CHAIN_HEIGHT`]).
+const CHAIN_TOO_LONG: &str = "operator chain is too long";
+
+/// The error of what is parsed past the depth limit ([`MAX_DEPTH`]).
+const TOO_DEEP: &str = "maximum parsing depth exceeded";
+
+/// Eats one operand of a chain for [`math_chain_error`]: a token or a
+/// bracketed group, then the groups directly after it. Returns `false`, having
+/// eaten nothing, when no operand starts here.
+fn math_chain_operand(p: &mut Parser<'_>) -> bool {
+    const END: SyntaxSet = syntax_set!(Dollar, End, Label);
+    if p.at_set(END) {
+        return false;
+    }
+    // A root takes the operand after it, as in a regular parse: `√x`.
+    while p.at(SyntaxKind::Root) {
+        p.eat();
+        if p.at_set(END) {
+            return true;
+        }
+    }
+    math_chain_group(p);
+    while !p.had_trivia() && p.at_set(syntax_set!(LeftBrace, LeftParen)) {
+        math_chain_group(p);
+    }
+    true
+}
+
+/// Eats a token, or a bracketed group to its closing bracket. It stops early
+/// only at the end of the equation. Embedded code inside a group is parsed
+/// as code, so that a `$` or a quote in it is read in its own mode.
+fn math_chain_group(p: &mut Parser<'_>) {
+    let mut balance: usize = 0;
+    loop {
+        if p.at_set(syntax_set!(Dollar, End)) {
+            break;
+        }
+        if p.at(SyntaxKind::Hash) {
+            math_chain_code(p);
+            if balance == 0 {
+                break;
+            }
+            continue;
+        }
+        if p.at_set(syntax_set!(LeftBrace, LeftParen)) {
+            balance += 1;
+        } else if p.at_set(syntax_set!(RightBrace, RightParen)) {
+            balance = balance.saturating_sub(1);
+        }
+        p.eat();
+        if balance == 0 {
+            break;
+        }
     }
 }
 
@@ -444,6 +589,37 @@ fn is_math_alphabetic(text: &str) -> bool {
         text.chars().all(char::is_alphabetic)
     }
 }
+
+/// Parses embedded code inside a chain's error ([`math_chain_group`]). The
+/// parser is at the depth limit there, so the code is parsed with
+/// [`CHAIN_CODE_DEPTH`] levels of room below it. Code in the error of a chain
+/// in that code gets the room again, up to [`CHAIN_CODE_NESTING`] times, so
+/// the parser's calls stay bounded; past that, its code is read as math
+/// tokens. A chain cut by its height rather than at the depth limit leaves
+/// room enough: its code is parsed as usual and does not count.
+fn math_chain_code(p: &mut Parser<'_>) {
+    let depth = p.depth;
+    if depth <= MAX_DEPTH - CHAIN_CODE_DEPTH {
+        embedded_code_expr(p);
+        return;
+    }
+    if p.chain_code >= CHAIN_CODE_NESTING {
+        p.eat();
+        return;
+    }
+    p.depth = MAX_DEPTH - CHAIN_CODE_DEPTH;
+    p.chain_code += 1;
+    embedded_code_expr(p);
+    p.chain_code -= 1;
+    p.depth = depth;
+}
+
+/// The room below the depth limit for embedded code in a chain's error.
+const CHAIN_CODE_DEPTH: u32 = 32;
+
+/// How often embedded code in chain errors within one another gets that
+/// room ([`math_chain_code`]).
+const CHAIN_CODE_NESTING: u32 = 4;
 
 /// Parse matched delimiters in math: `[x + y]`.
 ///
@@ -626,6 +802,13 @@ fn code_expr(p: &mut Parser<'_>) {
 }
 
 /// Parses a code expression with at least the given precedence.
+///
+/// Every call, field access and binary operator the loop here wraps around
+/// its left operand makes the tree one level taller without a deeper call.
+/// Once what it has wrapped is [`MAX_CHAIN_HEIGHT`] tall, the rest of the
+/// chain (`x + x + …`, `f()()…`) is parsed without wrapping and becomes one
+/// error. The tree stays shallow, so the
+/// recursive walks of later stages do not overflow the stack.
 fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
     let Some(p) = &mut p.increase_depth() else {
         return;
@@ -654,6 +837,23 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
         }
     }
 
+    // Where the rest of a chain past the limit starts, once it is parsed
+    // flat. The whole chain then becomes one error, which stands where the
+    // expression stands, if anything follows there.
+    let mut chain_error = None;
+    let wrap =
+        |p: &mut Parser<'_>, kind: SyntaxKind, chain_error: &mut Option<(Marker, &'static str)>| {
+            if chain_error.is_some() {
+                return;
+            }
+            p.wrap(m, kind);
+            if p.too_tall(m) {
+                // The next wrap would make the tree too tall: parse the rest
+                // flat.
+                *chain_error = Some((p.marker(), CHAIN_TOO_LONG));
+            }
+        };
+
     loop {
         // In a stylesheet value, a name directly followed by an attribute
         // test is a selector: `slide-break: heading[level=2], slide;`. In
@@ -669,8 +869,18 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
         }
 
         if p.directly_at(SyntaxKind::LeftParen) || p.directly_at(SyntaxKind::LeftBracket) {
+            let start = p.marker();
             args(p);
-            p.wrap(m, SyntaxKind::FuncCall);
+            // Arguments parsed past the depth limit, as in a long
+            // `f(x)(x)…` there: parse the rest flat, rather than give an
+            // error for each call. Calls whose arguments parse are no error.
+            if chain_error.is_none()
+                && p.depth >= MAX_DEPTH
+                && p.nodes.get(start.0).is_some_and(|n| n.diagnosis().errors)
+            {
+                chain_error = Some((start, TOO_DEEP));
+            }
+            wrap(p, SyntaxKind::FuncCall, &mut chain_error);
             continue;
         }
 
@@ -683,7 +893,7 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
 
         if p.eat_if(SyntaxKind::Dot) {
             p.expect(SyntaxKind::Ident);
-            p.wrap(m, SyntaxKind::FieldAccess);
+            wrap(p, SyntaxKind::FieldAccess, &mut chain_error);
             continue;
         }
 
@@ -698,6 +908,7 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
             break;
         }
 
+        let op_start = p.marker();
         let binop = if p.at_set(set::BINARY_OP) {
             ast::BinOp::from_kind(p.current())
         } else if min_prec <= ast::BinOp::NotIn.precedence() && p.eat_if(SyntaxKind::Not) {
@@ -722,13 +933,26 @@ fn code_expr_prec(p: &mut Parser<'_>, atomic: bool, min_prec: u8) {
                 ast::Assoc::Right => {}
             }
 
+            // The operand would be parsed past the depth limit, as in a long
+            // `x = x = …` there: parse the rest flat, rather than give an
+            // error for each operator.
+            if chain_error.is_none() && p.depth >= MAX_DEPTH {
+                chain_error = Some((op_start, TOO_DEEP));
+            }
+
             p.eat();
             code_expr_prec(p, false, prec);
-            p.wrap(m, SyntaxKind::Binary);
+            wrap(p, SyntaxKind::Binary, &mut chain_error);
             continue;
         }
 
         break;
+    }
+
+    if let Some((start, message)) = chain_error
+        && p.before_trivia().0 > start.0
+    {
+        p.wrap_error(m, message);
     }
 }
 
@@ -1752,6 +1976,9 @@ struct Parser<'s> {
     memo: MemoArena,
     /// The current expression nesting depth.
     depth: u32,
+    /// How many levels of embedded code in math chains' errors are being
+    /// parsed ([`math_chain_code`]).
+    chain_code: u32,
     /// Whether the parser is in a stylesheet value or render template, where
     /// a function argument can be several items, braces hold template items
     /// and a name followed by an attribute test is a selector.
@@ -1877,6 +2104,7 @@ impl<'s> Parser<'s> {
             nodes,
             memo: Default::default(),
             depth: 0,
+            chain_code: 0,
             style_values: false,
             split_signs: false,
         }
@@ -2384,6 +2612,14 @@ impl Parser<'_> {
             start -= 1;
         }
         self.nodes.drain(start..end);
+    }
+
+    /// Whether the node at `m`, the left operand of an operator chain so far,
+    /// is too tall to be wrapped once more ([`MAX_CHAIN_HEIGHT`]).
+    fn too_tall(&self, m: Marker) -> bool {
+        self.nodes
+            .get(m.0)
+            .is_some_and(|node| node.height() >= MAX_CHAIN_HEIGHT)
     }
 
     /// Check if the maximum depth has been exceeded. If so, generate an error

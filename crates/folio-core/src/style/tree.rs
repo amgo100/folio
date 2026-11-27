@@ -16,6 +16,7 @@ use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{BODY, LAYOUT_HINTS, Location, Name, QualifiedName, Target};
 use folio_syntax::ast::{self, AstNode};
 use folio_syntax::{Span, SyntaxNode};
+use folio_text::Lang;
 
 use super::computed::{ComputedStyle, Styler};
 use super::props::Properties;
@@ -66,7 +67,9 @@ pub struct Styled {
 /// A `footnote` element has one more child too, the part [`NOTE_PART`]:
 /// the style of its note, matched as the footnote and inheriting from the
 /// `doc` element rather than from the anchor, as the footnote's body does
-/// (SPEC §7.8). The text stage finds it with [`StyledNode::note_style`].
+/// (SPEC §7.8). Only `lang` follows the anchor, and `font` too where the
+/// anchor's language, by language and script, is another than the
+/// document's. The text stage finds it with [`StyledNode::note_style`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StyledNode {
     /// The element's name, or the part's.
@@ -202,6 +205,10 @@ pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
         has_scoped: false,
         order: 0,
         root_style: None,
+        default_lang: {
+            let manifest = project.manifest(db);
+            Lang::new(manifest.project.lang.v.as_str()).unwrap_or_else(Lang::english)
+        },
         variant: build.variant(db).clone(),
         target: build.target(db),
     };
@@ -364,8 +371,11 @@ struct Walker<'a> {
     /// The document order of scoped rules.
     order: u32,
     /// The computed style of the `doc` element, which the notes of
-    /// footnotes inherit from ([`NOTE_PART`]).
+    /// footnotes inherit from, but for `lang`, and `font` in another
+    /// language ([`NOTE_PART`]).
     root_style: Option<ComputedStyle>,
+    /// The manifest's language, which `lang: auto` stands for.
+    default_lang: Lang,
     variant: Option<Name>,
     target: Target,
 }
@@ -433,13 +443,25 @@ impl<'a> Walker<'a> {
             self.root_style = Some(style.clone());
         }
         // A footnote's note inherits from the document, not from its
-        // anchor, so that every note on a page looks alike; the footnote
+        // anchor, so that every note on a page looks alike, but keeps the
+        // language of the passage it is anchored in, and the passage's font
+        // where that is another language than the document's; the footnote
         // itself, which styles the marker at its anchor, inherits from the
-        // anchor (SPEC §7.8, D-327-1, D-327-3).
+        // anchor (SPEC §7.8, D-327-1, D-327-3, D-327-4, D-327-5).
         let note = match child {
             Child::Element(element) if is_footnote(element) => {
-                let root = self.root_style.clone();
-                Some(self.compute(root.as_ref(), &matched, &local))
+                let base = match (self.root_style.clone(), parent) {
+                    (Some(root), Some(anchor)) => {
+                        let props = &self.cascade.properties;
+                        let mut kept = vec![props.builtin("lang")];
+                        if !same_language(&self.language(anchor), &self.language(&root)) {
+                            kept.push(props.builtin("font"));
+                        }
+                        Some(self.styler.adopt(&root, anchor, &kept))
+                    }
+                    (root, _) => root,
+                };
+                Some(self.compute(base.as_ref(), &matched, &local))
             }
             _ => None,
         };
@@ -618,6 +640,18 @@ impl<'a> Walker<'a> {
             .unwrap_or_else(|| project.manifest(self.db).project.entry.v.clone())
     }
 
+    /// The language a style sets text in: its `lang`, or the manifest's
+    /// language where that is `auto` or not a language tag, as the text
+    /// stage reads it.
+    fn language(&self, style: &ComputedStyle) -> Lang {
+        let props = &self.cascade.properties;
+        let tag = match style.value(props, props.builtin("lang")) {
+            Some(folio_component::Value::Str(tag)) => Lang::new(tag),
+            _ => None,
+        };
+        tag.unwrap_or_else(|| self.default_lang.clone())
+    }
+
     /// The declarations an element makes for itself: its `override`
     /// fields and layout hints (SPEC §5.4), checked against their
     /// properties, lowest priority first. They rank by form, not by the
@@ -769,6 +803,28 @@ fn resolve_tokens(values: &Values<'_>, value: &Value, span: Span) -> Option<Decl
             .map(Declared::List),
         _ => Some(Declared::Value(value.clone())),
     }
+}
+
+/// Whether two language tags name one language: the same primary subtag,
+/// and the same script where both write one, whatever their regions. So
+/// `en-GB` and `en` are one, `sr` and `sr-Cyrl` too, but `sr-Latn` and
+/// `sr-Cyrl` two (SPEC §7.8).
+fn same_language(a: &Lang, b: &Lang) -> bool {
+    // The script is the subtag of four letters after the primary one,
+    // before any singleton (`x-…` and extensions), whose subtags are not
+    // scripts. `Lang::new` checked the form.
+    fn script(lang: &Lang) -> Option<&str> {
+        lang.as_str()
+            .split('-')
+            .skip(1)
+            .take_while(|subtag| subtag.len() > 1)
+            .find(|subtag| subtag.len() == 4 && subtag.bytes().all(|b| b.is_ascii_alphabetic()))
+    }
+    a.primary() == b.primary()
+        && match (script(a), script(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => true,
+        }
 }
 
 /// Whether an element is a built-in `footnote`.
