@@ -123,7 +123,9 @@ impl FontCache {
     }
 
     /// Stores a font file under its hash, unless the cache has it, and
-    /// returns the hash. The file is written to a temporary file of its own
+    /// returns the hash. A file under that name that `insert` did not
+    /// write, such as one copied in by hand, is replaced. The file is
+    /// written to a temporary file of its own
     /// and given the modification time that marks it as written here
     /// ([`stamp`]), then renamed into place and made read-only, so a reader
     /// never sees it half-written and nothing changes it afterwards. Until
@@ -131,7 +133,8 @@ impl FontCache {
     pub fn insert(&self, data: &[u8]) -> io::Result<FontHash> {
         let hash = FontHash::of(data);
         let path = self.path(hash);
-        if path.exists() {
+        let stored = || fs::metadata(&path).is_ok_and(|meta| written_by_insert(&meta, hash));
+        if stored() {
             return Ok(hash);
         }
         fs::create_dir_all(&self.dir)?;
@@ -151,7 +154,7 @@ impl FontCache {
         if result.is_err() {
             let _ = fs::remove_file(&temp);
             // Another process may have stored the same file meanwhile.
-            if path.exists() {
+            if stored() {
                 return Ok(hash);
             }
         }
@@ -227,9 +230,10 @@ mod map {
         // gives it. `insert` writes each file once to a temporary file of
         // its own, renames it into place under the hash of its contents and
         // makes it read-only, and never writes to a file that exists; a copy
-        // that keeps both marks is read-only too. Any other file, such as one copied into the cache by hand, is read
-        // into memory instead, as is a mapped file whose contents do not
-        // have its hash. What remains is a file changed from outside
+        // that keeps both marks is read-only too. Any other file, such as
+        // one copied into the cache by hand, is read into memory instead,
+        // as is a mapped file whose contents do not have its hash. What
+        // remains is a file changed from outside
         // Folio, against its read-only permission, while a compile runs:
         // the risk accepted by every program that maps fonts, and the
         // reason only these files are mapped (SPEC §2.5, §14.2).
@@ -323,6 +327,11 @@ mod tests {
         let again = cache.get(hash).unwrap().unwrap();
         assert_eq!(again.data().len(), 16);
         assert_ne!(again.hash(), hash);
+
+        // Storing the font replaces the file that `insert` did not write.
+        assert_eq!(cache.insert(font.data()).unwrap(), hash);
+        assert!(written_by_insert(&fs::metadata(&path).unwrap(), hash));
+        assert_eq!(&**cache.get(hash).unwrap().unwrap().data(), &**font.data());
     }
 
     /// Read-only is not enough: a file is mapped only with the

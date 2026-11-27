@@ -435,9 +435,18 @@ fn check_locked(
             "`folio.lock` locks {}, but {origin} has {hash}",
             locked.hash.v
         ))
-        .with_hint(
-            "the file changed since it was locked: restore the locked file, or lock the new one",
-        ),
+        .with_hint(if *origin == FontOrigin::Cache {
+            // The cache finds a file by the hash it is locked by, so
+            // locking the other hash would not find it.
+            eco_format!(
+                "the font cache file `fonts/{}` in {CACHE_DIR} holds another file: \
+                 replace it with the locked file, or delete it",
+                folio_fonts::FontHash(want).hex()
+            )
+        } else {
+            "the file changed since it was locked: restore the locked file, or lock the new one"
+                .into()
+        }),
         None => Diagnostic::error(
             locked.postscript_name.span,
             eco_format!(

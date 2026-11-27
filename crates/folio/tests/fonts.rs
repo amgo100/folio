@@ -311,6 +311,15 @@ fn a_cache_file_with_another_font() {
             FontHash::of(&data)
         )
     );
+    assert_eq!(
+        error.hints[1],
+        format!(
+            "the font cache file `fonts/{}` in Folio's cache directory (`$FOLIO_CACHE_DIR`, \
+             by default `folio` in the user's cache directory) holds another file: replace it \
+             with the locked file, or delete it",
+            locked.hex()
+        )
+    );
 }
 
 /// A system font that is a copy of a bundled file in a directory of its own.
