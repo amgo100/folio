@@ -10,7 +10,7 @@
 //! | --- | --- | --- |
 //! | `markup` | content markup | the parse is lossless |
 //! | `stylesheet` | a stylesheet | the parse is lossless |
-//! | `reparse` | an edit to markup or a stylesheet | incremental reparsing equals a full parse; node identities follow the edit |
+//! | `reparse` | a sequence of edits to markup or a stylesheet | after each, incremental reparsing equals a full parse; node identities follow the edit |
 //! | `style` | content and a stylesheet | evaluation, the cascade and selector matching finish without a panic |
 //! | `nesting` | wrappers and how often to apply each | a script that nests values that deeply compiles to PDF on a small stack, or reports the nesting limit, without a panic or an overflow |
 //! | `document` | content markup | evaluation and the document tree finish without a panic, with no stylesheet |
@@ -97,7 +97,8 @@ fn check_lossless(root: &SyntaxNode, text: &str) {
     lengths(root);
 }
 
-/// An edit to a file, as [`reparse`] reads it from bytes.
+/// An edit to a file, and the edits that follow it, as [`reparse`] reads
+/// them from bytes.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Edit {
     /// Whether the file is a stylesheet rather than content.
@@ -109,57 +110,153 @@ pub struct Edit {
     pub range: Range<usize>,
     /// What replaces them.
     pub with: String,
+    /// The edits made after this one, in order, each to the text the one
+    /// before it left.
+    pub then: Vec<Step>,
+}
+
+/// An edit after the first of an [`Edit`], placed by characters so that it
+/// fits whatever text the edits before it left.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Step {
+    /// The character the replaced range starts at, wrapped to the text's
+    /// length in characters.
+    pub at: usize,
+    /// How many characters it replaces (up to 15), stopping at the end.
+    pub len: usize,
+    /// What replaces them.
+    pub with: String,
+}
+
+/// How many [`Step`]s [`Edit::decode`] reads at most, so that one input
+/// stays fast.
+pub const MAX_STEPS: usize = 32;
+
+/// The start of a [`Step`] that a character encodes: its code point less
+/// one, not counting the surrogates, so that every start up to the last
+/// has a character.
+fn step_start(c: char) -> usize {
+    let cp = c as usize;
+    cp.saturating_sub(1) - if cp > 0xDFFF { 0x800 } else { 0 }
+}
+
+/// The character that encodes the start of a [`Step`] ([`step_start`]).
+fn step_char(at: usize) -> Option<char> {
+    let cp = at.checked_add(1)?;
+    let cp = if cp >= 0xD800 {
+        cp.checked_add(0x800)?
+    } else {
+        cp
+    };
+    char::from_u32(u32::try_from(cp).ok()?)
+}
+
+impl Step {
+    /// The range of `text` this step replaces.
+    pub fn range(&self, text: &str) -> Range<usize> {
+        let boundaries: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain([text.len()])
+            .collect();
+        let first = self.at % boundaries.len();
+        let last = (first + self.len % 16).min(boundaries.len() - 1);
+        boundaries[first]..boundaries[last]
+    }
 }
 
 impl Edit {
-    /// Reads an edit: a flags byte (bit 0: a stylesheet), the start of the
-    /// range as two bytes (little-endian, wrapped to the text's length),
-    /// the range's length in characters as one byte (up to 15), then the
-    /// text, and after a NUL byte, the replacement. `None` when the bytes
-    /// are too few or not UTF-8.
+    /// Reads an edit: a flags byte (bit 0: a stylesheet; bit 1: a sequence),
+    /// the start of the range as two bytes (little-endian, wrapped to the
+    /// text's length), the range's length in characters as one byte (up to
+    /// 15), then the text, and after a NUL byte, the replacement. In a
+    /// sequence, the replacement ends at the next NUL, and each part after
+    /// a further NUL is a [`Step`]: a character that says where it starts
+    /// (its code point less one, not counting the surrogates), a character whose code point modulo 16 is how
+    /// many characters it replaces, and the replacement (parts of fewer
+    /// than two characters are skipped; up to [`MAX_STEPS`]). `None` when
+    /// the bytes are too few or not UTF-8.
     pub fn decode(data: &[u8]) -> Option<Self> {
         let [flags, lo, hi, len, rest @ ..] = data else {
             return None;
         };
         let rest = std::str::from_utf8(rest).ok()?;
         let (text, with) = rest.split_once('\0').unwrap_or((rest, ""));
-        let boundaries: Vec<usize> = text
-            .char_indices()
-            .map(|(i, _)| i)
-            .chain([text.len()])
-            .collect();
-        let first = usize::from(u16::from_le_bytes([*lo, *hi])) % boundaries.len();
-        let last = (first + usize::from(len % 16)).min(boundaries.len() - 1);
+        let (with, then) = if flags & 2 == 2 {
+            let mut parts = with.split('\0');
+            let with = parts.next().unwrap_or("");
+            let then = parts
+                .filter_map(|part| {
+                    let mut chars = part.chars();
+                    let at = chars.next()?;
+                    let len = chars.next()?;
+                    Some(Step {
+                        at: step_start(at),
+                        len: len as usize % 16,
+                        with: chars.as_str().to_string(),
+                    })
+                })
+                .take(MAX_STEPS)
+                .collect();
+            (with, then)
+        } else {
+            (with, Vec::new())
+        };
+        let first = Step {
+            at: usize::from(u16::from_le_bytes([*lo, *hi])),
+            len: usize::from(*len),
+            with: String::new(),
+        };
         Some(Self {
             stylesheet: flags & 1 == 1,
             text: text.to_string(),
-            range: boundaries[first]..boundaries[last],
+            range: first.range(text),
             with: with.to_string(),
+            then,
         })
     }
 
     /// The bytes that [`Edit::decode`] reads as this edit, if its range is on
-    /// character boundaries of a text of at most 65,535 characters without
-    /// a NUL, and it spans at most 15 characters.
+    /// character boundaries of a text of at most 65,535 characters, it spans
+    /// at most 15 characters, the text holds no NUL, and in a sequence no
+    /// replacement does either, and every step replaces at most 15
+    /// characters and starts before the character 1,112,063.
     pub fn encode(&self) -> Option<Vec<u8>> {
-        if self.text.contains('\0') {
+        // A NUL ends the text, and in a sequence each replacement.
+        let sequence = !self.then.is_empty();
+        let mut separated = self.then.iter().map(|step| &step.with);
+        if self.text.contains('\0')
+            || (sequence && (self.with.contains('\0') || separated.any(|w| w.contains('\0'))))
+        {
             return None;
         }
         let first = self.text.get(..self.range.start)?.chars().count();
         let len = self.text.get(self.range.clone())?.chars().count();
         let first = u16::try_from(first).ok()?;
         let len = u8::try_from(len).ok().filter(|len| *len < 16)?;
-        let mut out = vec![u8::from(self.stylesheet)];
+        let mut out = vec![u8::from(self.stylesheet) | (u8::from(sequence) << 1)];
         out.extend(first.to_le_bytes());
         out.push(len);
         out.extend(self.text.as_bytes());
         out.push(0);
         out.extend(self.with.as_bytes());
+        for step in &self.then {
+            if step.len >= 16 {
+                return None;
+            }
+            let at = step_char(step.at)?;
+            let len = char::from_u32(u32::try_from(16 + step.len).ok()?)?;
+            out.push(0);
+            out.extend(at.to_string().as_bytes());
+            out.extend(len.to_string().as_bytes());
+            out.extend(step.with.as_bytes());
+        }
         Some(out)
     }
 
-    /// Applies the edit incrementally, and checks the tree against a full
-    /// parse of the new text and the node identities against the edit.
+    /// Applies the edit and then its steps incrementally, and checks after
+    /// each the tree against a full parse of the new text and the node
+    /// identities against the edit.
     pub fn check(&self) {
         let (mut source, full): (Source, fn(&str) -> SyntaxNode) = if self.stylesheet {
             (
@@ -171,36 +268,46 @@ impl Edit {
         };
         let mut ids = NodeIds::new();
         ids.insert(source.root());
-        let old = source.root().clone();
-        source.edit(self.range.clone(), &self.with);
-        let mut new_text = self.text.clone();
-        new_text.replace_range(self.range.clone(), &self.with);
-        assert_eq!(source.text(), new_text);
-        assert_eq!(source.root().full_text(), new_text);
-        assert!(
-            source.root().spanless_eq(&full(&new_text)),
-            "incremental reparse differs from a full parse after replacing {:?} with {:?}",
-            self.range,
-            self.with
-        );
-        ids.update(&old, source.root());
-        // Every node of the new tree has an identity, and it leads back to
-        // the node.
-        fn walk(node: &SyntaxNode, ids: &NodeIds) -> usize {
-            let span = node.span();
-            assert!(!span.is_detached(), "{:?} has no span", node.kind());
-            let id = ids
-                .id(span)
-                .unwrap_or_else(|| panic!("{:?} has no identity", node.kind()));
-            assert_eq!(ids.span(id), Some(span), "an identity leads elsewhere");
-            1 + node.children().map(|child| walk(child, ids)).sum::<usize>()
+        let mut text = self.text.clone();
+        let steps = std::iter::once(None).chain(self.then.iter().map(Some));
+        for (i, step) in steps.enumerate() {
+            let (range, with) = match step {
+                None => (self.range.clone(), self.with.as_str()),
+                Some(step) => (step.range(&text), step.with.as_str()),
+            };
+            let old = source.root().clone();
+            source.edit(range.clone(), with);
+            text.replace_range(range.clone(), with);
+            assert_eq!(source.text(), text);
+            assert_eq!(source.root().full_text(), text);
+            assert!(
+                source.root().spanless_eq(&full(&text)),
+                "incremental reparse differs from a full parse after edit {i}, \
+                 replacing {range:?} with {with:?}"
+            );
+            ids.update(&old, source.root());
+            assert_eq!(
+                identities(source.root(), &ids),
+                ids.len(),
+                "ids of nodes that went remain"
+            );
         }
-        assert_eq!(
-            walk(source.root(), &ids),
-            ids.len(),
-            "ids of nodes that went remain"
-        );
     }
+}
+
+/// Checks that every node of a tree has an identity that leads back to it,
+/// and counts the nodes.
+fn identities(node: &SyntaxNode, ids: &NodeIds) -> usize {
+    let span = node.span();
+    assert!(!span.is_detached(), "{:?} has no span", node.kind());
+    let id = ids
+        .id(span)
+        .unwrap_or_else(|| panic!("{:?} has no identity", node.kind()));
+    assert_eq!(ids.span(id), Some(span), "an identity leads elsewhere");
+    1 + node
+        .children()
+        .map(|child| identities(child, ids))
+        .sum::<usize>()
 }
 
 /// Edits a file incrementally ([`Edit::decode`] reads the bytes) and checks
@@ -1029,6 +1136,119 @@ fn random_bytes(seed: u64, len: usize) -> Vec<u8> {
 /// How many random inputs of [`differential`] the seed corpus holds.
 pub const DIFFERENTIAL_SEEDS: u64 = 4;
 
+/// Sequences of edits to a file for the seed corpus of [`reparse`], by kind:
+/// for each pair of delimiters, the opening one typed a third of the way in,
+/// the closing one typed at the middle, and both deleted again; and the same
+/// file made dense with syntax errors (an unbalanced delimiter every forty
+/// characters), with a binding typed into its middle a character at a time
+/// and deleted again. Authors pass through such broken states on every
+/// keystroke, and they are where a reparse is most likely to go wrong
+/// (#334).
+pub fn edit_sequences(text: &str, stylesheet: bool) -> Vec<(String, Edit)> {
+    let (pairs, scatter, typed): (&[(&str, &str)], &[&str], &str) = if stylesheet {
+        (
+            &[("{", "}"), ("(", ")"), ("[", "]"), ("\"", "\"")],
+            &["{", "}", "(", "\"", ";", ":", "[", "@variant v {", "/*"],
+            "--x: 4pt{;",
+        )
+    } else {
+        (
+            &[
+                ("{", "}"),
+                ("[", "]"),
+                ("\"", "\""),
+                ("$", "$"),
+                ("#(", ")"),
+            ],
+            &[
+                "{",
+                "[",
+                "\"",
+                "(",
+                "*",
+                "$",
+                "}",
+                "]",
+                ")",
+                "#",
+                "_",
+                "`",
+                "#let x = ",
+            ],
+            "#let x = \"[",
+        )
+    };
+    let n = text.chars().count();
+    let at = |i: usize| text.char_indices().nth(i).map_or(text.len(), |(b, _)| b);
+    let mut out = Vec::new();
+    for (i, (open, close)) in pairs.iter().enumerate() {
+        let (a, b) = (n / 3, n / 2 + open.chars().count());
+        let then = vec![
+            Step {
+                at: b,
+                len: 0,
+                with: close.to_string(),
+            },
+            Step {
+                at: b,
+                len: close.chars().count(),
+                with: String::new(),
+            },
+            Step {
+                at: a,
+                len: open.chars().count(),
+                with: String::new(),
+            },
+        ];
+        let edit = Edit {
+            stylesheet,
+            text: text.to_string(),
+            range: at(a)..at(a),
+            with: open.to_string(),
+            then,
+        };
+        out.push((format!("pair-{i}"), edit));
+    }
+    let mut dense = String::new();
+    for (i, c) in text.chars().enumerate() {
+        if i % 40 == 39 {
+            dense.push_str(scatter[i / 40 % scatter.len()]);
+        }
+        dense.push(c);
+    }
+    let middle = dense.chars().count() / 2;
+    let start = dense
+        .char_indices()
+        .nth(middle)
+        .map_or(dense.len(), |(b, _)| b);
+    let mut chars = typed.chars();
+    let first = chars.next().expect("a typed text").to_string();
+    let mut then: Vec<Step> = chars
+        .enumerate()
+        .map(|(i, c)| Step {
+            at: middle + 1 + i,
+            len: 0,
+            with: c.to_string(),
+        })
+        .collect();
+    then.extend((0..typed.chars().count()).rev().map(|i| Step {
+        at: middle + i,
+        len: 1,
+        with: String::new(),
+    }));
+    out.push((
+        "dense-typed".to_string(),
+        Edit {
+            stylesheet,
+            text: dense,
+            range: start..start,
+            with: first,
+            then,
+        },
+    ));
+    out
+}
+
 /// The seed corpus of every target, as (target, file name, bytes): the
 /// documents and stylesheets of `tests/corpus` and of the parser's corpus
 /// in `crates/folio-syntax/tests/corpus`, encoded for each target.
@@ -1176,7 +1396,13 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
                     text: text.clone(),
                     range,
                     with: with.to_string(),
+                    then: Vec::new(),
                 };
+                if let Some(bytes) = edit.encode() {
+                    out.push(("reparse", format!("{name}.{kind}.bin"), bytes));
+                }
+            }
+            for (kind, edit) in edit_sequences(text, stylesheet) {
                 if let Some(bytes) = edit.encode() {
                     out.push(("reparse", format!("{name}.{kind}.bin"), bytes));
                 }
