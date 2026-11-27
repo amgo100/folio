@@ -394,25 +394,34 @@ fn notes_take_the_anchors_font_only_in_another_language() {
 
 #[test]
 fn another_script_is_another_language_for_notes() {
+    // The note in a passage of the document's language and in one of
+    // another: its font and the passage's.
+    let note_fonts = |sheet: &str, text: &str| {
+        let mut w = world(Some("styles/main.fsty"), sheet);
+        w.set_source("main.fol", text).unwrap();
+        let s = styled(&w);
+        let font = |node: &StyledNode| get(&s, node, "font");
+        let notes: Vec<Value> = all(&s, "footnote")
+            .into_iter()
+            .map(|n| font(n.note_style().expect("a note part")))
+            .collect();
+        let passage = all(&s, "emph").first().map(|e| font(e));
+        (notes, font(&s.root), passage)
+    };
     // `sr-Latn` in a `sr-Cyrl` document: the same language in another
     // script, whose font the note keeps.
-    let mut world = world(
-        Some("styles/main.fsty"),
+    let (notes, document, passage) = note_fonts(
         "doc { lang: \"sr-Cyrl\"; }\n.latn { lang: \"sr-Latn\"; font: \"Source Sans 3\"; }\n",
+        "Text.#footnote[A.]\n\n#emph(class: \"latn\")[Tekst.#footnote[B.]]\n",
     );
-    world
-        .set_source(
-            "main.fol",
-            "Text.#footnote[A.]\n\n#emph(class: \"latn\")[Tekst.#footnote[B.]]\n",
-        )
-        .unwrap();
-    let styled = styled(&world);
-    let notes: Vec<_> = all(&styled, "footnote")
-        .into_iter()
-        .map(|n| n.note_style().expect("a note part"))
-        .collect();
-    let font = |node| get(&styled, node, "font");
-    assert_eq!(font(notes[0]), font(&styled.root));
-    assert_eq!(font(notes[1]), font(all(&styled, "emph")[0]));
-    assert_ne!(font(notes[1]), font(&styled.root));
+    assert_eq!(notes[0], document);
+    assert_eq!(Some(notes[1].clone()), passage);
+    assert_ne!(notes[1], document);
+    // `sr-Cyrl` in a document whose language is `sr`, which writes no
+    // script: one language, the document's font.
+    let (notes, document, _) = note_fonts(
+        "doc { lang: \"sr\"; }\n.cyrl { lang: \"sr-Cyrl\"; font: \"Source Sans 3\"; }\n",
+        "#emph(class: \"cyrl\")[Текст.#footnote[Б.]]\n",
+    );
+    assert_eq!(notes[0], document);
 }

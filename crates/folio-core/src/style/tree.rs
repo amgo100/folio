@@ -454,7 +454,7 @@ impl<'a> Walker<'a> {
                     (Some(root), Some(anchor)) => {
                         let props = &self.cascade.properties;
                         let mut kept = vec![props.builtin("lang")];
-                        if self.language(anchor) != self.language(&root) {
+                        if !same_language(&self.language(anchor), &self.language(&root)) {
                             kept.push(props.builtin("font"));
                         }
                         Some(self.styler.adopt(&root, anchor, &kept))
@@ -640,27 +640,16 @@ impl<'a> Walker<'a> {
             .unwrap_or_else(|| project.manifest(self.db).project.entry.v.clone())
     }
 
-    /// The language a style sets text in, without its region, so that
-    /// `en-GB` and `en` are one language but `sr-Latn` and `sr-Cyrl` two:
-    /// its `lang`, or the manifest's language where that is `auto` or not
-    /// a language tag, as the text stage reads it.
-    fn language(&self, style: &ComputedStyle) -> EcoString {
+    /// The language a style sets text in: its `lang`, or the manifest's
+    /// language where that is `auto` or not a language tag, as the text
+    /// stage reads it.
+    fn language(&self, style: &ComputedStyle) -> Lang {
         let props = &self.cascade.properties;
         let tag = match style.value(props, props.builtin("lang")) {
             Some(folio_component::Value::Str(tag)) => Lang::new(tag),
             _ => None,
         };
-        let lang = tag.unwrap_or_else(|| self.default_lang.clone());
-        let mut out = EcoString::from(lang.primary());
-        // A script is the one subtag of four letters (`Lang::new` checks
-        // the form).
-        for subtag in lang.as_str().split('-').skip(1) {
-            if subtag.len() == 4 && subtag.bytes().all(|b| b.is_ascii_alphabetic()) {
-                out.push('-');
-                out.push_str(subtag);
-            }
-        }
-        out
+        tag.unwrap_or_else(|| self.default_lang.clone())
     }
 
     /// The declarations an element makes for itself: its `override`
@@ -814,6 +803,28 @@ fn resolve_tokens(values: &Values<'_>, value: &Value, span: Span) -> Option<Decl
             .map(Declared::List),
         _ => Some(Declared::Value(value.clone())),
     }
+}
+
+/// Whether two language tags name one language: the same primary subtag,
+/// and the same script where both write one, whatever their regions. So
+/// `en-GB` and `en` are one, `sr` and `sr-Cyrl` too, but `sr-Latn` and
+/// `sr-Cyrl` two (SPEC §7.8).
+fn same_language(a: &Lang, b: &Lang) -> bool {
+    // The script is the subtag of four letters after the primary one,
+    // before any singleton (`x-…` and extensions), whose subtags are not
+    // scripts. `Lang::new` checked the form.
+    fn script(lang: &Lang) -> Option<&str> {
+        lang.as_str()
+            .split('-')
+            .skip(1)
+            .take_while(|subtag| subtag.len() > 1)
+            .find(|subtag| subtag.len() == 4 && subtag.bytes().all(|b| b.is_ascii_alphabetic()))
+    }
+    a.primary() == b.primary()
+        && match (script(a), script(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => true,
+        }
 }
 
 /// Whether an element is a built-in `footnote`.
