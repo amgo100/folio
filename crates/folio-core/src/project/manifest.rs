@@ -379,7 +379,10 @@ impl Manifest {
         let output = root
             .get("output")
             .and_then(|v| v.table(&mut cx, "`[output]`".into()))
-            .map(|table| read_output(&mut cx, &table, &variants))
+            .map(|table| {
+                let entry = project.as_ref().map(|p| &p.entry.v);
+                read_output(&mut cx, &table, &variants, entry, &components)
+            })
             .unwrap_or_default();
 
         let manifest = project.map(|project| Self {
@@ -724,7 +727,13 @@ fn read_formatting(cx: &mut Cx, table: &Table<'_>) -> Formatting {
     formatting
 }
 
-fn read_output(cx: &mut Cx, table: &Table<'_>, variants: &[Variant]) -> Output {
+fn read_output(
+    cx: &mut Cx,
+    table: &Table<'_>,
+    variants: &[Variant],
+    entry: Option<&ProjectPath>,
+    components: &Components,
+) -> Output {
     table.check_keys(cx, &["path"]);
     let Some(path) = table
         .get("path")
@@ -752,7 +761,7 @@ fn read_output(cx: &mut Cx, table: &Table<'_>, variants: &[Variant]) -> Output {
         && let Some(variant) = variants.iter().find(|v| file_targets(v) > 1)
     {
         cx.error(
-            range,
+            range.clone(),
             eco_format!(
                 "the targets of variant `{}` write to the same file",
                 variant.name.v
@@ -760,5 +769,92 @@ fn read_output(cx: &mut Cx, table: &Table<'_>, variants: &[Variant]) -> Output {
         )
         .hint("add `{ext}` to the path");
     }
+
+    // No output replaces a file the project is made of. The first file
+    // that a build would write there is reported.
+    if let Some(entry) = entry {
+        let files: Vec<EcoString> = if variants.is_empty() {
+            Target::Pdf
+                .extension()
+                .map(|ext| path.v.resolve(entry.stem(), None, ext))
+                .into_iter()
+                .collect()
+        } else {
+            variants
+                .iter()
+                .flat_map(|v| {
+                    v.targets.iter().filter_map(|t| {
+                        let ext = t.v.extension()?;
+                        Some(path.v.resolve(entry.stem(), Some(v.name.v.as_str()), ext))
+                    })
+                })
+                .collect()
+        };
+        if let Some(invalid) = files
+            .iter()
+            .find_map(|file| reserved_output(file, entry, components))
+        {
+            cx.invalid(range, invalid);
+        }
+    }
     Output { path }
 }
+
+/// Why an output may not be written to `file`, a project path, when it would
+/// replace or be read as one of the project's own files (SPEC §4.1): the
+/// entry file, the manifest, the lockfile, a content file or stylesheet, a
+/// hidden file or one in a hidden directory, a file in the font directory,
+/// or one in the directory of a component declared by a path inside the
+/// project. Names are compared without regard to ASCII case, since file
+/// systems that ignore case would replace the file all the same.
+fn reserved_output(file: &str, entry: &ProjectPath, components: &Components) -> Option<Invalid> {
+    const HINT: &str = "an output may not replace the manifest, the lockfile, a content file, a \
+                        stylesheet, a hidden file, a file in the font directory or a file of a \
+                        component";
+    // The path as it is written to, with any `.` or `..` that a placeholder
+    // brought in resolved.
+    let path = ProjectPath::new(file)?;
+    let file = path.as_str();
+    let is = |name: &str| file.eq_ignore_ascii_case(name);
+    let within = |dir: &str| {
+        file.len() > dir.len()
+            && file.as_bytes()[dir.len()] == b'/'
+            && file[..dir.len()].eq_ignore_ascii_case(dir)
+    };
+    let component = components.declared.iter().find_map(|c| match &c.source {
+        ComponentSource::Path(dir) if dir.v.as_str().split('/').next() != Some("..") => {
+            within(dir.v.as_str()).then_some(dir.v.as_str())
+        }
+        _ => None,
+    });
+    let ext = path.extension().map(str::to_ascii_lowercase);
+    let message = if is(entry.as_str()) {
+        eco_format!("the output `{file}` is the entry file")
+    } else if is(MANIFEST_FILE) {
+        eco_format!("the output `{file}` would replace the manifest")
+    } else if is(LOCKFILE_FILE) {
+        eco_format!("the output `{file}` would replace the lockfile")
+    } else if file.split('/').any(|segment| segment.starts_with('.')) {
+        eco_format!("the output `{file}` is a hidden path")
+    } else if within(folio_fonts::PROJECT_FONT_DIR) {
+        eco_format!(
+            "the output `{file}` is in the font directory `{}/`",
+            folio_fonts::PROJECT_FONT_DIR
+        )
+    } else if let Some(dir) = component {
+        eco_format!("the output `{file}` is in the component directory `{dir}/`")
+    } else if ext.as_deref() == Some("fol") {
+        eco_format!("the output `{file}` is a content file")
+    } else if ext.as_deref() == Some("fsty") {
+        eco_format!("the output `{file}` is a stylesheet")
+    } else {
+        return None;
+    };
+    Some(Invalid::new(message).with_hint(HINT))
+}
+
+/// The manifest's file name, in the project directory.
+const MANIFEST_FILE: &str = "folio.toml";
+
+/// The lockfile's file name, in the project directory.
+const LOCKFILE_FILE: &str = "folio.lock";
