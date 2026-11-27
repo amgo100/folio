@@ -1,6 +1,7 @@
 // Local overrides of SPEC §5.4.
 #question[
   #rule question { numbering: "(a)"; }
+  #rule .warn { color: #d62728; font-size: $body-size * 1.2; }
   #rule @target pptx figure { width: 40%; space-before: 24pt; }
   #rule @variant slides, handout heading[level=1] > answer:first {
     margin-column: outer, width 32mm, gap 6mm;

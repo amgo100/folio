@@ -10,11 +10,73 @@ use super::error::StrResult;
 use super::value::{Angle, Duration, Equality, Fraction, Length, Value as V, compare_once};
 
 fn mismatch(op: &str, lhs: &V, rhs: &V) -> EcoString {
-    eco_format!(
+    let message = eco_format!(
         "cannot {op} {} and {}",
         a_type(lhs.type_name()),
         a_type(rhs.type_name())
-    )
+    );
+    with_token_advice(message, [lhs, rhs])
+}
+
+/// An operator's error, with advice when an operand is a token reference
+/// (SPEC §5.4): its value is known only when the document is styled, so it
+/// can be computed with only where the style stage evaluates values.
+fn with_token_advice<'a>(
+    message: EcoString,
+    operands: impl IntoIterator<Item = &'a V>,
+) -> EcoString {
+    match operands
+        .into_iter()
+        .find_map(first_token)
+        .and_then(|v| match v {
+            V::Token(name) => Some(name),
+            _ => None,
+        }) {
+        Some(name) => eco_format!(
+            "{message}: a token's value is known only when the document is styled, \
+             so compute with it in a `#rule` or a stylesheet, as `${name}`"
+        ),
+        None => message,
+    }
+}
+
+/// The error of `==` or `!=` with a token reference (SPEC §5.4): its value
+/// is known only when the document is styled, so a comparison would always
+/// be false. `None` when neither operand is one.
+pub(crate) fn token_error(op: &str, lhs: &V, rhs: &V) -> Option<EcoString> {
+    if !holds_token(lhs) && !holds_token(rhs) {
+        return None;
+    }
+    let message = eco_format!(
+        "cannot compare {} and {} with `{op}`",
+        short_repr(lhs),
+        short_repr(rhs)
+    );
+    Some(with_token_advice(message, [lhs, rhs]))
+}
+
+/// Whether a value is a token reference or holds one as a direct item of an
+/// array or a dictionary (SPEC §5.4). It looks one level deep only: values
+/// can share parts, and a walk of all of them could take exponential time.
+pub(crate) fn holds_token(value: &V) -> bool {
+    first_token(value).is_some()
+}
+
+/// The first token reference a value is or holds as a direct item.
+fn first_token(value: &V) -> Option<&V> {
+    let token = |v: &&V| matches!(v, V::Token(_));
+    match value {
+        V::Token(_) => Some(value),
+        V::Array(items) => items.iter().find(token),
+        V::Dict(dict) => dict.iter().map(|(_, v)| v).find(token),
+        _ => None,
+    }
+}
+
+/// The error of a unary operator that does not apply to a value.
+fn unary_mismatch(op: &str, value: &V) -> EcoString {
+    let message = eco_format!("cannot apply {op} to {}", a_type(value.type_name()));
+    with_token_advice(message, [value])
 }
 
 /// A type name with its article: "an int", "a string".
@@ -45,10 +107,7 @@ pub(crate) fn pos(value: V) -> StrResult<V> {
         | V::Ratio(_)
         | V::Fraction(_)
         | V::Duration(_) => Ok(value),
-        v => Err(eco_format!(
-            "cannot apply unary `+` to {}",
-            a_type(v.type_name())
-        )),
+        v => Err(unary_mismatch("unary `+`", &v)),
     }
 }
 
@@ -68,7 +127,7 @@ pub(crate) fn neg(value: V) -> StrResult<V> {
         V::Ratio(v) => V::Ratio(-v),
         V::Fraction(v) => V::Fraction(Fraction(Scalar::new(-v.get()))),
         V::Duration(v) => V::Duration(Duration(Scalar::new(-v.seconds()))),
-        v => bail_str!("cannot apply unary `-` to {}", a_type(v.type_name())),
+        v => return Err(unary_mismatch("unary `-`", &v)),
     })
 }
 
@@ -76,17 +135,9 @@ pub(crate) fn neg(value: V) -> StrResult<V> {
 pub(crate) fn not(value: V) -> StrResult<V> {
     match value {
         V::Bool(b) => Ok(V::Bool(!b)),
-        v => Err(eco_format!(
-            "cannot apply `not` to {}",
-            a_type(v.type_name())
-        )),
+        v => Err(unary_mismatch("`not`", &v)),
     }
 }
-
-macro_rules! bail_str {
-    ($($fmt:tt)*) => { return Err(eco_format!($($fmt)*)) };
-}
-use bail_str;
 
 /// `a + b`. Strings, arrays and content concatenate, dictionaries merge.
 /// The left operand is extended in place when nothing else holds it.
@@ -359,11 +410,8 @@ pub(crate) fn compare(lhs: &V, rhs: &V) -> StrResult<Ordering> {
             return result;
         }
         (a, b) => {
-            return Err(eco_format!(
-                "cannot compare {} and {}",
-                short_repr(a),
-                short_repr(b)
-            ));
+            let message = eco_format!("cannot compare {} and {}", short_repr(a), short_repr(b));
+            return Err(with_token_advice(message, [a, b]));
         }
     })
 }
@@ -379,15 +427,21 @@ pub(crate) fn short_repr(value: &V) -> EcoString {
 
 /// `a in b`.
 pub(crate) fn contains(item: &V, collection: &V) -> StrResult<bool> {
+    if let Some(message) = token_error("in", item, collection) {
+        return Err(message);
+    }
     match (item, collection) {
         (V::Str(a), V::Str(b)) => Ok(b.contains(a.as_str())),
         (V::Str(key), V::Dict(d)) => Ok(d.get(key).is_some()),
         (a, V::Array(items)) => Ok(items.iter().any(|b| equal(a, b))),
-        (a, b) => Err(eco_format!(
-            "cannot apply `in` to {} and {}",
-            a_type(a.type_name()),
-            a_type(b.type_name())
-        )),
+        (a, b) => {
+            let message = eco_format!(
+                "cannot apply `in` to {} and {}",
+                a_type(a.type_name()),
+                a_type(b.type_name())
+            );
+            Err(with_token_advice(message, [a, b]))
+        }
     }
 }
 
@@ -395,6 +449,15 @@ pub(crate) fn contains(item: &V, collection: &V) -> StrResult<bool> {
 /// `none` disappears, strings and content concatenate, arrays concatenate,
 /// dictionaries merge.
 pub(crate) fn join(lhs: V, rhs: V) -> StrResult<V> {
+    // Only the operands themselves: a loop joins onto one growing value.
+    if matches!(lhs, V::Token(_)) || matches!(rhs, V::Token(_)) {
+        let message = eco_format!(
+            "cannot join {} with {}",
+            a_type(lhs.type_name()),
+            a_type(rhs.type_name())
+        );
+        return Err(with_token_advice(message, [&lhs, &rhs]));
+    }
     Ok(match (lhs, rhs) {
         (a, V::None) => a,
         (V::None, b) => b,
@@ -403,11 +466,12 @@ pub(crate) fn join(lhs: V, rhs: V) -> StrResult<V> {
             Err(_) => return Err("cannot join these values".into()),
         },
         (a, b) => {
-            return Err(eco_format!(
+            let message = eco_format!(
                 "cannot join {} with {}",
                 a_type(a.type_name()),
                 a_type(b.type_name())
-            ));
+            );
+            return Err(with_token_advice(message, [&a, &b]));
         }
     })
 }
@@ -415,5 +479,62 @@ pub(crate) fn join(lhs: V, rhs: V) -> StrResult<V> {
 impl From<Content> for V {
     fn from(content: Content) -> Self {
         V::Content(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operators_on_a_token_reference_point_to_a_scoped_rule() {
+        let size = || V::Token("body-size".into());
+        let advice = "a token's value is known only when the document is styled, \
+                      so compute with it in a `#rule` or a stylesheet, as `$body-size`";
+        assert_eq!(
+            mul(size(), V::Float(Scalar::new(1.2))).unwrap_err(),
+            format!("cannot multiply a token and a float: {advice}")
+        );
+        assert_eq!(
+            add(V::Int(1), size()).unwrap_err(),
+            format!("cannot add an int and a token: {advice}")
+        );
+        assert_eq!(
+            neg(size()).unwrap_err(),
+            format!("cannot apply unary `-` to a token: {advice}")
+        );
+        // Without a token, the error is as before.
+        assert_eq!(
+            sub(V::Bool(true), V::Int(1)).unwrap_err(),
+            "cannot subtract a bool and an int"
+        );
+        assert_eq!(
+            compare(&size(), &V::Int(1)).unwrap_err(),
+            format!("cannot compare tok.body-size and 1: {advice}")
+        );
+        assert_eq!(
+            join(V::Int(1), size()).unwrap_err(),
+            format!("cannot join an int with a token: {advice}")
+        );
+        assert_eq!(
+            token_error("==", &size(), &V::Str("dark".into())).unwrap(),
+            format!("cannot compare tok.body-size and \"dark\" with `==`: {advice}")
+        );
+        assert_eq!(token_error("==", &V::Int(1), &V::Int(1)), None);
+        // Inside an array, too.
+        let list = || V::Array([size(), V::Int(2)].into_iter().collect());
+        assert!(token_error("==", &list(), &V::Int(1)).is_some());
+        assert!(
+            contains(&size(), &V::Array([V::Int(1)].into_iter().collect()))
+                .unwrap_err()
+                .ends_with(advice)
+        );
+        assert_eq!(
+            join(V::Str("Size: ".into()), size()).unwrap_err(),
+            format!("cannot join a str with a token: {advice}")
+        );
+        // A token reference is equal to itself only.
+        assert!(equal(&size(), &size()));
+        assert!(!equal(&size(), &V::Token("gap".into())));
     }
 }

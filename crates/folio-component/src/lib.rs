@@ -12,8 +12,7 @@
 //!
 //! # Extension points
 //!
-//! This version of the interface has the first three extension points of SPEC
-//! §3.2, which are all declarative:
+//! This version of the interface has these extension points of SPEC §3.2:
 //!
 //! - **Elements**: [`ElementSchema`]s with fields, kind, body slots and a
 //!   counter, and the [`LocaleString`]s their generated words use.
@@ -21,6 +20,10 @@
 //!   inheritance, and whether they affect layout or only paint.
 //! - **Templates**: default and named render templates ([`TemplateDecl`]),
 //!   written in the stylesheet language.
+//! - **Default stylesheet**: [`Declarations::stylesheet`], the default look of
+//!   the component's elements, below every stylesheet of a project.
+//! - **Lints**: [`Component::lint`], checks over an [`InstanceTree`] of the
+//!   component's element instances that return [`LintDiagnostic`]s.
 //!
 //! A component's elements and properties live in its namespace
 //! ([`ComponentName::namespace`]), so they can always be written qualified
@@ -35,6 +38,8 @@ mod element;
 mod fragment;
 mod geom;
 mod image;
+mod instance;
+mod lint;
 mod names;
 mod property;
 mod registry;
@@ -55,6 +60,8 @@ pub use self::element::{
 pub use self::fragment::{BaselineGrid, Fragment, FragmentItem, ImageBox, ObjectBox, Regions};
 pub use self::geom::{Abs, Em, Point, Ratio, Rect, Scalar, Size};
 pub use self::image::{Image, ImageFormat};
+pub use self::instance::{Instance, InstanceTree, Part};
+pub use self::lint::{LintDiagnostic, Related, Severity};
 pub use self::names::{ComponentName, Name, QualifiedName, Target, is_ident};
 pub use self::property::{Effect, PropertyDecl};
 pub use self::registry::{Registered, Registry, RegistryError};

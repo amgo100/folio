@@ -499,6 +499,7 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     }
     component_host(db, project);
     crate::fonts::check_fonts(db, build);
+    crate::lint::check_lints(db, build);
 
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),

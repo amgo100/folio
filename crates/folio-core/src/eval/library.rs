@@ -38,6 +38,9 @@ pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
         "calc".into(),
         Value::Module(Module::new("calc", calc.into(), Content::new())),
     );
+    // `tok.warn` names a stylesheet token, which the style stage resolves
+    // for each build (SPEC §5.4).
+    scope.insert("tok".into(), Value::Module(Module::tokens()));
 
     // The built-in elements come before components' elements: a component
     // element named like one is reached only qualified (`exam.figure`).
