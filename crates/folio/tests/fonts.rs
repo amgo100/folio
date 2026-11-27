@@ -268,9 +268,49 @@ fn a_copied_cache_file_truncated_under_a_live_world() {
     assert!(second.diagnostics.is_empty(), "{:?}", second.diagnostics);
     assert_ne!(first.output, second.output);
 
-    // Loading the fonts again finds the file changed.
-    let error = world.load_fonts(root.path(), Some(&cache)).unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    // Loading the fonts again finds the file changed, and the build says
+    // so at the lock entry.
+    world.load_fonts(root.path(), Some(&cache)).unwrap();
+    let messages = messages(&compile(&world));
+    assert!(
+        messages.contains(&(
+            Severity::Error,
+            "the locked font `SourceSerif4-Regular` (family `Source Serif 4`) is not available"
+                .into()
+        )),
+        "{messages:?}"
+    );
+}
+
+/// Another font copied into the cache under the locked hash is the error
+/// at the lock entry that names the file and both hashes (SPEC §2.5).
+#[test]
+fn a_cache_file_with_another_font() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = FontCache::new(root.path().join("cache"));
+    let data = bundled(SERIF);
+    let locked = FontHash::of(b"the file that was locked");
+    fs::create_dir_all(cache.dir()).unwrap();
+    fs::write(cache.path(locked), &data).unwrap();
+    let lockfile = lock("SourceSerif4-Regular", locked);
+
+    let mut world = bare(MANIFEST, Some(&lockfile), BuildMode::Build);
+    world.load_fonts(root.path(), Some(&cache)).unwrap();
+    let compiled = compile(&world);
+    let error = compiled
+        .diagnostics
+        .iter()
+        .find(|d| {
+            d.message == "the font `SourceSerif4-Regular` does not have the hash it is locked by"
+        })
+        .unwrap();
+    assert_eq!(
+        error.hints[0],
+        format!(
+            "`folio.lock` locks {locked}, but the font cache has {}",
+            FontHash::of(&data)
+        )
+    );
 }
 
 /// A system font that is a copy of a bundled file in a directory of its own.

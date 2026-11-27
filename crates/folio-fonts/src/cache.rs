@@ -73,7 +73,10 @@ impl FontCache {
     }
 
     /// The file with this hash, or `None` when the cache does not have it.
-    /// Its contents are checked against its name.
+    /// The file has its own hash ([`FontFile::hash`]), which differs from
+    /// `hash` when the cache was changed from outside or a file was copied
+    /// in under the wrong name; the check of `folio.lock` then reports the
+    /// file with both hashes (SPEC §2.5).
     ///
     /// A file that [`Self::insert`] wrote, which is read-only and carries
     /// the modification time `insert` gives it, is memory-mapped, once per
@@ -82,8 +85,7 @@ impl FontCache {
     /// it is read into memory, once per process while its length and
     /// modification time stay the same.
     ///
-    /// Fails when the file cannot be read, or when its contents do not have
-    /// the hash it is stored under: the cache was changed from outside.
+    /// Fails when the file cannot be read.
     pub fn get(&self, hash: FontHash) -> io::Result<Option<FontFile>> {
         static MAPPED: Mutex<Option<HashMap<PathBuf, FontFile>>> = Mutex::new(None);
 
@@ -102,22 +104,22 @@ impl FontCache {
         };
         // The metadata of the open file, not of the path, so that the file
         // checked is the file mapped.
-        if !written_by_insert(&file.metadata()?, hash) {
-            drop(file);
-            let font = read(&path, FontOrigin::Cache)?;
-            check(&path, hash, font.hash())?;
-            return Ok(Some(font));
+        if written_by_insert(&file.metadata()?, hash) {
+            let data = map::read_only(&file)?;
+            if FontHash::of(&data) == hash {
+                let font = FontFile::with_hash(FontOrigin::Cache, data, hash);
+                let mut mapped = lock();
+                let font = mapped
+                    .get_or_insert_with(HashMap::new)
+                    .entry(path)
+                    .or_insert(font)
+                    .clone();
+                return Ok(Some(font));
+            }
+            // Not what `insert` wrote: read it as any other file.
         }
-        let data = map::read_only(&file)?;
-        check(&path, hash, FontHash::of(&data))?;
-        let font = FontFile::with_hash(FontOrigin::Cache, data, hash);
-        let mut mapped = lock();
-        let font = mapped
-            .get_or_insert_with(HashMap::new)
-            .entry(path)
-            .or_insert(font)
-            .clone();
-        Ok(Some(font))
+        drop(file);
+        read(&path, FontOrigin::Cache).map(Some)
     }
 
     /// Stores a font file under its hash, unless the cache has it, and
@@ -178,30 +180,18 @@ impl FontCache {
     }
 }
 
-/// Fails unless a file's contents have the hash it is stored under.
-fn check(path: &Path, hash: FontHash, found: FontHash) -> io::Result<()> {
-    if found == hash {
-        return Ok(());
-    }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!(
-            "the font cache file {} has hash {found}, not the hash it is named by; \
-             delete it so that it is stored again",
-            path.display()
-        ),
-    ))
-}
-
 /// The modification time [`FontCache::insert`] gives the file it stores
 /// under a hash: a time taken from the hash, which a file copied into the
 /// cache keeps only by a rare coincidence or when the copy keeps times
-/// (`cp -a`). It is a whole, even number of seconds before 2038, so that
-/// file systems with 32-bit times or 2-second precision store it as given.
+/// (`cp -a`). It is a whole, even number of seconds from 1980 to 2014, so
+/// that file systems with 32-bit times, times from 1980 or 2-second
+/// precision store it as given, and no tool sees a time in the future.
 fn stamp(hash: FontHash) -> SystemTime {
+    /// 1980-01-01T00:00:00Z.
+    const START: u64 = 315_532_800;
     let [a, b, c, d, ..] = hash.0;
-    let seconds = u32::from_be_bytes([a, b, c, d]) & 0x7FFF_FFFE;
-    SystemTime::UNIX_EPOCH + Duration::from_secs(seconds.into())
+    let offset = u32::from_be_bytes([a, b, c, d]) & 0x3FFF_FFFE;
+    SystemTime::UNIX_EPOCH + Duration::from_secs(START + u64::from(offset))
 }
 
 /// Whether a file of the cache shows that [`FontCache::insert`] wrote it,
@@ -238,8 +228,8 @@ mod map {
         // its own, renames it into place under the hash of its contents and
         // makes it read-only, and never writes to a file that exists; a copy
         // that keeps both marks is read-only too. Any other file, such as one copied into the cache by hand, is read
-        // into memory instead. The caller checks the contents against the
-        // hash after mapping. What remains is a file changed from outside
+        // into memory instead, as is a mapped file whose contents do not
+        // have its hash. What remains is a file changed from outside
         // Folio, against its read-only permission, while a compile runs:
         // the risk accepted by every program that maps fonts, and the
         // reason only these files are mapped (SPEC §2.5, §14.2).
@@ -281,14 +271,28 @@ mod tests {
         assert!(std::ptr::eq(got.data().as_ptr(), again.data().as_ptr()));
     }
 
+    /// A file whose contents do not have its name's hash is returned with
+    /// its own hash, for the lock check to report, and never mapped.
     #[test]
-    fn a_changed_file_is_an_error() {
+    fn a_changed_file_has_its_own_hash() {
         let dir = tempfile::tempdir().unwrap();
         let cache = FontCache::new(dir.path());
         let hash = FontHash::of(b"a font");
-        fs::write(cache.path(hash), b"another font").unwrap();
-        let error = cache.get(hash).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let path = cache.path(hash);
+        fs::write(&path, b"another font").unwrap();
+        let got = cache.get(hash).unwrap().unwrap();
+        assert_eq!(got.hash(), FontHash::of(b"another font"));
+
+        // With both marks, it is still read rather than mapped.
+        let file = File::options().write(true).open(&path).unwrap();
+        file.set_modified(stamp(hash)).unwrap();
+        let mut permissions = file.metadata().unwrap().permissions();
+        permissions.set_readonly(true);
+        file.set_permissions(permissions).unwrap();
+        assert!(written_by_insert(&fs::metadata(&path).unwrap(), hash));
+        let got = cache.get(hash).unwrap().unwrap();
+        assert_eq!(&**got.data(), b"another font");
+        assert_eq!(got.hash(), FontHash::of(b"another font"));
     }
 
     /// A file copied into the cache by hand is read into memory, not
@@ -308,7 +312,7 @@ mod tests {
         assert_eq!(&**got.data(), &**font.data());
 
         // Truncated in place: the font in use keeps its bytes, and the
-        // next lookup reads the file again and finds the change.
+        // next lookup reads the file again, with its new hash.
         File::options()
             .write(true)
             .open(&path)
@@ -316,10 +320,9 @@ mod tests {
             .set_len(16)
             .unwrap();
         assert_eq!(&**got.data(), &**font.data());
-        assert_eq!(
-            cache.get(hash).unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
+        let again = cache.get(hash).unwrap().unwrap();
+        assert_eq!(again.data().len(), 16);
+        assert_ne!(again.hash(), hash);
     }
 
     /// Read-only is not enough: a file is mapped only with the
