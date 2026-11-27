@@ -410,10 +410,46 @@ pub const SHEET_SNIPPETS: &[&str] = &[
     "doc { widows: 4; orphans: 4; }\n",
     "heading { break-before: page; }\n",
     "heading[level=1] { break-before: odd-page; }\n",
-    "page { page-size: A6; }\n",
+    "page { page-size: A5; }\n",
+    "page { page-size: 120mm 160mm; }\n",
     "page { counter-reset: footnote; }\n",
     "footnote { font-size: 14pt; }\n",
 ];
+
+/// The images that [`CONTENT_SNIPPETS`] name, by the corpus project that
+/// holds each and its path there.
+const SNIPPET_IMAGES: &[(&str, &str)] = &[
+    ("figures", "assets/wave.png"),
+    ("acceptance", "assets/sledge.svg"),
+];
+
+/// The corpus projects, each given the images of [`SNIPPET_IMAGES`] as data
+/// files, so that an inserted image is laid out whichever project the edit
+/// is made to, rather than reported missing.
+fn with_snippet_images() -> Vec<corpus::Project> {
+    let mut projects = corpus::projects();
+    let images: Vec<(String, Vec<u8>)> = SNIPPET_IMAGES
+        .iter()
+        .map(|&(name, path)| {
+            let bytes = projects
+                .iter()
+                .find(|p| p.name == name)
+                .and_then(|p| p.files.get(path))
+                .unwrap_or_else(|| panic!("the corpus project {name} has {path}"))
+                .clone();
+            (path.to_string(), bytes)
+        })
+        .collect();
+    for project in &mut projects {
+        for (path, bytes) in &images {
+            project
+                .files
+                .entry(path.clone())
+                .or_insert_with(|| bytes.clone());
+        }
+    }
+    projects
+}
 
 /// How many edits [`differential`] applies at most, so that one input stays
 /// within a few seconds.
@@ -441,7 +477,8 @@ pub struct Edits {
 }
 
 impl Edits {
-    /// Reads a project (the first byte picks one of [`corpus::projects`])
+    /// Reads a project (the first byte picks one of [`corpus::projects`],
+    /// given the images the snippets name)
     /// and then up to [`MAX_EDITS`] edits of five bytes each: the source
     /// (an index into the project's sources in order of path), where the
     /// edit starts (two bytes, little-endian, wrapped to the text's
@@ -454,7 +491,7 @@ impl Edits {
         let (&first, rest) = data.split_first()?;
         // Read once: the fuzzer runs the target many times a second.
         static PROJECTS: OnceLock<Vec<corpus::Project>> = OnceLock::new();
-        let projects = PROJECTS.get_or_init(corpus::projects);
+        let projects = PROJECTS.get_or_init(with_snippet_images);
         let project = projects[usize::from(first) % projects.len()].clone();
         let ops = rest
             .chunks_exact(5)
