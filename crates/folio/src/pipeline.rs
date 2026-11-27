@@ -78,9 +78,6 @@ pub(crate) struct Checked {
 #[salsa::tracked(returns(ref))]
 pub(crate) fn check_build(db: &dyn Db, build: Build<'_>) -> Checked {
     let checked = build_output(db, build);
-    // Loops whose iterations cannot pair across a numbering group's
-    // variants (SPEC §6.1).
-    folio_core::variants::check_loops(db, build.project(db), build.variant(db).clone());
     let writes = *check_target(db, build);
     Checked {
         sources: checked.sources.clone(),

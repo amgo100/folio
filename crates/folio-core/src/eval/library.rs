@@ -18,8 +18,7 @@ use super::value::{
 use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
 use crate::db::{Bytes, FileKind, data_file, report_read, source_file};
-use crate::locate::Frame;
-use crate::variants;
+use crate::locate::{Frame, item_key};
 
 /// The global scope: the library, the built-in elements content can call,
 /// and the elements of the components in use, unqualified where the name
@@ -1217,25 +1216,21 @@ fn array_method(
                     Frame::Iteration {
                         span,
                         index: i as u64,
+                        item: item_key(item),
                     },
                 );
                 out.push(value);
             }
-            let out = Value::Array(out);
-            variants::record(vm.db, span, items.iter(), &out);
-            out
+            Value::Array(out)
         }
         "fold" => {
             let mut acc: Value = args.expect("initial value")?;
             let func: Func = args.expect("function")?;
             // The accumulator holds what earlier calls made, so the calls
-            // are not stamped: their instances are told apart by number,
-            // which pairs across variants when the items do, as the
-            // record checks.
+            // are not stamped: their instances are told apart by number.
             for item in items.iter() {
                 acc = call_with(vm, &func, &[acc, item.clone()], span)?;
             }
-            variants::record(vm.db, span, items.iter(), &acc);
             acc
         }
         "any" | "all" => {

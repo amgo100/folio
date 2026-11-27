@@ -384,7 +384,7 @@ fn a_loop_over_different_items_is_an_error() {
     for variant in ["exam", "markscheme"] {
         let errors = loop_errors(&world, variant);
         assert_eq!(errors.len(), 1, "{variant}: {errors:?}");
-        assert!(errors[0].contains("`heading` numbering"), "{errors:?}");
+        assert!(errors[0].contains("this `heading`"), "{errors:?}");
     }
     // A loop that makes nothing a shared counter counts may differ.
     let world = grouped(&format!(
@@ -442,4 +442,65 @@ fn an_inserted_call_renumbers_nothing() {
     let (before, after) = (heads(&before), heads(&after));
     assert_eq!(after.len(), 3);
     assert_eq!(&after[1..], &before[..]);
+}
+
+#[test]
+fn a_loop_run_only_for_shown_items_is_no_error() {
+    // An inner loop that runs only for the questions a variant shows
+    // iterates over the same parts wherever it runs: its instances pair,
+    // and the check says nothing (#360 review).
+    let world = grouped(
+        "#let bank = ((parts: (\"a\", \"b\"), hidden: false), \
+         (parts: (\"c\",), hidden: true), (parts: (\"d\", \"e\"), hidden: false))\n\
+         #for q in bank { if variant == \"markscheme\" or not q.hidden { \
+         for p in q.parts [= #p\n\n] } }\n\
+         #if variant == \"markscheme\" { for x in (\"x\", \"y\") [= #x\n\n] }\n",
+    );
+    assert!(loop_errors(&world, "exam").is_empty());
+    assert!(loop_errors(&world, "markscheme").is_empty());
+    let exam = headings(&world, "exam");
+    let markscheme = headings(&world, "markscheme");
+    for (text, location) in &exam {
+        let paired = markscheme.iter().find(|(t, _)| t == text).unwrap();
+        assert_eq!(*location, paired.1, "{text}");
+    }
+}
+
+#[test]
+fn elements_of_a_paragraph_pair_whatever_comes_first() {
+    // The model's paragraph takes the origin of its first element, but
+    // what it holds keeps its own (#360 review): the second iteration's
+    // `strong` pairs whether or not the first iteration made one.
+    let world = grouped("#for i in (0, 1) [#if variant == \"markscheme\" or i != 0 [*b#i* ]]\n");
+    let strongs = |variant: &str| {
+        let variant = folio::Name::new(variant).unwrap();
+        let doc = folio::document(&world, Some(&variant)).unwrap().unwrap();
+        elements(&doc)
+            .into_iter()
+            .filter(|(n, ..)| n == "strong")
+            .map(|(_, t, l)| (t, l))
+            .collect::<Vec<_>>()
+    };
+    let (exam, markscheme) = (strongs("exam"), strongs("markscheme"));
+    assert_eq!(exam.len(), 1);
+    assert_eq!(markscheme.len(), 2);
+    assert_eq!(exam[0], markscheme[1]);
+}
+
+#[test]
+fn where_content_was_made_does_not_change_equality() {
+    // `==` compares content as it was before origins: content from two
+    // calls or two iterations of one node is equal (#360 review), while
+    // content written elsewhere is other content, as its span says.
+    let world = world(
+        "#let mk() = [*x*]\n\
+         #let made = for i in range(2) { ([*a*],) }\n\
+         #(mk() == mk()) #(made.at(0) == made.at(1)) #(made.contains([*a*]))\n",
+    );
+    let doc = document(&world);
+    let text = match doc.root.field("body") {
+        Some(Value::Content(body)) => body.plain_text().to_string(),
+        _ => String::new(),
+    };
+    assert_eq!(text.trim(), "true true false");
 }

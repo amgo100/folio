@@ -54,28 +54,42 @@ pub(crate) enum Made {
 }
 
 /// The origin of an element instance: the loop iterations and closure
-/// calls that made it, from the outermost inward, as a key (SPEC §2.3,
-/// §6.1). Content made outside any loop or call has the root origin.
+/// calls that made it, from the outermost inward (SPEC §2.3, §6.1).
+/// Content made outside any loop or call has the root origin.
+///
+/// An origin has two parts. Its key names the iterations by their loops
+/// and indices and the calls by their sites: it is what a location is
+/// built from, so that iteration `i` of a loop pairs across the variants
+/// of a numbering group. Its items fingerprint what those iterations
+/// iterated over: two instances with one key whose items differ were made
+/// from different items, so they cannot share numbering
+/// ([`crate::variants`]).
 ///
 /// Evaluation stamps the [`Frame`] of an iteration or a call on the
-/// elements of the value it returns (`Content::stamp`), and
-/// the document model gives an element inside another's content the origin
-/// of the element around it as well ([`Origin::nested`]). An origin is a
-/// hash, mixed by a fixed function so that it is the same on every platform
-/// and in every process; like the spans it is made from, it is compared,
-/// never written to output.
+/// elements of the value it returns (`Content::stamp`), and the document
+/// model gives an element inside another's content the origin of the
+/// element around it as well ([`Origin::nested`]). Both parts are hashes,
+/// mixed by a fixed function so that they are the same on every platform
+/// and in every process; like the spans they are made from, they are
+/// compared, never written to output.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Origin(u64);
+pub struct Origin {
+    key: u64,
+    items: u64,
+}
 
 impl Origin {
     /// The origin of content made outside any loop or call.
-    pub const ROOT: Self = Self(0);
+    pub const ROOT: Self = Self { key: 0, items: 0 };
 
     /// The origin of an instance with this origin that `frame` returns:
     /// the frame comes before the frames already recorded.
     #[must_use]
     pub fn within(self, frame: Frame) -> Self {
-        Self::keyed(pair(frame.key(), self.0))
+        Self {
+            key: pair(frame.key(), self.key).max(1),
+            items: pair(frame.item(), self.items),
+        }
     }
 
     /// The origin of an element whose own origin is `own`, inside the
@@ -87,13 +101,16 @@ impl Origin {
         } else if self == Self::ROOT {
             own
         } else {
-            Self::keyed(pair(self.0, own.0))
+            Self {
+                key: pair(self.key, own.key).max(1),
+                items: pair(self.items, own.items),
+            }
         }
     }
 
-    /// A key, as an origin other than the root.
-    fn keyed(key: u64) -> Self {
-        Self(key.max(1))
+    /// The fingerprint of the items its iterations iterated over.
+    pub fn items(self) -> u64 {
+        self.items
     }
 }
 
@@ -109,6 +126,9 @@ pub enum Frame {
         span: Span,
         /// Which iteration.
         index: u64,
+        /// A hash of the item it iterates over ([`item_key`]), or its index
+        /// for a loop over no items.
+        item: u64,
     },
     /// A call of a closure, at its call site.
     Call {
@@ -118,13 +138,30 @@ pub enum Frame {
 }
 
 impl Frame {
-    /// The frame's key.
+    /// The frame's key: its loop or call site, and its index.
     fn key(self) -> u64 {
         match self {
-            Self::Iteration { span, index } => pair(pair(1, span.into_raw().get()), index),
+            Self::Iteration { span, index, .. } => pair(pair(1, span.into_raw().get()), index),
             Self::Call { span } => pair(2, span.into_raw().get()),
         }
     }
+
+    /// The item it iterates over, or `0` for a call.
+    fn item(self) -> u64 {
+        match self {
+            Self::Iteration { item, .. } => item,
+            Self::Call { .. } => 0,
+        }
+    }
+}
+
+/// A hash of an item a loop iterates over, for [`Frame::Iteration`]. It
+/// is compared within one process, never written out.
+pub(crate) fn item_key(item: &impl std::hash::Hash) -> u64 {
+    use std::hash::{DefaultHasher, Hasher};
+    let mut hasher = DefaultHasher::new();
+    item.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Mixes a word into a key: SplitMix64's finaliser of the two, a
@@ -149,7 +186,7 @@ fn pair(first: u64, second: u64) -> u64 {
 pub(crate) struct Locator {
     /// How many instances each span has made so far from each origin, by
     /// what made them. It is never iterated, so its order does not matter.
-    made: BTreeMap<(u64, Made, Origin), u64>,
+    made: BTreeMap<(u64, Made, u64), u64>,
 }
 
 impl Locator {
@@ -177,14 +214,14 @@ impl Locator {
         let first = u64::from(span.is_detached());
         let count = self
             .made
-            .entry((span.into_raw().get(), made, origin))
+            .entry((span.into_raw().get(), made, origin.key))
             .or_insert(first);
         let n = *count;
         *count = n.saturating_add(1).min(Self::COUNT);
-        let number = if origin == Origin::ROOT {
+        let number = if origin.key == 0 {
             n
         } else {
-            Self::KEYED | (mix(origin.0, n) & Self::COUNT)
+            Self::KEYED | (mix(origin.key, n) & Self::COUNT)
         };
         Location {
             source: source_ref(span),
@@ -334,6 +371,7 @@ mod tests {
         let iteration = |index| Frame::Iteration {
             span: span(4),
             index,
+            item: index,
         };
         let root = Origin::ROOT;
         assert_ne!(root.within(iteration(0)), root);

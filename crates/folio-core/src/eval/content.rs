@@ -134,6 +134,46 @@ impl Content {
             })
     }
 
+    /// Whether two contents are equal but for the origins of their
+    /// elements, as `==` compares content: the loop iteration or call that
+    /// made content does not make it other content, though it gives its
+    /// elements other locations.
+    pub(crate) fn same_but_origins(&self, other: &Self) -> bool {
+        if self.nodes.as_ptr() == other.nodes.as_ptr() && self.len() == other.len() {
+            return true;
+        }
+        if self.len() != other.len() {
+            return false;
+        }
+        compare_once(
+            self.nodes.as_ptr() as usize,
+            other.nodes.as_ptr() as usize,
+            Equality::ButOrigins,
+            || {
+                self.nodes
+                    .iter()
+                    .zip(other.nodes.iter())
+                    .all(|(a, b)| match (a, b) {
+                        (Node::Element(a), Node::Element(b)) => {
+                            a.name == b.name
+                                && a.kind == b.kind
+                                && a.label == b.label
+                                && a.span == b.span
+                                && a.location == b.location
+                                && dicts_same_but_origins(&a.fields, &b.fields)
+                        }
+                        (Node::Slot(a), Node::Slot(b)) => {
+                            a.parent == b.parent
+                                && a.name == b.name
+                                && a.span == b.span
+                                && a.body.same_but_origins(&b.body)
+                        }
+                        (a, b) => a == b,
+                    })
+            },
+        )
+    }
+
     /// Records that `frame`, an iteration or a call, made this content:
     /// on its elements at the top level, and those of its slots' bodies.
     /// Elements inside them take the frame from the element around them
@@ -285,6 +325,33 @@ impl Debug for Content {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Content").field(&self.nodes).finish()
     }
+}
+
+/// Whether two values are equal but for the origins of the elements of the
+/// content they hold ([`Content::same_but_origins`]).
+fn same_but_origins(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Content(a), Value::Content(b)) => a.same_but_origins(b),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len()
+                && compare_once(a.storage(), b.storage(), Equality::ButOrigins, || {
+                    a.iter().zip(b.iter()).all(|(a, b)| same_but_origins(a, b))
+                })
+        }
+        (Value::Dict(a), Value::Dict(b)) => dicts_same_but_origins(a, b),
+        (a, b) => a == b,
+    }
+}
+
+/// Whether two dictionaries are equal but for the origins of the elements
+/// of the content they hold.
+fn dicts_same_but_origins(a: &Dict, b: &Dict) -> bool {
+    a.len() == b.len()
+        && compare_once(a.storage(), b.storage(), Equality::ButOrigins, || {
+            a.iter()
+                .zip(b.iter())
+                .all(|((ka, va), (kb, vb))| ka == kb && same_but_origins(va, vb))
+        })
 }
 
 /// Records that `frame`, an iteration or a call, made `value`: on the

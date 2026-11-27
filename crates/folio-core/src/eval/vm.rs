@@ -22,9 +22,8 @@ use super::value::{
 use super::{Cost, Limits, MAX_NESTING, Memo, Mode, eval_file_for, globals, reachable, today};
 use crate::component::Reason;
 use crate::db::{Db, Project, component_host, source_file};
-use crate::locate::Frame;
+use crate::locate::{Frame, item_key};
 use crate::project::ProjectPath;
-use crate::variants;
 
 /// How much stack must be left before an expression is evaluated: enough
 /// for the frames between two expressions, a call through its query
@@ -1703,15 +1702,20 @@ impl<'a> Vm<'a> {
                 break;
             }
             let mut value = self.expr(body)?;
-            stamp(&mut value, Frame::Iteration { span, index });
+            stamp(
+                &mut value,
+                Frame::Iteration {
+                    span,
+                    index,
+                    item: index,
+                },
+            );
             index += 1;
             output = self.join(output, value, body.span())?;
             if self.leave_loop() {
                 break;
             }
         }
-        // A `while` loop iterates over nothing but its count.
-        variants::record(self.db, span, &[Value::Int(index as i64)], &output);
         Ok(output)
     }
 
@@ -1751,8 +1755,9 @@ impl<'a> Vm<'a> {
         let mut output = Value::None;
         let body = for_loop.body();
         let span = for_loop.span();
-        for (index, item) in items.iter().cloned().enumerate() {
+        for (index, item) in items.into_iter().enumerate() {
             self.step(span)?;
+            let key = item_key(&item);
             self.enter();
             let result = self
                 .pattern(for_loop.pattern(), item, true)
@@ -1766,6 +1771,7 @@ impl<'a> Vm<'a> {
                 Frame::Iteration {
                     span,
                     index: index as u64,
+                    item: key,
                 },
             );
             output = self.join(output, value, body.span())?;
@@ -1773,7 +1779,6 @@ impl<'a> Vm<'a> {
                 break;
             }
         }
-        variants::record(self.db, span, items.iter(), &output);
         Ok(output)
     }
 
