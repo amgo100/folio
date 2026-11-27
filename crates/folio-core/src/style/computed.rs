@@ -279,6 +279,36 @@ impl<'a> Styler<'a> {
         style
     }
 
+    /// `style` with the values of the properties `ids` taken from `from`:
+    /// a parent made of two, such as the document's style with the
+    /// language and font of a note's anchor (SPEC §7.8).
+    pub(super) fn adopt(
+        &mut self,
+        style: &ComputedStyle,
+        from: &ComputedStyle,
+        ids: &[PropId],
+    ) -> ComputedStyle {
+        let props = self.props;
+        let mut groups = style.0.groups.clone();
+        let mut changed = false;
+        for &id in ids {
+            let prop = props.get(id);
+            let (group, slot) = (prop.group, prop.slot as usize);
+            let value = from.get(props, id);
+            if groups[group.index()].values[slot] == *value {
+                continue;
+            }
+            let mut values = groups[group.index()].values.clone();
+            values.make_mut()[slot] = value.clone();
+            groups[group.index()] = self.group(PropertyGroup::new(props, group, values));
+            changed = true;
+        }
+        if !changed {
+            return style.clone();
+        }
+        self.style(groups)
+    }
+
     /// The style of a node with a parent's style and the declarations that
     /// apply to it, lowest priority first: a later declaration of a
     /// property replaces an earlier one. A value that does not fit its

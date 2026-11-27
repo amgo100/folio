@@ -552,6 +552,15 @@ impl SyntaxNode {
         }
     }
 
+    /// The height of the node's subtree: 1 for a leaf, one more than its
+    /// tallest child for an inner node. The parser bounds it (#380).
+    pub(super) fn height(&self) -> usize {
+        match self.node_ref() {
+            NodeRef::Leaf(_) | NodeRef::Error(_) => 1,
+            NodeRef::Inner(inner) => inner.height,
+        }
+    }
+
     /// The node's children, mutably.
     pub(super) fn children_mut(&mut self) -> &mut [SyntaxNode] {
         if let Some((inner, _)) = self.inner_and_span_mut() {
@@ -628,6 +637,8 @@ struct InnerNode {
     len: usize,
     /// The number of nodes in the whole subtree, including this node.
     descendants: usize,
+    /// The height of the subtree: one more than the tallest child's.
+    height: usize,
     /// Whether this node or any of its children contain an error/warning
     /// diagnostic.
     diagnosis: Diagnosis,
@@ -653,10 +664,16 @@ impl InnerNode {
         Self {
             len,
             descendants,
+            height: Self::height_of(&children),
             diagnosis,
             upper: 0,
             children,
         }
+    }
+
+    /// The height of an inner node with these children.
+    fn height_of(children: &[SyntaxNode]) -> usize {
+        1 + children.iter().map(SyntaxNode::height).max().unwrap_or(0)
     }
 
     /// Assign span numbers `within` an interval to this node's subtree or just
@@ -796,6 +813,7 @@ impl InnerNode {
             replacement_vec.drain(replacement_range.clone()),
         );
         range.end = range.start + replacement_range.len();
+        self.height = Self::height_of(&self.children);
 
         // Renumber the new children. Retries until it works, taking
         // exponentially more children into account.
@@ -855,6 +873,7 @@ impl InnerNode {
         self.len = self.len + new_len - prev_len;
         self.descendants = self.descendants + new_descendants - prev_descendants;
         self.diagnosis = Diagnosis::any(&self.children);
+        self.height = Self::height_of(&self.children);
     }
 
     /// Format the inner node with its `SyntaxKind` for debugging.
