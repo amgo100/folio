@@ -304,10 +304,14 @@ fn node_ids_are_stable_across_edits_elsewhere() {
     check_glyphs(&world, &pages(&world));
 }
 
+/// A glyph of a marker: its page, pen position and where a click on it
+/// leads.
+type Marker = (usize, f64, f64, Range<usize>);
+
 /// The glyphs whose source is the element written at `at`, such as a list
 /// item's marker: glyphs of a node that is not text, and maps as a whole.
 /// Each with its page, pen position and where a click on it leads.
-fn marker_glyphs(world: &World, pages: &Pages, at: usize) -> Vec<(usize, f64, f64, Range<usize>)> {
+fn marker_glyphs(world: &World, pages: &Pages, at: usize) -> Vec<Marker> {
     let source = world.source("main.fol").unwrap();
     let mut out = Vec::new();
     for (index, page) in pages.pages.iter().enumerate() {
@@ -403,8 +407,18 @@ fn find_with_markers(
     text: &str,
     at: usize,
     bytes: Range<usize>,
-) -> (Vec<span_map::Found>, Vec<(usize, f64, f64, Range<usize>)>) {
-    let world = world("", text);
+) -> (Vec<span_map::Found>, Vec<Marker>) {
+    find_styled("", text, at, bytes)
+}
+
+/// As [`find_with_markers`], with a stylesheet.
+fn find_styled(
+    style: &str,
+    text: &str,
+    at: usize,
+    bytes: Range<usize>,
+) -> (Vec<span_map::Found>, Vec<Marker>) {
+    let world = world(style, text);
     let laid = pages(&world);
     let fragments: Vec<_> = laid.pages.iter().map(|p| &p.fragment).collect();
     let found = span_map::Index::new(&world, &fragments).find("main.fol", bytes);
@@ -414,7 +428,7 @@ fn find_with_markers(
 /// Whether any found area of glyphs covers any of the markers. (Where no
 /// glyph shows the bytes, the innermost box that holds them is found, which
 /// may be the item's block around its label.)
-fn marks(found: &[span_map::Found], markers: &[(usize, f64, f64, Range<usize>)]) -> bool {
+fn marks(found: &[span_map::Found], markers: &[Marker]) -> bool {
     markers
         .iter()
         .any(|&(page, x, y, _)| found.iter().any(|f| f.glyphs && covers(f, page, x, y)))
@@ -512,6 +526,23 @@ fn a_footnote_anchor_is_found_after_its_call_not_inside_its_note() {
     assert!(marks(&found, &markers), "{found:?}");
     let inside = text.find("text.").unwrap() + 1;
     let (found, markers) = find_with_markers(text, at, inside..inside);
+    assert!(
+        found.iter().all(|f| f.glyphs) && !found.is_empty(),
+        "{found:?}"
+    );
+    assert!(!marks(&found, &markers), "{found:?}");
+}
+
+/// A figure's number stands for the whole figure: a cursor in its caption
+/// marks the caption's text alone.
+#[test]
+fn a_cursor_in_a_caption_marks_its_text_not_the_figure_number() {
+    let text = "#figure([Figured body.], caption: [A caption of words.])\n";
+    let at = text.find("figure").unwrap();
+    let inside = text.find("caption of").unwrap() + 1;
+    let style = "figure { numbering: \"1\"; }\n";
+    let (found, markers) = find_styled(style, text, at, inside..inside);
+    assert!(!markers.is_empty(), "the figure has no number");
     assert!(
         found.iter().all(|f| f.glyphs) && !found.is_empty(),
         "{found:?}"
