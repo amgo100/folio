@@ -235,6 +235,24 @@ impl<'a> Vm<'a> {
                 })
                 .collect(),
             Value::Str(text) => Content::node(Node::Text { text, span }),
+            // A token reference is a value for styling, not text (SPEC §5.4).
+            Value::Token(name) => {
+                return Err(EvalError::new(
+                    span,
+                    eco_format!(
+                        "`tok.{name}` names a stylesheet token and cannot be shown as text"
+                    ),
+                )
+                .with_hint("use it as the value of an `override` entry or a layout hint")
+                .into());
+            }
+            other if ops::holds_token(&other) => {
+                bail!(
+                    span,
+                    "{} holds a stylesheet token and cannot be shown as text",
+                    ops::short_repr(&other)
+                );
+            }
             other => Content::node(Node::Text {
                 text: self.repr(&other, span)?,
                 span,
@@ -1057,6 +1075,13 @@ impl<'a> Vm<'a> {
             Eq | Neq | Lt | Leq | Gt | Geq | In | NotIn => {
                 let lhs = self.expr(binary.lhs())?;
                 let rhs = self.expr(binary.rhs())?;
+                // A token reference has no value yet (SPEC §5.4).
+                if let Eq | Neq = op
+                    && let Some(message) =
+                        ops::token_error(if op == Eq { "==" } else { "!=" }, &lhs, &rhs)
+                {
+                    bail!(span, "{message}");
+                }
                 let result = match op {
                     Eq => ops::equal(&lhs, &rhs),
                     Neq => !ops::equal(&lhs, &rhs),
@@ -2011,6 +2036,8 @@ fn field(target: Value, name: &str, span: Span) -> EvalResult<Value> {
         },
         Value::Module(module) => match module.scope().get(name) {
             Some(value) => Ok(value.clone()),
+            // `tok.warn`: a token reference (SPEC §5.4).
+            None if let Some(token) = module.token(name) => Ok(token),
             None if module.failed(name) => Err(Stop::Reported),
             None => bail!(span, "module `{}` does not contain `{name}`", module.name()),
         },
