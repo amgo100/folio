@@ -18,7 +18,7 @@
 //! 8. **Layout**, for the fixed-layout targets (PDF, live): the text stage
 //!    ([`text`](crate::text::text)), the paragraph builder
 //!    ([`lines`](crate::layout::lines)) and the page builder
-//!    ([`pages`](crate::layout::pages)), which read the step-styled tree.
+//!    ([`pages`](crate::layout::pages())), which read the step-styled tree.
 //! 9. **Emit**: the `folio` crate's `emit` query, which hands a
 //!    fixed-layout target's pages to its writer. The Office targets fork
 //!    after step styling and will take the step-styled tree (M4, M5).
@@ -32,8 +32,13 @@
 //! them read the tree from the stage before, and an edit that leaves the
 //! styled tree equal stops at Style (early cutoff, SPEC §2.3).
 
+use ecow::eco_format;
+
 use crate::db::{Build, Db};
-use crate::resolve::{Resolution, resolve_tree};
+use crate::diag::{self, Diagnostic};
+use crate::layout::pages;
+use crate::resolve::page_refs::{self, EXTRA_PASSES};
+use crate::resolve::{PageNumbers, Resolution, resolve_tree};
 use crate::style::{Styled, styles};
 
 /// The styled tree after Select (SPEC §2.1, §6.3): the nodes whose computed
@@ -101,13 +106,140 @@ pub fn sequence(db: &dyn Db, build: Build<'_>) -> Option<Sequenced> {
 /// Resolves the counters, references, citations and queries of a build
 /// (stage 6), or `None` when the document could not be styled: counters,
 /// markers and references so far ([`resolve_tree`]).
+///
+/// Page-number references show the page numbers that [`settle`] found
+/// for the build, or, for a layout pass of the fixpoint, those the pass
+/// was made with. What does not depend on pages is resolved once for a
+/// build and its passes ([`resolve_counters`]).
 #[salsa::tracked(returns(ref))]
 pub fn resolve(db: &dyn Db, build: Build<'_>) -> Option<Resolved> {
+    let counted = resolve_counters(db, build.base(db)).as_ref()?;
+    let mut resolution = counted.resolution.clone();
+    if !resolution.page_targets().is_empty() {
+        match build.pass(db) {
+            Some(numbers) => resolution.set_pages(numbers),
+            None => {
+                let numbers = settle(db, build);
+                resolution.set_pages(numbers);
+                report_unsettled(db, &resolution);
+            }
+        }
+    }
+    Some(Resolved {
+        styled: counted.styled.clone(),
+        resolution,
+    })
+}
+
+/// Resolves what does not depend on pages: [`resolve`] without the page
+/// numbers of page-number references, which show [`UNRESOLVED`] here.
+///
+/// [`UNRESOLVED`]: crate::resolve::UNRESOLVED
+#[salsa::tracked(returns(ref))]
+pub fn resolve_counters(db: &dyn Db, build: Build<'_>) -> Option<Resolved> {
     let sequenced = sequence(db, build).as_ref()?;
     Some(Resolved {
         styled: sequenced.styled.clone(),
         resolution: resolve_tree(db, build, &sequenced.styled),
     })
+}
+
+/// The page numbers that a build's page-number references show: the
+/// bounded fixpoint of [`page_refs`], run as layout passes of the build
+/// (SPEC §2.3).
+///
+/// The first pass knows no page. Each pass is the build with its
+/// references set to the numbers the pass before measured, a key of its
+/// own ([`Build::pass`]), so every pass is memoised like the build, and
+/// the shaping, line-break and page caches serve the paragraphs and pages
+/// that a pass leaves as they were. The passes stop when one measures the
+/// numbers it was set with, or freeze the numbers after the extra passes;
+/// the build is then laid out with them, as the last pass was. The
+/// passes always start from no page known, so the numbers do not depend on
+/// which stage a host asks for first or on what an earlier revision
+/// found (SPEC §2.4).
+///
+/// A DOCX or PPTX build measures its tree with Folio's layout too, which
+/// gives the cached results of its page fields (SPEC §11.2); the text
+/// stage reports no layout warnings for it.
+#[salsa::tracked(returns(ref))]
+pub fn settle(db: &dyn Db, build: Build<'_>) -> PageNumbers {
+    let build = build.base(db);
+    let project = build.project(db);
+    let variant = build.variant(db).clone();
+    let Some(counted) = resolve_counters(db, build).as_ref() else {
+        return PageNumbers::default();
+    };
+    let mut used = PageNumbers::default().for_targets(counted.resolution.page_targets());
+    loop {
+        let pass = Build::with_pass(
+            db,
+            project,
+            build.target(db),
+            variant.clone(),
+            Some(used.clone()),
+        );
+        let Some(pages) = pages(db, pass).as_ref() else {
+            return used;
+        };
+        let targets: Vec<_> = used.pages.iter().map(|(target, _)| *target).collect();
+        let measured: Vec<Option<u32>> = pages
+            .pages_of(&targets)
+            .into_iter()
+            .map(|page| page.and_then(|i| u32::try_from(i + 1).ok()))
+            .collect();
+        let next = page_refs::next(&used, &measured);
+        if next == used || next.frozen {
+            return next;
+        }
+        used = next;
+    }
+}
+
+/// Warns at each page-number reference whose target's page did not
+/// settle, so its number was frozen, and at each whose target the build's
+/// layout puts on no page, so it shows [`UNRESOLVED`].
+///
+/// [`UNRESOLVED`]: crate::resolve::UNRESOLVED
+fn report_unsettled(db: &dyn Db, resolution: &Resolution) {
+    let numbers = &resolution.pages;
+    for r in &resolution.references {
+        let Some(target) = r.target.filter(|_| r.page.is_some()) else {
+            continue;
+        };
+        if numbers.unsettled.contains(&target.location) {
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    r.span,
+                    eco_format!(
+                        "the page of `<{}>` did not settle after {EXTRA_PASSES} more layout \
+                         passes, so this reference shows the last pass's page, which may be wrong",
+                        r.label
+                    ),
+                )
+                .with_hint(
+                    "the reference's own number moves its target between pages; rewording \
+                     the text before the target, or a break before it, settles it",
+                ),
+            );
+        } else if numbers.page(target.location).is_none() {
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    r.span,
+                    eco_format!(
+                        "`<{}>` is on no page, so the reference has no page number to show",
+                        r.label
+                    ),
+                )
+                .with_hint(
+                    "an inline element has no box of its own to find; refer to a block \
+                     element, such as a heading, a figure or a display equation",
+                ),
+            );
+        }
+    }
 }
 
 /// What the Resolve stage resolved in a build, or `None` when the document

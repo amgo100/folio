@@ -69,7 +69,8 @@ use super::{Lines, lines, report_lines};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
-use crate::pipeline::step_styled;
+use crate::pipeline::{resolution, step_styled};
+use crate::resolve::PageNumbers;
 use crate::span_map::source_ref;
 use crate::style::{DeclValue, NodeName, NodeView, Position, Properties, Styled, Subject};
 use crate::text::{Text, TextBlock, TextObject, text};
@@ -100,9 +101,44 @@ pub struct Pages {
     /// names leaves the hashes as they were, so a watcher draws every page
     /// again when a font file changes.
     pub hashes: EcoVec<u64>,
+    /// The page numbers the build's page-number references were set with
+    /// (SPEC §2.3): those its layout pass was keyed by, or those the
+    /// fixpoint settled on for the build itself. Empty when the build has
+    /// none. The fixpoint keeps its own record of them; these tell a
+    /// reader of the pages which numbers they show.
+    pub page_refs: PageNumbers,
 }
 
 impl Pages {
+    /// The page each element instance of `targets` starts on, by index,
+    /// in the order given: the first page with a box of it, or `None`
+    /// where no page has one, as for an inline element, whose text is set
+    /// in its paragraph's lines without a box of its own. This is the map
+    /// from locations to pages that page-number references read.
+    pub fn pages_of(&self, targets: &[Location]) -> Vec<Option<usize>> {
+        // Each target's index, looked up but never iterated.
+        let mut index_of: HashMap<Location, Vec<usize>> = HashMap::new();
+        for (i, target) in targets.iter().enumerate() {
+            index_of.entry(*target).or_default().push(i);
+        }
+        let mut found: Vec<Option<usize>> = vec![None; targets.len()];
+        let mut left = targets.len();
+        for (index, page) in self.pages.iter().enumerate() {
+            if left == 0 {
+                break;
+            }
+            visit(&page.fragment, &mut |location| {
+                if let Some(indices) = index_of.remove(&location) {
+                    for i in indices {
+                        found[i] = Some(index);
+                        left -= 1;
+                    }
+                }
+            });
+        }
+        found
+    }
+
     /// The indices of the pages that differ from those of `before` by
     /// their content hash: pages whose hash changed, and pages that
     /// `before` did not have. These are the pages a watcher draws again.
@@ -132,6 +168,22 @@ impl Pages {
             })
             .map(|(i, _)| i)
             .collect()
+    }
+}
+
+/// Calls `f` with the location of a fragment and of every fragment and
+/// object box inside it, in painting order.
+fn visit(fragment: &Fragment, f: &mut dyn FnMut(Location)) {
+    let location = fragment.location();
+    if location != Location::DETACHED {
+        f(location);
+    }
+    for (_, item) in &fragment.items {
+        match item {
+            FragmentItem::Group(group) => visit(group, f),
+            FragmentItem::Object(object) => f(object.location),
+            _ => {}
+        }
     }
 }
 
@@ -274,6 +326,12 @@ impl Debug for Regions<'_> {
 /// the page builder reports the lines of paragraphs that a region breaks
 /// at another width, which only the test hooks of [`paginate`] make, and
 /// [`lines`] is to leave them to it once masters vary.
+///
+/// The pages carry the page numbers their page-number references were set
+/// with ([`Pages::page_refs`]); the fixpoint finds where they put each
+/// target ([`Pages::pages_of`], [`crate::pipeline::settle`]). A layout
+/// pass of the fixpoint reports nothing here: the build reports what its
+/// own layout finds.
 #[salsa::tracked(returns(ref))]
 pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     // The lines at the master's widths, broken in parallel: what the page
@@ -284,7 +342,10 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let props = &styled.properties;
     let fonts = fonts(db, build.project(db));
     let (master, requested) = PageMaster::checked(&styled.page, props);
-    if let Some(requested) = requested {
+    let quiet = build.is_pass(db);
+    if let Some(requested) = requested
+        && !quiet
+    {
         report_page_size(db, build, master, requested, text.root.span);
     }
     let project = build.project(db);
@@ -295,7 +356,10 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         fonts,
         master,
     };
-    Some(build_pages(
+    let page_refs = resolution(db, build)
+        .map(|r| r.pages.clone())
+        .unwrap_or_default();
+    let pages = build_pages(
         &input,
         db.layout_cache(),
         db.page_cache(),
@@ -303,12 +367,16 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         // An edit stops the query between pages (SPEC §2.3).
         &mut || db.unwind_if_revision_cancelled(),
         &mut |out, rebroken| {
+            if quiet {
+                return;
+            }
             report(db, out);
             for (paragraph, layout) in rebroken {
                 report_lines(db, project, &text.paragraphs[*paragraph], layout);
             }
         },
-    ))
+    );
+    Some(Pages { page_refs, ..pages })
 }
 
 /// The pages of a build as [`pages()`] makes them, from the stages before
@@ -473,6 +541,7 @@ fn build_pages(
         master,
         pages,
         hashes,
+        page_refs: PageNumbers::default(),
     }
 }
 
@@ -563,7 +632,7 @@ fn report_page_size(
     requested: Size,
     root: Span,
 ) {
-    let cascade = crate::style::cascade(db, build);
+    let cascade = crate::style::cascade(db, build.base(db));
     let page_size = cascade.properties.builtin("page-size");
     let page = NodeView {
         subject: Subject {
