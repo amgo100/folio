@@ -6,7 +6,6 @@ The page holds what `hayro-interpret` computes with transcendental float
 functions when Folio converts a PDF figure to SVG (SPEC §11.1, §2.4):
 
 - swatches in CalRGB and CalGray, whose gamma is a power;
-- a swatch in Lab, decoded with a cube;
 - a spot colour (Separation) whose tint transform is a PostScript
   calculator function (Type 4) that uses sin, cos, atan, exp, ln and log;
 - an axial shading of that spot colour through an exponential function
@@ -15,7 +14,7 @@ functions when Folio converts a PDF figure to SVG (SPEC §11.1, §2.4):
 
 Colours end as 8-bit values, which hide a difference in the last bit of a
 float function almost always. So the spot colour is a test pattern: each
-channel is the fractional part of a million times a sum of those
+channel is the fractional part of 10^4 or 10^5 times a sum of those
 functions, which turns a one-unit difference in the last place into a
 visible one. Its swatches and its shading, sampled at hundreds of points,
 give a PDF whose bytes change if any of these functions gives other bits,
@@ -36,10 +35,9 @@ CAL_RGB = (
     " /Matrix [0.4124 0.2126 0.0193 0.3576 0.7152 0.1192 0.1805 0.0722 0.9505] >>]"
 )
 CAL_GRAY = "[/CalGray << /WhitePoint [0.9505 1 1.089] /Gamma 1.8 >>]"
-LAB = "[/Lab << /WhitePoint [0.9505 1 1.089] /Range [-100 100 -100 100] >>]"
 
 # The spot colour's tint transform: tint t in [0, 1] to an RGB colour, where
-# frac(x) = |x mod 1|:
+# frac(x) = x - floor(x):
 #   r = frac(10^4 atan(5 t, 12))
 #   g = frac(10^5 (sin(360 t) + cos(180 t)))
 #   b = frac(10^5 (log(1 + 9 t) + ln(1 + t) + t ^ 0.6))
@@ -47,12 +45,12 @@ LAB = "[/Lab << /WhitePoint [0.9505 1 1.089] /Range [-100 100 -100 100] >>]"
 # tints 1 and 0.4921875 (the two swatches), r differs between the C
 # libraries of x86-64 and aarch64 Linux (#300, #304).
 TINT = (
-    b"{ dup 5 mul 12 atan 10000 mul 1 mod abs"
+    b"{ dup 5 mul 12 atan 10000 mul dup floor sub"
     b" exch dup 360 mul sin"
-    b" 1 index 180 mul cos add 100000 mul 1 mod abs"
+    b" 1 index 180 mul cos add 100000 mul dup floor sub"
     b" exch dup 9 mul 1 add log"
     b" 1 index 1 add ln add"
-    b" exch 0.6 exp add 100000 mul 1 mod abs }"
+    b" exch 0.6 exp add 100000 mul dup floor sub }"
 )
 
 # The CalRGB shading's function: s in [0, 1] to a CalRGB colour.
@@ -67,8 +65,8 @@ q
 /CalRGB cs 0.85 0.35 0.15 sc 10 70 40 40 re f
 /CalRGB cs 0.2 0.55 0.8 sc 55 70 40 40 re f
 /CalGray cs 0.45 sc 100 70 40 40 re f
-/Lab cs 62 38 -42 sc 145 70 40 40 re f
-/Lab cs 35 -20 30 sc 190 70 40 40 re f
+/CalRGB cs 0.55 0.3 0.75 sc 145 70 40 40 re f
+/CalGray cs 0.8 sc 190 70 40 40 re f
 /Spot cs 0.4921875 scn 10 40 40 20 re f
 /Spot cs 1 scn 55 40 40 20 re f
 q 100 40 130 20 re W n /SpotRamp sh Q
@@ -84,27 +82,26 @@ def objects():
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {WIDTH} {HEIGHT}]"
-            " /Resources << /ColorSpace << /CalRGB 5 0 R /CalGray 6 0 R /Lab 7 0 R"
-            " /Spot 8 0 R >> /Shading << /SpotRamp 10 0 R /RgbRamp 12 0 R >> >>"
+            " /Resources << /ColorSpace << /CalRGB 5 0 R /CalGray 6 0 R"
+            " /Spot 7 0 R >> /Shading << /SpotRamp 9 0 R /RgbRamp 11 0 R >> >>"
             " /Contents 4 0 R >>"
         ).encode("ascii"),
         stream(b"", CONTENT),
         CAL_RGB.encode("ascii"),
         CAL_GRAY.encode("ascii"),
-        LAB.encode("ascii"),
-        b"[/Separation /Spectrum /DeviceRGB 9 0 R]",
+        b"[/Separation /Spectrum /DeviceRGB 8 0 R]",
         stream(
             b"/FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1]",
             TINT,
         ),
         (
-            b"<< /ShadingType 2 /ColorSpace 8 0 R /Coords [100 0 230 0]"
-            b" /Function 11 0 R /Extend [true true] >>"
+            b"<< /ShadingType 2 /ColorSpace 7 0 R /Coords [100 0 230 0]"
+            b" /Function 10 0 R /Extend [true true] >>"
         ),
         b"<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1.7 >>",
         (
             b"<< /ShadingType 2 /ColorSpace 5 0 R /Coords [10 0 230 0]"
-            b" /Function 13 0 R /Extend [true true] >>"
+            b" /Function 12 0 R /Extend [true true] >>"
         ),
         stream(
             b"/FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1]",

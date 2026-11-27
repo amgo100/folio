@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The patched copies of upstream crates in third_party/ (SPEC §2.4,
 # D-300-1): crates whose floating-point code calls the platform's maths
-# library, changed to call the `libm` crate instead, so that SVG figures
-# give the same PDF bytes on every platform. third_party/README.md
-# describes them.
+# library, changed to call the `libm` crate instead, so that SVG figures,
+# and PDF figures converted to SVG, give the same PDF bytes on every
+# platform. third_party/README.md describes them.
 #
 # Usage: scripts/patch-third-party.sh [--check | --diff <crate>]
 #   (none)          rebuild every copy: download the upstream .crate from

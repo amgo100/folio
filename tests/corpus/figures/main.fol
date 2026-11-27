@@ -18,7 +18,7 @@ The forces on a block on a ramp are drawn in @fig:ramp, with a shadow under the 
 
 Colour swatches from a printer's PDF keep their calibrated colours, spot colours and blends (@fig:spectrum).
 
-#figure[#image("assets/spectrum.pdf", alt: "Five colour swatches in calibrated and Lab colour, two swatches of a spot colour, and two colour blends, one through the spot colour and one from blue to yellow", width: 80%)][Colour swatches and blends] <fig:spectrum>
+#figure[#image("assets/spectrum.pdf", alt: "Five colour swatches in calibrated colour, two swatches of a spot colour, and two colour blends, one through the spot colour and one from blue to yellow", width: 80%)][Colour swatches and blends] <fig:spectrum>
 
 = Pictures
 

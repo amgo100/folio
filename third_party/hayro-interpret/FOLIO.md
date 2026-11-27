@@ -20,8 +20,10 @@ a comment that starts with `Folio:`.
   `powf`, `logf`, `log10f`).
 - `src/function/type2.rs`: exponential functions with `libm::powf`.
 - `src/color.rs`: CalGray and CalRGB gamma, the sRGB transfer function and
-  the default range of indexed colour with `libm::powf`; the Lab decode's
-  cubes multiplied out instead of `powi`.
+  the default range of indexed colour with `libm::powf`; the cubes of the
+  L* decode in CalRGB's black-point compensation multiplied out instead of
+  `powi`. Lab and ICC-based colour go through `moxcms`, which this patch
+  does not change (#312).
 - `src/shading.rs`: the Bernstein polynomials of patch meshes multiplied
   out, and the largest coordinate and component values of mesh data with
   `libm::ldexpf` (exact powers of two) instead of `powi`.

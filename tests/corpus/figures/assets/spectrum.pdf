@@ -7,17 +7,17 @@ endobj
 << /Type /Pages /Kids [3 0 R] /Count 1 >>
 endobj
 3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 120] /Resources << /ColorSpace << /CalRGB 5 0 R /CalGray 6 0 R /Lab 7 0 R /Spot 8 0 R >> /Shading << /SpotRamp 10 0 R /RgbRamp 12 0 R >> >> /Contents 4 0 R >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 120] /Resources << /ColorSpace << /CalRGB 5 0 R /CalGray 6 0 R /Spot 7 0 R >> /Shading << /SpotRamp 9 0 R /RgbRamp 11 0 R >> >> /Contents 4 0 R >>
 endobj
 4 0 obj
-<<  /Length 356 >>
+<<  /Length 361 >>
 stream
 q
 /CalRGB cs 0.85 0.35 0.15 sc 10 70 40 40 re f
 /CalRGB cs 0.2 0.55 0.8 sc 55 70 40 40 re f
 /CalGray cs 0.45 sc 100 70 40 40 re f
-/Lab cs 62 38 -42 sc 145 70 40 40 re f
-/Lab cs 35 -20 30 sc 190 70 40 40 re f
+/CalRGB cs 0.55 0.3 0.75 sc 145 70 40 40 re f
+/CalGray cs 0.8 sc 190 70 40 40 re f
 /Spot cs 0.4921875 scn 10 40 40 20 re f
 /Spot cs 1 scn 55 40 40 20 re f
 q 100 40 130 20 re W n /SpotRamp sh Q
@@ -33,50 +33,46 @@ endobj
 [/CalGray << /WhitePoint [0.9505 1 1.089] /Gamma 1.8 >>]
 endobj
 7 0 obj
-[/Lab << /WhitePoint [0.9505 1 1.089] /Range [-100 100 -100 100] >>]
+[/Separation /Spectrum /DeviceRGB 8 0 R]
 endobj
 8 0 obj
-[/Separation /Spectrum /DeviceRGB 9 0 R]
-endobj
-9 0 obj
-<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 191 >>
+<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 203 >>
 stream
-{ dup 5 mul 12 atan 10000 mul 1 mod abs exch dup 360 mul sin 1 index 180 mul cos add 100000 mul 1 mod abs exch dup 9 mul 1 add log 1 index 1 add ln add exch 0.6 exp add 100000 mul 1 mod abs }
+{ dup 5 mul 12 atan 10000 mul dup floor sub exch dup 360 mul sin 1 index 180 mul cos add 100000 mul dup floor sub exch dup 9 mul 1 add log 1 index 1 add ln add exch 0.6 exp add 100000 mul dup floor sub }
 endstream
 endobj
-10 0 obj
-<< /ShadingType 2 /ColorSpace 8 0 R /Coords [100 0 230 0] /Function 11 0 R /Extend [true true] >>
+9 0 obj
+<< /ShadingType 2 /ColorSpace 7 0 R /Coords [100 0 230 0] /Function 10 0 R /Extend [true true] >>
 endobj
-11 0 obj
+10 0 obj
 << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1.7 >>
 endobj
-12 0 obj
-<< /ShadingType 2 /ColorSpace 5 0 R /Coords [10 0 230 0] /Function 13 0 R /Extend [true true] >>
+11 0 obj
+<< /ShadingType 2 /ColorSpace 5 0 R /Coords [10 0 230 0] /Function 12 0 R /Extend [true true] >>
 endobj
-13 0 obj
+12 0 obj
 << /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 57 >>
 stream
 { dup 0.6 exp exch dup 90 mul sin exch 2 exp 1 exch sub }
 endstream
 endobj
 xref
-0 14
+0 13
 0000000000 65535 f 
 0000000015 00000 n 
 0000000064 00000 n 
 0000000121 00000 n 
-0000000343 00000 n 
-0000000751 00000 n 
-0000000905 00000 n 
-0000000977 00000 n 
-0000001061 00000 n 
-0000001117 00000 n 
-0000001410 00000 n 
-0000001524 00000 n 
-0000001599 00000 n 
-0000001712 00000 n 
+0000000331 00000 n 
+0000000744 00000 n 
+0000000898 00000 n 
+0000000970 00000 n 
+0000001026 00000 n 
+0000001331 00000 n 
+0000001444 00000 n 
+0000001519 00000 n 
+0000001632 00000 n 
 trailer
-<< /Size 14 /Root 1 0 R >>
+<< /Size 13 /Root 1 0 R >>
 startxref
-1871
+1791
 %%EOF

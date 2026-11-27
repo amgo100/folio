@@ -48,6 +48,10 @@ const ALLOWED: &[(&str, &str, &str, usize, &str)] = &[(
     "`f32x8::powf`, tiny-skia's own polynomial approximation in IEEE operations",
 )];
 
+/// The patched crates whose patch needs no `libm`: `hayro-syntax` only
+/// multiplies out a `powi`.
+const WITHOUT_LIBM: &[&str] = &["hayro-syntax"];
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -293,11 +297,8 @@ fn every_build_uses_the_patched_crates() {
                 .iter()
                 .find(|p| p.contains(&format!("\nversion = \"{version}\"\n")))
                 .unwrap_or_else(|| panic!("{lock} has no {name} {version}"));
-            let copy =
-                fs::read_to_string(root().join("third_party").join(&name).join("Cargo.toml"))
-                    .unwrap();
             assert!(
-                !copy.contains("\n[dependencies.libm]\n") || patched.contains("\n \"libm\",\n"),
+                WITHOUT_LIBM.contains(&name.as_str()) || patched.contains("\n \"libm\",\n"),
                 "{lock} is stale: {name} {version} does not depend on libm, as \
                  its patched copy does; regenerate the lockfile"
             );
@@ -342,10 +343,11 @@ fn calculator_colours_come_from_libm() {
     // under PDF/UA (§11.1). Its spot colour's tint transform, a PostScript
     // calculator function, multiplies atan, sin, cos, log, ln and a power by
     // 10^4 or 10^5 and keeps the fraction, so that a one-unit difference in
-    // the last place shows in the 8-bit colour. The swatch at tint 1 must
-    // have the colour that libm gives, step by step as hayro evaluates the
-    // program in f32 (#304); there, the C libraries of x86-64 and aarch64
-    // Linux give atan(5, 12) red channels 4 levels apart.
+    // the last place shows in the 8-bit colour. Its two swatches must have
+    // the colours that libm gives, step by step as hayro evaluates the
+    // program in f32 (#304); at both tints, the C libraries of x86-64 and
+    // aarch64 Linux give red channels apart. This checks only the
+    // calculator; the scan above guards every patched call.
     let path = root().join("tests/corpus/figures/assets/spectrum.pdf");
     let pdf = hayro_svg::hayro_syntax::Pdf::new(Arc::new(fs::read(path).unwrap())).unwrap();
     let page = &pdf.pages()[0];
@@ -356,8 +358,24 @@ fn calculator_colours_come_from_libm() {
         &hayro_svg::SvgRenderSettings::default(),
     );
 
-    let t = 1.0f32;
-    let frac = |x: f32, scale: f32| ((x * scale) % 1.0).abs();
+    // The two swatches of the spot colour.
+    for t in [1.0f32, 0.4921875] {
+        let fill = spot_fill(t);
+        assert!(
+            svg.contains(&fill),
+            "no swatch with {fill} at tint {t} in:\n{svg}"
+        );
+    }
+}
+
+/// The fill of a swatch of `spectrum.pdf`'s spot colour at tint `t`: its
+/// tint transform (`spectrum.py`) computed with libm in f32, operator by
+/// operator, then the 8-bit colour hayro writes.
+fn spot_fill(t: f32) -> String {
+    let frac = |x: f32, scale: f32| {
+        let v = x * scale;
+        v - v.floor()
+    };
     let mut atan = libm::atan2f(t * 5.0, 12.0).to_degrees() % 360.0;
     if atan < 0.0 {
         atan += 360.0;
@@ -372,6 +390,5 @@ fn calculator_colours_come_from_libm() {
         100_000.0,
     );
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    let fill = format!("fill=\"#{:02x}{:02x}{:02x}\"", byte(r), byte(g), byte(b));
-    assert!(svg.contains(&fill), "no swatch with {fill} in:\n{svg}");
+    format!("fill=\"#{:02x}{:02x}{:02x}\"", byte(r), byte(g), byte(b))
 }

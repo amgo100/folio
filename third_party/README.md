@@ -5,9 +5,9 @@ This directory holds what Folio takes from other projects.
 - `typst/`: the licence and notice of Typst, from which `folio-syntax` and
   `folio-math` derive (see `NOTICE` at the repository root).
 - `hayro-interpret/`, `hayro-syntax/`, `kurbo/`, `resvg/`, `svgtypes/`,
-  `tiny-skia/`, `tiny-skia-path/`, `usvg/`: patched copies of crates.io releases, which the workspace uses in place
-  of the releases through `[patch.crates-io]` in the root `Cargo.toml` (and
-  in `fuzz/Cargo.toml`).
+  `tiny-skia/`, `tiny-skia-path/`, `usvg/`: patched copies of crates.io
+  releases, which the workspace uses in place of the releases through
+  `[patch.crates-io]` in the root `Cargo.toml` (and in `fuzz/Cargo.toml`).
 
 ## The patched crates
 
@@ -25,7 +25,7 @@ last bits of these numbers.
 PDF figures that Folio converts to SVG (under PDF/A or PDF/UA, or when
 their PDF version is newer than the output's; SPEC §11.1) are read by
 `hayro-interpret` and `hayro-syntax`, which `hayro-svg` turns into SVG.
-Their colour conversions (CalGray, CalRGB, Lab), shadings and PostScript
+Their calibrated colour (CalGray, CalRGB), shadings and PostScript
 calculator functions called the same functions, and are patched the same
 way (#304). `tests/corpus/figures/assets/spectrum.pdf`, written by
 `spectrum.py` beside it, exercises them.
@@ -60,8 +60,8 @@ which every way of computing `powi` gives exactly.
 
 Still unpatched, and outside what the corpus uses: krilla's sweep
 gradients (one `atan2`; Folio draws none), and `moxcms`, which converts
-ICC-based colour in PDF figures and picks SIMD and FMA paths by CPU at run
-time (#312 tracks it).
+Lab and ICC-based colour in PDF figures, fuses multiply-adds on aarch64
+only and picks SIMD paths by CPU at run time (#312 tracks it).
 
 The copies are not workspace members (`exclude` in the root `Cargo.toml`):
 they keep their own lints, and `cargo test --workspace` does not run their
