@@ -1706,7 +1706,9 @@ impl PageCache {
     ) -> Option<(Arc<PageOut>, Fragment)> {
         let now = page.caches.now;
         let take = |entry: &mut Entry| {
-            entry.used = now;
+            // The first pages are laid out on the clock of the last call of
+            // `pages`, which a call since may have passed.
+            entry.used = entry.used.max(now);
             if entry.dressed.0 != root {
                 entry.dressed = (root, dress(&entry.out.fragment, root));
             }

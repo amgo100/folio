@@ -784,7 +784,9 @@ impl Engine {
             font_generation,
             layout,
             overlays,
-            partial: false,
+            // The first pages of this revision, sent before a check that
+            // laid out nothing, are still all that is of it.
+            partial: frame.pages.is_none() && old.partial && old.revision == revision,
         }));
         self.settings.emit(Event::Updated(Arc::new(Update {
             revision,
@@ -842,11 +844,11 @@ impl Engine {
         let old = self.publish.borrow().clone();
         let mut pages = old.pages.clone();
         let (lists, spans) = self.place(&mut pages, first.lists);
-        // The marks on the pages sent now marked them as they were.
+        // The marks on the pages drawn again marked them as they were.
         let overlays: Vec<Overlay> = old
             .overlays
             .iter()
-            .filter(|o| !lists.contains(&o.page) && !spans.contains(&o.page))
+            .filter(|o| !lists.contains(&o.page))
             .cloned()
             .collect();
         self.last = Some(first.pages);

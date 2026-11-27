@@ -432,6 +432,8 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
             _ = stop.changed() => break,
         }
     }
+    // A client that is going no longer decides what is laid out first.
+    drop(seen);
     let _ = ws.close(None).await;
 }
 
