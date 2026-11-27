@@ -325,7 +325,10 @@ compiler = \"0.0.0\"
 
 /// What [`differential`] inserts into content: markup that opens and closes
 /// blocks, scripts, equations, references and labels, words, and breaks, so that
-/// random edits restructure the document as well as reflow it.
+/// random edits restructure the document as well as reflow it; and footnotes
+/// (one long enough to split across pages), page-number references and
+/// images, so that edits reach the page cache's queue of carried notes, the
+/// layout passes that settle page references, and footnote numbers per page.
 pub const CONTENT_SNIPPETS: &[&str] = &[
     "x",
     "word ",
@@ -366,11 +369,18 @@ pub const CONTENT_SNIPPETS: &[&str] = &[
     "żółć ",
     "biało-czerwony ",
     "A sentence long enough to move a line break or two further down the page. ",
+    "#footnote[A note.]",
+    "#footnote[A note long enough to be split across two pages when its anchor falls near the foot of one: it runs on over several lines, so that the page builder places as much of it as fits below the separator, carries the rest to the next page after a continuation mark, and keeps the carried part in the key of the next page's cache entry. It goes on a little longer still, to be sure that at least one line has to move.]",
+    "#ref(<l>, form: \"page\")",
+    "#ref(<eq:l>, form: \"page\")",
+    "#image(\"assets/wave.png\", alt: \"A wave\", width: 40%)",
+    "#figure[#image(\"assets/sledge.svg\", alt: \"A sledge\", width: 50%)][A sledge.] <l>",
 ];
 
 /// What [`differential`] inserts into stylesheets: rules, declarations of
-/// properties that layout reads, and the punctuation that opens and
-/// closes them.
+/// properties that layout reads (box properties, widows and orphans, page
+/// breaks, the page size and footnote numbering per page), and the
+/// punctuation that opens and closes them.
 pub const SHEET_SNIPPETS: &[&str] = &[
     "{",
     "}",
@@ -395,7 +405,51 @@ pub const SHEET_SNIPPETS: &[&str] = &[
     "page { margin-top: 60mm; }\n",
     "font-size: 9pt;",
     "space-after: 30pt;",
+    "figure { padding: 6pt 10pt; border: 2pt solid #000000; background: #eeeeee; }\n",
+    "paragraph { border: 1pt; padding: 4pt; }\n",
+    "doc { widows: 4; orphans: 4; }\n",
+    "heading { break-before: page; }\n",
+    "heading[level=1] { break-before: odd-page; }\n",
+    "page { page-size: A5; }\n",
+    "page { page-size: 120mm 160mm; }\n",
+    "page { counter-reset: footnote; }\n",
+    "footnote { font-size: 14pt; }\n",
 ];
+
+/// The images that [`CONTENT_SNIPPETS`] name, by the corpus project that
+/// holds each and its path there.
+const SNIPPET_IMAGES: &[(&str, &str)] = &[
+    ("figures", "assets/wave.png"),
+    ("acceptance", "assets/sledge.svg"),
+];
+
+/// The corpus projects, each given the images of [`SNIPPET_IMAGES`] as data
+/// files, so that an inserted image is laid out whichever project the edit
+/// is made to, rather than reported missing.
+fn with_snippet_images() -> Vec<corpus::Project> {
+    let mut projects = corpus::projects();
+    let images: Vec<(String, Vec<u8>)> = SNIPPET_IMAGES
+        .iter()
+        .map(|&(name, path)| {
+            let bytes = projects
+                .iter()
+                .find(|p| p.name == name)
+                .and_then(|p| p.files.get(path))
+                .unwrap_or_else(|| panic!("the corpus project {name} has {path}"))
+                .clone();
+            (path.to_string(), bytes)
+        })
+        .collect();
+    for project in &mut projects {
+        for (path, bytes) in &images {
+            project
+                .files
+                .entry(path.clone())
+                .or_insert_with(|| bytes.clone());
+        }
+    }
+    projects
+}
 
 /// How many edits [`differential`] applies at most, so that one input stays
 /// within a few seconds.
@@ -423,7 +477,8 @@ pub struct Edits {
 }
 
 impl Edits {
-    /// Reads a project (the first byte picks one of [`corpus::projects`])
+    /// Reads a project (the first byte picks one of [`corpus::projects`],
+    /// given the images the snippets name)
     /// and then up to [`MAX_EDITS`] edits of five bytes each: the source
     /// (an index into the project's sources in order of path), where the
     /// edit starts (two bytes, little-endian, wrapped to the text's
@@ -436,7 +491,7 @@ impl Edits {
         let (&first, rest) = data.split_first()?;
         // Read once: the fuzzer runs the target many times a second.
         static PROJECTS: OnceLock<Vec<corpus::Project>> = OnceLock::new();
-        let projects = PROJECTS.get_or_init(corpus::projects);
+        let projects = PROJECTS.get_or_init(with_snippet_images);
         let project = projects[usize::from(first) % projects.len()].clone();
         let ops = rest
             .chunks_exact(5)
