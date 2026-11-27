@@ -45,6 +45,7 @@ pub trait Component: Send + Sync {
 
 /// What identifies a component and what it supports.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct ComponentManifest {
     /// The component's name: `exam`, `@school/house`. It also gives the
     /// namespace that qualifies its elements and properties
@@ -86,6 +87,7 @@ impl ComponentManifest {
 /// What a component adds through the element, property, default stylesheet
 /// and template extension points (SPEC §3.2).
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct Declarations {
     /// Element schemas.
     pub elements: EcoVec<ElementSchema>,

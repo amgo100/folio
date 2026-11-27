@@ -374,13 +374,19 @@ impl Gather<'_> {
     /// Gathers the default stylesheets of the components in use, in the
     /// order they are registered (SPEC §3.2, §5.1).
     fn components(&mut self, host: Option<&ComponentHost>) {
-        for component in host.into_iter().flat_map(|h| h.components()) {
-            let Some(text) = &component.declarations.stylesheet else {
+        for (component, sheet) in host.into_iter().flat_map(|h| h.stylesheets()) {
+            if !sheet.errors.is_empty() {
+                for error in &sheet.errors {
+                    diag::report(
+                        self.db,
+                        Diagnostic::error(Span::detached(), error.clone())
+                            .with_hint("the component's default stylesheet is left out"),
+                    );
+                }
                 continue;
-            };
+            }
             let namespace = component.manifest.namespace();
-            let source = Source::detached_stylesheet(text.as_str());
-            let Some(sheet) = source.root().cast::<ast::Stylesheet<'_>>() else {
+            let Some(sheet) = sheet.source.root().cast::<ast::Stylesheet<'_>>() else {
                 continue;
             };
             let path = ProjectPath::new(&format!("folio-component-{namespace}.fsty"))
@@ -458,15 +464,8 @@ impl Gather<'_> {
     ) {
         for item in items {
             match *item {
-                StyleItem::Import(import) if self.component.is_some() => {
-                    diag::report(
-                        self.db,
-                        Diagnostic::error(
-                            import.to_untyped().span(),
-                            "a component's default stylesheet cannot import another",
-                        ),
-                    );
-                }
+                // The host rejects a component sheet that imports.
+                StyleItem::Import(_) if self.component.is_some() => {}
                 StyleItem::Import(import) => {
                     if let Some(imported) = import_path(path, import) {
                         // Imports bring in themes, whatever imports them.

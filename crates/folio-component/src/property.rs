@@ -6,6 +6,7 @@ use crate::value::{PropertyType, Value};
 
 /// A stylesheet property a component provides, such as `column-gap`.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct PropertyDecl {
     /// The property's name within its component's namespace.
     pub name: Name,

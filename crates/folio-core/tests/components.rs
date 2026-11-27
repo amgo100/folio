@@ -8,9 +8,8 @@ use std::num::NonZeroU16;
 use ecow::EcoVec;
 use folio_component::{
     Abs, Body, Component, ComponentManifest, ComponentName, ContentKind, CounterDecl, Declarations,
-    Effect, ElementKind, ElementSchema, FieldDecl, FieldType, INTERFACE_VERSION, LocaleString,
-    Name, PropertyDecl, PropertyType, QualifiedName, Registry, SlotDecl, Target, TemplateDecl,
-    Value,
+    Effect, ElementKind, ElementSchema, FieldDecl, FieldType, LocaleString, Name, PropertyDecl,
+    PropertyType, QualifiedName, Registry, SlotDecl, Target, TemplateDecl, Value,
 };
 use folio_core::component::{ComponentHost, Kind, Reason, Via, unhosted};
 use folio_core::diag::Severity;
@@ -36,12 +35,11 @@ struct TestComponent {
 
 impl Component for TestComponent {
     fn manifest(&self) -> ComponentManifest {
-        ComponentManifest {
-            name: ComponentName::new(self.name).unwrap(),
-            version: semver::Version::new(0, 3, 2),
-            interface: INTERFACE_VERSION,
-            targets: EcoVec::from([Target::Pdf, Target::Docx]),
-        }
+        ComponentManifest::new(
+            ComponentName::new(self.name).unwrap(),
+            semver::Version::new(0, 3, 2),
+            [Target::Pdf, Target::Docx],
+        )
     }
 
     fn declarations(&self) -> Declarations {
@@ -63,27 +61,21 @@ impl Component for TestComponent {
         ]));
         element.counter = Some(CounterDecl::default());
         element.ref_key = Some(name(self.element));
-        Declarations {
-            elements: EcoVec::from([element]),
-            properties: EcoVec::from([PropertyDecl {
-                name: name("marks-gap"),
-                ty: PropertyType::Length,
-                initial: Value::Length(Abs::mm(4.0)),
-                inherited: false,
-                effect: Effect::Layout,
-            }]),
-            templates: EcoVec::from([TemplateDecl {
-                element: name(self.element),
-                name: None,
-                parts: self.template.into(),
-            }]),
-            locale_strings: EcoVec::from([LocaleString {
-                lang: "en".into(),
-                key: name(self.element),
-                text: "Question".into(),
-            }]),
-            stylesheet: None,
-        }
+        let mut declarations = Declarations::new();
+        declarations.elements = EcoVec::from([element]);
+        declarations.properties = EcoVec::from([PropertyDecl::new(
+            name("marks-gap"),
+            PropertyType::Length,
+            Value::Length(Abs::mm(4.0)),
+        )]);
+        declarations.templates =
+            EcoVec::from([TemplateDecl::new(name(self.element), self.template)]);
+        declarations.locale_strings = EcoVec::from([LocaleString {
+            lang: "en".into(),
+            key: name(self.element),
+            text: "Question".into(),
+        }]);
+        declarations
     }
 }
 
@@ -340,4 +332,62 @@ fn declared_components_that_cannot_be_hosted() {
         ]
     );
     assert!(unhosted(&registry, &self::manifest("").components).is_empty());
+}
+
+/// A component with only a default stylesheet.
+struct Sheeted(&'static str);
+
+impl Component for Sheeted {
+    fn manifest(&self) -> ComponentManifest {
+        ComponentManifest::new(
+            ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 3, 2),
+            [Target::Pdf],
+        )
+    }
+
+    fn declarations(&self) -> Declarations {
+        let mut declarations = Declarations::new();
+        declarations.stylesheet = Some(self.0.into());
+        declarations
+    }
+}
+
+#[test]
+fn default_stylesheets_are_parsed_when_hosted() {
+    let manifest = manifest("");
+    let host = |sheet: &'static str| {
+        let mut registry = Registry::new();
+        registry.register(&Sheeted(sheet)).unwrap();
+        ComponentHost::new(&registry, &manifest.components, &Default::default()).unwrap()
+    };
+
+    let good = host("question { space-before: 1em; }\n");
+    let sheets: Vec<_> = good.stylesheets().collect();
+    assert_eq!(sheets.len(), 1);
+    assert_eq!(sheets[0].0.name().as_str(), "exam");
+    assert!(sheets[0].1.errors.is_empty());
+
+    // Errors are kept with the sheet, with where they are, and a sheet may
+    // not import.
+    let broken = host("question { space-before: 1em;\n@import \"x.fsty\";\n");
+    let (_, sheet) = broken.stylesheets().next().unwrap();
+    assert!(!sheet.errors.is_empty());
+    assert!(
+        sheet
+            .errors
+            .iter()
+            .all(|e| e.starts_with("component `exam`: default stylesheet")),
+        "{:?}",
+        sheet.errors
+    );
+    let imports = host("@import \"x.fsty\";\nquestion { indent: 0; }\n");
+    let (_, sheet) = imports.stylesheets().next().unwrap();
+    assert_eq!(
+        sheet.errors.as_slice(),
+        [
+            "component `exam`: default stylesheet, bytes 0..17: a component's default \
+          stylesheet cannot import another"
+        ]
+    );
 }

@@ -12,6 +12,7 @@ use crate::names::Name;
 /// to Office like any template a stylesheet writes. The core parses and
 /// checks it when the component is loaded.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct TemplateDecl {
     /// The element the template renders, within the component's namespace.
     pub element: Name,

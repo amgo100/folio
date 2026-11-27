@@ -61,6 +61,7 @@ pub struct ComponentHost {
 struct Hosted {
     registered: Registered,
     templates: Vec<Template>,
+    stylesheet: Option<DefaultSheet>,
 }
 
 impl ComponentHost {
@@ -90,9 +91,15 @@ impl ComponentHost {
                     Err(errs) => errors.extend(errs),
                 }
             }
+            let stylesheet = registered
+                .declarations
+                .stylesheet
+                .as_ref()
+                .map(|text| DefaultSheet::parse(registered.name(), text));
             hosted.push(Hosted {
                 registered: registered.clone(),
                 templates,
+                stylesheet,
             });
         }
         if !errors.is_empty() {
@@ -107,6 +114,14 @@ impl ComponentHost {
     /// The components in use, in registration order.
     pub fn components(&self) -> impl Iterator<Item = &Registered> {
         self.components.iter().map(|c| &c.registered)
+    }
+
+    /// The default stylesheets of the components in use, parsed, in
+    /// registration order (SPEC §3.2).
+    pub fn stylesheets(&self) -> impl Iterator<Item = (&Registered, &DefaultSheet)> {
+        self.components
+            .iter()
+            .filter_map(|c| Some((&c.registered, c.stylesheet.as_ref()?)))
     }
 
     /// Resolves an element name, qualified (`exam.question`) or not
@@ -341,6 +356,66 @@ impl Display for ResolveError {
 }
 
 impl std::error::Error for ResolveError {}
+
+/// A component's default stylesheet (SPEC §3.2), parsed when the component
+/// is hosted, with what is wrong with it.
+#[derive(Debug, Clone)]
+pub struct DefaultSheet {
+    /// The parsed stylesheet. Its spans are detached: it is in no project.
+    pub source: Source,
+    /// Its errors, each naming the component and, where it has one, the
+    /// byte range in the sheet. A sheet with errors is left out of every
+    /// cascade; a component that registered cleanly but has one is a bug
+    /// in that component.
+    pub errors: Vec<EcoString>,
+}
+
+/// Default sheets are equal when their text is: the rest is parsed from it.
+impl PartialEq for DefaultSheet {
+    fn eq(&self, other: &Self) -> bool {
+        self.source.text() == other.source.text()
+    }
+}
+
+impl Eq for DefaultSheet {}
+
+impl DefaultSheet {
+    fn parse(component: &ComponentName, text: &str) -> Self {
+        let source = Source::detached_stylesheet(text);
+        let error = |message: &str, range: Option<Range<usize>>| match range {
+            Some(r) => eco_format!(
+                "component `{component}`: default stylesheet, bytes {}..{}: {message}",
+                r.start,
+                r.end
+            ),
+            None => eco_format!("component `{component}`: default stylesheet: {message}"),
+        };
+        let (diagnostics, _) = source.root().errors_and_warnings();
+        let mut errors: Vec<EcoString> = diagnostics
+            .into_iter()
+            .map(|diag| {
+                let range = match diag.span.get() {
+                    DiagSpanKind::Number { num, sub_range, .. } => source.range(num, sub_range),
+                    DiagSpanKind::Range { range, .. } => Some(range),
+                    DiagSpanKind::Detached => None,
+                };
+                error(&diag.message, range)
+            })
+            .collect();
+        if let Some(sheet) = source.root().cast::<ast::Stylesheet<'_>>() {
+            for item in sheet.items() {
+                if let StyleItem::Import(import) = item {
+                    let range = source.find(import.to_untyped().span()).map(|n| n.range());
+                    errors.push(error(
+                        "a component's default stylesheet cannot import another",
+                        range,
+                    ));
+                }
+            }
+        }
+        Self { source, errors }
+    }
+}
 
 /// A component's render template, parsed as a stylesheet with one `render`
 /// block (SPEC §5.3).
