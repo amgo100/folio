@@ -1,7 +1,7 @@
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 08:53:08.814516874 +0000
-@@ -0,0 +1,24 @@
++++ b/FOLIO.md	2026-11-27 15:34:28.371613900 +0000
+@@ -0,0 +1,49 @@
 +# hayro-syntax 0.7.2, patched for Folio
 +
 +This is the crates.io release of `hayro-syntax` 0.7.2
@@ -23,12 +23,244 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +  did without the `std` feature, instead of calling `powi`, whose result
 +  the language leaves unspecified.
 +
++Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
++#333). These changes bound what reading one may take:
++
++- `src/lib.rs`: `MAX_NESTING` (256), the deepest arrays and dictionaries
++  are read, and `MAX_IMAGE_BYTES` (256 MiB, 8,192 × 8,192 pixels at four
++  bytes), the most memory the images of one interpretation may take
++  decoded, which `hayro-interpret` and Folio's image reader apply.
++- `src/byte_reader.rs`: the reader counts how many arrays and dictionaries
++  it is inside, and `Reader::nest` refuses one more past `MAX_NESTING`, so
++  that 100,000 nested `[` no longer overflow the stack.
++- `src/object/array.rs`, `src/object/dict.rs`: skipping an array or a
++  dictionary, and reading a dictionary whole, go through `Reader::nest`.
++- `src/object/array.rs`: an array item that cannot be read ends the
++  iteration instead of panicking (an input found by Folio's `image` fuzz
++  target, through `hayro-write`).
++- `src/filter/jpx.rs`, `src/filter/jbig2.rs`, `src/filter/ccitt.rs`,
++  `src/filter/mod.rs`, `src/object/stream.rs`: an image whose own header
++  (JPEG 2000, JBIG2) or decode parameters (CCITT) say it would take more
++  than `MAX_IMAGE_BYTES` decoded, at four bytes a pixel or more, is not
++  decoded, and fails with a new `DecodeFailure::ImageTooLarge`; its size
++  there need not match the image dictionary's, which `hayro-interpret`
++  checks.
++- `src/object/dict.rs`: `Dict::entries` leaves out an entry that cannot be
++  read instead of panicking, as the array iterator does.
++
 +The whole change is `third_party/patches/hayro-syntax.patch` in Folio's repository;
 +`scripts/patch-third-party.sh` rebuilds this directory from the release and
 +the patch, and `third_party/README.md` says how to move to a new release.
+diff -ruN a/src/byte_reader.rs b/src/byte_reader.rs
+--- a/src/byte_reader.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/byte_reader.rs	2026-11-27 15:34:28.371593143 +0000
+@@ -9,19 +9,42 @@
+     pub data: &'a [u8],
+     /// The current byte-offset.
+     pub offset: usize,
++    // Folio: how many arrays and dictionaries the reader is inside.
++    depth: u32,
+ }
+ 
+ impl<'a> Reader<'a> {
+     /// Create a new reader.
+     #[inline]
+     pub fn new(data: &'a [u8]) -> Self {
+-        Self { data, offset: 0 }
++        Self {
++            data,
++            offset: 0,
++            depth: 0,
++        }
+     }
+ 
+     /// Create a new reader at the given offset.
+     #[inline]
+     pub fn new_with(data: &'a [u8], offset: usize) -> Self {
+-        Self { data, offset }
++        Self {
++            data,
++            offset,
++            depth: 0,
++        }
++    }
++
++    /// Runs `f` one array or dictionary deeper, or returns `None` when that
++    /// would be deeper than [`crate::MAX_NESTING`] (Folio).
++    #[inline]
++    pub(crate) fn nest<T>(&mut self, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
++        if self.depth >= crate::MAX_NESTING {
++            return None;
++        }
++        self.depth += 1;
++        let result = f(self);
++        self.depth -= 1;
++        result
+     }
+ 
+     /// Returns `true` if the reader has reached the end of the data.
+diff -ruN a/src/filter/ccitt.rs b/src/filter/ccitt.rs
+--- a/src/filter/ccitt.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/ccitt.rs	2026-11-27 15:34:28.371027055 +0000
+@@ -8,6 +8,18 @@
+ use core::iter;
+ use hayro_ccitt::{DecodeSettings, Decoder, DecoderContext, EncodingMode};
+ 
++// Folio: whether an image's columns and rows would take more memory
++// decoded than `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn. Its
++// size comes from the decode parameters, not the image dictionary.
++pub(crate) fn too_large(params: &Dict<'_>, image_params: &ImageDecodeParams) -> bool {
++    let rows = params.get::<u32>(ROWS).unwrap_or(image_params.height);
++    let columns = params.get::<usize>(COLUMNS).unwrap_or(1728) as u64;
++    columns
++        .saturating_mul(u64::from(rows.max(image_params.height)))
++        .saturating_mul(4)
++        > crate::MAX_IMAGE_BYTES
++}
++
+ pub(crate) fn decode(
+     data: &[u8],
+     params: &Dict<'_>,
+@@ -18,6 +30,12 @@
+     let rows = params.get::<u32>(ROWS).unwrap_or(image_params.height);
+     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
+ 
++    // Folio: an image too large for `MAX_IMAGE_BYTES` is not decoded (see
++    // `too_large`, which `Filter::apply` checks first).
++    if too_large(params, image_params) {
++        return None;
++    }
++
+     let settings = DecodeSettings {
+         columns: params.get::<usize>(COLUMNS).unwrap_or(1728) as u32,
+         rows,
+diff -ruN a/src/filter/jbig2.rs b/src/filter/jbig2.rs
+--- a/src/filter/jbig2.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/jbig2.rs	2026-11-27 15:34:28.371057143 +0000
+@@ -8,6 +8,25 @@
+ use alloc::vec::Vec;
+ use core::iter;
+ 
++// Folio: whether an image's page would take more memory decoded than
++// `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn. Its size comes
++// from the JBIG2 data, not the image dictionary.
++pub(crate) fn too_large(data: &[u8], params: &Dict<'_>) -> bool {
++    let globals = params
++        .get::<Stream<'_>>(JBIG2_GLOBALS)
++        .and_then(|g| g.decoded().ok());
++    hayro_jbig2::Image::new_embedded(data, globals.as_deref())
++        .is_ok_and(|image| image_too_large(&image))
++}
++
++// Folio: see `too_large`.
++fn image_too_large(image: &hayro_jbig2::Image<'_>) -> bool {
++    u64::from(image.width())
++        .saturating_mul(u64::from(image.height()))
++        .saturating_mul(4)
++        > crate::MAX_IMAGE_BYTES
++}
++
+ /// Decode JBIG2 data from a PDF stream.
+ ///
+ /// The `params` dictionary may contain a `JBIG2Globals` entry pointing to
+@@ -23,6 +42,12 @@
+ 
+     let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref()).ok()?;
+ 
++    // Folio: an image too large for `MAX_IMAGE_BYTES` is not decoded (see
++    // `too_large`, which `Filter::apply` checks first).
++    if image_too_large(&image) {
++        return None;
++    }
++
+     // Whenever possible (if we don't have an indexed color space), we convert
+     // the data as 8-bit instead of 1-bit, so that it can be easier converted
+     // into an RGBA8 image.
+diff -ruN a/src/filter/jpx.rs b/src/filter/jpx.rs
+--- a/src/filter/jpx.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/jpx.rs	2026-11-27 15:34:28.370983072 +0000
+@@ -18,6 +18,27 @@
+     }
+ }
+ 
++// Folio: whether an image's header says it would take more memory decoded
++// than `MAX_IMAGE_BYTES`, at four bytes a pixel or more.
++pub(crate) fn too_large(data: &[u8], params: &ImageDecodeParams) -> bool {
++    let settings = DecodeSettings {
++        resolve_palette_indices: false,
++        strict: false,
++        target_resolution: params.target_dimension,
++    };
++    hayro_jpeg2000::Image::new(data, &settings).is_ok_and(|image| image_too_large(&image))
++}
++
++// Folio: see `too_large`.
++fn image_too_large(image: &hayro_jpeg2000::Image<'_>) -> bool {
++    let channels =
++        u64::from(image.color_space().num_channels()) + u64::from(image.has_alpha());
++    u64::from(image.width())
++        .saturating_mul(u64::from(image.height()))
++        .saturating_mul(channels.max(4))
++        > crate::MAX_IMAGE_BYTES
++}
++
+ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
+     use crate::object::stream::ImageColorSpace;
+ 
+@@ -48,6 +69,11 @@
+         },
+     };
+     let has_alpha = image.has_alpha();
++    // Folio: an image too large for `MAX_IMAGE_BYTES` is not decoded (see
++    // `too_large`, which `Filter::apply` checks first).
++    if image_too_large(&image) {
++        return None;
++    }
+     let bitmap = image.decode().ok()?;
+ 
+     let (mut data, mut alpha) = if !has_alpha {
+diff -ruN a/src/filter/mod.rs b/src/filter/mod.rs
+--- a/src/filter/mod.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/mod.rs	2026-11-27 15:34:28.371106207 +0000
+@@ -106,6 +106,19 @@
+             Self::DctDecode => {
+                 dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
+             }
++            // Folio: an image too large to decode is a failure of its own.
++            #[cfg(feature = "images")]
++            Self::CcittFaxDecode if ccitt::too_large(params, image_params) => {
++                Err(DecodeFailure::ImageTooLarge)
++            }
++            #[cfg(feature = "images")]
++            Self::Jbig2Decode if jbig2::too_large(data, params) => {
++                Err(DecodeFailure::ImageTooLarge)
++            }
++            #[cfg(feature = "images")]
++            Self::JpxDecode if jpx::too_large(data, image_params) => {
++                Err(DecodeFailure::ImageTooLarge)
++            }
+             #[cfg(feature = "images")]
+             Self::CcittFaxDecode => {
+                 ccitt::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/lib.rs	2026-11-27 15:34:28.370612632 +0000
+@@ -111,3 +111,12 @@
+ pub use data::PdfData;
+ pub use filter::*;
+ pub use pdf::*;
++
++// Folio: limits on hostile input (Folio #333; see FOLIO.md).
++/// The most memory, in bytes, that the images an interpretation decodes may
++/// take together: 8,192 × 8,192 pixels at four bytes each (Folio).
++pub const MAX_IMAGE_BYTES: u64 = 8_192 * 8_192 * 4;
++
++/// How deeply arrays and dictionaries may nest in an object; deeper ones
++/// are not read, so that reading them does not overflow the stack (Folio).
++pub const MAX_NESTING: u32 = 256;
 diff -ruN a/src/math.rs b/src/math.rs
 --- a/src/math.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/math.rs	2026-11-27 08:53:08.812608742 +0000
++++ b/src/math.rs	2026-11-27 15:34:28.371135466 +0000
 @@ -40,11 +40,8 @@
  
  #[inline(always)]
@@ -43,3 +275,112 @@ diff -ruN a/src/math.rs b/src/math.rs
      {
          let mut result = 1.0;
          let mut base = x;
+diff -ruN a/src/object/array.rs b/src/object/array.rs
+--- a/src/object/array.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/object/array.rs	2026-11-27 15:34:28.371194127 +0000
+@@ -70,6 +70,14 @@
+ 
+ impl Skippable for Array<'_> {
+     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
++        // Folio: arrays and dictionaries nested more deeply than
++        // `MAX_NESTING` are not read (see `Reader::nest`).
++        r.nest(|r| skip_inner(r, is_content_stream))
++    }
++}
++
++fn skip_inner(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
++    {
+         r.forward_tag(b"[")?;
+ 
+         loop {
+@@ -125,12 +133,17 @@
+         self.reader.skip_white_spaces_and_comments();
+ 
+         if !self.reader.at_end() {
+-            // Objects are already guaranteed to be valid.
++            // Folio: an item that cannot be read ends the iteration. The
++            // array was checked when it was skipped, but an item read on its
++            // own can still fail (found by Folio's `image` fuzz target), and
++            // unwrapping it panicked.
+             let item = self
+                 .reader
+-                .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx)
+-                .unwrap();
+-            return Some(item);
++                .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx);
++            if item.is_none() {
++                self.reader.jump_to_end();
++            }
++            return item;
+         }
+ 
+         None
+diff -ruN a/src/object/dict.rs b/src/object/dict.rs
+--- a/src/object/dict.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/object/dict.rs	2026-11-27 15:34:28.371212915 +0000
+@@ -99,9 +99,11 @@
+     pub fn entries(&self) -> impl Iterator<Item = (Name<'a>, MaybeRef<Object<'a>>)> + '_ {
+         let mut sorted_keys = self.keys().collect::<Vec<_>>();
+         sorted_keys.sort_by(|n1, n2| n1.as_ref().cmp(n2.as_ref()));
+-        sorted_keys.into_iter().map(|k| {
+-            let obj = self.get_raw(k.deref()).unwrap();
+-            (k, obj)
++        // Folio: an entry that cannot be read is left out rather than
++        // unwrapped, as `ArrayIter` does.
++        sorted_keys.into_iter().filter_map(|k| {
++            let obj = self.get_raw(k.deref())?;
++            Some((k, obj))
+         })
+     }
+ 
+@@ -158,6 +160,14 @@
+ 
+ impl Skippable for Dict<'_> {
+     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
++        // Folio: arrays and dictionaries nested more deeply than
++        // `MAX_NESTING` are not read (see `Reader::nest`).
++        r.nest(|r| skip_inner(r, is_content_stream))
++    }
++}
++
++fn skip_inner(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
++    {
+         r.forward_tag(b"<<")?;
+ 
+         loop {
+@@ -270,6 +280,21 @@
+     r: &mut Reader<'a>,
+     ctx: &ReaderContext<'a>,
+     start_tag: Option<&[u8]>,
++    end_tag: &[u8],
++    on_entry: F,
++) -> Option<&'a [u8]>
++where
++    F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
++{
++    // Folio: a dictionary read whole counts towards `MAX_NESTING` too, as
++    // entries it cannot read are read as objects.
++    r.nest(|r| parse_dict_with_inner(r, ctx, start_tag, end_tag, on_entry))
++}
++
++fn parse_dict_with_inner<'a, F>(
++    r: &mut Reader<'a>,
++    ctx: &ReaderContext<'a>,
++    start_tag: Option<&[u8]>,
+     end_tag: &[u8],
+     mut on_entry: F,
+ ) -> Option<&'a [u8]>
+diff -ruN a/src/object/stream.rs b/src/object/stream.rs
+--- a/src/object/stream.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/object/stream.rs	2026-11-27 15:34:28.371370437 +0000
+@@ -240,6 +240,10 @@
+     Decryption,
+     /// An unknown failure occurred.
+     Unknown,
++    /// An image stream would take more memory decoded than
++    /// [`crate::MAX_IMAGE_BYTES`], by its own header or decode parameters,
++    /// and was not decoded (Folio).
++    ImageTooLarge,
+ }
+ 
+ /// An image color space.

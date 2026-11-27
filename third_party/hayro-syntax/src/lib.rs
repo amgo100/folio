@@ -111,3 +111,12 @@ pub mod reader;
 pub use data::PdfData;
 pub use filter::*;
 pub use pdf::*;
+
+// Folio: limits on hostile input (Folio #333; see FOLIO.md).
+/// The most memory, in bytes, that the images an interpretation decodes may
+/// take together: 8,192 × 8,192 pixels at four bytes each (Folio).
+pub const MAX_IMAGE_BYTES: u64 = 8_192 * 8_192 * 4;
+
+/// How deeply arrays and dictionaries may nest in an object; deeper ones
+/// are not read, so that reading them does not overflow the stack (Folio).
+pub const MAX_NESTING: u32 = 256;

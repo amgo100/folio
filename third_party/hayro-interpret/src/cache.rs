@@ -4,11 +4,91 @@ use kurbo::Affine;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 type CacheMap = HashMap<u128, Option<Box<dyn Any + Send + Sync>>>;
+// Folio: the cache also carries the limits of one interpretation, as every
+// nested context, pattern, soft mask and image shares it (see `Budget`).
 #[derive(Clone)]
-pub(crate) struct Cache(Arc<Mutex<CacheMap>>);
+pub(crate) struct Cache(Arc<Mutex<CacheMap>>, pub(crate) Arc<Budget>);
+
+// Folio: what one interpretation of a page (with every form, pattern, soft
+// mask and glyph it draws) may do, so that a hostile file ends in bounded
+// time: the work is counted (an operator is one unit, a nested
+// interpretation `NESTED_COST`) and stops at `MAX_WORK`, and the images
+// decoded together may take at most `hayro_syntax::MAX_IMAGE_BYTES`. Each
+// limit reached sends a warning to the settings' warning sink. (A form
+// XObject that draws itself is not drawn again: see `Context::forms`.)
+/// The most work one interpretation does (Folio).
+pub(crate) const MAX_WORK: u64 = 10_000_000;
+/// The work a nested interpretation costs (Folio).
+pub(crate) const NESTED_COST: u64 = 50;
+
+/// The images an interpretation has decoded: their bytes together, and
+/// the objects among them, which count once however often they are drawn
+/// (Folio).
+#[derive(Default)]
+pub(crate) struct Images {
+    bytes: u64,
+    objects: std::collections::HashSet<u128>,
+}
+
+#[derive(Default)]
+pub(crate) struct Budget {
+    work: AtomicU64,
+    images: Mutex<Images>,
+    exhausted: AtomicBool,
+}
+
+impl Budget {
+    /// Spends `units` of work; `false` once the work is used up, with one
+    /// warning the first time.
+    pub(crate) fn spend(&self, units: u64, sink: &crate::WarningSinkFn) -> bool {
+        let before = self.work.fetch_add(units, Ordering::Relaxed);
+        if before.saturating_add(units) <= MAX_WORK {
+            return true;
+        }
+        if !self.exhausted.swap(true, Ordering::Relaxed) {
+            sink(crate::InterpreterWarning::TooComplex);
+        }
+        false
+    }
+
+    /// Takes `bytes` of decoded image data from what the interpretation may
+    /// decode; `false`, taking nothing, when that is more than is left. An
+    /// image (`key`) is taken once, however often it is decoded. Each
+    /// decoding also spends work. (Each drawing of an image can keep a copy
+    /// of it, as `hayro-svg` writes one per drawing; Folio limits those
+    /// copies in the drawing it converts to.)
+    pub(crate) fn take_image_bytes(
+        &self,
+        key: u128,
+        bytes: u64,
+        sink: &crate::WarningSinkFn,
+    ) -> bool {
+        // Every decoding is work, as a nested interpretation is, and in
+        // proportion to its size (a unit a kilobyte), so that an image drawn
+        // over and over ends too, however small: each drawing is a copy in
+        // what a device such as `hayro-svg` writes.
+        if !self.spend(NESTED_COST + bytes / 1024, sink) {
+            return false;
+        }
+        let mut images = self.images.lock().unwrap();
+        if images.objects.contains(&key) {
+            return true;
+        }
+        let total = images.bytes.saturating_add(bytes);
+        if total > hayro_syntax::MAX_IMAGE_BYTES {
+            drop(images);
+            sink(crate::InterpreterWarning::ImageTooLarge);
+            return false;
+        }
+        images.bytes = total;
+        images.objects.insert(key);
+        true
+    }
+}
 
 impl Default for Cache {
     fn default() -> Self {
@@ -18,7 +98,7 @@ impl Default for Cache {
 
 impl Cache {
     pub(crate) fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::new())))
+        Self(Arc::new(Mutex::new(HashMap::new())), Arc::default())
     }
 
     pub(crate) fn get_or_insert_with<T: Clone + Send + Sync + 'static>(

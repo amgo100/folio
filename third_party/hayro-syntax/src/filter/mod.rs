@@ -106,6 +106,19 @@ impl Filter {
             Self::DctDecode => {
                 dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
             }
+            // Folio: an image too large to decode is a failure of its own.
+            #[cfg(feature = "images")]
+            Self::CcittFaxDecode if ccitt::too_large(params, image_params) => {
+                Err(DecodeFailure::ImageTooLarge)
+            }
+            #[cfg(feature = "images")]
+            Self::Jbig2Decode if jbig2::too_large(data, params) => {
+                Err(DecodeFailure::ImageTooLarge)
+            }
+            #[cfg(feature = "images")]
+            Self::JpxDecode if jpx::too_large(data, image_params) => {
+                Err(DecodeFailure::ImageTooLarge)
+            }
             #[cfg(feature = "images")]
             Self::CcittFaxDecode => {
                 ccitt::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
