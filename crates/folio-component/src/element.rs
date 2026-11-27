@@ -195,6 +195,13 @@ pub struct CounterDecl {
     /// The element whose instances reset the counter, if any: `within
     /// heading(level: 1)`.
     pub within: Option<Within>,
+    /// The elements the counter is scoped to: `scoped(question, part)`.
+    /// Entering an instance of one opens a new level of the counter,
+    /// counted from 1 among the instances inside it, and leaving it
+    /// restores the value the counter had before. The element itself may be
+    /// one, so that its instances nest: parts *(a)*, *(i)*, *(ii)*, *(b)*.
+    /// Each is qualified if it belongs to a component.
+    pub scope: EcoVec<QualifiedName>,
 }
 
 /// The element that resets a counter, optionally limited to instances whose
