@@ -125,11 +125,11 @@ impl FontCache {
     /// Stores a font file under its hash, unless the cache has it, and
     /// returns the hash. A file under that name that `insert` did not
     /// write, such as one copied in by hand, is replaced. The file is
-    /// written to a temporary file of its own
-    /// and given the modification time that marks it as written here
-    /// ([`stamp`]), then renamed into place and made read-only, so a reader
-    /// never sees it half-written and nothing changes it afterwards. Until
-    /// it is read-only, [`Self::get`] reads it rather than mapping it.
+    /// written to a temporary file of its own and given a modification time
+    /// taken from the hash, which marks it as written here, then renamed
+    /// into place and made read-only, so a reader never sees it
+    /// half-written and nothing changes it afterwards. Until it is
+    /// read-only, [`Self::get`] reads it rather than mapping it.
     pub fn insert(&self, data: &[u8]) -> io::Result<FontHash> {
         let hash = FontHash::of(data);
         let path = self.path(hash);
