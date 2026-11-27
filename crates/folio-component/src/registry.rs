@@ -504,6 +504,7 @@ mod tests {
                 key: name("example"),
                 text: "Example".into(),
             }]),
+            stylesheet: None,
         }
     }
 

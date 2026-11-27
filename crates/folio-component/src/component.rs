@@ -1,8 +1,10 @@
 //! Components and their manifests (SPEC §3, §3.5, §3.6).
 
-use ecow::EcoVec;
+use ecow::{EcoString, EcoVec};
 
 use crate::element::{ElementSchema, LocaleString};
+use crate::instance::InstanceTree;
+use crate::lint::LintDiagnostic;
 use crate::names::{ComponentName, Name, Target};
 use crate::property::PropertyDecl;
 use crate::template::TemplateDecl;
@@ -27,9 +29,18 @@ pub trait Component: Send + Sync {
     /// The component's name, version, interface version and targets.
     fn manifest(&self) -> ComponentManifest;
 
-    /// What the component adds through the element, property and template
-    /// extension points.
+    /// What the component adds through the element, property, default
+    /// stylesheet and template extension points.
     fn declarations(&self) -> Declarations;
+
+    /// The component's lints (SPEC §3.2): checks over the instances of its
+    /// own elements in a build. The core calls it once per build and view,
+    /// and shows what it returns like its own diagnostics. A component
+    /// without lints keeps the default, which finds nothing.
+    fn lint(&self, view: &InstanceTree) -> EcoVec<LintDiagnostic> {
+        let _ = view;
+        EcoVec::new()
+    }
 }
 
 /// What identifies a component and what it supports.
@@ -57,8 +68,8 @@ impl ComponentManifest {
     }
 }
 
-/// What a component adds through the element, property and template
-/// extension points (SPEC §3.2).
+/// What a component adds through the element, property, default stylesheet
+/// and template extension points (SPEC §3.2).
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Declarations {
     /// Element schemas.
@@ -69,4 +80,14 @@ pub struct Declarations {
     pub templates: EcoVec<TemplateDecl>,
     /// Words the component's elements generate, per language.
     pub locale_strings: EcoVec<LocaleString>,
+    /// The component's default stylesheet (SPEC §3.2, §5.1), as source text
+    /// in the stylesheet language: the default look of its elements, with
+    /// `@variant` and `@target` blocks where it varies.
+    ///
+    /// Its rules rank below every stylesheet of a project, `@variant` and
+    /// `@target` blocks included. Unqualified names in it resolve to the
+    /// component's own elements and properties first, then to the built-in
+    /// ones, whatever the project's lockfile binds; another component's
+    /// names must be qualified. It may not `@import`.
+    pub stylesheet: Option<EcoString>,
 }

@@ -2,7 +2,7 @@
 //! origins, tokens, compiled selectors and evaluated declarations, in
 //! cascade order.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
@@ -30,6 +30,9 @@ pub enum Origin {
     /// The core's base stylesheet ([`BASE_STYLESHEET`]): the look of the
     /// built-in elements in a project that does not restyle them.
     Base,
+    /// The default stylesheets of the components in use, `@variant` and
+    /// `@target` blocks in them included (SPEC §3.2).
+    ComponentDefault,
     /// A stylesheet another stylesheet imports.
     Theme,
     /// A project stylesheet (`project.styles`).
@@ -239,6 +242,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
         variant,
         target,
         origins: HashMap::new(),
+        component: None,
         seen: HashSet::new(),
         rules: Vec::new(),
         tokens: Vec::new(),
@@ -249,6 +253,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
         gather.reach(path, origin);
     }
     gather.base();
+    gather.components(host);
     for &(path, origin) in &roots {
         gather.file(path, origin);
     }
@@ -267,6 +272,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             tokens: &tokens,
         },
         applies: Cell::new(true),
+        own: RefCell::new(None),
     };
 
     let mut rules = Vec::new();
@@ -278,6 +284,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
             .expect("a style rule");
         let values = Values::new(cx.values, pending.file.clone());
         cx.applies.set(pending.applies);
+        *cx.own.borrow_mut() = pending.component.clone();
         let compiled = cx.compile_rule(
             &values,
             rule.selectors(),
@@ -323,6 +330,8 @@ struct Pending {
     order: u32,
     /// Whether it is in no block or in blocks that apply to the build.
     applies: bool,
+    /// The namespace of the component whose default stylesheet it is in.
+    component: Option<Name>,
 }
 
 struct Gather<'a> {
@@ -334,6 +343,9 @@ struct Gather<'a> {
     /// The highest origin each stylesheet is reached at (SPEC §5.1): a
     /// file is gathered there, once.
     origins: HashMap<ProjectPath, Origin>,
+    /// The namespace of the component whose default stylesheet is being
+    /// gathered.
+    component: Option<Name>,
     seen: HashSet<ProjectPath>,
     rules: Vec<Pending>,
     tokens: Vec<(EcoString, TokenDef)>,
@@ -357,6 +369,27 @@ impl Gather<'_> {
             "the base stylesheet imports nothing"
         );
         self.items(&path, &items, Origin::Base, true);
+    }
+
+    /// Gathers the default stylesheets of the components in use, in the
+    /// order they are registered (SPEC §3.2, §5.1).
+    fn components(&mut self, host: Option<&ComponentHost>) {
+        for component in host.into_iter().flat_map(|h| h.components()) {
+            let Some(text) = &component.declarations.stylesheet else {
+                continue;
+            };
+            let namespace = component.manifest.namespace();
+            let source = Source::detached_stylesheet(text.as_str());
+            let Some(sheet) = source.root().cast::<ast::Stylesheet<'_>>() else {
+                continue;
+            };
+            let path = ProjectPath::new(&format!("folio-component-{namespace}.fsty"))
+                .expect("a valid project path");
+            let items: Vec<_> = sheet.items().collect();
+            self.component = Some(namespace);
+            self.items(&path, &items, Origin::ComponentDefault, true);
+            self.component = None;
+        }
     }
 
     /// Records that a stylesheet is reached at an origin, and follows its
@@ -425,6 +458,15 @@ impl Gather<'_> {
     ) {
         for item in items {
             match *item {
+                StyleItem::Import(import) if self.component.is_some() => {
+                    diag::report(
+                        self.db,
+                        Diagnostic::error(
+                            import.to_untyped().span(),
+                            "a component's default stylesheet cannot import another",
+                        ),
+                    );
+                }
                 StyleItem::Import(import) => {
                     if let Some(imported) = import_path(path, import) {
                         // Imports bring in themes, whatever imports them.
@@ -460,6 +502,7 @@ impl Gather<'_> {
                         origin,
                         order: self.order,
                         applies,
+                        component: self.component.clone(),
                     });
                 }
                 StyleItem::Overlay(overlay) => {
@@ -489,15 +532,19 @@ impl Gather<'_> {
 
     /// The origin of an overlay's rules, and whether the overlay applies to
     /// the build. Reports scopes that name no declared variant or no
-    /// target.
+    /// target. An overlay in a component's default stylesheet keeps its
+    /// origin (SPEC §3.2), so a project's rules still win over it.
     fn overlay(&self, overlay: ast::Overlay<'_>, outer: Origin) -> (Origin, bool) {
         let mut origin = outer;
+        let raises = outer > Origin::ComponentDefault;
         let mut matches = true;
         for scope in overlay.scopes() {
             let names: Vec<_> = scope.names().collect();
             match scope.kind() {
                 "variant" => {
-                    origin = origin.max(Origin::Variant);
+                    if raises {
+                        origin = origin.max(Origin::Variant);
+                    }
                     let mut any = false;
                     for name in names {
                         let declared = self
@@ -525,7 +572,9 @@ impl Gather<'_> {
                     matches &= any;
                 }
                 "target" => {
-                    origin = origin.max(Origin::Target);
+                    if raises {
+                        origin = origin.max(Origin::Target);
+                    }
                     let mut any = false;
                     for name in names {
                         match Target::from_name(name.get()) {
@@ -615,6 +664,10 @@ pub(super) struct Compiler<'a> {
     /// Whether the rule being compiled applies to the build: the warnings
     /// that a feature is not implemented yet are given only then.
     pub(super) applies: Cell<bool>,
+    /// The namespace of the component whose default stylesheet holds the
+    /// rule being compiled: its unqualified names resolve there first, then
+    /// to the built-in ones, never through the lockfile (SPEC §3.2).
+    pub(super) own: RefCell<Option<Name>>,
 }
 
 impl<'a> Compiler<'a> {
@@ -637,6 +690,7 @@ impl<'a> Compiler<'a> {
                 tokens,
             },
             applies: Cell::new(true),
+            own: RefCell::new(None),
         }
     }
 
@@ -836,6 +890,23 @@ impl<'a> Compiler<'a> {
             Some(None) => return unknown(None),
             None => None,
         };
+        let own = self.own.borrow().clone();
+        if namespace.is_none()
+            && let Some(own) = &own
+        {
+            let full = QualifiedName::qualified(own.clone(), plain.clone());
+            if self.host.is_some_and(|h| h.property(&full).is_ok()) {
+                return self.properties.find(&full);
+            }
+            // Then the built-in properties; never a lockfile binding.
+            return match self
+                .properties
+                .find(&QualifiedName::unqualified(plain.clone()))
+            {
+                Some(id) => Some(id),
+                None => unknown(confusable(name)),
+            };
+        }
         if namespace.is_none()
             && let Some(id) = self
                 .properties
@@ -1094,8 +1165,25 @@ impl<'a> Compiler<'a> {
             return Some(NodeName::Page);
         }
         let name = Name::new(text)?;
+        let own = self.own.borrow().clone();
+        if let Some(own) = &own {
+            let full = QualifiedName::qualified(own.clone(), name.clone());
+            if self.host.is_some_and(|h| h.element(&full).is_ok()) {
+                return Some(NodeName::Element(full));
+            }
+        }
         if builtin(text).is_some() {
             return Some(NodeName::Element(QualifiedName::unqualified(name)));
+        }
+        if own.is_some() {
+            // A component's sheet never resolves through the lockfile.
+            if !self.parts.contains(&name) {
+                self.warn(
+                    span,
+                    eco_format!("unknown element `{name}`; the rule matches nothing"),
+                );
+            }
+            return Some(NodeName::Part(name));
         }
         match self
             .host
