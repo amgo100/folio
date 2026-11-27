@@ -42,6 +42,32 @@ it (Apache License 2.0, section 4(b)), for example:
     // (third_party/typst/LICENSE). Modified for Folio.
 
 ================================================================================
+Patched crates: kurbo, usvg, svgtypes, resvg, tiny-skia, tiny-skia-path
+
+Folio builds modified copies of these crates.io releases in place of the
+releases (SPEC §2.4, D-300-1): their floating-point code calls the `libm`
+crate where it called the platform's maths library. Each copy keeps its
+licence files, carries a `FOLIO.md` that names the release and states what
+Folio changed, and marks every changed file with a comment that starts with
+"Folio:"; the whole change is in third_party/patches/. third_party/README.md
+describes them.
+
+* kurbo 0.13.1: https://github.com/linebender/kurbo
+  Copyright (c) 2018 Raph Levien and the Kurbo Authors.
+  Apache-2.0 OR MIT: third_party/kurbo/LICENSE-APACHE, LICENSE-MIT
+* usvg 0.47.0, resvg 0.47.0: https://github.com/linebender/resvg
+  Copyright 2017 the Resvg Authors.
+  Apache-2.0 OR MIT: third_party/usvg/LICENSE-APACHE, LICENSE-MIT (and the
+  same files in third_party/resvg/)
+* svgtypes 0.16.2: https://github.com/linebender/svgtypes
+  Copyright (c) 2018 Yevhenii Reizner and the SVG Types Authors.
+  Apache-2.0 OR MIT: third_party/svgtypes/LICENSE-APACHE, LICENSE-MIT
+* tiny-skia 0.12.0, tiny-skia-path 0.12.0: https://github.com/linebender/tiny-skia
+  Copyright (c) 2011 Google Inc. and (c) 2020 Yevhenii Reizner.
+  BSD-3-Clause: third_party/tiny-skia/LICENSE (and
+  third_party/tiny-skia-path/LICENSE)
+
+================================================================================
 Bundled fonts
 
 Folio bundles font families in `crates/folio-fonts/bundled/` and compiles them

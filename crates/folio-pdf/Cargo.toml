@@ -16,5 +16,8 @@ krilla-svg.workspace = true
 usvg.workspace = true
 hayro-svg.workspace = true
 
+[dev-dependencies]
+libm.workspace = true
+
 [lints]
 workspace = true
