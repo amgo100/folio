@@ -79,6 +79,11 @@ pub(crate) const DEPTH_GUARD: usize = 64;
 /// one that makes an error, is parsed in full, which keeps the span numbers
 /// of the top-level items it leaves alone (`replace_root`); and so is a
 /// reparse deep in the tree, where the depth limit may differ (`DEPTH_GUARD`).
+///
+/// So `try_reparse` only ever sees an error-free old tree, and its checks for
+/// erroneous items at the edges of a range no longer decide anything. They
+/// are kept: a narrower guard, one that looks only at the items near an
+/// edit, would need them again.
 fn reusable(root: &SyntaxNode, range: &Range<usize>) -> bool {
     !root.diagnosis().errors && !reaches_depth(root, range, 0, 0)
 }
@@ -129,7 +134,11 @@ enum Failure {
 /// again (#241). When the gap is too narrow, the neighbouring kept items are
 /// numbered again too, a widening number of them on each side, as after any
 /// incremental reparse; when even all of them do not fit, the whole new tree
-/// is numbered. `root` must be numbered and unchanged by a failed attempt.
+/// is numbered. `root` must be whole and numbered: the old tree, or the
+/// tree an incremental reparse made that the guard then rejected (only
+/// items equal to the full parse apart from spans are kept, so a wrong
+/// incremental result never survives), never one half changed by a failed
+/// attempt.
 fn replace_root(root: &mut SyntaxNode, mut new: SyntaxNode) {
     let id = root.span().id().expect("a numbered root");
     if root.kind() == new.kind() && root.is_inner() && new.is_inner() {

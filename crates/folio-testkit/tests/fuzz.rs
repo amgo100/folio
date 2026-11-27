@@ -183,10 +183,22 @@ fn edit_sequences_round_trip() {
     let single = Edit::decode(&bytes).unwrap();
     assert!(single.then.is_empty());
     assert!(single.with.starts_with("#{\0"));
-    // A step that cannot be encoded: one past the characters a code point
-    // can name without a surrogate, or a NUL in a replacement.
+    assert_eq!(Edit::decode(&single.encode().unwrap()), Some(single));
+    // Starts on both sides of the surrogates encode; one past the last
+    // character, or a NUL in a replacement, does not.
+    for at in [0xD7FE, 0xD7FF, 0xD800, 0xE000, 0x10F7FE] {
+        let mut far = edit.clone();
+        far.then[0].at = at;
+        let back = Edit::decode(&far.encode().unwrap()).unwrap();
+        assert_eq!(back.then[0].at, at);
+    }
     let mut far = edit.clone();
-    far.then[0].at = 0xD800;
+    far.then[0].at = 0x10F7FF;
+    assert_eq!(far.encode(), None);
+    far.then[0].at = usize::MAX;
+    assert_eq!(far.encode(), None);
+    far.then[0].at = 0;
+    far.then[0].len = usize::MAX;
     assert_eq!(far.encode(), None);
     let mut nul = edit;
     nul.then[1].with = "\0".into();

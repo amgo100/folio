@@ -132,6 +132,25 @@ pub struct Step {
 /// stays fast.
 pub const MAX_STEPS: usize = 32;
 
+/// The start of a [`Step`] that a character encodes: its code point less
+/// one, not counting the surrogates, so that every start up to the last
+/// has a character.
+fn step_start(c: char) -> usize {
+    let cp = c as usize;
+    cp.saturating_sub(1) - if cp > 0xDFFF { 0x800 } else { 0 }
+}
+
+/// The character that encodes the start of a [`Step`] ([`step_start`]).
+fn step_char(at: usize) -> Option<char> {
+    let cp = at.checked_add(1)?;
+    let cp = if cp >= 0xD800 {
+        cp.checked_add(0x800)?
+    } else {
+        cp
+    };
+    char::from_u32(u32::try_from(cp).ok()?)
+}
+
 impl Step {
     /// The range of `text` this step replaces.
     pub fn range(&self, text: &str) -> Range<usize> {
@@ -152,8 +171,8 @@ impl Edit {
     /// text's length), the range's length in characters as one byte (up to
     /// 15), then the text, and after a NUL byte, the replacement. In a
     /// sequence, the replacement ends at the next NUL, and each part after
-    /// a further NUL is a [`Step`]: a character whose code point, less one,
-    /// is where it starts, a character whose code point modulo 16 is how
+    /// a further NUL is a [`Step`]: a character that says where it starts
+    /// (its code point less one, not counting the surrogates), a character whose code point modulo 16 is how
     /// many characters it replaces, and the replacement (parts of fewer
     /// than two characters are skipped; up to [`MAX_STEPS`]). `None` when
     /// the bytes are too few or not UTF-8.
@@ -172,7 +191,7 @@ impl Edit {
                     let at = chars.next()?;
                     let len = chars.next()?;
                     Some(Step {
-                        at: (at as usize).saturating_sub(1),
+                        at: step_start(at),
                         len: len as usize % 16,
                         with: chars.as_str().to_string(),
                     })
@@ -199,21 +218,22 @@ impl Edit {
 
     /// The bytes that [`Edit::decode`] reads as this edit, if its range is on
     /// character boundaries of a text of at most 65,535 characters, it spans
-    /// at most 15 characters, no text holds a NUL, and every step replaces
-    /// at most 15 characters and starts at a character whose index plus one
-    /// is a Unicode scalar value.
+    /// at most 15 characters, the text holds no NUL, and in a sequence no
+    /// replacement does either, and every step replaces at most 15
+    /// characters and starts before the character 1,112,063.
     pub fn encode(&self) -> Option<Vec<u8>> {
-        let texts = [&self.text, &self.with]
-            .into_iter()
-            .chain(self.then.iter().map(|step| &step.with));
-        if texts.into_iter().any(|text| text.contains('\0')) {
+        // A NUL ends the text, and in a sequence each replacement.
+        let sequence = !self.then.is_empty();
+        let mut separated = self.then.iter().map(|step| &step.with);
+        if self.text.contains('\0')
+            || (sequence && (self.with.contains('\0') || separated.any(|w| w.contains('\0'))))
+        {
             return None;
         }
         let first = self.text.get(..self.range.start)?.chars().count();
         let len = self.text.get(self.range.clone())?.chars().count();
         let first = u16::try_from(first).ok()?;
         let len = u8::try_from(len).ok().filter(|len| *len < 16)?;
-        let sequence = !self.then.is_empty();
         let mut out = vec![u8::from(self.stylesheet) | (u8::from(sequence) << 1)];
         out.extend(first.to_le_bytes());
         out.push(len);
@@ -221,11 +241,11 @@ impl Edit {
         out.push(0);
         out.extend(self.with.as_bytes());
         for step in &self.then {
-            let at = char::from_u32(u32::try_from(step.at + 1).ok()?)?;
-            let len = char::from_u32(u32::try_from(16 + step.len).ok()?)?;
             if step.len >= 16 {
                 return None;
             }
+            let at = step_char(step.at)?;
+            let len = char::from_u32(u32::try_from(16 + step.len).ok()?)?;
             out.push(0);
             out.extend(at.to_string().as_bytes());
             out.extend(len.to_string().as_bytes());
