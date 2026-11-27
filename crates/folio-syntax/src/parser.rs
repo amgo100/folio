@@ -21,12 +21,15 @@ pub(super) use self::style::{reparse_style_block, reparse_stylesheet_items};
 // Picked by gut feeling.
 const MAX_DEPTH: u32 = 256;
 
-/// How tall an operator chain may make the tree (#380). Nesting within
-/// `MAX_DEPTH` makes a tree at most about three times as tall (766 levels
-/// for `#f(` nested 255 times), so no operand that parses without a depth
-/// error is this tall: only a long chain reaches it. It depends on nothing
-/// around the chain, so an incremental reparse decides as a full parse does.
-const MAX_CHAIN_HEIGHT: usize = 4 * MAX_DEPTH as usize;
+/// How tall an operator chain may make the tree (#380). Nesting alone within
+/// `MAX_DEPTH` makes a tree about three levels tall per level of depth (766
+/// for `#f(` nested 255 times), and short operator chains at each level of
+/// a formula make it up to about five (`a(…)^2/x` nested). This leaves room
+/// for both, so in practice only a long chain reaches it; math that deep is
+/// past the evaluator's limit of 100 rows in any case. The bound depends on
+/// nothing around the chain, so an incremental reparse decides as a full
+/// parse does.
+const MAX_CHAIN_HEIGHT: usize = 8 * MAX_DEPTH as usize;
 
 /// Parses a source file as top-level markup.
 pub fn parse(text: &str) -> SyntaxNode {
@@ -453,17 +456,19 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
 /// It takes operators and their operands token by token without nesting, so
 /// the chain gives one error and the parser goes no deeper, however long the
 /// chain. An operand is one token, or a bracketed group with the brackets
-/// directly after it (`f(x)`), and may be a closing bracket, as in a regular
-/// parse. The chain ends before anything else, and before a line break, an
-/// alignment point, a label, the end of the equation or embedded code, which
-/// the enclosing sequence then parses, and before an operator that binds
-/// less tightly than `min_prec`, which an enclosing operator takes. Operators that
+/// directly after it (`f(x)`), or embedded code, which is parsed as code. As
+/// in a regular parse, it may be a closing bracket, a line break or an
+/// alignment point. The chain ends before anything else, a label or the end
+/// of the equation, which the enclosing sequence then parses, and before an
+/// operator that binds less tightly than `min_prec`, which an enclosing
+/// operator takes. Operators that
 /// would end a nested operand in a regular parse, such as the `_` after
 /// `b` in `a^b_c`, are part of the chain here: the error takes them too.
 fn math_chain_error(p: &mut Parser<'_>, operand: bool, min_prec: u8) {
     let m = p.marker();
     if operand && !math_chain_operand(p) {
-        // Nothing here can be an operand: a regular parse would say so too.
+        // Nothing here can be an operand (a label or the end of the
+        // equation): a regular parse would say so too.
         p.expected("expression");
         return;
     }
@@ -486,7 +491,7 @@ fn math_chain_error(p: &mut Parser<'_>, operand: bool, min_prec: u8) {
 /// bracketed group, then the groups directly after it. Returns `false`, having
 /// eaten nothing, when no operand starts here.
 fn math_chain_operand(p: &mut Parser<'_>) -> bool {
-    const END: SyntaxSet = syntax_set!(Dollar, End, Hash, Linebreak, MathAlignPoint, Label);
+    const END: SyntaxSet = syntax_set!(Dollar, End, Label);
     if p.at_set(END) {
         return false;
     }
@@ -556,24 +561,29 @@ fn is_math_alphabetic(text: &str) -> bool {
 
 /// Parses embedded code inside a chain's error ([`math_chain_group`]). The
 /// parser is at the depth limit there, so the code is parsed with
-/// [`CHAIN_CODE_DEPTH`] levels of room below it. Inside that code, a chain
-/// past the limit again reads its code as tokens, so the room is given once
-/// and the parser's calls stay bounded.
+/// [`CHAIN_CODE_DEPTH`] levels of room below it. Code in the error of a chain
+/// in that code gets the room again, up to [`CHAIN_CODE_NESTING`] times, so
+/// the parser's calls stay bounded; past that, its code is read as math
+/// tokens.
 fn math_chain_code(p: &mut Parser<'_>) {
-    if p.chain_code {
+    if p.chain_code >= CHAIN_CODE_NESTING {
         p.eat();
         return;
     }
     let depth = p.depth;
     p.depth = depth.min(MAX_DEPTH - CHAIN_CODE_DEPTH);
-    p.chain_code = true;
+    p.chain_code += 1;
     embedded_code_expr(p);
-    p.chain_code = false;
+    p.chain_code -= 1;
     p.depth = depth;
 }
 
 /// The room below the depth limit for embedded code in a chain's error.
 const CHAIN_CODE_DEPTH: u32 = 32;
+
+/// How often embedded code in chain errors within one another gets that
+/// room ([`math_chain_code`]).
+const CHAIN_CODE_NESTING: u32 = 4;
 
 /// Parse matched delimiters in math: `[x + y]`.
 ///
@@ -1920,9 +1930,9 @@ struct Parser<'s> {
     memo: MemoArena,
     /// The current expression nesting depth.
     depth: u32,
-    /// Whether embedded code in a math chain's error is being parsed
-    /// ([`math_chain_code`]).
-    chain_code: bool,
+    /// How many levels of embedded code in math chains' errors are being
+    /// parsed ([`math_chain_code`]).
+    chain_code: u32,
     /// Whether the parser is in a stylesheet value or render template, where
     /// a function argument can be several items, braces hold template items
     /// and a name followed by an attribute test is a selector.
@@ -2048,7 +2058,7 @@ impl<'s> Parser<'s> {
             nodes,
             memo: Default::default(),
             depth: 0,
-            chain_code: false,
+            chain_code: 0,
             style_values: false,
             split_signs: false,
         }

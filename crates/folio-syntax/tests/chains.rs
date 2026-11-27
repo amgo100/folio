@@ -7,9 +7,9 @@ use folio_syntax::{Source, SyntaxNode};
 /// The stack of the compile threads, the watcher and the language server.
 const STACK: usize = 2 * 1024 * 1024;
 
-/// How tall a tree may get: the chain limit (4 × 256) and a few levels per
+/// How tall a tree may get: the chain limit (8 × 256) and a few levels per
 /// level of the parser's depth limit (256) around it.
-const MAX_HEIGHT: usize = 4 * 256 + 3 * 256;
+const MAX_HEIGHT: usize = 8 * 256 + 6 * 256;
 
 /// Runs `f` on a thread with a 2 MiB stack.
 fn small_stack(f: impl FnOnce() + Send + 'static) {
@@ -211,8 +211,14 @@ fn reparsing_in_the_last_operand_matches_a_full_parse() {
 #[test]
 fn a_chain_on_a_deeply_nested_operand_parses() {
     // Nesting within the depth limit makes operands up to about 766 levels
-    // tall; a short chain on one is no error.
+    // tall, or more with short chains at each level; a short chain on one is
+    // no error.
+    let mut nested = String::from("x");
+    for _ in 0..250 {
+        nested = format!("a({nested})^2/x");
+    }
     for text in [
+        format!("${nested}/y$\n"),
         format!("${}x{}/y/z$\n", "(".repeat(130), ")".repeat(130)),
         format!("#f({}x{}).a.b + 1\n", "f(".repeat(250), ")".repeat(250)),
     ] {
@@ -260,5 +266,48 @@ fn the_error_leaves_looser_operators_to_the_enclosing_expression() {
             stack.extend(node.children());
         }
         assert!(error.unwrap().ends_with("^x"));
+    });
+}
+
+#[test]
+fn an_operand_at_the_limit_is_what_a_regular_parse_takes() {
+    small_stack(|| {
+        // `\`, `&` and embedded code are operands of `^` in a regular parse,
+        // so at the limit they belong to the chain's error.
+        for (operand, error) in [
+            ("\\ y", "maximum parsing depth exceeded"),
+            ("& y", "maximum parsing depth exceeded"),
+            ("#f(x) y", "maximum parsing depth exceeded"),
+        ] {
+            for n in [254, 255, 256, 300] {
+                let text = format!("${}{operand}$\n", "x^".repeat(n));
+                let errors = check(text);
+                assert!(errors.len() <= 1, "{operand:?} × {n}: {errors:?}");
+                if n >= 256 || !errors.is_empty() {
+                    assert_eq!(errors, [error], "{operand:?} × {n}");
+                }
+            }
+        }
+        // A label is no operand: where the chain reaches the limit right
+        // before one, it is an expected expression, as in a regular parse.
+        let text = format!("${}<a>$\n", "x^".repeat(255));
+        assert_eq!(check(text), ["expected expression"]);
+    });
+}
+
+#[test]
+fn code_in_errors_within_errors_is_parsed_as_code() {
+    small_stack(|| {
+        let chain = "y^".repeat(300);
+        let inner = format!("#[ ${chain}(#[ $ a $ ]) $ ]");
+        let text = format!("A ${}({inner}) + c$ and *strong* text.\n", "x^".repeat(300));
+        let source = Source::detached(text);
+        assert_eq!(errors(&source), ["maximum parsing depth exceeded"]);
+        let equations = source
+            .root()
+            .children()
+            .filter(|n| n.kind() == folio_syntax::SyntaxKind::Equation)
+            .count();
+        assert_eq!(equations, 1);
     });
 }
