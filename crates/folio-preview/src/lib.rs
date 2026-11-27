@@ -36,6 +36,21 @@
 //! that [`Preview::url`] gives holds it, for the person who started the
 //! preview.
 //!
+//! The viewer may be shown in a frame. Editors show the preview beside the
+//! source in an `<iframe>` (VS Code's Simple Browser, which the extension
+//! opens with `"folio.preview.openIn": "editor"`), so the viewer's
+//! `Content-Security-Policy` sets no `frame-ancestors` and the server sends
+//! no `X-Frame-Options`. Any page that knows the URL with the token may
+//! frame the viewer; one that does not cannot load it at all, as every
+//! request needs the token. A page on another origin that has the token
+//! still cannot open the websocket, which the `Origin` check refuses, but
+//! it can frame the viewer under a decoy and turn the clicks it catches
+//! into reveals of the source in the editor. That risk is accepted: it
+//! needs the token, and a reveal only shows a place in the project. The viewer inside a frame is a page of the
+//! preview's own origin, so its websocket passes the `Origin` check. The
+//! policy otherwise loads only the server's own scripts, styles, images and
+//! connections (decision D-332-1).
+//!
 //! # Protocol
 //!
 //! Version [`PROTOCOL`] of the protocol, for the viewer and other

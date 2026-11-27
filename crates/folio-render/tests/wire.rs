@@ -39,7 +39,7 @@ fn color() -> impl Strategy<Value = Color> {
 }
 
 fn span() -> impl Strategy<Value = Span> {
-    (any::<u64>(), any::<u32>()).prop_map(|(s, instance)| Span {
+    (any::<u64>(), any::<u64>()).prop_map(|(s, instance)| Span {
         source: SourceRef(s),
         instance,
     })

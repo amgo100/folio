@@ -44,5 +44,5 @@ pub use self::selector::{
     Pseudo, Selector, Specificity, Subject,
 };
 pub(crate) use self::tree::{Child, content_elements, styled_children};
-pub use self::tree::{Styled, StyledNode, VECTOR_PART, styles};
+pub use self::tree::{NOTE_PART, Styled, StyledNode, VECTOR_PART, styles};
 pub use self::value::{Declared, coerce, compute};

@@ -259,3 +259,393 @@ fn another_iteration_keeps_the_locations_of_the_earlier_ones() {
         assert!(kept.contains(&(name, location)), "{name} {location:?} lost");
     }
 }
+
+/// Every glyph run on the pages, with the location of the box around it.
+fn runs(world: &World) -> Vec<(folio::GlyphRun, Location)> {
+    fn walk(fragment: &Fragment, out: &mut Vec<(folio::GlyphRun, Location)>) {
+        for (_, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(group) => walk(group, out),
+                FragmentItem::Text(run) => out.push((run.clone(), fragment.location())),
+                _ => {}
+            }
+        }
+    }
+    let pages = folio::pages(world, Target::Pdf, None).unwrap().unwrap();
+    let mut out = Vec::new();
+    for page in &pages.pages {
+        walk(&page.fragment, &mut out);
+    }
+    out
+}
+
+#[test]
+fn glyphs_name_the_instance_they_come_from() {
+    // SPEC §6.4: of two instances made from one node, each glyph names its
+    // own, so the leak check can tell a hidden one from a shown one.
+    let world = world("#for i in (1, 2) [Again a *bold* word.\n\n]\n");
+    let all = elements(&document(&world));
+    let strongs: Vec<Location> = all
+        .iter()
+        .filter(|(n, ..)| n == "strong")
+        .map(|(.., l)| *l)
+        .collect();
+    let paragraphs: Vec<Location> = all
+        .iter()
+        .filter(|(n, ..)| n == "paragraph")
+        .map(|(.., l)| *l)
+        .collect();
+    let mut bold = vec![String::new(); 2];
+    for (run, around) in runs(&world) {
+        for (i, glyph) in run.glyphs.iter().enumerate() {
+            let text = &run.text[glyph.range.start as usize..glyph.range.end as usize];
+            let instance = match run.instance(i) {
+                Location::DETACHED => around,
+                instance => instance,
+            };
+            match strongs.iter().position(|l| *l == instance) {
+                Some(n) => bold[n].push_str(text),
+                None => assert!(paragraphs.contains(&instance), "{text:?}: {instance:?}"),
+            }
+        }
+    }
+    // The glyphs of each `bold` name their own `strong`.
+    assert_eq!(bold, ["bold", "bold"]);
+}
+
+/// A world with variants `exam` and `markscheme` in numbering group
+/// `paper`, which shares the heading counter.
+fn grouped(text: &str) -> World {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\nstyles = [\"styles/main.fsty\"]\n\n\
+                    [variants.exam]\ntargets = [\"pdf\"]\n\n\
+                    [variants.markscheme]\ntargets = [\"pdf\"]\n\n\
+                    [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
+                    shared-counters = [\"heading\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world.set_source("styles/main.fsty", STYLE).unwrap();
+    world.set_source("main.fol", text).unwrap();
+    world
+}
+
+const BANK: &str = "#let bank = ((t: \"Forces\", hidden: false), \
+                    (t: \"Energy\", hidden: true), (t: \"Waves\", hidden: false))\n";
+
+/// The location of each heading of a variant, by its text.
+fn headings(world: &World, variant: &str) -> Vec<(String, Location)> {
+    let variant = folio::Name::new(variant).unwrap();
+    let doc = folio::document(world, Some(&variant)).unwrap().unwrap();
+    elements(&doc)
+        .into_iter()
+        .filter(|(name, ..)| name == "heading")
+        .map(|(_, text, location)| (text, location))
+        .collect()
+}
+
+/// The `variant-loop-differs` errors of a variant's build.
+fn loop_errors(world: &World, variant: &str) -> Vec<String> {
+    let variant = folio::Name::new(variant).unwrap();
+    folio::check(world, Target::Pdf, Some(&variant))
+        .unwrap()
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.as_deref() == Some("variant-loop-differs"))
+        .map(|d| d.message.to_string())
+        .collect()
+}
+
+#[test]
+fn a_variant_dependent_iteration_pairs_across_variants() {
+    // SPEC §6.1: the mark scheme shows a question the exam leaves out, and
+    // the questions after it still pair by the iteration that made them.
+    let world = grouped(&format!(
+        "{BANK}#bank.map(q => if variant == \"markscheme\" or not q.hidden \
+         [= #q.t\n\n]).join()\n"
+    ));
+    let exam = headings(&world, "exam");
+    let markscheme = headings(&world, "markscheme");
+    let texts = |h: &[(String, Location)]| h.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>();
+    assert_eq!(texts(&exam), ["Forces", "Waves"]);
+    assert_eq!(texts(&markscheme), ["Forces", "Energy", "Waves"]);
+    assert_eq!(exam[0].1, markscheme[0].1);
+    assert_eq!(exam[1].1, markscheme[2].1);
+    assert_ne!(markscheme[1].1, markscheme[2].1);
+    assert!(loop_errors(&world, "exam").is_empty());
+}
+
+#[test]
+fn a_loop_over_different_items_is_an_error() {
+    // Filtering before the loop changes what iteration 1 is, so the
+    // shared numbering cannot pair: the build says so at the loop.
+    let world = grouped(&format!(
+        "{BANK}#bank.filter(q => variant == \"markscheme\" or not q.hidden)\
+         .map(q => [= #q.t\n\n]).join()\n"
+    ));
+    for variant in ["exam", "markscheme"] {
+        let errors = loop_errors(&world, variant);
+        assert_eq!(errors.len(), 1, "{variant}: {errors:?}");
+        assert!(errors[0].contains("this `heading`"), "{errors:?}");
+    }
+    // Each variant's build reports the same error, so it is shown once.
+    assert_eq!(
+        loop_errors(&world, "exam"),
+        loop_errors(&world, "markscheme")
+    );
+    // A loop that makes nothing a shared counter counts may differ.
+    let world = grouped(&format!(
+        "{BANK}#bank.filter(q => variant == \"markscheme\" or not q.hidden)\
+         .map(q => [*#q.t*\n\n]).join()\n"
+    ));
+    assert!(loop_errors(&world, "exam").is_empty());
+}
+
+#[test]
+fn the_issue_example_pairs_in_a_for_loop() {
+    // #339's example: a `#for` loop whose body reads `variant`.
+    let world = grouped(&format!(
+        "{BANK}#for q in bank {{ if variant == \"markscheme\" or not q.hidden \
+         [= #q.t\n\n] }}\n"
+    ));
+    let exam = headings(&world, "exam");
+    let markscheme = headings(&world, "markscheme");
+    assert_eq!(exam.len(), 2);
+    assert_eq!(markscheme.len(), 3);
+    assert_eq!(exam[0], markscheme[0]);
+    assert_eq!(exam[1], markscheme[2]);
+    assert!(loop_errors(&world, "exam").is_empty());
+    assert!(loop_errors(&world, "markscheme").is_empty());
+
+    // Filtered before the loop, iteration 1 is another question in each
+    // variant: a clear error at the loop instead of wrong numbering.
+    let world = grouped(&format!(
+        "{BANK}#for q in bank.filter(q => variant == \"markscheme\" or not q.hidden) \
+         [= #q.t\n\n]\n"
+    ));
+    for variant in ["exam", "markscheme"] {
+        assert_eq!(loop_errors(&world, variant).len(), 1, "{variant}");
+    }
+}
+
+#[test]
+fn an_inserted_call_renumbers_nothing() {
+    // Each call is named by its call site, so a new call of a helper
+    // before the others leaves their instances alone (#339, item 3).
+    let text = "#let q(t) = [= #t\n\n]\n#q(\"Forces\")\n#q(\"Energy\")\n";
+    let mut world = world(text);
+    let before = elements(&document(&world));
+    let heads = |all: &[(String, String, Location)]| {
+        all.iter()
+            .filter(|(n, ..)| n == "heading")
+            .map(|(_, t, l)| (t.clone(), *l))
+            .collect::<Vec<_>>()
+    };
+    let at = text.find("#q(\"Forces\")").unwrap();
+    world
+        .edit_source("main.fol", at..at, "#q(\"Waves\")\n")
+        .unwrap();
+    let after = elements(&document(&world));
+    let (before, after) = (heads(&before), heads(&after));
+    assert_eq!(after.len(), 3);
+    assert_eq!(&after[1..], &before[..]);
+}
+
+#[test]
+fn a_loop_run_only_for_shown_items_is_no_error() {
+    // An inner loop that runs only for the questions a variant shows
+    // iterates over the same parts wherever it runs: its instances pair,
+    // and the check says nothing (#360 review).
+    let world = grouped(
+        "#let bank = ((parts: (\"a\", \"b\"), hidden: false), \
+         (parts: (\"c\",), hidden: true), (parts: (\"d\", \"e\"), hidden: false))\n\
+         #for q in bank { if variant == \"markscheme\" or not q.hidden { \
+         for p in q.parts [= #p\n\n] } }\n\
+         #if variant == \"markscheme\" { for x in (\"x\", \"y\") [= #x\n\n] }\n",
+    );
+    assert!(loop_errors(&world, "exam").is_empty());
+    assert!(loop_errors(&world, "markscheme").is_empty());
+    let exam = headings(&world, "exam");
+    let markscheme = headings(&world, "markscheme");
+    for (text, location) in &exam {
+        let paired = markscheme.iter().find(|(t, _)| t == text).unwrap();
+        assert_eq!(*location, paired.1, "{text}");
+    }
+}
+
+#[test]
+fn elements_of_a_paragraph_pair_whatever_comes_first() {
+    // The model's paragraph takes the origin of its first element, but
+    // what it holds keeps its own (#360 review): the second iteration's
+    // `strong` pairs whether or not the first iteration made one.
+    let world = grouped("#for i in (0, 1) [#if variant == \"markscheme\" or i != 0 [*b#i* ]]\n");
+    let strongs = |variant: &str| {
+        let variant = folio::Name::new(variant).unwrap();
+        let doc = folio::document(&world, Some(&variant)).unwrap().unwrap();
+        elements(&doc)
+            .into_iter()
+            .filter(|(n, ..)| n == "strong")
+            .map(|(_, t, l)| (t, l))
+            .collect::<Vec<_>>()
+    };
+    let (exam, markscheme) = (strongs("exam"), strongs("markscheme"));
+    assert_eq!(exam.len(), 1);
+    assert_eq!(markscheme.len(), 2);
+    assert_eq!(exam[0], markscheme[1]);
+}
+
+#[test]
+fn where_content_was_made_does_not_change_equality() {
+    // `==` compares content as it was before origins: content from two
+    // calls or two iterations of one node is equal (#360 review), while
+    // content written elsewhere is other content, as its span says.
+    let world = world(
+        "#let mk() = [*x*]\n\
+         #let made = for i in range(2) { ([*a*],) }\n\
+         #(mk() == mk()) #(made.at(0) == made.at(1)) #(made.contains([*a*]))\n",
+    );
+    let doc = document(&world);
+    let text = match doc.root.field("body") {
+        Some(Value::Content(body)) => body.plain_text().to_string(),
+        _ => String::new(),
+    };
+    assert_eq!(text.trim(), "true true false");
+}
+
+/// Checks that the exam's headings pair with the mark scheme's headings of
+/// the same text, and that neither variant reports `variant-loop-differs`.
+fn pairs_by_text(world: &World) {
+    assert!(loop_errors(world, "exam").is_empty());
+    assert!(loop_errors(world, "markscheme").is_empty());
+    let exam = headings(world, "exam");
+    let markscheme = headings(world, "markscheme");
+    assert!(!exam.is_empty());
+    for (text, location) in &exam {
+        let paired = markscheme.iter().find(|(t, _)| t == text).unwrap();
+        assert_eq!(*location, paired.1, "{text}");
+    }
+}
+
+#[test]
+fn content_kept_in_a_variable_pairs_by_iteration() {
+    // An element takes the iteration it is made in, wherever the loop
+    // puts it (#360 review): pushed into an array, or returned from a
+    // function inside the loop.
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#let qs = ()\n\
+         #for q in bank {{ if variant == \"markscheme\" or not q.hidden {{ \
+         qs.push([= #q.t\n\n]) }} }}\n#qs.join()\n"
+    )));
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#let last(bank) = {{ let out = none; for q in bank {{ \
+         if variant == \"markscheme\" or not q.hidden {{ out = [= #q.t\n\n] }} }}; \
+         out }}\n#let second(bank) = {{ for (i, q) in bank.enumerate() {{ \
+         if i == 1 {{ return [= #q.t\n\n] }} }} }}\n#second(bank)\n#last(bank)\n"
+    )));
+}
+
+#[test]
+fn a_fold_keeps_what_earlier_steps_made() {
+    // Anchoring a call reaches only what the call made, so an element of
+    // an early step keeps its location however many steps follow.
+    let headings = |world: &World| {
+        elements(&document(world))
+            .into_iter()
+            .filter(|(n, ..)| n == "heading")
+            .map(|(_, t, l)| (t, l))
+            .collect::<Vec<_>>()
+    };
+    let text = "#let bank = (\"q0\", \"q1\", \"q2\")\n\n\
+                #bank.fold([], (acc, t) => acc + [= #t\n\n])\n";
+    let mut world = world(text);
+    let three = headings(&world);
+    let at = text.find(")").unwrap();
+    world
+        .edit_source("main.fol", at..at, ", \"q3\", \"q4\"")
+        .unwrap();
+    let five = headings(&world);
+    assert_eq!(five.len(), 5);
+    assert_eq!(&five[..3], &three[..]);
+}
+
+#[test]
+fn content_of_an_item_does_not_tell_items_apart() {
+    // An item whose content differs by variant (an answer shown only in
+    // the mark scheme) is the same item: no error (#360 review).
+    let world = grouped(
+        "#let bank = ((t: \"Forces\", ans: if variant == \"markscheme\" { [Yes] } else { none }, \
+         hidden: false), (t: \"Energy\", ans: [No], hidden: true), \
+         (t: \"Waves\", ans: [Maybe], hidden: false))\n\
+         #for q in bank { if variant == \"markscheme\" or not q.hidden [= #q.t\n\n] }\n",
+    );
+    pairs_by_text(&world);
+}
+
+#[test]
+fn content_made_before_a_loop_and_closures_in_items() {
+    // Content made before a loop keeps the location it was made with:
+    // a loop that places some of it by variant pairs each piece with
+    // itself, so it is no error (#360 review).
+    pairs_by_text(&grouped(
+        "#let qs = ([= A\n\n], [= B\n\n], [= C\n\n])\n\
+         #for q in qs.enumerate().filter(p => variant == \"markscheme\" or p.at(0) != 1) { \
+         q.at(1) }\n",
+    ));
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#let qs = bank.map(q => [= #q.t\n\n])\n\
+         #for q in qs.enumerate().filter(p => variant == \"markscheme\" or p.at(0) != 1) {{ \
+         q.at(1) }}\n"
+    )));
+    // A closure in an item, which captures what a variant sets, does not
+    // make the items differ.
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#let mark = if variant == \"markscheme\" {{ 2 }} else {{ 0 }}\n\
+         #for q in bank.map(q => (t: q.t, hidden: q.hidden, fmt: x => x * mark)) {{ \
+         if variant == \"markscheme\" or not q.hidden [= #q.t\n\n] }}\n"
+    )));
+}
+
+#[test]
+fn fourth_review_cases() {
+    // `fold` calls are iterations: leaving items out inside the step
+    // pairs by item.
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#bank.fold((), (acc, q) => if variant == \"markscheme\" or not q.hidden \
+         {{ acc + ([= #q.t\n\n],) }} else {{ acc }}).join()\n"
+    )));
+    // An item that is content which a variant changes is the same item.
+    let world = grouped(
+        "#let qs = ([Q1 #if variant == \"markscheme\" [*Ans* 4]], [Q2])\n\
+         #for q in qs [= #q\n\n]\n",
+    );
+    assert!(loop_errors(&world, "exam").is_empty());
+    assert!(loop_errors(&world, "markscheme").is_empty());
+}
+
+#[test]
+fn every_build_of_a_group_reports_the_same_error() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\nstyles = [\"styles/main.fsty\"]\n\n\
+                    [variants.a]\ntargets = [\"pdf\"]\n\n[variants.b]\ntargets = [\"pdf\"]\n\n\
+                    [variants.c]\ntargets = [\"pdf\"]\n\n\
+                    [numbering-groups.paper]\nvariants = [\"a\", \"b\", \"c\"]\n\
+                    shared-counters = [\"heading\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world.set_source("styles/main.fsty", STYLE).unwrap();
+    world
+        .set_source(
+            "main.fol",
+            &format!(
+                "{BANK}#for q in bank.filter(q => variant != \"a\" or not q.hidden) \
+                 [= #q.t\n\n]\n"
+            ),
+        )
+        .unwrap();
+    let (a, b, c) = (
+        loop_errors(&world, "a"),
+        loop_errors(&world, "b"),
+        loop_errors(&world, "c"),
+    );
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert!(a[0].contains("in `a`, `b` and `c`"), "{a:?}");
+    assert_eq!(a, b);
+    assert_eq!(a, c);
+}

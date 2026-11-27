@@ -32,7 +32,8 @@
 //! image command (tag 4: its box, a format byte and the file's bytes) came
 //! that way.
 //! Every other change raises [`VERSION`], and a decoder rejects a version
-//! it does not know.
+//! it does not know. Version 2 widened a span's instance from 32 to 64
+//! bits, a key of the instance's origin (SPEC §2.3).
 //!
 //! [`Command::Unknown`]: crate::Command::Unknown
 
@@ -63,7 +64,7 @@ fn format_byte(format: ImageFormat) -> u8 {
 pub const MAGIC: [u8; 3] = *b"FDL";
 
 /// The version of the format this crate writes and reads.
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
 
 const KIND_LIST: u8 = 0;
 const KIND_SPANS: u8 = 1;
@@ -293,7 +294,7 @@ impl Writer {
 
     fn span(&mut self, span: Span) {
         self.uint(span.source.0);
-        self.uint(u64::from(span.instance));
+        self.uint(span.instance);
     }
 
     /// A glyph's span-map entry, as differences from the previous glyph's
@@ -533,7 +534,7 @@ impl<'a> Reader<'a> {
     fn span(&mut self) -> Result<Span, DecodeError> {
         Ok(Span {
             source: SourceRef(self.uint()?),
-            instance: self.u32()?,
+            instance: self.uint()?,
         })
     }
 

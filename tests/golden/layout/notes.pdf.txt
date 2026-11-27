@@ -34,13 +34,16 @@ page 1 419.53 × 595.28, 18 line(s)
           box (0.00, 76.34) 328.82 × 64.45 main.fol:13:1 baselines 14.29..60.93
             box (15.75, 0.00) 313.07 × 21.22 main.fol:13:1 baselines 14.29..14.29
               box (0.00, 0.00) 313.07 × 21.22 main.fol:13:3 baselines 14.29..14.29
-                text (0.00, 14.29) SourceSerif4-Regular 10.50 w 265.18 59 glyph(s) "at the equilibrium position the kinetic energy is greatest;"
+                text (0.00, 14.29) SourceSerif4-Regular 10.50 w 5.65 2 glyph(s) "•\u{a0}"
+                text (5.65, 14.29) SourceSerif4-Regular 10.50 w 265.18 59 glyph(s) "at the equilibrium position the kinetic energy is greatest;"
             box (15.75, 23.32) 313.07 × 21.22 main.fol:14:1 baselines 14.29..14.29
               box (0.00, 0.00) 313.07 × 21.22 main.fol:14:3 baselines 14.29..14.29
-                text (0.00, 14.29) SourceSerif4-Regular 10.50 w 274.49 57 glyph(s) "at maximum displacement the potential energy is greatest;"
+                text (0.00, 14.29) SourceSerif4-Regular 10.50 w 5.65 2 glyph(s) "•\u{a0}"
+                text (5.65, 14.29) SourceSerif4-Regular 10.50 w 274.49 57 glyph(s) "at maximum displacement the potential energy is greatest;"
             box (15.75, 46.64) 313.07 × 17.81 main.fol:15:1 baselines 14.29..14.29
               box (0.00, 0.00) 313.07 × 17.81 main.fol:15:3 baselines 14.29..14.29
-                text (0.00, 14.29) SourceSerif4-Regular 10.50 w 218.17 48 glyph(s) "at every point the two add up to the same total."
+                text (0.00, 14.29) SourceSerif4-Regular 10.50 w 5.65 2 glyph(s) "•\u{a0}"
+                text (5.65, 14.29) SourceSerif4-Regular 10.50 w 218.17 48 glyph(s) "at every point the two add up to the same total."
 page 2 419.53 × 595.28, 19 line(s)
   box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 10.50..455.37
     box (0.00, 0.00) 328.82 × 458.89 main.fol:1:2 baselines 10.50..455.37
@@ -94,18 +97,22 @@ page 3 419.53 × 595.28, 20 line(s)
         box (0.00, 0.00) 328.82 × 108.99 main.fol:33:1 baselines 10.88..102.06
           box (15.75, 0.00) 313.07 × 39.03 main.fol:33:1 baselines 10.88..32.10
             box (0.00, 0.00) 313.07 × 39.03 main.fol:33:3 baselines 10.88..32.10
-              text (0.00, 10.88) SourceSerif4-Regular 10.50 w 309.79 64 glyph(s) "set up a loudspeaker and two microphones connected to an oscillo"
+              text (0.00, 10.88) SourceSerif4-Regular 10.50 w 10.69 3 glyph(s) "1.\u{a0}"
+              text (10.69, 10.88) SourceSerif4-Regular 10.50 w 299.10 62 glyph(s) "set up a loudspeaker and two microphones connected to an oscil"
               text (309.79, 10.88) SourceSerif4-Regular 10.50 w 3.28 1 glyph(s) "-"
-              text (0.00, 32.10) SourceSerif4-Regular 10.50 w 29.97 6 glyph(s) "scope;"
+              text (0.00, 32.10) SourceSerif4-Regular 10.50 w 38.86 8 glyph(s) "loscope;"
           box (15.75, 41.13) 313.07 × 21.22 main.fol:34:1 baselines 14.29..14.29
             box (0.00, 0.00) 313.07 × 21.22 main.fol:34:3 baselines 14.29..14.29
-              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 288.05 60 glyph(s) "move one microphone until the two traces are in phase again;"
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "2.\u{a0}"
+              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 288.05 60 glyph(s) "move one microphone until the two traces are in phase again;"
           box (15.75, 64.45) 313.07 × 21.22 main.fol:35:1 baselines 14.29..14.29
             box (0.00, 0.00) 313.07 × 21.22 main.fol:35:3 baselines 14.29..14.29
-              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 247.26 51 glyph(s) "record the distance moved, which is one wavelength;"
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "3.\u{a0}"
+              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 247.26 51 glyph(s) "record the distance moved, which is one wavelength;"
           box (15.75, 87.77) 313.07 × 21.22 main.fol:36:1 baselines 14.29..14.29
             box (0.00, 0.00) 313.07 × 21.22 main.fol:36:3 baselines 14.29..14.29
-              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 304.26 65 glyph(s) "multiply the wavelength by the frequency of the signal generator."
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.64 3 glyph(s) "4.\u{a0}"
+              text (10.64, 14.29) SourceSerif4-Regular 10.50 w 302.43 65 glyph(s) "multiply the wavelength by the frequency of the signal generator."
         box (0.00, 114.24) 328.82 × 21.22 main.fol:38:1 baselines 14.29..14.29
           text (0.00, 14.29) SourceSerif4-Regular 10.50 w 250.87 52 glyph(s) "The calculation can be checked with a short program:"
         box (0.00, 140.71) 328.82 × 54.41 main.fol:40:1 baselines 12.27..48.54

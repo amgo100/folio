@@ -16,9 +16,10 @@
 //!   file is read once per process while it is unchanged. System fonts are
 //!   discovered with `fontdb` and only read when a document uses them.
 //! - **The font cache** ([`FontCache`]): fonts locked by hash in
-//!   `folio.lock` are stored under their hash, written once and never
-//!   changed, so they are the only files that are memory-mapped (SPEC §2.3,
-//!   §14.2).
+//!   `folio.lock` are stored under their hash. The files the cache wrote
+//!   itself are written once and never changed, so they are the only files
+//!   that are memory-mapped (SPEC §2.5, §14.2); a file copied into the
+//!   cache by hand is read into memory.
 //! - **Lookup** ([`FontBook`]): faces by family name and the variant
 //!   closest to a requested weight, style and stretch.
 //!

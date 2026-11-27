@@ -66,6 +66,10 @@ pub enum Value {
     Args(Args),
     /// A module: an imported file, or a namespace such as `calc`.
     Module(Module),
+    /// A reference to a stylesheet token, `tok.warn` (SPEC §5.4). Content
+    /// is evaluated once for every build, so the name is kept and the
+    /// style stage resolves it against the tokens of each build.
+    Token(EcoString),
 }
 
 impl Value {
@@ -92,6 +96,7 @@ impl Value {
             Self::Func(_) => "function",
             Self::Args(_) => "arguments",
             Self::Module(_) => "module",
+            Self::Token(_) => "token",
             Self::Math(_) => "formula",
         }
     }
@@ -191,6 +196,7 @@ impl Value {
                 out.push(')');
             }
             Self::Module(m) => write!(out, "<module {}>", m.name()).unwrap(),
+            Self::Token(name) => write!(out, "tok.{name}").unwrap(),
             Self::Math(formula) => {
                 // A formula is written whole, so its length is bounded
                 // first: its nodes can share one long text.
@@ -257,7 +263,7 @@ pub(crate) const ITEM: u64 = 64;
 /// The bytes a node of content, a pair of a dictionary or an argument
 /// counts against the memory limit ([`Value::shallow_size`]): at least what
 /// each takes.
-pub(crate) const NODE: u64 = 128;
+pub(crate) const NODE: u64 = 144;
 
 /// Writes a string as code writes it, or fails without writing it when it
 /// would make `out` longer than `limit` bytes: escaping can make a string
@@ -415,6 +421,9 @@ pub(crate) enum Equality {
     Loose,
     /// The order of `<` and sorting: the pairs it found equal.
     Order,
+    /// `==` on content: structural, but for the origins of elements
+    /// ([`super::content::Content::same_but_origins`]).
+    ButOrigins,
 }
 
 /// The comparisons running on a thread, and the pairs of containers they
@@ -1149,6 +1158,8 @@ struct ModuleRepr {
     failed: BTreeSet<EcoString>,
     /// The depth of its deepest binding or of its content.
     depth: Depth,
+    /// Whether this is `tok`, whose every field is a token reference.
+    tokens: bool,
 }
 
 impl Module {
@@ -1177,7 +1188,28 @@ impl Module {
             content,
             failed,
             depth: Depth(depth),
+            tokens: false,
         }))
+    }
+
+    /// The `tok` namespace (SPEC §5.4): `tok.warn` is a reference to the
+    /// stylesheet token `$warn`, which the style stage resolves for each
+    /// build, since evaluation reads no stylesheet.
+    pub fn tokens() -> Self {
+        Self(Arc::new(ModuleRepr {
+            name: "tok".into(),
+            scope: Scope::default(),
+            content: Content::new(),
+            failed: BTreeSet::new(),
+            depth: Depth(0),
+            tokens: true,
+        }))
+    }
+
+    /// The field `name` of the `tok` namespace: a token reference. `None`
+    /// for any other module, whose fields are its bindings.
+    pub fn token(&self, name: &str) -> Option<Value> {
+        self.0.tokens.then(|| Value::Token(name.into()))
     }
 
     /// How deeply the module nests: as deeply as its deepest binding or its
@@ -1900,5 +1932,21 @@ mod tests {
         assert!(other.is_empty());
         assert_eq!(other, Dict::new());
         assert_eq!(hash_of(&other), hash_of(&Dict::new()));
+    }
+
+    #[test]
+    fn the_tok_namespace_gives_token_references() {
+        let tok = Module::tokens();
+        assert_eq!(tok.name(), "tok");
+        let warn = tok.token("body-size").unwrap();
+        assert_eq!(warn, Value::Token("body-size".into()));
+        assert_eq!(warn.type_name(), "token");
+        assert_eq!(warn.repr(), "tok.body-size");
+        assert_eq!(warn.depth(), 0);
+        // Other modules have bindings, not token references, and a module
+        // named `tok` is not the namespace.
+        let file = Module::new("tok", Scope::default(), Content::new());
+        assert_eq!(file.token("warn"), None);
+        assert_ne!(file, tok);
     }
 }

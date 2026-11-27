@@ -117,7 +117,7 @@ mod tests {
 
     use super::*;
 
-    fn target(instance: u32) -> Location {
+    fn target(instance: u64) -> Location {
         Location {
             source: SourceRef::DETACHED,
             instance,
@@ -130,7 +130,7 @@ mod tests {
             pages: pages
                 .iter()
                 .enumerate()
-                .map(|(i, p)| (target(i as u32), *p))
+                .map(|(i, p)| (target(i as u64), *p))
                 .collect(),
             unsettled: EcoVec::new(),
             frozen: false,

@@ -15,31 +15,38 @@ page 1 595.28 × 841.89, 33 line(s)
         box (0.00, 51.24) 481.89 × 53.50 main.fol:7:1 baselines 10.87..47.87
           box (15.00, 0.00) 466.89 × 16.50 main.fol:7:1 baselines 10.87..10.87
             box (0.00, 0.00) 466.89 × 16.50 main.fol:7:3 baselines 10.87..10.87
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 68.91 16 glyph(s) "Use a black pen."
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 6.92 2 glyph(s) "•\u{a0}"
+              text (6.92, 10.87) STIXTwoText-Regular 10.00 w 68.91 16 glyph(s) "Use a black pen."
           box (15.00, 18.50) 466.89 × 16.50 main.fol:8:1 baselines 10.87..10.87
             box (0.00, 0.00) 466.89 × 16.50 main.fol:8:3 baselines 10.87..10.87
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 170.37 39 glyph(s) "Show your working in every calculation."
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 6.92 2 glyph(s) "•\u{a0}"
+              text (6.92, 10.87) STIXTwoText-Regular 10.00 w 170.37 39 glyph(s) "Show your working in every calculation."
           box (15.00, 37.00) 466.89 × 16.50 main.fol:9:1 baselines 10.87..10.87
             box (0.00, 0.00) 466.89 × 16.50 main.fol:9:3 baselines 10.87..10.87
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 303.93 71 glyph(s) "Give numerical answers to an appropriate number of significant figures."
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 6.92 2 glyph(s) "•\u{a0}"
+              text (6.92, 10.87) STIXTwoText-Regular 10.00 w 303.93 71 glyph(s) "Give numerical answers to an appropriate number of significant figures."
       box (0.00, 155.24) 481.89 × 163.24 main.fol:11:1 baselines 16.25..157.61
         box (0.00, 0.00) 481.89 × 23.74 main.fol:11:1 baselines 16.25..16.25 keep penalty 10000
           text (0.00, 16.25) SourceSans3-Bold 13.00 w 53.17 9 glyph(s) "Section A"
         box (0.00, 29.74) 481.89 × 133.50 main.fol:13:1 baselines 10.87..127.87
           box (15.00, 0.00) 466.89 × 33.00 main.fol:13:1 baselines 10.87..27.37
             box (0.00, 0.00) 466.89 × 33.00 main.fol:13:3 baselines 10.87..27.37
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 466.89 112 glyph(s) "A ball is thrown vertically upwards at 12 m/s from the edge of a cliff 30 m high. Calculate the time it takes to"
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 9.78 3 glyph(s) "1.\u{a0}"
+              text (9.78, 10.87) STIXTwoText-Regular 10.00 w 457.11 112 glyph(s) "A ball is thrown vertically upwards at 12 m/s from the edge of a cliff 30 m high. Calculate the time it takes to"
               text (0.00, 27.37) STIXTwoText-Regular 10.00 w 220.19 55 glyph(s) "reach the sea below, and its speed just before it does."
           box (15.00, 39.00) 466.89 × 33.00 main.fol:14:1 baselines 10.87..27.37
             box (0.00, 0.00) 466.89 × 33.00 main.fol:14:3 baselines 10.87..27.37
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 466.89 110 glyph(s) "A trolley of mass 2.0 kg is pushed along a smooth horizontal track by a constant force. Its speed doubles from"
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 9.66 3 glyph(s) "2.\u{a0}"
+              text (9.66, 10.87) STIXTwoText-Regular 10.00 w 457.23 110 glyph(s) "A trolley of mass 2.0 kg is pushed along a smooth horizontal track by a constant force. Its speed doubles from"
               text (0.00, 27.37) STIXTwoText-Regular 10.00 w 276.62 68 glyph(s) "1.5 m/s to 3.0 m/s in 4.0 s. Find the force on it and the work done."
           box (15.00, 78.00) 466.89 × 16.50 main.fol:15:1 baselines 10.87..10.87
             box (0.00, 0.00) 466.89 × 16.50 main.fol:15:3 baselines 10.87..10.87
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 405.33 97 glyph(s) "State Newton’s third law of motion, and explain why the forces in a pair never cancel each other."
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 9.75 3 glyph(s) "3.\u{a0}"
+              text (9.75, 10.87) STIXTwoText-Regular 10.00 w 405.33 97 glyph(s) "State Newton’s third law of motion, and explain why the forces in a pair never cancel each other."
           box (15.00, 100.50) 466.89 × 33.00 main.fol:16:1 baselines 10.87..27.37
             box (0.00, 0.00) 466.89 × 33.00 main.fol:16:3 baselines 10.87..27.37
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 466.89 111 glyph(s) "A car of mass 1200 kg rounds a bend of radius 50 m at a constant speed of 15 m/s. Calculate the resultant force"
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 9.40 3 glyph(s) "4.\u{a0}"
+              text (9.40, 10.87) STIXTwoText-Regular 10.00 w 457.49 111 glyph(s) "A car of mass 1200 kg rounds a bend of radius 50 m at a constant speed of 15 m/s. Calculate the resultant force"
               text (0.00, 27.37) STIXTwoText-Regular 10.00 w 137.55 35 glyph(s) "on the car and state its direction."
       box (0.00, 330.48) 481.89 × 348.49 main.fol:18:1 baselines 16.25..346.11
         box (0.00, 0.00) 481.89 × 23.74 main.fol:18:1 baselines 16.25..16.25 keep penalty 10000
@@ -110,15 +117,19 @@ page 2 595.28 × 841.89, 30 line(s)
         box (0.00, 29.74) 481.89 × 84.00 main.fol:53:3 baselines 10.87..78.37
           box (15.00, 0.00) 466.89 × 16.50 main.fol:53:3 baselines 10.87..10.87
             box (0.00, 0.00) 466.89 × 16.50 main.fol:53:5 baselines 10.87..10.87
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 439.61 105 glyph(s) "Time to reach the sea: 3.98 s; speed: 27.1 m/s. Award one mark for each, and one for using g = 9.81 m/s²."
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 9.75 3 glyph(s) "1.\u{a0}"
+              text (9.75, 10.87) STIXTwoText-Regular 10.00 w 439.61 105 glyph(s) "Time to reach the sea: 3.98 s; speed: 27.1 m/s. Award one mark for each, and one for using g = 9.81 m/s²."
           box (15.00, 22.50) 466.89 × 16.50 main.fol:54:3 baselines 10.87..10.87
             box (0.00, 0.00) 466.89 × 16.50 main.fol:54:5 baselines 10.87..10.87
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 135.63 33 glyph(s) "Force: 0.75 N; work done: 6.75 J."
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 9.75 3 glyph(s) "2.\u{a0}"
+              text (9.75, 10.87) STIXTwoText-Regular 10.00 w 135.63 33 glyph(s) "Force: 0.75 N; work done: 6.75 J."
           box (15.00, 45.00) 466.89 × 16.50 main.fol:55:3 baselines 10.87..10.87
             box (0.00, 0.00) 466.89 × 16.50 main.fol:55:5 baselines 10.87..10.87
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 386.48 92 glyph(s) "Award one mark for the statement and one for noting that the forces act on different bodies."
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 9.75 3 glyph(s) "3.\u{a0}"
+              text (9.75, 10.87) STIXTwoText-Regular 10.00 w 386.48 92 glyph(s) "Award one mark for the statement and one for noting that the forces act on different bodies."
           box (15.00, 67.50) 466.89 × 16.50 main.fol:56:3 baselines 10.87..10.87
             box (0.00, 0.00) 466.89 × 16.50 main.fol:56:5 baselines 10.87..10.87
-              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 233.51 56 glyph(s) "Resultant force: 5400 N, towards the centre of the bend."
+              text (0.00, 10.87) STIXTwoText-Regular 10.00 w 9.75 3 glyph(s) "4.\u{a0}"
+              text (9.75, 10.87) STIXTwoText-Regular 10.00 w 233.51 56 glyph(s) "Resultant force: 5400 N, towards the centre of the bend."
         box (0.00, 118.74) 481.89 × 13.25 main.fol:58:3 baselines 10.87..10.87
           text (0.00, 10.87) STIXTwoText-Regular 10.00 w 368.55 90 glyph(s) "Section B, first projectile: range 6.55 m, maximum height 0.596 m, time of flight 0.697 s."
