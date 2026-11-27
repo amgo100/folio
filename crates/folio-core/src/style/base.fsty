@@ -27,8 +27,20 @@ list-item > paragraph, enum-item > paragraph, terms-item > paragraph {
 }
 terms-item > term { font-weight: bold; }
 
-// Figures stand apart from the text, centred.
-figure { space-before: 1em; space-after: 1em; align: center; }
+// List markers and enum numbers vary by depth (decision D-327-2): bullets
+// •, – and ◦; numbers 1., (a) and (i). An `enum` item takes its enum's
+// pattern, and enums are counted as if scoped to `enum` (SPEC §4.5), so
+// each nested list counts from its own start.
+list-item { marker: "•"; }
+list list list-item { marker: "–"; }
+list list list list-item { marker: "◦"; }
+enum { numbering: "1."; }
+enum enum { numbering: "(a)"; }
+enum enum enum { numbering: "(i)"; }
+
+// Figures stand apart from the text, centred, and a page break does not
+// part a figure's body from its caption.
+figure { space-before: 1em; space-after: 1em; align: center; keep-together: true; }
 
 // `strong` and `emph` say what text is (SPEC §4.3); this is how it looks.
 strong { font-weight: bold; }

@@ -430,6 +430,35 @@ fn a_block_kept_together_moves_to_the_next_page() {
 }
 
 #[test]
+fn a_figure_at_a_page_foot_keeps_its_body_with_its_caption() {
+    // The base stylesheet keeps a figure together (SPEC §5.1), so wherever
+    // the page would end inside it, its body and caption share a page.
+    let fill = |n: usize| -> String { (0..n).map(|i| format!("Line {i}.\n\n")).collect() };
+    let capacity = {
+        let pages = pages(&world("", &fill(80)));
+        pages.pages[0].lines.len()
+    };
+    for n in capacity.saturating_sub(3)..=capacity {
+        let source = format!("{}#figure[FIGURE-BODY][CAPTION-TEXT]\n", fill(n));
+        let world = world("", &source);
+        let text = text(&world);
+        let body = paragraphs_starting(&text, "FIGURE-BODY")[0];
+        let caption = paragraphs_starting(&text, "CAPTION-TEXT")[0];
+        let pages = pages(&world);
+        let page_of = |paragraph: usize| {
+            pages
+                .pages
+                .iter()
+                .position(|p| p.lines.iter().any(|l| l.paragraph == paragraph))
+                .unwrap()
+        };
+        assert_eq!(page_of(body), page_of(caption), "after {n} lines");
+        let diags = diagnostics(&world);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+}
+
+#[test]
 fn an_impossible_keep_gives_the_least_bad_page_and_a_warning() {
     let mut source = String::from("Before.\n\n= Too long\n\n");
     for p in 0..14 {
