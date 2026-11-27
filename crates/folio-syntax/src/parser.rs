@@ -287,7 +287,7 @@ fn math_expr(p: &mut Parser<'_>) {
 /// chaining with another operator by returning early.
 ///
 /// Every operator a loop here wraps around its left operand nests the tree
-/// one level deeper, so each wrap after the first counts against the depth
+/// one level deeper, so each wrap counts against the depth
 /// limit like a recursive call: a chain such as `x/x/…/x` or `x^x^…^x` stops
 /// at the limit, and the rest of it becomes one error ([`math_chain_error`]).
 /// The tree stays within the limit, so the recursive walks of later stages
