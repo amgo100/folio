@@ -3,7 +3,7 @@
 //! cascade order.
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 use ecow::{EcoString, EcoVec, eco_format};
@@ -213,32 +213,43 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
     let variant = build.variant(db).clone();
     let target = build.target(db);
 
-    // Gather the items of every stylesheet in cascade order.
+    // The stylesheets the build names, in cascade order.
+    let mut roots: Vec<(&ProjectPath, Origin)> = manifest
+        .project
+        .styles
+        .iter()
+        .map(|path| (&path.v, Origin::Project))
+        .collect();
+    if let Some(variant) = &variant
+        && let Some(decl) = manifest.variants.iter().find(|v| v.name.v == *variant)
+    {
+        roots.extend(decl.styles.iter().map(|path| (&path.v, Origin::Variant)));
+    }
+    if let Some(path) = &manifest.formatting.overrides_sheet {
+        roots.push((&path.v, Origin::Overrides));
+    }
+
+    // Gather the items of every stylesheet in cascade order, each file at
+    // the highest origin it is reached at.
     let mut gather = Gather {
         db,
         project,
         manifest,
         variant,
         target,
+        origins: HashMap::new(),
         seen: HashSet::new(),
         rules: Vec::new(),
         tokens: Vec::new(),
         office: BTreeSet::new(),
         order: 0,
     };
+    for &(path, origin) in &roots {
+        gather.reach(path, origin);
+    }
     gather.base();
-    for path in &manifest.project.styles {
-        gather.file(&path.v, Origin::Project);
-    }
-    if let Some(variant) = gather.variant.clone()
-        && let Some(decl) = manifest.variants.iter().find(|v| v.name.v == variant)
-    {
-        for path in &decl.styles {
-            gather.file(&path.v, Origin::Variant);
-        }
-    }
-    if let Some(path) = &manifest.formatting.overrides_sheet {
-        gather.file(&path.v, Origin::Overrides);
+    for &(path, origin) in &roots {
+        gather.file(path, origin);
     }
 
     let properties = Arc::new(Properties::new(host, gather.office.iter().cloned()));
@@ -319,6 +330,9 @@ struct Gather<'a> {
     manifest: &'a Manifest,
     variant: Option<Name>,
     target: Target,
+    /// The highest origin each stylesheet is reached at (SPEC §5.1): a
+    /// file is gathered there, once.
+    origins: HashMap<ProjectPath, Origin>,
     seen: HashSet<ProjectPath>,
     rules: Vec<Pending>,
     tokens: Vec<(EcoString, TokenDef)>,
@@ -338,10 +352,42 @@ impl Gather<'_> {
         self.items(&path, &items, Origin::Base, true);
     }
 
-    /// Gathers a stylesheet, once per build. A missing file is reported by
-    /// the search for the build's files.
+    /// Records that a stylesheet is reached at an origin, and follows its
+    /// imports the first time it is reached.
+    fn reach(&mut self, path: &ProjectPath, origin: Origin) {
+        let first = match self.origins.get_mut(path) {
+            Some(known) => {
+                *known = (*known).max(origin);
+                false
+            }
+            None => {
+                self.origins.insert(path.clone(), origin);
+                true
+            }
+        };
+        if !first {
+            return;
+        }
+        let Some(file) = source_file(self.db, self.project, path.clone()) else {
+            return;
+        };
+        let root = file.source(self.db).root();
+        let Some(sheet) = root.cast::<ast::Stylesheet<'_>>() else {
+            return;
+        };
+        let mut imports = Vec::new();
+        collect_imports(path, sheet.items(), &mut imports);
+        for imported in imports {
+            // Imports bring in themes, whatever imports them.
+            self.reach(&imported, Origin::Theme);
+        }
+    }
+
+    /// Gathers a stylesheet, once per build, where it is reached at the
+    /// highest origin [`Gather::reach`] found for it. A missing file is
+    /// reported by the search for the build's files.
     fn file(&mut self, path: &ProjectPath, origin: Origin) {
-        if !self.seen.insert(path.clone()) {
+        if self.origins.get(path) != Some(&origin) || !self.seen.insert(path.clone()) {
             return;
         }
         let Some(file) = source_file(self.db, self.project, path.clone()) else {
@@ -373,10 +419,7 @@ impl Gather<'_> {
         for item in items {
             match *item {
                 StyleItem::Import(import) => {
-                    if let Some(target) = import.path().map(|p| p.get())
-                        && !target.starts_with('@')
-                        && let Some(imported) = path.join(&target)
-                    {
+                    if let Some(imported) = import_path(path, import) {
                         // Imports bring in themes, whatever imports them.
                         self.file(&imported, Origin::Theme);
                     }
@@ -388,6 +431,7 @@ impl Gather<'_> {
                             TokenDef {
                                 node: token.to_untyped().clone(),
                                 file: path.clone(),
+                                origin,
                             },
                         ));
                     }
@@ -496,6 +540,32 @@ impl Gather<'_> {
             }
         }
         (origin, matches)
+    }
+}
+
+/// The project file an import names, if it names one: `@` paths name
+/// packages, which are not read yet.
+fn import_path(path: &ProjectPath, import: ast::StyleImport<'_>) -> Option<ProjectPath> {
+    let target = import.path()?.get();
+    if target.starts_with('@') {
+        return None;
+    }
+    path.join(&target)
+}
+
+/// The files a stylesheet's items import, in source order, inside overlay
+/// blocks too.
+fn collect_imports<'a>(
+    path: &ProjectPath,
+    items: impl Iterator<Item = StyleItem<'a>>,
+    out: &mut Vec<ProjectPath>,
+) {
+    for item in items {
+        match item {
+            StyleItem::Import(import) => out.extend(import_path(path, import)),
+            StyleItem::Overlay(overlay) => collect_imports(path, overlay.items(), out),
+            _ => {}
+        }
     }
 }
 
