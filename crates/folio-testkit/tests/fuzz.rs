@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use folio_testkit::fuzz::{self, Edit, TARGETS};
+use folio_testkit::fuzz::{self, Edit, Step, TARGETS};
 
 /// The function of a target, by name.
 fn target(name: &str) -> fn(&[u8]) {
@@ -60,6 +60,7 @@ fn edits_round_trip() {
         text: "doc { font-size: 11pt; }\nłódź {}".into(),
         range: 25..29,
         with: "#{".into(),
+        then: Vec::new(),
     };
     assert_eq!(Edit::decode(&edit.encode().unwrap()), Some(edit.clone()));
     edit.check();
@@ -139,8 +140,67 @@ fn edits_with_a_nul_do_not_encode() {
         text: "a\0b".into(),
         range: 0..1,
         with: String::new(),
+        then: Vec::new(),
     };
     assert_eq!(edit.encode(), None);
+}
+
+#[test]
+fn edit_sequences_round_trip() {
+    let edit = Edit {
+        stylesheet: false,
+        text: "a *b* c\n\n= d".into(),
+        range: 2..2,
+        with: "#{".into(),
+        then: vec![
+            Step {
+                at: 9,
+                len: 0,
+                with: "}".into(),
+            },
+            Step {
+                at: 2,
+                len: 2,
+                with: String::new(),
+            },
+            Step {
+                at: 40_001,
+                len: 15,
+                with: "ł\"".into(),
+            },
+        ],
+    };
+    let bytes = edit.encode().unwrap();
+    assert_eq!(bytes[0], 2, "a sequence of content edits");
+    assert_eq!(Edit::decode(&bytes), Some(edit.clone()));
+    edit.check();
+    // A step's range wraps to the text and stops at its end.
+    assert_eq!(edit.then[2].range("abc"), 1..3);
+    // Without the sequence flag, the replacement runs to the end, NULs and
+    // all, as in the inputs from before sequences.
+    let mut bytes = bytes;
+    bytes[0] = 0;
+    let single = Edit::decode(&bytes).unwrap();
+    assert!(single.then.is_empty());
+    assert!(single.with.starts_with("#{\0"));
+    // A step that cannot be encoded: one past the characters a code point
+    // can name without a surrogate, or a NUL in a replacement.
+    let mut far = edit.clone();
+    far.then[0].at = 0xD800;
+    assert_eq!(far.encode(), None);
+    let mut nul = edit;
+    nul.then[1].with = "\0".into();
+    assert_eq!(nul.encode(), None);
+    // At most MAX_STEPS steps, and parts too short to be one are skipped.
+    let mut many = vec![2, 0, 0, 0, b'a', 0];
+    for _ in 0..fuzz::MAX_STEPS + 5 {
+        many.extend([0, b'x']);
+        many.extend([0, b'\x01', b'\x10', b'y']);
+    }
+    let many = Edit::decode(&many).unwrap();
+    assert_eq!(many.then.len(), fuzz::MAX_STEPS);
+    assert!(many.then.iter().all(|step| step.at == 0 && step.len == 0));
+    many.check();
 }
 
 #[test]

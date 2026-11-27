@@ -24,9 +24,19 @@ pub(crate) fn reparse(
     replacement_len: usize,
 ) -> Range<usize> {
     let style = root.kind() == SyntaxKind::Stylesheet;
-    let failure = match try_reparse(text, replaced, replacement_len, None, root, 0, style) {
-        Ok(range) => return range,
-        Err(failure) => failure,
+    // The guard (#334): an incremental reparse is kept only when neither the
+    // old tree nor the new one has a syntax error, and the reparsed range is
+    // not deeply nested. See `reusable`.
+    let failure = if root.diagnosis().errors {
+        Failure::NotHere
+    } else {
+        match try_reparse(text, replaced, replacement_len, None, root, 0, style) {
+            Ok(range) if reusable(root, &range) => return range,
+            // The tree is whole and numbered: the full parse is spliced into
+            // it as into the old tree.
+            Ok(_) => Failure::NotHere,
+            Err(failure) => failure,
+        }
     };
     let mut new = if style {
         parse_stylesheet(text)
@@ -43,6 +53,55 @@ pub(crate) fn reparse(
         (_, None) => *root = new,
     }
     0..text.len()
+}
+
+/// How deep in the tree a node of a reparsed range may lie for the reparse to
+/// be kept: a fraction of the parser's `MAX_DEPTH` (256), with a margin.
+///
+/// A reparse starts the parser's depth counter at 0, so a range whose
+/// ancestors hold the parser past its limit would parse without the error a
+/// full parse reports. Every parser frame open at a point adds at least half
+/// a level of nodes around it (two frames per level for blocks in
+/// stylesheet values, one or fewer elsewhere; `test_depth_guard_margin`
+/// measures each construct), so a point no deeper than this in the tree is
+/// within 128 frames of the root, well below the limit.
+pub(crate) const DEPTH_GUARD: usize = 64;
+
+/// Whether an incremental reparse that produced `root`, reparsing `range` of
+/// the new text, may be kept rather than parsed again in full.
+///
+/// The parse of a node can depend on text outside it: whether a later quote
+/// closes a string, whether a later brace closes a block, how deep the parser
+/// is. The reparser checks the delimiters and the start-of-line state at the
+/// edges of the range; those checks are exact for text without syntax errors,
+/// but a broken item next to the range can take in or give up text in ways
+/// they do not see (#273, #274, #334). So an edit to a tree with an error, or
+/// one that makes an error, is parsed in full, which keeps the span numbers
+/// of the top-level items it leaves alone (`replace_root`); and so is a
+/// reparse deep in the tree, where the depth limit may differ (`DEPTH_GUARD`).
+fn reusable(root: &SyntaxNode, range: &Range<usize>) -> bool {
+    !root.diagnosis().errors && !reaches_depth(root, range, 0, 0)
+}
+
+/// Whether a node overlapping `range` (with `node` starting at `offset`) lies
+/// [`DEPTH_GUARD`] levels or more below the root, `depth` being `node`'s own.
+/// Visits only the nodes that overlap the range.
+fn reaches_depth(node: &SyntaxNode, range: &Range<usize>, offset: usize, depth: usize) -> bool {
+    if depth >= DEPTH_GUARD {
+        return true;
+    }
+    let mut start = offset;
+    for child in node.children() {
+        let end = start + child.len();
+        if start > range.end {
+            break;
+        }
+        if end >= range.start && reaches_depth(child, range, start, depth + 1) {
+            return true;
+        }
+        start = end;
+    }
+    false
 }
 
 /// Why an attempt at an incremental reparse failed.
@@ -500,7 +559,8 @@ fn next_nesting(node: &SyntaxNode, nesting: &mut usize) {
 mod tests {
     use std::ops::Range;
 
-    use crate::{LinkedNode, Source, Span, parse};
+    use super::DEPTH_GUARD;
+    use crate::{LinkedNode, Source, Span, parse, parse_stylesheet};
 
     /// How to replace text in the test string.
     enum Edit {
@@ -640,18 +700,18 @@ mod tests {
         );
         test("#rule f { a: b.. }", Edit::End, "c", All);
         test("#for", Edit::End, "//", All);
-        test("a\n#let \nb", Edit::At(7), "i", Incr("#let i\nb"));
+        test("a\n#let \nb", Edit::At(7), "i", All);
         test("#{{let x = z}; a = 1} b", Edit::At(7), "//", All);
         test("a ```typst hello```", Edit::Range(16..17), "", All);
         test("a{b}c", Edit::At(1), "#", All);
         test("a#{b}c", Edit::Match("#"), "", All);
         // An unclosed strong or emph keeps the paragraph break, so the heading
-        // marker after it is still at the start of a line.
-        test("*.\n\n=\nsei", Edit::At(7), "", Incr("=\nsei"));
-        test("_a\n\n= b\nc~d~e", Edit::At(9), "x", Incr("= b\ncx~d"));
-        // The empty error an embedded expression ends with is reparsed with
-        // it, not made twice.
-        test("\n#element a}", Edit::At(0), "", Incr("\n#element a"));
+        // marker after it is still at the start of a line. Texts with a syntax
+        // error, before or after the edit, are parsed in full (#334).
+        test("*.\n\n=\nsei", Edit::At(7), "", All);
+        test("_a\n\n= b\nc~d~e", Edit::At(9), "x", All);
+        // The empty error an embedded expression ends with is made once.
+        test("\n#element a}", Edit::At(0), "", All);
     }
 
     /// Test incremental reparsing of code and content blocks.
@@ -666,15 +726,15 @@ mod tests {
         );
         test("A#{}!", Edit::After("{"), "\"", All);
         test("#{ [= x] }!", Edit::After("="), "=", Incr("== x"));
-        test("#[[]]", Edit::At(3), "\\", Incr("[[\\]]"));
-        test("#[[ab]]", Edit::Match("b"), "\\", Incr("[[a\\]]"));
+        test("#[[]]", Edit::At(3), "\\", All);
+        test("#[[ab]]", Edit::Match("b"), "\\", All);
         test("#{}}", Edit::After("{"), "{", All);
         test("A: #[BC]", Edit::After("B"), "{", Incr("B{C"));
-        test("A: #[BC]", Edit::After("B"), "#{", Incr("B#{C"));
+        test("A: #[BC]", Edit::After("B"), "#{", All);
         test("A: #[BC]", Edit::After("B"), "#{}", Incr("B#{}C"));
         test("#{\"ab\"}A", Edit::At(5), "c", Incr("{\"abc\"}"));
         test("#{\"ab\"}A", Edit::Range(5..6), "c", All);
-        test("a#[]b", Edit::After("["), "#{", Incr("[#{]"));
+        test("a#[]b", Edit::After("["), "#{", All);
         test(
             "a#{call(); abc}b",
             Edit::At(8),
@@ -701,12 +761,7 @@ mod tests {
         test("#import $a\nb\nc", Edit::End, "$", All);
         test("#rule thing\"a\n", Edit::End, "\"", All);
         test("#let x = \"a\nb\nc", Edit::End, "\"", All);
-        test(
-            "#let x = {\"a\nb\nc}",
-            Edit::After("c"),
-            "\"",
-            Incr("{\"a\nb\nc\"}"),
-        );
+        test("#let x = {\"a\nb\nc}", Edit::After("c"), "\"", All);
         test("#if x {\"a\nb\nc", Edit::End, "\"", All);
         test("#if x \"a\nb\nc", Edit::End, "\"", All);
         test("#if x \"a\nb\nc", Edit::After("x "), "{}", All);
@@ -809,6 +864,130 @@ mod tests {
         fresh.synthesize(Span::detached());
         reparsed.synthesize(Span::detached());
         assert_eq!(reparsed, fresh);
+    }
+
+    /// Edits whose reparse depends on text outside the reparsed range are
+    /// parsed in full (#334, #273, #274): the old or the new text has a
+    /// syntax error, or the range is nested deeper than the parser's depth
+    /// limit allows a reparse that starts at depth 0 to see.
+    #[test]
+    fn test_reparse_guard() {
+        use Reparse::*;
+        // A stale `Semicolon` after an embedded expression.
+        test(">#f--;", Edit::At(0), "#let x = ", All);
+        // An error token lexed as code.
+        test(" #let x\"", Edit::At(0), "#if a ", All);
+        // #274: a later quote changes an earlier broken binding.
+        test(
+            "#let g(x) = x + 1\n\nA #g(2) b.\n\n a - ement a\n#let f(x)\"= [#x]\n\n\
+             - item\n- two #f(3)\n=#x\n\n#{ let y = a ;\"y }\n= Head\nMore *text$e.\n",
+            Edit::Range(99..102),
+            ")",
+            All,
+        );
+        // Error-free text is still reparsed incrementally.
+        test("a #f(x) b~c~d~e", Edit::Match("x"), "y", Incr("a #f(y) "));
+    }
+
+    #[track_caller]
+    fn test_style(text: &str, range: Range<usize>, with: &str) -> Range<usize> {
+        let mut source = Source::detached_stylesheet(text);
+        let reparsed = source.edit(range, with);
+        let mut incremental = source.root().clone();
+        let mut fresh = parse_stylesheet(source.text());
+        incremental.synthesize(Span::detached());
+        fresh.synthesize(Span::detached());
+        assert_eq!(incremental, fresh, "{:?}", source.text());
+        reparsed
+    }
+
+    /// The guard in stylesheets: a block reparse inside a broken value, the
+    /// unclosed attribute selector of #273, and parentheses nested to the
+    /// parser's depth limit.
+    #[test]
+    fn test_stylesheet_reparse_guard() {
+        let text = "a { b: 4pt{; c: d; }\nheading[level=1] { e: f; }\n";
+        assert_eq!(test_style(text, 36..36, "}"), 0..text.len() + 1);
+        let text = "doc { font-size: 11pt_\n\nheadi[g { font-size: 14pt; }\n\
+                    @variant x { p { a: 1 } }\n--t: 3;\n";
+        test_style(text, 30..33, "x");
+        let text = format!("a {{ b: {}x{}; }}", "(".repeat(253), ")".repeat(253));
+        let x = text.find('x').unwrap();
+        let new_len = text.len() + 2;
+        assert_eq!(test_style(&text, x..x + 1, "(x)"), 0..new_len);
+        // Shallow and error-free: incremental.
+        let text = "a { b: (1); }\nc { d: 2; }\n";
+        assert_ne!(test_style(text, 8..9, "3"), 0..text.len());
+    }
+
+    /// `DEPTH_GUARD` keeps a margin of two: for each construct that nests,
+    /// the tree is at least twice the guard deep at the last nesting a full
+    /// parse takes without the depth error. A construct that opened parser
+    /// frames with fewer nodes around them would fail here.
+    #[test]
+    fn test_depth_guard_margin() {
+        use crate::{SyntaxNode, parse, parse_stylesheet};
+        fn height(node: &SyntaxNode) -> usize {
+            1 + node.children().map(height).max().unwrap_or(0)
+        }
+        fn too_deep(node: &SyntaxNode) -> bool {
+            node.errors_and_warnings()
+                .0
+                .iter()
+                .any(|e| e.message.contains("maximum parsing depth"))
+        }
+        // (stylesheet, before, opening, middle, closing, after)
+        let shapes: &[(bool, &str, &str, &str, &str, &str)] = &[
+            (false, "", "#[", "x", "]", ""),
+            (false, "", "#[#[", "x", "]]", ""),
+            (false, "", "#strong[", "x", "]", ""),
+            (false, "", "_*", "x", "*_", ""),
+            (false, "", "#[#", "x", "]", ""),
+            (false, "#", "(", "x", ")", ""),
+            (false, "#", "{", "x", "}", ""),
+            (false, "#", "f(", "x", ")", ""),
+            (false, "#", "if x {", "y", "}", ""),
+            (false, "#", "f.with(", "x", ")", ""),
+            (false, "#(", "-", "x", "", ")"),
+            (false, "#(", "not ", "x", "", ")"),
+            (false, "#(", "(1,", "2", ")", ")"),
+            (false, "#(", "(a:", "2", ")", ")"),
+            (false, "#let g = ", "(x) => ", "x", "", ""),
+            (false, "#let (", "(", "a", ")", ") = x"),
+            (false, "#{", "let x = ", "1", "", "}"),
+            (false, "$", "(", "x", ")", "$"),
+            (false, "$", "sqrt(", "x", ")", "$"),
+            (false, "$", "a^(", "x", ")", "$"),
+            (false, "$", "1/(", "x", ")", "$"),
+            (false, "$", "#[$", "x", "$]", "$"),
+            (true, "", "@variant m {", "a { b: c; }", "}", ""),
+            (true, "a { b: ", "(", "1", ")", "; }"),
+            (true, "a { b: ", "f(", "1", ")", "; }"),
+            (true, "a { b: ", "-", "1", "", "; }"),
+            (true, "a { b: ", "{", "1", "}", "; }"),
+        ];
+        for &(style, before, open, middle, close, after) in shapes {
+            let tree = |n: usize| {
+                let text = format!(
+                    "{before}{}{middle}{}{after}",
+                    open.repeat(n),
+                    close.repeat(n)
+                );
+                if style {
+                    parse_stylesheet(&text)
+                } else {
+                    parse(&text)
+                }
+            };
+            let n = (1..600)
+                .find(|&n| too_deep(&tree(n)))
+                .unwrap_or_else(|| panic!("{open:?} nests without the depth error"));
+            let h = height(&tree(n - 1));
+            assert!(
+                h >= 2 * DEPTH_GUARD,
+                "{open:?}: {h} levels at the last nesting a parse takes"
+            );
+        }
     }
 
     /// A stylesheet that is parsed again in full keeps the spans of its

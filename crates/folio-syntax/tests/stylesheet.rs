@@ -881,13 +881,24 @@ fn reparse_of_top_level_items_is_local() {
 #[test]
 fn reparse_of_a_scoped_rule_in_a_stylesheet_value() {
     // The content block is lexed as content, so its scoped rule must be
-    // reparsed as content too: `#fff` is not a colour there.
+    // reparsed as content too: `--x` is a negated negation there, not a
+    // token reference.
+    let text = "q { fallback: [#rule a { b: --x; }]; }";
+    let mut source = Source::detached_stylesheet(text);
+    assert_eq!(count(source.root(), SyntaxKind::Unary), 2);
+    let at = text.find("b:").unwrap();
+    let reparsed = source.edit(at..at, "b");
+    assert_eq!(&source.text()[reparsed], "{ bb: --x; }");
+    assert!(source.root().spanless_eq(&parse_stylesheet(source.text())));
+    assert_eq!(count(source.root(), SyntaxKind::Unary), 2);
+
+    // `#fff` is not a colour there but an error, so the edit is parsed in
+    // full (#334), with the same result.
     let text = "q { fallback: [#rule a { b: #fff; }]; }";
     let mut source = Source::detached_stylesheet(text);
     assert_eq!(count(source.root(), SyntaxKind::Color), 0);
     let at = text.find("b:").unwrap();
-    let reparsed = source.edit(at..at, "b");
-    assert_eq!(&source.text()[reparsed], "{ bb: #fff; }");
+    source.edit(at..at, "b");
     assert!(source.root().spanless_eq(&parse_stylesheet(source.text())));
     assert_eq!(count(source.root(), SyntaxKind::Color), 0);
 }
