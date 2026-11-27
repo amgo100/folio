@@ -1,6 +1,8 @@
-//! A long chain of a left-associative math operator nests as deeply as it
-//! is long without nesting the parser's calls, so the evaluator must stop
-//! it at the nesting limit on the way down (SPEC §4.4, §8.1; #322).
+//! A chain of a left-associative math operator nests as deeply as it is
+//! long, up to the parser's limit on how tall a chain makes the tree
+//! (2,048 levels), so the evaluator must stop it at its own nesting limit
+//! (100) on the way down (SPEC §4.4, §8.1; #322). Longer chains are a
+//! syntax error (#380, `folio-syntax`'s `tests/chains.rs`).
 
 mod support;
 
@@ -21,7 +23,7 @@ fn evaluate_on_small_stack(script: String) -> Vec<String> {
 fn long_fraction_chains_end_at_the_nesting_limit() {
     for (open, close) in [("", ""), ("(", ")")] {
         let term = format!("{open}x{close}");
-        let chain = vec![term.as_str(); 5000].join("/");
+        let chain = vec![term.as_str(); 2000].join("/");
         // In an equation of the file, and in one a function makes.
         for script in [
             format!("A ${chain}$\n"),
