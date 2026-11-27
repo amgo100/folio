@@ -67,7 +67,7 @@ struct Client {
     /// The revision the server checks next, from its last `Edited` event.
     latest: u64,
     /// Whether the server has changed the world since [`Self::settle`] last
-    /// returned; starting it counts.
+    /// returned. It starts true: starting the server loads the world.
     edited: bool,
     /// The revisions whose checks have started and not yet ended.
     running: BTreeSet<u64>,
@@ -226,9 +226,10 @@ impl Client {
     /// started has ended, and returns the outcomes of the checks that ended
     /// since the last call.
     ///
-    /// A cancelled check reports its end from its own thread, so its
-    /// `Checked` can come after that of the check that overtook it: waiting
-    /// for the latest revision alone would miss it.
+    /// A cancelled check's thread drops its world handle, which lets the
+    /// next edit through, before it sends its result to the server, so the
+    /// server can emit its `Checked` after that of the check that overtook
+    /// it: waiting for the latest revision alone would miss it.
     fn settle(&mut self) -> Vec<(u64, Outcome)> {
         loop {
             let published = self.ended.contains(&(self.latest, Outcome::Published));
