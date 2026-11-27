@@ -98,6 +98,21 @@ fn a_token_in_an_overlay_wins_over_the_project() {
         &[A, ("styles/v.fsty", "@variant exam { $size: 14pt; }\n")],
     );
     assert_eq!(heading_size(&world), pt(14.0));
+
+    // An `@variant` block ranks as a variant overlay in a theme too, as its
+    // rules do.
+    let world = project(
+        &["styles/a.fsty"],
+        None,
+        &[
+            (
+                "styles/a.fsty",
+                "@import \"theme.fsty\";\n$size: 30pt;\nheading { font-size: $size; }\n",
+            ),
+            ("styles/theme.fsty", "@variant exam { $size: 16pt; }\n"),
+        ],
+    );
+    assert_eq!(heading_size(&world), pt(16.0));
 }
 
 #[test]

@@ -117,7 +117,8 @@ pub struct Cascade {
     pub step_rules: EcoVec<StepRule>,
     /// What the rules need to see of nodes.
     pub needs: Needs,
-    /// The token definitions, in cascade order.
+    /// The token definitions, in source order; `Tokens::new` ranks them
+    /// by origin.
     tokens: EcoVec<(EcoString, TokenDef)>,
     /// The rules by the key of their subject compound.
     index: BTreeMap<IndexKey, Vec<u32>>,
@@ -349,6 +350,12 @@ impl Gather<'_> {
             .expect("the base stylesheet is a stylesheet");
         let path = ProjectPath::new(BASE_PATH).expect("a valid project path");
         let items: Vec<_> = sheet.items().collect();
+        // Imports are gathered where `reach` recorded them, and it does not
+        // walk the base sheet.
+        debug_assert!(
+            !items.iter().any(|i| matches!(i, StyleItem::Import(_))),
+            "the base stylesheet imports nothing"
+        );
         self.items(&path, &items, Origin::Base, true);
     }
 
