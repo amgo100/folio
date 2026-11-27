@@ -441,6 +441,36 @@ fn outputs_never_replace_project_files() {
     }
 }
 
+/// Manifest keys that have no effect yet are reported, not ignored: strict
+/// mode and numbering groups warn, and a declared component that cannot be
+/// loaded fails the build (#330).
+#[test]
+fn reports_manifest_keys_that_have_no_effect_yet() {
+    let strict = format!("{MANIFEST}\n[formatting]\nmode = \"strict\"\n");
+    let dir = project(&[("folio.toml", &strict), ("main.fol", "Text.\n")]);
+    for command in ["check", "build"] {
+        let output = folio(dir.path(), &[command]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("strict mode is not implemented yet"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    let declared = format!("{MANIFEST}\n[components]\ncircuits = {{ version = \"0.3\" }}\n");
+    let dir = project(&[("folio.toml", &declared), ("main.fol", "Text.\n")]);
+    for command in ["check", "build"] {
+        let output = folio(dir.path(), &[command]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("component `circuits` cannot be loaded"),
+            "{}",
+            stderr(&output)
+        );
+    }
+}
+
 /// The `.fol` and `.fsty` files under `dir`, by path relative to it.
 fn sources(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
     let mut entries: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();

@@ -4,6 +4,7 @@
 
 use std::num::NonZeroU16;
 
+use folio_core::diag::Severity;
 use folio_core::project::{
     ComponentSource, FormattingMode, Lockfile, Manifest, Name, ProjectError, Target,
 };
@@ -671,6 +672,55 @@ fn output_that_replaces_a_project_file() {
         let text = format!("{PROJECT}\n[output]\npath = \"{path}\"\n");
         assert!(Manifest::parse(&text, file()).is_ok(), "{path}");
     }
+}
+
+/// Keys this compiler reads but does not act on yet are warned about at
+/// each key that is given, and only then (#330).
+#[test]
+fn keys_that_are_not_implemented_yet() {
+    let warnings = |text: &str| -> String {
+        let text = format!("{PROJECT}{text}");
+        let manifest = Manifest::parse(&text, file()).unwrap();
+        let mut out = String::new();
+        for d in manifest.not_implemented() {
+            let DiagSpanKind::Range { range, .. } = d.span.get() else {
+                panic!("detached {d:?}")
+            };
+            assert_eq!(d.severity, Severity::Warning);
+            out.push_str(&format!("{} @ {}\n", d.message, &text[range]));
+            for hint in &d.hints {
+                out.push_str(&format!("  hint: {hint}\n"));
+            }
+        }
+        out
+    };
+    assert_eq!(warnings(""), "");
+    assert_eq!(warnings("\n[formatting]\nmode = \"local\"\n"), "");
+    assert_eq!(
+        warnings(
+            "\n[formatting]\nmode = \"strict\"\nstrict-paths = [\"questions/**\", \"a/**\"]\n\
+             allow-overrides-sheet = true\nallow-local-packages = false\n"
+        ),
+        "strict mode is not implemented yet, so overrides in content are not checked \
+         @ \"strict\"\n  \
+         hint: until it is, strict mode only makes an unpinned system font an error\n\
+         `strict-paths` is not implemented yet, so it has no effect @ \"questions/**\"\n  \
+         hint: strict mode does not check content for overrides yet\n\
+         `allow-overrides-sheet` is not implemented yet, so it has no effect @ true\n  \
+         hint: strict mode does not check content for overrides yet\n\
+         `allow-local-packages` is not implemented yet, so it has no effect @ false\n  \
+         hint: strict mode does not check content for overrides yet\n"
+    );
+    assert_eq!(
+        warnings(
+            "\n[variants.exam]\ntargets = [\"pdf\"]\n\n[variants.markscheme]\ntargets = [\"pdf\"]\n\n\
+             [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
+             shared-counters = [\"question\"]\n"
+        ),
+        "numbering groups are not implemented yet, so the variants of `paper` number their \
+         content separately @ paper\n  \
+         hint: each variant counts only the content it shows\n"
+    );
 }
 
 #[test]

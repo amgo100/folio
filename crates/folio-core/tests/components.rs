@@ -12,8 +12,10 @@ use folio_component::{
     Name, PropertyDecl, PropertyType, QualifiedName, Registry, SlotDecl, Target, TemplateDecl,
     Value,
 };
-use folio_core::component::{ComponentHost, Kind, Reason, Via};
+use folio_core::component::{ComponentHost, Kind, Reason, Via, unhosted};
+use folio_core::diag::Severity;
 use folio_core::project::{Lockfile, Manifest};
+use folio_syntax::DiagSpanKind;
 use folio_syntax::FileId;
 
 fn name(text: &str) -> Name {
@@ -301,4 +303,40 @@ fn template_errors() {
         errors[0].message,
         "a template's parts must be declarations, such as `body: slot(statement);`"
     );
+}
+
+/// A declared component the compiler cannot host is an error at its key,
+/// not a silent gap until one of its names is used (#330).
+#[test]
+fn declared_components_that_cannot_be_hosted() {
+    let registry = registry(&[&EXAM, &CIRCUITS]);
+    let declared = "circuits = { version = \"0.3\" }\n\
+                    \"@school/house\" = { path = \"../house-style\" }\n\
+                    tables = { version = \"1\" }\n";
+    let manifest = manifest(declared);
+    let errors = unhosted(&registry, &manifest.components);
+    let found: Vec<_> = errors
+        .iter()
+        .map(|d| {
+            assert_eq!(d.severity, Severity::Error);
+            assert!(matches!(d.span.get(), DiagSpanKind::Range { .. }));
+            (d.message.as_str(), d.hints[0].as_str())
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "component `@school/house` cannot be loaded",
+                "loading components from a path is not implemented yet; only first-party \
+                 components are available, without a declaration"
+            ),
+            (
+                "component `tables` cannot be loaded",
+                "loading components by version is not implemented yet; only first-party \
+                 components are available, without a declaration"
+            ),
+        ]
+    );
+    assert!(unhosted(&registry, &self::manifest("").components).is_empty());
 }
