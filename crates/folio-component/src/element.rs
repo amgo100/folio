@@ -200,7 +200,7 @@ pub struct CounterDecl {
     /// counted from 1 among the instances inside it, and leaving it
     /// restores the value the counter had before. The element itself may be
     /// one, so that its instances nest: parts *(a)*, *(i)*, *(ii)*, *(b)*.
-    /// Each is qualified if it belongs to a component.
+    /// Each is qualified if it belongs to another component.
     pub scope: EcoVec<QualifiedName>,
 }
 

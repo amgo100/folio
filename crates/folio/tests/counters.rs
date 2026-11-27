@@ -7,7 +7,7 @@ use ecow::EcoVec;
 use folio::{Name, Registry, Target, World};
 use folio_component::{
     Body, Component, ComponentManifest, ComponentName, ContentKind, CounterDecl, Declarations,
-    ElementKind, ElementSchema, INTERFACE_VERSION, LocaleString, QualifiedName,
+    ElementKind, ElementSchema, INTERFACE_VERSION, LocaleString, QualifiedName, Within,
 };
 
 fn name(text: &str) -> Name {
@@ -38,15 +38,27 @@ impl Component for Exam {
         part.body = Body::Content(ContentKind::Blocks);
         part.counter = Some(CounterDecl {
             within: None,
+            // The component's own elements, unqualified.
             scope: EcoVec::from([
-                QualifiedName::new("exam.question").unwrap(),
-                QualifiedName::new("exam.part").unwrap(),
+                QualifiedName::new("question").unwrap(),
+                QualifiedName::new("part").unwrap(),
             ]),
         });
         part.ref_key = Some(name("part"));
 
+        // Restarted at each top-level heading, and scoped to questions.
+        let mut note = ElementSchema::new(name("note"), ElementKind::Block);
+        note.body = Body::Content(ContentKind::Blocks);
+        note.counter = Some(CounterDecl {
+            within: Some(Within {
+                element: QualifiedName::new("heading").unwrap(),
+                fields: EcoVec::from([(name("level"), folio_component::Value::Int(1))]),
+            }),
+            scope: EcoVec::from([QualifiedName::new("question").unwrap()]),
+        });
+
         Declarations {
-            elements: EcoVec::from([question, part]),
+            elements: EcoVec::from([question, part, note]),
             locale_strings: EcoVec::from([
                 LocaleString {
                     lang: "en".into(),
@@ -213,4 +225,20 @@ fn counter_reset_of_no_counter_warns() {
         messages(&world),
         ["there is no counter `answer`, so `counter-reset` does not restart it"]
     );
+}
+
+#[test]
+fn a_restart_within_an_element_inside_a_scope_outlasts_the_scope() {
+    // Restarts go in document order: the heading inside the question
+    // restarts `note`, and the note after the question counts under it.
+    let world = world(
+        &format!("{STYLE}heading {{ numbering: \"1\"; }}\nnote {{ numbering: \"1.1\"; }}\n"),
+        "= A\n\n#note[One.]\n\n#question[\n  #note[Two.]\n\n  = B\n\n  #note[Three.]\n]\n\n#note[Four.]\n",
+    );
+    let notes: Vec<String> = numbers(&world)
+        .into_iter()
+        .filter(|(counter, _)| counter == "exam.note")
+        .map(|(_, number)| number)
+        .collect();
+    assert_eq!(notes, ["1.1", "1.1", "2.1", "2.1"]);
 }
