@@ -135,7 +135,8 @@ pub struct Lines {
 
 /// The paragraphs of a build broken into lines of the body's width, or
 /// `None` when the document could not be styled. Reports overfull and
-/// underfull lines.
+/// underfull lines, except for a layout pass of the page-number fixpoint
+/// ([`Build::is_pass`]).
 #[salsa::tracked(returns(ref))]
 pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let text = text(db, build).as_ref()?;
@@ -180,11 +181,23 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         .into_iter()
         .collect();
 
-    for (paragraph, layout) in text.paragraphs.iter().zip(&paragraphs) {
+    let lines = Lines {
+        width,
+        paragraphs,
+        slots,
+        maths,
+    };
+    // A layout pass of the page-number fixpoint reports nothing: the build
+    // reports its own lines (`crate::pipeline::settle`).
+    if build.is_pass(db) {
+        return Some(lines);
+    }
+    for (paragraph, layout) in text.paragraphs.iter().zip(&lines.paragraphs) {
         report_lines(db, build.project(db), paragraph, layout);
     }
     // A display wider than its block is an overfull line (SPEC §7.9).
     for (i, content) in display_widths {
+        let maths = &lines.maths;
         let Some(display) = maths.display(i) else {
             continue;
         };
@@ -204,12 +217,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
             );
         }
     }
-    Some(Lines {
-        width,
-        paragraphs,
-        slots,
-        maths,
-    })
+    Some(lines)
 }
 
 /// What the paragraph builder reads of a paragraph of the text stage: its

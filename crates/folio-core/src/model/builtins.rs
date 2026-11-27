@@ -133,11 +133,19 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
             .body(content(Blocks))
             .counter()
             .build(),
-        element("ref", ElementKind::Inline, false)
+        // A cross-reference (SPEC §4.5): `@label` in markup, or
+        // `#ref(<label>, form: "page")` for the page its target is on.
+        element("ref", ElementKind::Inline, true)
             .fields([
                 FieldDecl::required(name("target"), FieldType::Ref),
                 optional("supplement", FieldType::Content),
+                // `number` where it is not given.
+                optional(
+                    "form",
+                    FieldType::Choice(["number".into(), "page".into()].into_iter().collect()),
+                ),
             ])
+            .positional(["target", "supplement"])
             .build(),
         element("link", ElementKind::Inline, false)
             .fields([FieldDecl::required(name("dest"), FieldType::Str)])
