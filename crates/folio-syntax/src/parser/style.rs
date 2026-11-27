@@ -41,8 +41,9 @@ pub(crate) fn reparse_stylesheet_items(
 
 /// Reparses a declaration block, a slide master's body or an overlay's body.
 /// Succeeds only if the new block has balanced delimiters and ends exactly at
-/// the end of the range. `style` tells whether the block is in a stylesheet
-/// (or in a scoped rule in content).
+/// the end of the range. `style` tells whether the block is in a stylesheet;
+/// a declaration block is lexed as one either way, even in a scoped rule in
+/// content.
 pub(crate) fn reparse_style_block(
     text: &str,
     range: std::ops::Range<usize>,
@@ -668,10 +669,12 @@ fn master_block(p: &mut Parser<'_>) {
 }
 
 /// Parses a block of declarations, which in a slide master may also contain
-/// placeholder rules.
+/// placeholder rules. The block is lexed as a stylesheet wherever it is, so
+/// the declarations of a scoped rule in content are written as in a
+/// stylesheet (SPEC §5.4): `#d62728` is a colour and `$size` a token.
 fn block_of_declarations(p: &mut Parser<'_>, master: bool) {
     let m = p.marker();
-    p.enter_modes(SyntaxMode::Code, AtNewline::Continue, |p| {
+    p.enter_lexer(SyntaxMode::Code, true, AtNewline::Continue, |p| {
         p.assert(SyntaxKind::LeftBrace);
         while !p.at_set(syntax_set!(RightBrace, RightBracket, RightParen, End)) {
             if p.at(SyntaxKind::Ident) && p.peek() == Some(SyntaxKind::LeftBrace) {

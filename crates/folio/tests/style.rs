@@ -556,6 +556,29 @@ fn scoped_rules_apply_inside_their_element() {
 }
 
 #[test]
+fn scoped_rules_take_stylesheet_values() {
+    // The declarations of `#rule` are written as in a stylesheet (SPEC
+    // §5.4): hex colours, and tokens resolved against the build's sheets.
+    let known = world(
+        "#rule paragraph { color: #d62728; indent: $gap * 2; }\nText.\n",
+        &[("styles/main.fsty", "$gap: 1.5pt;\n")],
+    );
+    let exam = styled(&known, "exam", Target::Pdf);
+    let p = first(&exam, "paragraph");
+    assert_eq!(
+        get(&exam, p, "color"),
+        Value::Color(Color::rgb(0xd6, 0x27, 0x28))
+    );
+    assert_eq!(get(&exam, p, "indent"), pt(3.0));
+    assert!(messages(&known).is_empty(), "{:?}", messages(&known));
+
+    // A token that no sheet of the build defines is an error at the
+    // declaration.
+    let unknown = world("#rule paragraph { indent: $gpa; }\nText.\n", &[]);
+    assert_eq!(messages(&unknown), ["unknown token `$gpa`"]);
+}
+
+#[test]
 fn step_rules_are_collected_not_applied() {
     let world = world(
         "#rule paragraph:step(3) { color: rgb(\"00ff00\"); }\nText.\n",
