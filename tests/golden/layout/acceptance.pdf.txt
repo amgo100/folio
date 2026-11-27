@@ -13,7 +13,7 @@ page 1 595.28 × 841.89, 26 line(s)
       box (0.00, 72.67) 481.89 × 18.15 main.fol:9:1 baselines 11.96..11.96
         text (0.00, 11.96) STIXTwoText-Regular 11.00 w 38.63 7 glyph(s) "Answer "
         text (38.63, 11.96) STIXTwoText-Bold 11.00 w 13.00 3 glyph(s) "all"
-        text (51.63, 11.96) STIXTwoText-Regular 11.00 w 396.54 85 glyph(s) " questions in the spaces provided. The marks for each question are shown in brackets."
+        text (51.63, 11.96) STIXTwoText-Regular 11.00 w 290.91 62 glyph(s) " questions. The marks for each question are shown in brackets."
       box (0.00, 96.32) 481.89 × 58.85 main.fol:11:1 baselines 11.96..52.66
         box (16.50, 0.00) 465.39 × 18.15 main.fol:11:1 baselines 11.96..11.96
           box (0.00, 0.00) 465.39 × 18.15 main.fol:11:3 baselines 11.96..11.96
@@ -451,21 +451,25 @@ page 3 595.28 × 841.89, 20 line(s)
           text (151.77, 30.64) STIXTwoText-Regular 11.00 w 270.63 60 glyph(s) ". The frequency of its first harmonic is given by equation ("
           text (422.40, 30.64) STIXTwoText-Regular 11.00 w 10.89 2 glyph(s) "12"
           text (433.29, 30.64) STIXTwoText-Regular 11.00 w 48.60 11 glyph(s) "), which is"
-          text (0.00, 56.84) STIXTwoText-Regular 11.00 w 62.90 14 glyph(s) "equivalent to "
-          box (62.90, 49.02) 20.60 × 10.30 main.fol:76:262
+          box (0.00, 49.02) 20.60 × 10.30 main.fol:76:248
             text (0.00, 7.82) STIXTwoMath-Regular 11.00 w 6.57 1 glyph(s) "𝑓"
             text (9.62, 7.82) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
-          box (83.50, 40.41) 30.74 × 26.93 main.fol:76:262
-            text (3.29, 9.99) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "1"
-            text (1.10, 22.86) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
-            text (4.91, 22.86) STIXTwoMath-Regular 7.70 w 4.38 1 glyph(s) "𝐿"
-            shape (1.10, 13.22) M(0.00, 0.00) L(8.19, 0.00) L(8.19, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:267
-            text (10.39, 24.01) STIXTwoMath-Regular 11.00 w 12.95 1 glyph(s) "√"
-            shape (23.34, 0.86) M(0.00, 0.00) L(7.40, 0.00) L(7.40, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:275
-            text (24.44, 9.99) STIXTwoMath-Regular 7.70 w 5.20 1 glyph(s) "𝑇"
-            text (24.77, 22.86) STIXTwoMath-Regular 7.70 w 4.53 1 glyph(s) "𝜇"
-            shape (24.44, 13.22) M(0.00, 0.00) L(5.20, 0.00) L(5.20, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:280
-          text (114.23, 56.84) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+          box (20.60, 46.72) 10.39 × 16.56 main.fol:76:248
+            text (3.20, 3.69) STIXTwoMath-Regular 7.70 w 4.00 1 glyph(s) "𝑣"
+            text (1.10, 16.56) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
+            text (4.91, 16.56) STIXTwoMath-Regular 7.70 w 4.38 1 glyph(s) "𝐿"
+            shape (1.10, 6.91) M(0.00, 0.00) L(8.19, 0.00) L(8.19, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:253
+          text (30.99, 56.84) STIXTwoText-Regular 11.00 w 231.36 53 glyph(s) " for waves that travel along the string at the speed "
+          box (262.35, 51.57) 19.74 × 5.37 main.fol:76:314
+            text (0.00, 5.27) STIXTwoMath-Regular 11.00 w 5.71 1 glyph(s) "𝑣"
+            text (8.76, 5.27) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          box (282.09, 40.41) 20.34 × 26.93 main.fol:76:314
+            text (0.00, 24.01) STIXTwoMath-Regular 11.00 w 12.95 1 glyph(s) "√"
+            shape (12.95, 0.86) M(0.00, 0.00) L(7.40, 0.00) L(7.40, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:319
+            text (14.05, 9.99) STIXTwoMath-Regular 7.70 w 5.20 1 glyph(s) "𝑇"
+            text (14.38, 22.86) STIXTwoMath-Regular 7.70 w 4.53 1 glyph(s) "𝜇"
+            shape (14.05, 13.22) M(0.00, 0.00) L(5.20, 0.00) L(5.20, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:324
+          text (302.44, 56.84) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
         box (0.00, 106.80) 481.89 × 55.87 main.fol:78:1 baselines 11.96..53.26
           box (16.50, 0.00) 465.39 × 18.15 main.fol:78:1 baselines 11.96..11.96
             box (0.00, 0.00) 465.39 × 18.15 main.fol:78:3 baselines 11.96..11.96

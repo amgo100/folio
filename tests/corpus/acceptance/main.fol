@@ -6,7 +6,7 @@
 
 *Time allowed:* 1 hour 15 minutes. *Total for this paper:* 50 marks.
 
-Answer *all* questions in the spaces provided. The marks for each question are shown in brackets.
+Answer *all* questions. The marks for each question are shown in brackets.
 
 - Use black ink or ball-point pen. You may use a pencil for diagrams.
 - Show your working in every calculation, and give units with your answers.
@@ -73,7 +73,7 @@ Light of wavelength #qty(633, "nm") from a laser passes through two narrow slits
 
 = Stationary waves <q:string>
 
-A string of length #qty(0.65, "m") is stretched between two fixed points with a tension of #qty(52, "N"). Its mass per unit length is $mu = qty(1.2e-3, "kg m^-1")$. The frequency of its first harmonic is given by equation (@eq:string[]), which is equivalent to $f = 1/(2 L) sqrt(T/mu)$.
+A string of length #qty(0.65, "m") is stretched between two fixed points with a tension of #qty(52, "N"). Its mass per unit length is $mu = qty(1.2e-3, "kg m^-1")$. The frequency of its first harmonic is given by equation (@eq:string[]), which is $f = v/(2 L)$ for waves that travel along the string at the speed $v = sqrt(T/mu)$.
 
 + Calculate the frequency of the first harmonic. *[3]*
 + State the positions of the nodes and the antinodes when the string vibrates at its first harmonic. *[2]*
