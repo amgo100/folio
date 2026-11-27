@@ -174,13 +174,13 @@ fn the_pages_laid_out_first_are_not_laid_out_again() {
     assert!(!first.complete);
     assert_eq!(first.pages.pages.len(), 3);
     // Laying out the first pages is not the `pages` query.
-    assert!(
-        !counts.lock().unwrap().contains_key("pages"),
-        "{counts:?}"
-    );
+    assert!(!counts.lock().unwrap().contains_key("pages"), "{counts:?}");
     let after = pages(&world);
     assert_eq!(counts.lock().unwrap().get("pages"), Some(&1));
-    assert!(after.changed(&before).len() > 3, "the edit reflowed the pages after");
+    assert!(
+        after.changed(&before).len() > 3,
+        "the edit reflowed the pages after"
+    );
     // The query found the first pages in the page cache: their content is
     // shared, not laid out again.
     for (i, page) in first.pages.pages.iter().enumerate() {

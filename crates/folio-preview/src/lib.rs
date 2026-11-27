@@ -80,7 +80,13 @@
 //!
 //! A new connection receives every page. Pages that the client says are
 //! visible come first: it sends `{"type": "visible", "pages": [..]}`
-//! whenever that changes.
+//! whenever that changes. They are also laid out first (SPEC §12.2): once
+//! any client has said what it shows, a revision whose document has pages
+//! after the last visible one may come in two updates, the first with the
+//! pages through it that changed, and the pages after them and the
+//! diagnostics still those of the revision before, then one with the
+//! rest. A client applies each update as it comes; a click on a page after
+//! those laid out first finds no source until the second.
 //!
 //! Source sync (SPEC §12.2): a client sends `{"type": "click", "revision":
 //! r, "page": n, "x": x, "y": y}` for a click at a point of a page, in
@@ -298,6 +304,24 @@ pub enum Event {
         /// The new revision.
         revision: u64,
     },
+    /// The pages of a revision through the last that a client shows were
+    /// laid out and sent, before the rest (SPEC §12.2). The pages after
+    /// them, and the diagnostics, are those of the revision before until
+    /// the revision is checked ([`Event::Updated`]). Only when a client
+    /// has said which pages it shows and the document has pages after
+    /// them.
+    FirstPages {
+        /// The revision.
+        revision: u64,
+        /// How many pages were laid out, from the first.
+        laid: usize,
+        /// How many pages the preview shows.
+        pages: usize,
+        /// The pages whose display lists were sent again.
+        lists: Vec<usize>,
+        /// The pages whose span maps were sent again.
+        spans: Vec<usize>,
+    },
     /// A revision was checked and sent to the clients.
     Updated(Arc<Update>),
     /// The check of a revision ended after an edit had overtaken it, so
@@ -414,6 +438,7 @@ impl Preview {
             options.port,
             token.clone(),
             published.clone(),
+            pending.visible.clone(),
             broadcast.clone(),
             options.on_event.clone(),
         )?;

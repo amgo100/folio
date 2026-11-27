@@ -59,6 +59,10 @@
 //!   which may be inside a paragraph) and the leaves and boundaries its
 //!   builder read, so an edit re-breaks only the pages whose content it
 //!   changed (§2.3).
+//! - **The first pages** ([`pages_through`]): the pages through a given
+//!   one, made as [`pages()`] makes them through the same page cache, for
+//!   the preview, which lays out the visible pages before the rest
+//!   (§12.2).
 //!
 //! This is the stage that becomes `folio-layout` (SPEC §2.2) once its
 //! interface settles.
@@ -89,8 +93,8 @@ use self::math::maths;
 pub use self::math::{Display, LaidMath, MATH_FONT, Maths, Number};
 pub(crate) use self::math::{math_face, math_settings};
 pub use self::page::{
-    FILL, FirstPages, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject, pages,
-    pages_through, paginate,
+    FILL, FirstPages, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject,
+    pages, pages_through, paginate,
 };
 pub use self::paragraph::{
     Align, Line, LineSlot, ObjectBreak, ObjectMetrics, ParagraphInput, ParagraphLayout,

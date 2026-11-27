@@ -948,13 +948,24 @@ fn assert_first_pages(style: &str, text: &str) {
         let first = first_pages(&world, last);
         let len = first.pages.pages.len();
         assert_eq!(first.complete, len == n, "through page {last}");
-        assert!(first.complete || len > last, "through page {last}: {len} pages");
+        assert!(
+            first.complete || len > last,
+            "through page {last}: {len} pages"
+        );
         // A blank page padding before a page counts as one.
         assert!(len <= last + 2, "through page {last}: {len} pages");
         assert_eq!(first.pages.master, all.master);
         assert_eq!(first.pages.page_refs, all.page_refs);
-        assert_eq!(&first.pages.pages[..], &all.pages[..len], "through page {last}");
-        assert_eq!(&first.pages.hashes[..], &all.hashes[..len], "through page {last}");
+        assert_eq!(
+            &first.pages.pages[..],
+            &all.pages[..len],
+            "through page {last}"
+        );
+        assert_eq!(
+            &first.pages.hashes[..],
+            &all.hashes[..len],
+            "through page {last}"
+        );
         // The build's pages after them are the same as at once.
         assert_eq!(pages(&world), all, "after the pages through {last}");
     }

@@ -464,7 +464,16 @@ pub fn paginate(
         fonts,
         master,
     };
-    build_pages(&input, cache, pages, regions, None, &mut || {}, &mut |_, _| {}).0
+    build_pages(
+        &input,
+        cache,
+        pages,
+        regions,
+        None,
+        &mut || {},
+        &mut |_, _| {},
+    )
+    .0
 }
 
 /// What the page builder reads of the stages before it.

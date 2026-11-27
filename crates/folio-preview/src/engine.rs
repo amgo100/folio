@@ -6,10 +6,15 @@
 //! a change cancels the check still running, since setting an input of the
 //! query database waits for every other handle to be dropped, and the
 //! cancelled check drops its handle at once (SPEC §2.3).
+//!
+//! The visible pages are laid out first (SPEC §12.2): when a client has
+//! said which pages it shows, the check lays out the pages through the
+//! last of them and sends those that changed, then checks the revision,
+//! which lays out the rest, and sends the rest with the diagnostics.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -38,6 +43,8 @@ const INTERNAL_ERROR: &str = "internal-error";
 enum Input {
     /// Files or directories changed.
     Paths(Vec<PathBuf>),
+    /// A check laid out the first pages of its revision.
+    First(Box<First>),
     /// A check finished.
     Done(Box<Done>),
     /// The pages of a check that finished were indexed.
@@ -85,7 +92,7 @@ pub(crate) struct Published {
     /// A number that changes whenever the font ids may name other faces
     /// or other bytes, so that clients drop the glyphs they have.
     pub(crate) font_generation: u64,
-    /// Where the pages' sources are, for source sync, when the pages are
+    /// Where the pages' sources are, for source sync, when any pages are
     /// those of this revision.
     pub(crate) layout: Option<Arc<Layout>>,
     /// The areas of the pages that the diagnostics point at, once the
@@ -98,6 +105,10 @@ pub(crate) struct Published {
 pub(crate) struct Layout {
     /// The revision the pages were laid out in.
     pub(crate) revision: u64,
+    /// How many of the first pages are of that revision: all of them, or
+    /// those laid out first while the rest are kept from the revision
+    /// before.
+    pub(crate) laid: usize,
     /// The files their spans resolve against.
     pub(crate) files: Arc<dyn Files + Send + Sync>,
     /// Where on the pages each place in the files is: indexed after the
@@ -109,6 +120,7 @@ impl std::fmt::Debug for Layout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Layout")
             .field("revision", &self.revision)
+            .field("laid", &self.laid)
             .finish_non_exhaustive()
     }
 }
@@ -210,6 +222,65 @@ impl folio_render::Fonts for FontTable {
     }
 }
 
+/// The pages a check laid out first, through the last page a client
+/// shows, ready to send.
+struct First {
+    revision: u64,
+    variant: Option<String>,
+    target: &'static str,
+    /// The pages laid out, followed by the pages sent before beyond them:
+    /// what the clients have once these are sent.
+    pages: Pages,
+    /// How many pages were laid out.
+    laid: usize,
+    /// The display lists of the pages laid out that changed or were
+    /// remapped, with whether only their spans changed.
+    lists: Vec<(usize, PageEntry, bool)>,
+    banner: Option<String>,
+    files: Arc<dyn Files + Send + Sync>,
+    fonts: Arc<FontTable>,
+    /// Whether the font ids may name other faces or bytes than before.
+    fonts_changed: bool,
+}
+
+/// The pages each client shows, which the check of a revision lays out
+/// first (SPEC §12.2).
+#[derive(Debug, Default)]
+pub(crate) struct Visible {
+    /// The last page each client shows, by the client's number.
+    clients: Mutex<Vec<(u64, usize)>>,
+    /// The last number given to a client.
+    next: AtomicU64,
+}
+
+impl Visible {
+    /// A number for a client that has connected.
+    pub(crate) fn join(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Records the pages a client shows.
+    pub(crate) fn show(&self, client: u64, pages: &[usize]) {
+        let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        clients.retain(|&(c, _)| c != client);
+        if let Some(&last) = pages.iter().max() {
+            clients.push((client, last));
+        }
+    }
+
+    /// Forgets a client that has gone.
+    pub(crate) fn leave(&self, client: u64) {
+        self.show(client, &[]);
+    }
+
+    /// The last page that any client shows, or `None` when no client has
+    /// said what it shows.
+    pub(crate) fn last(&self) -> Option<usize> {
+        let clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        clients.iter().map(|&(_, last)| last).max()
+    }
+}
+
 /// What a check found.
 struct Done {
     revision: u64,
@@ -280,6 +351,7 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         .map_err(|e| Error(e.to_string()))?
         .with_font_cache(cache);
     let (tx, rx) = crossbeam_channel::unbounded();
+    let visible = Arc::new(Visible::default());
     let (publish, published) = watch::channel(Arc::new(Published {
         target: Target::Pdf.as_str(),
         ..Published::default()
@@ -302,10 +374,12 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         written: 0,
         ids: 0,
         current: Arc::new(AtomicU64::new(0)),
+        visible: visible.clone(),
     };
     Ok(Pending {
         handle: Handle(tx),
         published,
+        visible,
         engine,
         rx,
     })
@@ -317,6 +391,8 @@ pub(crate) struct Pending {
     pub(crate) handle: Handle,
     /// What it publishes for the clients.
     pub(crate) published: watch::Receiver<Arc<Published>>,
+    /// The pages the clients show, which the server records.
+    pub(crate) visible: Arc<Visible>,
     engine: Engine,
     rx: Receiver<Input>,
 }
@@ -369,6 +445,8 @@ struct Engine {
     /// The revision checked next, which check threads read to leave out
     /// work an edit has made stale.
     current: Arc<AtomicU64>,
+    /// The pages the clients show.
+    visible: Arc<Visible>,
 }
 
 impl Engine {
@@ -412,6 +490,7 @@ impl Engine {
     fn handle(&mut self, input: Input) -> bool {
         match input {
             Input::Paths(_) => unreachable!("handled by the caller"),
+            Input::First(first) => self.first(*first),
             Input::Done(done) => self.done(*done),
             Input::Indexed(indexed) => self.indexed(*indexed),
             Input::Written(revision) => {
@@ -591,6 +670,7 @@ impl Engine {
         let before = if self.redraw { None } else { self.last.clone() };
         let published = self.publish.borrow().clone();
         let current = self.current.clone();
+        let visible = self.visible.last();
         let spawned = thread::Builder::new()
             .name("folio-preview-check".into())
             .spawn(move || {
@@ -600,11 +680,15 @@ impl Engine {
                 let frame = check(
                     &handle,
                     build,
-                    before.as_ref(),
+                    before,
                     &published,
                     files,
                     diagnostics,
                     project_errors,
+                    visible,
+                    &mut |first| {
+                        let _ = tx.send(Input::First(Box::new(First { revision, ..first })));
+                    },
                 );
                 // The next edit waits for every handle to go.
                 drop(handle);
@@ -645,23 +729,7 @@ impl Engine {
         let mut spans = Vec::new();
         if let Some(new) = &frame.pages {
             pages.truncate(new.pages.len());
-            for (index, mut entry, spans_only) in frame.lists {
-                self.ids += 1;
-                entry.id = self.ids;
-                if spans_only {
-                    // Remapped pages are pages `before` had, which were sent.
-                    entry.content = pages.get(index).map_or(entry.id, |old| old.content);
-                    spans.push(index);
-                } else {
-                    entry.content = entry.id;
-                    lists.push(index);
-                }
-                if index < pages.len() {
-                    pages[index] = entry;
-                } else {
-                    pages.push(entry);
-                }
-            }
+            (lists, spans) = self.place(&mut pages, frame.lists);
             self.last = frame.pages.clone();
             self.redraw = false;
         }
@@ -676,6 +744,7 @@ impl Engine {
         let layout = frame.pages.as_ref().map(|_| {
             Arc::new(Layout {
                 revision,
+                laid: count,
                 files: frame.files.clone(),
                 index: None,
             })
@@ -722,6 +791,78 @@ impl Engine {
         }
     }
 
+    /// Gives the display lists of a check numbers ([`PageEntry`]) and puts
+    /// them in `pages`; returns the pages whose lists and whose span maps
+    /// are sent.
+    fn place(
+        &mut self,
+        pages: &mut Vec<PageEntry>,
+        new: Vec<(usize, PageEntry, bool)>,
+    ) -> (Vec<usize>, Vec<usize>) {
+        let mut lists = Vec::new();
+        let mut spans = Vec::new();
+        for (index, mut entry, spans_only) in new {
+            self.ids += 1;
+            entry.id = self.ids;
+            if spans_only {
+                // Remapped pages are pages `before` had, which were sent.
+                entry.content = pages.get(index).map_or(entry.id, |old| old.content);
+                spans.push(index);
+            } else {
+                entry.content = entry.id;
+                lists.push(index);
+            }
+            if index < pages.len() {
+                pages[index] = entry;
+            } else {
+                pages.push(entry);
+            }
+        }
+        (lists, spans)
+    }
+
+    /// Sends the pages a check laid out first, unless an edit has
+    /// overtaken it. The pages after them stay as they were sent, and so
+    /// do the diagnostics, until the check finishes.
+    fn first(&mut self, first: First) {
+        let revision = first.revision;
+        if revision != self.revision {
+            // The check's end is stale too, and says so.
+            return;
+        }
+        let old = self.publish.borrow().clone();
+        let mut pages = old.pages.clone();
+        let (lists, spans) = self.place(&mut pages, first.lists);
+        self.last = Some(first.pages);
+        self.redraw = false;
+        let count = pages.len();
+        self.publish.send_replace(Arc::new(Published {
+            revision,
+            variant: first.variant,
+            target: first.target,
+            pages,
+            banner: first.banner,
+            diagnostics: old.diagnostics.clone(),
+            fonts: first.fonts,
+            font_generation: old.font_generation + u64::from(first.fonts_changed),
+            layout: Some(Arc::new(Layout {
+                revision,
+                laid: first.laid,
+                files: first.files,
+                index: None,
+            })),
+            // They marked the pages as they were.
+            overlays: Arc::new(Vec::new()),
+        }));
+        self.settings.emit(Event::FirstPages {
+            revision,
+            laid: first.laid,
+            pages: count,
+            lists,
+            spans,
+        });
+    }
+
     /// Adds the index of the pages and the overlays to the revision sent,
     /// if it is still the current one.
     fn indexed(&mut self, indexed: Indexed) {
@@ -738,6 +879,7 @@ impl Engine {
         let mut next = (*published).clone();
         next.layout = Some(Arc::new(Layout {
             revision: layout.revision,
+            laid: layout.laid,
             files: layout.files.clone(),
             index: Some(indexed.index),
         }));
@@ -814,14 +956,24 @@ fn choose(world: &World, variant: Option<&str>) -> Result<(Option<Name>, Target)
 
 /// Checks a build on a handle of the world and prepares what changed
 /// since `before` to send; `None` when an edit cancelled it.
+///
+/// When a client shows pages (`visible`, the last of them) and the build
+/// has pages after them, those through it are laid out first, and what
+/// changed of them is handed to `first` to send before the check goes on
+/// (SPEC §12.2). Strictly forward page breaking needs the pages before
+/// the last visible one anyway; the check then finds them in the page
+/// cache and lays out only the rest.
+#[allow(clippy::too_many_arguments)]
 fn check(
     world: &World,
     build: Result<(Option<Name>, Target), String>,
-    before: Option<&Pages>,
+    mut before: Option<Pages>,
     published: &Published,
     files: Arc<dyn Files + Send + Sync>,
     mut diagnostics: Vec<Diagnostic>,
     project_errors: bool,
+    visible: Option<usize>,
+    first: &mut dyn FnMut(First),
 ) -> Option<Frame> {
     let (variant, target) = match build {
         Ok(build) => build,
@@ -840,6 +992,54 @@ fn check(
             });
         }
     };
+    let name = variant.as_ref().map(|v| v.as_str().to_owned());
+    let banner = project_errors.then(|| {
+        "folio.toml or folio.lock has errors: the pages follow their last valid version".into()
+    });
+    // The fonts the clients have, and whether they must drop their glyphs.
+    let mut fonts_before = published.fonts.clone();
+    let mut redraw = before.is_none();
+    if let Some(last) = visible
+        && let Some(laid) = folio::pages_through(world, target, variant.as_ref(), last).ok()?
+        && !laid.complete
+    {
+        let pages = laid.pages;
+        let fonts = Arc::new(FontTable::new(&folio::fonts(world).ok()?));
+        let fonts_changed = redraw || !fonts.same_faces(&fonts_before);
+        let count = pages.pages.len();
+        // Pages kept beyond the first may name fonts by ids that now name
+        // others: then every page waits for the check.
+        let keeps_pages = published.pages.len() > count;
+        if !(fonts_changed && keeps_pages) {
+            let (changed, remapped) = match &before {
+                Some(before) => (pages.changed(before), pages.remapped(before)),
+                None => ((0..count).collect(), Vec::new()),
+            };
+            let mut lists = Vec::with_capacity(changed.len() + remapped.len());
+            for index in changed {
+                lists.push((index, entry(&pages, index), false));
+            }
+            for index in remapped {
+                lists.push((index, entry(&pages, index), true));
+            }
+            let merged = merge(&pages, before.as_ref());
+            first(First {
+                revision: 0,
+                variant: name.clone(),
+                target: target.as_str(),
+                pages: merged.clone(),
+                laid: count,
+                lists,
+                banner: banner.clone(),
+                files: files.clone(),
+                fonts: fonts.clone(),
+                fonts_changed,
+            });
+            before = Some(merged);
+            fonts_before = fonts;
+            redraw = false;
+        }
+    }
     let checked = folio::check(world, target, variant.as_ref()).ok()?;
     let panicked = checked
         .diagnostics
@@ -852,7 +1052,6 @@ fn check(
         true => None,
         false => folio::pages(world, target, variant.as_ref()).ok()?,
     };
-    let name = variant.as_ref().map(|v| v.as_str().to_owned());
     let Some(pages) = pages else {
         return Some(Frame {
             variant: name,
@@ -865,12 +1064,12 @@ fn check(
             }),
             diagnostics,
             files,
-            fonts: published.fonts.clone(),
+            fonts: fonts_before,
             fonts_changed: false,
         });
     };
     let fonts = Arc::new(FontTable::new(&folio::fonts(world).ok()?));
-    let (changed, remapped) = match before {
+    let (changed, remapped) = match &before {
         Some(before) => (pages.changed(before), pages.remapped(before)),
         None => ((0..pages.pages.len()).collect(), Vec::new()),
     };
@@ -881,20 +1080,31 @@ fn check(
     for index in remapped {
         lists.push((index, entry(&pages, index), true));
     }
-    let fonts_changed = before.is_none() || !fonts.same_faces(&published.fonts);
+    let fonts_changed = redraw || !fonts.same_faces(&fonts_before);
     Some(Frame {
         variant: name,
         target: target.as_str(),
         pages: Some(pages),
         lists,
-        banner: project_errors.then(|| {
-            "folio.toml or folio.lock has errors: the pages follow their last valid version".into()
-        }),
+        banner,
         diagnostics,
         files,
         fonts,
         fonts_changed,
     })
+}
+
+/// The pages the clients have once the first pages of a revision are sent:
+/// those pages, followed by the pages of `before` beyond them.
+fn merge(first: &Pages, before: Option<&Pages>) -> Pages {
+    let mut merged = first.clone();
+    if let Some(before) = before {
+        for i in first.pages.len()..before.pages.len() {
+            merged.pages.push(before.pages[i].clone());
+            merged.hashes.push(before.hashes[i]);
+        }
+    }
+    merged
 }
 
 /// Indexes the pages of a check, and finds where its diagnostics point.
