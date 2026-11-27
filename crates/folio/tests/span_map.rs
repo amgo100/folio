@@ -305,16 +305,19 @@ fn node_ids_are_stable_across_edits_elsewhere() {
 }
 
 /// The glyphs whose source is the element written at `at`, such as a list
-/// item's marker: each with its page, pen position and where a click on it
-/// leads.
+/// item's marker: glyphs of a node that is not text, and maps as a whole.
+/// Each with its page, pen position and where a click on it leads.
 fn marker_glyphs(world: &World, pages: &Pages, at: usize) -> Vec<(usize, f64, f64, Range<usize>)> {
+    let source = world.source("main.fol").unwrap();
     let mut out = Vec::new();
     for (index, page) in pages.pages.iter().enumerate() {
         for placed in span_map::glyphs(&page.fragment) {
             let Some(location) = span_map::locate_glyph(world, placed.glyph) else {
                 continue;
             };
-            if location.bytes.start == at && location.bytes.len() > placed.text().len() {
+            let node = source.find(span_map::span(placed.glyph.source.0)).unwrap();
+            let element = !matches!(node.kind(), SyntaxKind::Text | SyntaxKind::Space);
+            if element && node.range() == location.bytes && location.bytes.start == at {
                 let (x, y) = (placed.pos.x.to_pt(), placed.pos.y.to_pt());
                 out.push((index, x, y, location.bytes));
             }
@@ -392,21 +395,75 @@ fn a_cursor_in_a_list_item_marks_its_text_not_its_label() {
     }
 }
 
+/// Finds `bytes` in the pages of `text`, and the markers of the elements
+/// written at `at`.
+fn find_with_markers(
+    text: &str,
+    at: usize,
+    bytes: Range<usize>,
+) -> (Vec<span_map::Found>, Vec<(usize, f64, f64, Range<usize>)>) {
+    let world = world("", text);
+    let laid = pages(&world);
+    let fragments: Vec<_> = laid.pages.iter().map(|p| &p.fragment).collect();
+    let found = span_map::Index::new(&world, &fragments).find("main.fol", bytes);
+    (found, marker_glyphs(&world, &laid, at))
+}
+
+/// Whether any found area of glyphs covers any of the markers. (Where no
+/// glyph shows the bytes, the innermost box that holds them is found, which
+/// may be the item's block around its label.)
+fn marks(found: &[span_map::Found], markers: &[(usize, f64, f64, Range<usize>)]) -> bool {
+    markers
+        .iter()
+        .any(|&(page, x, y, _)| found.iter().any(|f| f.glyphs && covers(f, page, x, y)))
+}
+
 /// A cursor before a one-letter word of a list item marks that word alone,
 /// as in a paragraph: neither the label nor the space before it.
 #[test]
 fn a_cursor_before_a_short_word_in_an_item_marks_that_word() {
-    let find = |text: &str, at: usize| {
-        let world = world("", text);
-        let laid = pages(&world);
-        let fragments: Vec<_> = laid.pages.iter().map(|p| &p.fragment).collect();
-        span_map::Index::new(&world, &fragments).find("main.fol", at..at)
-    };
-    let item = find("+ go a way\n", 5);
-    let plain = find("go a way\n", 3);
+    let text = "+ go a way\n";
+    let (item, markers) = find_with_markers(text, 0, 5..5);
+    let (plain, _) = find_with_markers("go a way\n", 0, 3..3);
     assert_eq!(item.len(), 1, "{item:?}");
     assert_eq!(plain.len(), 1, "{plain:?}");
     assert_eq!(item[0].size, plain[0].size, "{item:?} {plain:?}");
+    assert!(!marks(&item, &markers), "{item:?}");
+    // The area starts where `a` is drawn.
+    let world = world("", text);
+    let laid = pages(&world);
+    let a = span_map::glyphs(&laid.pages[0].fragment)
+        .into_iter()
+        .find(|p| p.text() == "a")
+        .unwrap();
+    assert_eq!(item[0].pos.x, a.pos.x, "{item:?}");
+}
+
+/// Markup inside an item that shows no glyphs of its own, and places inside
+/// it, do not mark the label either; bytes that start at the item's marker,
+/// or before the next item's, do.
+#[test]
+fn inline_markup_and_selections_in_an_item_leave_its_label() {
+    let text = "+ See *bold* and #emph[x] now.\n+ Second item.\n";
+    let bold = text.find("*bold*").unwrap();
+    let emph = text.find("emph").unwrap() + 2;
+    for bytes in [bold..bold + 6, emph..emph] {
+        let (found, markers) = find_with_markers(text, 0, bytes.clone());
+        assert!(!markers.is_empty());
+        assert!(!found.is_empty(), "{bytes:?} finds nothing");
+        assert!(
+            !marks(&found, &markers),
+            "{bytes:?} marks the label: {found:?}"
+        );
+    }
+    // From the first item's text into the second item: the second label is
+    // in the bytes, the first is not.
+    let second = text.find("+ Second").unwrap();
+    let bytes = text.find("now").unwrap()..second + 8;
+    let (found, first) = find_with_markers(text, 0, bytes.clone());
+    assert!(!marks(&found, &first), "{found:?}");
+    let (_, labels) = find_with_markers(text, second, bytes);
+    assert!(marks(&found, &labels), "{found:?}");
 }
 
 /// A heading's number stands for the whole heading: a cursor in its title
