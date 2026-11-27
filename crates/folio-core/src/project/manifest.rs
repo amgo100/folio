@@ -397,12 +397,14 @@ impl Manifest {
         cx.finish(manifest)
     }
 
-    /// Warnings for keys that this compiler reads but does not act on yet,
-    /// at each key that is given: strict mode, which checks no overrides yet
-    /// (SPEC §5.5), the other keys of strict mode, and numbering groups
+    /// Warnings, for a build of `variant`, about keys that this compiler
+    /// reads but does not act on yet, at each one that is given: strict
+    /// mode, which checks no overrides yet (SPEC §5.5), the other keys of
+    /// strict mode (`strict-paths` at its first path, as an empty list means
+    /// the same as none), and the numbering group the variant belongs to
     /// (SPEC §6.1). A declared component that cannot be hosted is reported
     /// with the components ([`crate::component::unhosted`]).
-    pub fn not_implemented(&self) -> Vec<Diagnostic> {
+    pub fn not_implemented(&self, variant: Option<&Name>) -> Vec<Diagnostic> {
         let given = |span: DiagSpan| !matches!(span.get(), DiagSpanKind::Detached);
         let mut out = Vec::new();
         let formatting = &self.formatting;
@@ -426,7 +428,8 @@ impl Manifest {
                 out.push(unread(value.span, key));
             }
         }
-        for group in &self.numbering_groups {
+        let group = variant.and_then(|v| self.numbering_group(v.as_str()));
+        if let Some(group) = group {
             out.push(
                 Diagnostic::warning(
                     group.name.span,

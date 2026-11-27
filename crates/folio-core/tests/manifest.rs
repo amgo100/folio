@@ -678,11 +678,12 @@ fn output_that_replaces_a_project_file() {
 /// each key that is given, and only then (#330).
 #[test]
 fn keys_that_are_not_implemented_yet() {
-    let warnings = |text: &str| -> String {
+    let warnings_for = |text: &str, variant: Option<&str>| -> String {
         let text = format!("{PROJECT}{text}");
         let manifest = Manifest::parse(&text, file()).unwrap();
+        let variant = variant.map(|v| manifest.variant(v).unwrap().name.v.clone());
         let mut out = String::new();
-        for d in manifest.not_implemented() {
+        for d in manifest.not_implemented(variant.as_ref()) {
             let DiagSpanKind::Range { range, .. } = d.span.get() else {
                 panic!("detached {d:?}")
             };
@@ -694,6 +695,7 @@ fn keys_that_are_not_implemented_yet() {
         }
         out
     };
+    let warnings = |text: &str| warnings_for(text, None);
     assert_eq!(warnings(""), "");
     assert_eq!(warnings("\n[formatting]\nmode = \"local\"\n"), "");
     assert_eq!(
@@ -711,12 +713,14 @@ fn keys_that_are_not_implemented_yet() {
          `allow-local-packages` is not implemented yet, so it has no effect @ false\n  \
          hint: strict mode does not check content for overrides yet\n"
     );
+    // A numbering group is warned about in the builds of its variants.
+    let grouped = "\n[variants.exam]\ntargets = [\"pdf\"]\n\n[variants.markscheme]\n\
+                   targets = [\"pdf\"]\n\n[variants.slides]\ntargets = [\"pdf\"]\n\n\
+                   [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
+                   shared-counters = [\"question\"]\n";
+    assert_eq!(warnings_for(grouped, Some("slides")), "");
     assert_eq!(
-        warnings(
-            "\n[variants.exam]\ntargets = [\"pdf\"]\n\n[variants.markscheme]\ntargets = [\"pdf\"]\n\n\
-             [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
-             shared-counters = [\"question\"]\n"
-        ),
+        warnings_for(grouped, Some("markscheme")),
         "numbering groups are not implemented yet, so the variants of `paper` number their \
          content separately @ paper\n  \
          hint: each variant counts only the content it shows\n"

@@ -328,13 +328,13 @@ fn declared_components_that_cannot_be_hosted() {
         [
             (
                 "component `@school/house` cannot be loaded",
-                "loading components from a path is not implemented yet; only first-party \
-                 components are available, without a declaration"
+                "loading components from a path is not implemented yet, so its elements and \
+                 properties are not available"
             ),
             (
                 "component `tables` cannot be loaded",
-                "loading components by version is not implemented yet; only first-party \
-                 components are available, without a declaration"
+                "loading components by version is not implemented yet, so its elements and \
+                 properties are not available"
             ),
         ]
     );

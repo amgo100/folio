@@ -42,8 +42,8 @@ pub fn unhosted(registry: &Registry, components: &Components) -> Vec<Diagnostic>
                 eco_format!("component `{}` cannot be loaded", decl.name.v),
             )
             .with_hint(eco_format!(
-                "loading components {from} is not implemented yet; only first-party \
-                 components are available, without a declaration"
+                "loading components {from} is not implemented yet, so its elements and \
+                 properties are not available"
             ))
         })
         .collect()

@@ -254,12 +254,11 @@ fn system_fonts_depend_on_the_build_mode() {
         let mut found = messages(&compiled);
         // Strict mode also warns that it checks no overrides yet (#330).
         if extra == STRICT {
-            let (severity, first) = found.remove(0);
-            assert_eq!(severity, Severity::Warning);
-            assert!(
-                first.starts_with("strict mode is not implemented yet"),
-                "{first}"
-            );
+            let at = found
+                .iter()
+                .position(|(_, m)| m.starts_with("strict mode is not implemented yet"))
+                .expect("the strict-mode warning");
+            assert_eq!(found.remove(at).0, Severity::Warning);
         }
         assert_eq!(found, expected, "{mode:?} {extra}");
     }
