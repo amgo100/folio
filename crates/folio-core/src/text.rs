@@ -34,8 +34,10 @@
 //! sets them in fonts, for every target, and [`text()`] shapes them, for
 //! the targets that are laid out. Shaping is memoised per paragraph in the
 //! database's [`Cache`]: the query hands every paragraph of the build to
-//! it, the new ones are shaped in parallel with `rayon`, and an edit
-//! re-shapes only the paragraphs it changed. The queries themselves are
+//! it, the new ones are shaped in parallel with `rayon` (on the query's
+//! own thread when the shaping pool has one thread, as with
+//! `RAYON_NUM_THREADS=1`), and an edit re-shapes only the paragraphs it
+//! changed. The queries themselves are
 //! memoised like any other.
 
 use std::collections::{HashMap, HashSet};
