@@ -1,0 +1,162 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 595.28 × 841.89, 3 page(s)
+page 1 595.28 × 841.89, 20 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 23.52..614.92
+    box (0.00, 0.00) 481.89 × 618.11 main.fol:1:2 baselines 23.52..614.92
+      box (0.00, 0.00) 481.89 × 32.28 main.fol:1:2 baselines 23.52..23.52 keep penalty 10000
+        text (0.00, 23.52) NewCM10-Bold 17.60 w 163.42 17 glyph(s) "Forces and motion"
+        text (163.42, 19.20) NewCM10-Regular 12.32 w 6.16 1 glyph(s) "1"
+        box (0.00, 646.40) 481.89 × 13.93 main.fol:1:32 baselines 11.37..11.37
+          box (0.00, 0.00) 481.89 × 13.93 main.fol:1:41 baselines 11.37..11.37
+            text (0.00, 8.68) NewCM10-Regular 7.70 w 7.70 2 glyph(s) "1\u{a0}"
+            text (7.70, 11.37) NewCM10-Regular 8.80 w 110.04 29 glyph(s) "A note anchored in the title."
+      box (0.00, 50.76) 481.89 × 567.35 main.fol:3:1 baselines 21.02..564.16
+        box (0.00, 0.00) 481.89 × 29.14 main.fol:3:1 baselines 21.02..21.02 keep penalty 10000
+          text (0.00, 21.02) NewCM10-Bold 15.40 w 110.97 13 glyph(s) "Newton’s laws"
+          text (110.97, 17.25) NewCM10-Regular 10.78 w 5.39 1 glyph(s) "2"
+          box (0.00, 618.36) 481.89 × 13.93 main.fol:3:17 baselines 11.37..11.37
+            box (0.00, 0.00) 481.89 × 13.93 main.fol:3:26 baselines 11.37..11.37
+              text (0.00, 8.68) NewCM10-Regular 7.70 w 7.70 2 glyph(s) "2\u{a0}"
+              text (7.70, 11.37) NewCM10-Regular 8.80 w 116.40 29 glyph(s) "A note anchored in a heading."
+        box (0.00, 36.84) 481.89 × 22.74 main.fol:5:1 baselines 15.97..15.97
+          text (0.00, 15.97) NewCM10-Regular 11.00 w 374.70 81 glyph(s) "The base stylesheet alone sets this document: its lists, its figure and its notes."
+          text (374.70, 13.28) NewCM10-Regular 7.70 w 3.85 1 glyph(s) "3"
+          box (0.00, 604.25) 481.89 × 13.93 main.fol:5:84 baselines 11.37..11.37
+            box (0.00, 0.00) 481.89 × 13.93 main.fol:5:93 baselines 11.37..11.37
+              text (0.00, 8.68) NewCM10-Regular 7.70 w 7.70 2 glyph(s) "3\u{a0}"
+              text (7.70, 11.37) NewCM10-Regular 8.80 w 347.07 89 glyph(s) "A note anchored in body text, on the same page as the notes of the title and the heading."
+        box (0.00, 65.08) 481.89 × 107.45 main.fol:7:1 baselines 15.97..100.68
+          box (16.50, 0.00) 465.39 × 79.21 main.fol:7:1 baselines 15.97..72.45
+            box (0.00, 0.00) 465.39 × 22.74 main.fol:7:3 baselines 15.97..15.97
+              text (0.00, 15.97) NewCM10-Regular 11.00 w 14.06 2 glyph(s) "•\u{a0}"
+              text (14.06, 15.97) NewCM10-Regular 11.00 w 133.81 29 glyph(s) "a body at rest stays at rest;"
+            box (0.00, 28.24) 465.39 × 50.97 main.fol:8:3 baselines 15.97..44.21
+              box (16.50, 0.00) 448.89 × 50.97 main.fol:8:3 baselines 15.97..44.21
+                box (0.00, 0.00) 448.89 × 22.74 main.fol:8:5 baselines 15.97..15.97
+                  text (0.00, 15.97) NewCM10-Regular 11.00 w 11.00 2 glyph(s) "–\u{a0}"
+                  text (11.00, 15.97) NewCM10-Regular 11.00 w 162.84 36 glyph(s) "unless a resultant force acts on it;"
+                box (0.00, 28.24) 448.89 × 22.74 main.fol:9:5 baselines 15.97..15.97
+                  box (16.50, 0.00) 432.39 × 22.74 main.fol:9:5 baselines 15.97..15.97
+                    box (0.00, 0.00) 432.39 × 22.74 main.fol:9:7 baselines 15.97..15.97
+                      text (0.00, 15.97) NewCM10-Regular 11.00 w 14.06 2 glyph(s) "◦\u{a0}"
+                      text (14.06, 15.97) NewCM10-Regular 11.00 w 103.42 22 glyph(s) "which is the first law."
+          box (16.50, 84.71) 465.39 × 22.74 main.fol:10:1 baselines 15.97..15.97
+            box (0.00, 0.00) 465.39 × 22.74 main.fol:10:3 baselines 15.97..15.97
+              text (0.00, 15.97) NewCM10-Regular 11.00 w 14.06 2 glyph(s) "•\u{a0}"
+              text (14.06, 15.97) NewCM10-Regular 11.00 w 170.93 36 glyph(s) "a body in motion keeps its velocity."
+        box (0.00, 178.03) 481.89 × 160.62 main.fol:12:1 baselines 15.97..153.86
+          box (16.50, 0.00) 465.39 × 132.38 main.fol:12:1 baselines 15.97..125.62
+            box (0.00, 0.00) 465.39 × 22.74 main.fol:12:3 baselines 15.97..15.97
+              text (0.00, 15.97) NewCM10-Regular 11.00 w 14.06 3 glyph(s) "1.\u{a0}"
+              text (14.06, 15.97) NewCM10-Regular 11.00 w 88.19 17 glyph(s) "measure the mass;"
+            box (0.00, 28.24) 465.39 × 104.15 main.fol:13:3 baselines 15.97..97.38
+              box (16.50, 0.00) 448.89 × 75.91 main.fol:13:3 baselines 15.97..69.15
+                box (0.00, 0.00) 448.89 × 22.74 main.fol:13:5 baselines 15.97..15.97
+                  text (0.00, 15.97) NewCM10-Regular 11.00 w 19.56 4 glyph(s) "(a)\u{a0}"
+                  text (19.56, 15.97) NewCM10-Regular 11.00 w 73.34 15 glyph(s) "with a balance;"
+                box (0.00, 28.24) 448.89 × 47.67 main.fol:14:5 baselines 15.97..40.91
+                  box (16.50, 0.00) 432.39 × 22.74 main.fol:14:5 baselines 15.97..15.97
+                    box (0.00, 0.00) 432.39 × 22.74 main.fol:14:7 baselines 15.97..15.97
+                      text (0.00, 15.97) NewCM10-Regular 11.00 w 17.12 4 glyph(s) "(i)\u{a0}"
+                      text (17.12, 15.97) NewCM10-Regular 11.00 w 56.65 12 glyph(s) "zeroed first;"
+                  box (16.50, 24.94) 432.39 × 22.74 main.fol:15:5 baselines 15.97..15.97
+                    box (0.00, 0.00) 432.39 × 22.74 main.fol:15:7 baselines 15.97..15.97
+                      text (0.00, 15.97) NewCM10-Regular 11.00 w 20.17 5 glyph(s) "(ii)\u{a0}"
+                      text (20.17, 15.97) NewCM10-Regular 11.00 w 81.29 18 glyph(s) "read at eye level."
+              box (16.50, 81.41) 448.89 × 22.74 main.fol:16:3 baselines 15.97..15.97
+                box (0.00, 0.00) 448.89 × 22.74 main.fol:16:5 baselines 15.97..15.97
+                  text (0.00, 15.97) NewCM10-Regular 11.00 w 20.17 4 glyph(s) "(b)\u{a0}"
+                  text (20.17, 15.97) NewCM10-Regular 11.00 w 92.64 19 glyph(s) "or from the weight."
+          box (16.50, 137.88) 465.39 × 22.74 main.fol:17:1 baselines 15.97..15.97
+            box (0.00, 0.00) 465.39 × 22.74 main.fol:17:3 baselines 15.97..15.97
+              text (0.00, 15.97) NewCM10-Regular 11.00 w 14.06 3 glyph(s) "2.\u{a0}"
+              text (14.06, 15.97) NewCM10-Regular 11.00 w 121.72 25 glyph(s) "measure the acceleration."
+        box (0.00, 349.65) 481.89 × 65.39 main.fol:19:2 baselines 33.57..58.62
+          box (0.00, 0.00) 481.89 × 37.15 main.fol:19:10 baselines 33.57..33.57
+            box (209.02, 3.57) 60.00 × 30.00 main.fol:19:10
+              image (0.00, 0.00) 60.00 × 30.00 PNG 5ec2ff3884fea4d9 main.fol:19:10
+            text (269.02, 30.88) NewCM10-Regular 7.70 w 3.85 1 glyph(s) "4"
+            box (0.00, 314.17) 481.89 × 13.93 main.fol:19:74 baselines 11.37..11.37
+              box (0.00, 0.00) 481.89 × 13.93 main.fol:19:83 baselines 11.37..11.37
+                text (0.00, 8.68) NewCM10-Regular 7.70 w 7.70 2 glyph(s) "4\u{a0}"
+                text (7.70, 11.37) NewCM10-Regular 8.80 w 135.55 34 glyph(s) "A note anchored in a figure’s body."
+          box (0.00, 42.65) 481.89 × 22.74 main.fol:19:2 baselines 15.97..15.97
+            text (195.53, 15.97) NewCM10-Regular 11.00 w 90.83 18 glyph(s) "A wave on a string"
+        box (0.00, 430.88) 481.89 × 136.47 main.fol:21:1 baselines 18.53..133.28
+          box (0.00, 0.00) 481.89 × 26.00 main.fol:21:1 baselines 18.53..18.53 keep penalty 10000
+            text (0.00, 18.53) NewCM10-Bold 13.20 w 76.60 8 glyph(s) "Momentum"
+          box (0.00, 32.60) 481.89 × 22.74 main.fol:23:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 0 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 60.84) 481.89 × 22.74 main.fol:25:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 1 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 89.07) 481.89 × 22.74 main.fol:27:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 2 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 117.31) 481.89 × 19.16 main.fol:29:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 3 of the filler that brings the next figure to the foot of the page."
+    shape (0.00, 643.40) M(0.00, 0.00) L(160.63, 0.00) stroke #000000ff 0.50 Butt Miter
+page 2 595.28 × 841.89, 24 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 12.40..661.85
+    box (0.00, 0.00) 481.89 × 665.04 main.fol:1:2 baselines 12.40..661.85
+      box (0.00, 0.00) 481.89 × 665.04 main.fol:3:1 baselines 12.40..661.85
+        box (0.00, 0.00) 481.89 × 665.04 main.fol:21:1 baselines 12.40..661.85
+          box (0.00, 0.00) 481.89 × 19.16 main.fol:31:1 baselines 12.40..12.40
+            text (0.00, 12.40) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 4 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 24.66) 481.89 × 22.74 main.fol:33:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 5 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 52.90) 481.89 × 22.74 main.fol:35:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 6 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 81.14) 481.89 × 22.74 main.fol:37:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 7 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 109.37) 481.89 × 22.74 main.fol:39:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 8 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 137.61) 481.89 × 22.74 main.fol:41:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 333.07 71 glyph(s) "Line 9 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 165.85) 481.89 × 22.74 main.fol:43:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 10 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 194.08) 481.89 × 22.74 main.fol:45:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 11 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 222.32) 481.89 × 22.74 main.fol:47:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 12 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 250.56) 481.89 × 22.74 main.fol:49:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 13 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 278.79) 481.89 × 22.74 main.fol:51:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 14 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 307.03) 481.89 × 22.74 main.fol:53:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 15 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 335.27) 481.89 × 22.74 main.fol:55:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 16 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 363.51) 481.89 × 22.74 main.fol:57:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 17 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 391.74) 481.89 × 22.74 main.fol:59:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 18 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 419.98) 481.89 × 22.74 main.fol:61:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 19 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 448.22) 481.89 × 22.74 main.fol:63:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 20 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 476.45) 481.89 × 22.74 main.fol:65:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 21 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 504.69) 481.89 × 22.74 main.fol:67:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 22 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 532.93) 481.89 × 22.74 main.fol:69:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 23 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 561.16) 481.89 × 22.74 main.fol:71:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 24 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 589.40) 481.89 × 22.74 main.fol:73:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 25 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 617.64) 481.89 × 22.74 main.fol:75:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 26 of the filler that brings the next figure to the foot of the page."
+          box (0.00, 645.88) 481.89 × 19.16 main.fol:77:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 338.57 72 glyph(s) "Line 27 of the filler that brings the next figure to the foot of the page."
+page 3 595.28 × 841.89, 3 line(s)
+  box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 30.00..90.98
+    box (0.00, 0.00) 481.89 × 94.17 main.fol:1:2 baselines 30.00..90.98
+      box (0.00, 0.00) 481.89 × 94.17 main.fol:3:1 baselines 30.00..90.98
+        box (0.00, 0.00) 481.89 × 94.17 main.fol:21:1 baselines 30.00..90.98
+          box (0.00, 0.00) 481.89 × 64.01 main.fol:79:2 baselines 30.00..57.25
+            box (0.00, 0.00) 481.89 × 35.78 main.fol:79:10 baselines 30.00..30.00
+              box (210.94, 0.00) 60.00 × 30.00 main.fol:79:10
+                image (0.00, 0.00) 60.00 × 30.00 PNG 5ec2ff3884fea4d9 main.fol:79:10
+            box (0.00, 41.28) 481.89 × 22.74 main.fol:79:2 baselines 15.97..15.97
+              text (96.34, 15.97) NewCM10-Regular 11.00 w 289.21 60 glyph(s) "A figure that would end the page; its caption is kept with it"
+          box (0.00, 75.01) 481.89 × 19.16 main.fol:81:1 baselines 15.97..15.97
+            text (0.00, 15.97) NewCM10-Regular 11.00 w 120.35 24 glyph(s) "The text after the figure."

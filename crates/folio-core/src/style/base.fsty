@@ -27,8 +27,23 @@ list-item > paragraph, enum-item > paragraph, terms-item > paragraph {
 }
 terms-item > term { font-weight: bold; }
 
-// Figures stand apart from the text, centred.
+// List markers and enum numbers vary by depth (decision D-327-2): bullets
+// •, – and ◦; numbers 1., (a) and (i). An `enum` item takes its enum's
+// pattern, and enums are counted as if scoped to `enum` (SPEC §4.5), so
+// each nested list counts from its own start.
+list-item { marker: "•"; }
+list list list-item { marker: "–"; }
+list list list list-item { marker: "◦"; }
+enum { numbering: "1."; }
+enum enum { numbering: "(a)"; }
+enum enum enum { numbering: "(i)"; }
+
+// Figures stand apart from the text, centred, and a page break does not
+// part a figure's body from its caption. A figure without a caption, such
+// as an answer space, is not kept, so its ruled lines may break (SPEC
+// §6.3).
 figure { space-before: 1em; space-after: 1em; align: center; }
+figure[caption] { keep-together: true; }
 
 // `strong` and `emph` say what text is (SPEC §4.3); this is how it looks.
 strong { font-weight: bold; }
@@ -39,11 +54,13 @@ emph { font-style: italic; }
 // font, sets the characters Source Code Pro lacks.
 raw { font: "Source Code Pro", "New Computer Modern"; font-size: 0.9em; }
 
-// Footnotes (SPEC §7.8, decisions D-46-1 and D-46-2): numbered through
-// the document, with small raised numbers at the anchor and before the
-// note, upright and of normal weight wherever the anchor is. The note's
-// blocks are 0.8 of the body's size (1.143 times the markers') and on
-// their baselines.
+// Footnotes (SPEC §7.8, decisions D-46-1, D-46-2, D-327-1 and D-327-3):
+// numbered through the document, with small raised numbers at the anchor
+// and before the note, upright and of normal weight wherever the anchor
+// is. The marker at the anchor is 0.7 of the anchor's size; the note
+// inherits from the document, so the marker before it is 0.7 and its
+// blocks 0.8 of the body's size (1.143 times the marker's), on their
+// baselines, wherever the anchor is.
 footnote {
   numbering: "1"; font-size: 0.7em; baseline-shift: 0.35em; font-weight: normal;
   font-style: normal; space-before: 0.4em;

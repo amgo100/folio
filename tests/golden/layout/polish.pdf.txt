@@ -1,13 +1,13 @@
 # Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
 master 419.53 × 595.28, 2 page(s)
-page 1 419.53 × 595.28, 17 line(s)
-  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 21.81..453.29
-    box (0.00, 0.00) 334.49 × 456.98 main.fol:1:2 baselines 21.81..453.29
+page 1 419.53 × 595.28, 18 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 21.81..475.52
+    box (0.00, 0.00) 334.49 × 479.21 main.fol:1:2 baselines 21.81..475.52
       box (0.00, 0.00) 334.49 × 62.56 main.fol:1:2 baselines 21.81..53.09 keep penalty 10000
         text (0.00, 21.81) SourceSerif4-Bold 17.60 w 328.52 39 glyph(s) "Zadania z fizyki: ruch jednostajnie przy"
         text (328.52, 21.81) SourceSerif4-Bold 17.60 w 5.97 1 glyph(s) "-"
         text (0.00, 53.09) SourceSerif4-Bold 17.60 w 79.15 9 glyph(s) "spieszony"
-      box (0.00, 80.16) 334.49 × 376.82 main.fol:3:1 baselines 18.08..373.13
+      box (0.00, 80.16) 334.49 × 399.05 main.fol:3:1 baselines 18.08..395.36
         box (0.00, 0.00) 334.49 × 26.34 main.fol:3:1 baselines 18.08..18.08 keep penalty 10000
           text (0.00, 18.08) SourceSerif4-Bold 14.00 w 33.17 4 glyph(s) "Ruch"
         box (0.00, 32.34) 334.49 × 88.92 main.fol:5:1 baselines 14.97..81.66
@@ -24,20 +24,25 @@ page 1 419.53 × 595.28, 17 line(s)
           text (0.00, 59.43) SourceSerif4-Regular 11.00 w 331.06 63 glyph(s) "go przyspieszenie? Jaką drogę przebywa w tym czasie? Narysuj wy"
           text (331.06, 59.43) SourceSerif4-Regular 11.00 w 3.43 1 glyph(s) "-"
           text (0.00, 81.66) SourceSerif4-Regular 11.00 w 172.64 35 glyph(s) "kres zależności prędkości od czasu."
-        box (0.00, 232.49) 334.49 × 144.32 main.fol:9:1 baselines 18.08..140.64
+        box (0.00, 232.49) 334.49 × 166.56 main.fol:9:1 baselines 18.08..162.87
           box (0.00, 0.00) 334.49 × 26.34 main.fol:9:1 baselines 18.08..18.08 keep penalty 10000
             text (0.00, 18.08) SourceSerif4-Bold 14.00 w 123.05 17 glyph(s) "Pytania dodatkowe"
-          box (0.00, 32.34) 334.49 × 111.98 main.fol:11:1 baselines 14.97..108.30
-            box (16.50, 0.00) 317.99 × 22.23 main.fol:11:1 baselines 14.97..14.97
-              box (0.00, 0.00) 317.99 × 22.23 main.fol:11:3 baselines 14.97..14.97
-                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 317.99 64 glyph(s) "Czym różni się ruch jednostajny od jednostajnie przyspieszonego?"
-            box (16.50, 24.43) 317.99 × 44.46 main.fol:12:1 baselines 14.97..37.20
+          box (0.00, 32.34) 334.49 × 134.21 main.fol:11:1 baselines 14.97..130.53
+            box (16.50, 0.00) 317.99 × 44.46 main.fol:11:1 baselines 14.97..37.20
+              box (0.00, 0.00) 317.99 × 44.46 main.fol:11:3 baselines 14.97..37.20
+                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 6.23 2 glyph(s) "•\u{a0}"
+                text (6.23, 14.97) SourceSerif4-Regular 11.00 w 308.32 61 glyph(s) "Czym różni się ruch jednostajny od jednostajnie przyspieszone"
+                text (314.56, 14.97) SourceSerif4-Regular 11.00 w 3.43 1 glyph(s) "-"
+                text (0.00, 37.20) SourceSerif4-Regular 11.00 w 16.20 3 glyph(s) "go?"
+            box (16.50, 46.66) 317.99 × 44.46 main.fol:12:1 baselines 14.97..37.20
               box (0.00, 0.00) 317.99 × 44.46 main.fol:12:3 baselines 14.97..37.20
-                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 317.99 57 glyph(s) "Dlaczego „spadanie swobodne” nazywamy ruchem jednostajnie"
+                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 6.25 2 glyph(s) "•\u{a0}"
+                text (6.25, 14.97) SourceSerif4-Regular 11.00 w 311.74 57 glyph(s) "Dlaczego „spadanie swobodne” nazywamy ruchem jednostajnie"
                 text (0.00, 37.20) SourceSerif4-Regular 11.00 w 83.85 15 glyph(s) "przyspieszonym?"
-            box (16.50, 71.09) 317.99 × 40.89 main.fol:13:1 baselines 14.97..37.20
+            box (16.50, 93.32) 317.99 × 40.89 main.fol:13:1 baselines 14.97..37.20
               box (0.00, 0.00) 317.99 × 40.89 main.fol:13:3 baselines 14.97..37.20
-                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 314.56 63 glyph(s) "Jak zmieniłby się wynik na Księżycu, gdzie przyspieszenie grawi"
+                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 5.44 2 glyph(s) "•\u{a0}"
+                text (5.44, 14.97) SourceSerif4-Regular 11.00 w 309.11 63 glyph(s) "Jak zmieniłby się wynik na Księżycu, gdzie przyspieszenie grawi"
                 text (314.56, 14.97) SourceSerif4-Regular 11.00 w 3.43 1 glyph(s) "-"
                 text (0.00, 37.20) SourceSerif4-Regular 11.00 w 179.05 37 glyph(s) "tacyjne jest sześciokrotnie mniejsze?"
 page 2 419.53 × 595.28, 8 line(s)

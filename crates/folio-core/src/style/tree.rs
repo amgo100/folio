@@ -62,6 +62,11 @@ pub struct Styled {
 /// element with the class `vector` and inheriting from it, so that
 /// `math.vector { math-style: arrow; }` styles them (SPEC §8.1). Math
 /// layout finds it with [`StyledNode::vector_style`].
+///
+/// A `footnote` element has one more child too, the part [`NOTE_PART`]:
+/// the style of its note, matched as the footnote and inheriting from the
+/// `doc` element rather than from the anchor, as the footnote's body does
+/// (SPEC §7.8). The text stage finds it with [`StyledNode::note_style`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StyledNode {
     /// The element's name, or the part's.
@@ -80,6 +85,10 @@ pub struct StyledNode {
 /// vectors (see [`StyledNode`]).
 pub const VECTOR_PART: &str = "vector";
 
+/// The name of the part of a `footnote` element that holds the style of
+/// its note (see [`StyledNode`]).
+pub const NOTE_PART: &str = "note";
+
 impl StyledNode {
     /// The style of the vectors of a `math` element's formula: its part
     /// [`VECTOR_PART`], present when the formula holds a vector. `None` for
@@ -88,6 +97,14 @@ impl StyledNode {
         self.children.iter().find(
             |child| matches!(&child.name, NodeName::Part(name) if name.as_str() == VECTOR_PART),
         )
+    }
+
+    /// The style of a `footnote` element's note: its part [`NOTE_PART`].
+    /// `None` for any other node.
+    pub fn note_style(&self) -> Option<&StyledNode> {
+        self.children
+            .iter()
+            .find(|child| matches!(&child.name, NodeName::Part(name) if name.as_str() == NOTE_PART))
     }
 }
 
@@ -184,6 +201,7 @@ pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
         scoped_chain: Vec::new(),
         has_scoped: false,
         order: 0,
+        root_style: None,
         variant: build.variant(db).clone(),
         target: build.target(db),
     };
@@ -345,6 +363,9 @@ struct Walker<'a> {
     has_scoped: bool,
     /// The document order of scoped rules.
     order: u32,
+    /// The computed style of the `doc` element, which the notes of
+    /// footnotes inherit from ([`NOTE_PART`]).
+    root_style: Option<ComputedStyle>,
     variant: Option<Name>,
     target: Target,
 }
@@ -408,6 +429,21 @@ impl<'a> Walker<'a> {
         local.extend(own.iter().cloned());
 
         let style = self.compute(parent, &matched, &local);
+        if context.is_none() {
+            self.root_style = Some(style.clone());
+        }
+        // A footnote's note inherits from the document, not from its
+        // anchor, so that every note on a page looks alike; the footnote
+        // itself, which styles the marker at its anchor, inherits from the
+        // anchor (SPEC §7.8, D-327-1, D-327-3).
+        let note = match child {
+            Child::Element(element) if is_footnote(element) => {
+                let root = self.root_style.clone();
+                Some(self.compute(root.as_ref(), &matched, &local))
+            }
+            _ => None,
+        };
+        let inherited = note.as_ref().unwrap_or(&style);
 
         // The children, with this node as their context.
         let context_view = self.view(siblings, i, &needs.context, needs);
@@ -422,7 +458,7 @@ impl<'a> Walker<'a> {
         let mut children: EcoVec<StyledNode> = (0..grandchildren.len())
             .map(|j| {
                 let owner = (span, location);
-                self.node(&grandchildren, j, child_context, Some(&style), owner)
+                self.node(&grandchildren, j, child_context, Some(inherited), owner)
             })
             .collect();
         if scoped_view.is_some() {
@@ -434,6 +470,15 @@ impl<'a> Walker<'a> {
         {
             let owner = (span, location);
             children.push(self.vector_node(siblings, i, context, &style, &own, owner));
+        }
+        if let Some(note) = note {
+            children.push(StyledNode {
+                name: NodeName::Part(Name::new(NOTE_PART).expect("an identifier")),
+                span,
+                location,
+                style: note,
+                children: EcoVec::new(),
+            });
         }
 
         StyledNode {
@@ -724,6 +769,11 @@ fn resolve_tokens(values: &Values<'_>, value: &Value, span: Span) -> Option<Decl
             .map(Declared::List),
         _ => Some(Declared::Value(value.clone())),
     }
+}
+
+/// Whether an element is a built-in `footnote`.
+fn is_footnote(element: &Element) -> bool {
+    element.name.namespace.is_none() && element.name.name.as_str() == "footnote"
 }
 
 /// Whether an element is a `math` element whose formula holds a vector.
