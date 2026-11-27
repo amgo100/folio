@@ -927,3 +927,90 @@ fn pages_are_cached_by_the_state_coming_into_them() {
     assert_eq!(paginate(&world, Regions::default(), &cache), plain);
     assert_eq!(cache.stats().hits, hits + n);
 }
+
+/// The first pages of a build, through the page with index `last`.
+fn first_pages(world: &World, last: usize) -> folio::layout::FirstPages {
+    folio::pages_through(world, Target::Pdf, None, last)
+        .unwrap()
+        .unwrap()
+}
+
+/// Asserts that the first pages laid out through each page, in a world
+/// that has laid out nothing yet, are the first pages of the build, and
+/// that the build's pages laid out after them are those of a world that
+/// laid out all at once.
+fn assert_first_pages(style: &str, text: &str) {
+    let all = pages(&world(style, text));
+    let n = all.pages.len();
+    assert!(n >= 3, "{n} pages");
+    for last in [0, 1, n / 2, n - 2, n - 1, n, n + 5] {
+        let world = world(style, text);
+        let first = first_pages(&world, last);
+        let len = first.pages.pages.len();
+        assert_eq!(first.complete, len == n, "through page {last}");
+        assert!(first.complete || len > last, "through page {last}: {len} pages");
+        // A blank page padding before a page counts as one.
+        assert!(len <= last + 2, "through page {last}: {len} pages");
+        assert_eq!(first.pages.master, all.master);
+        assert_eq!(first.pages.page_refs, all.page_refs);
+        assert_eq!(&first.pages.pages[..], &all.pages[..len], "through page {last}");
+        assert_eq!(&first.pages.hashes[..], &all.hashes[..len], "through page {last}");
+        // The build's pages after them are the same as at once.
+        assert_eq!(pages(&world), all, "after the pages through {last}");
+    }
+}
+
+#[test]
+fn the_first_pages_are_the_pages_of_the_build() {
+    assert_first_pages("", &document(8));
+}
+
+#[test]
+fn the_first_pages_carry_footnotes_over() {
+    // Long notes, which continue on the next page: the queue of notes
+    // carried over is part of the state the next page starts from.
+    let mut text = String::new();
+    for p in 0..30 {
+        text.push_str(&format!(
+            "{} #footnote[{}] {}\n\n",
+            prose(p, 20),
+            prose(100 + p, 60),
+            prose(200 + p, 40)
+        ));
+    }
+    let all = pages(&world("", &text));
+    assert!(all.pages.len() >= 4, "{} pages", all.pages.len());
+    assert_first_pages("", &text);
+}
+
+#[test]
+fn the_first_pages_count_blank_pages() {
+    let style = "heading { break-before: odd-page; }\n";
+    let mut text = String::new();
+    for s in 0..4 {
+        text.push_str(&format!("= Heading {s}\n\n{}\n\n", prose(s, 40)));
+    }
+    assert_first_pages(style, &text);
+}
+
+/// A document whose page-number references need a layout pass.
+const REFS: &str = "= One <one>\n\nSee #ref(<three>, form: \"page\") and #ref(<one>, form: \"page\").\n\n\
+                    = Two\n\nText.\n\n= Three <three>\n\nMore.\n";
+
+#[test]
+fn the_first_pages_show_settled_page_numbers() {
+    let style = "heading { break-before: page; }\n";
+    let world = world(style, REFS);
+    let first = first_pages(&world, 0);
+    assert!(!first.complete);
+    assert_eq!(first.pages.pages.len(), 1);
+    // The page-number fixpoint laid every page out first, so the first
+    // page shows where the third heading is.
+    assert_eq!(first.pages.page_refs.pass, 1);
+    let runs: String = page_runs(&first.pages.pages[0])
+        .into_iter()
+        .map(|(_, run)| run)
+        .collect();
+    assert!(runs.contains("page\u{a0}3"), "{runs:?}");
+    assert_first_pages(style, REFS);
+}

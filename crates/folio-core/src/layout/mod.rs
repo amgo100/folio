@@ -89,8 +89,8 @@ use self::math::maths;
 pub use self::math::{Display, LaidMath, MATH_FONT, Maths, Number};
 pub(crate) use self::math::{math_face, math_settings};
 pub use self::page::{
-    FILL, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject, pages,
-    paginate,
+    FILL, FirstPages, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject, pages,
+    pages_through, paginate,
 };
 pub use self::paragraph::{
     Align, Line, LineSlot, ObjectBreak, ObjectMetrics, ParagraphInput, ParagraphLayout,

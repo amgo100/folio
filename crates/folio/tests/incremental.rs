@@ -142,6 +142,53 @@ fn a_reflow_confined_to_one_page_reuses_the_other_pages() {
     );
 }
 
+/// The content of a page's body, which the page cache shares between the
+/// layouts that find the page there.
+fn body_items(page: &Page) -> *const (folio::Point, FragmentItem) {
+    page.fragment
+        .items
+        .iter()
+        .find_map(|(_, item)| match item {
+            FragmentItem::Group(body) => Some(body.items.as_ptr()),
+            _ => None,
+        })
+        .expect("a page holds its body")
+}
+
+#[test]
+fn the_pages_laid_out_first_are_not_laid_out_again() {
+    let main = document(12);
+    let (mut world, counts) = counted(&main);
+    let before = pages(&world);
+    assert!(before.pages.len() >= 6, "{} pages", before.pages.len());
+
+    // A sentence added at the top reflows every page after the first.
+    let at = find(&main, "Sentence 0 of paragraph 0 in section 0").start;
+    world
+        .edit_source("main.fol", at..at, "One more sentence that says little. ")
+        .unwrap();
+    counts.lock().unwrap().clear();
+    let first = folio::pages_through(&world, Target::Pdf, None, 2)
+        .unwrap()
+        .unwrap();
+    assert!(!first.complete);
+    assert_eq!(first.pages.pages.len(), 3);
+    // Laying out the first pages is not the `pages` query.
+    assert!(
+        !counts.lock().unwrap().contains_key("pages"),
+        "{counts:?}"
+    );
+    let after = pages(&world);
+    assert_eq!(counts.lock().unwrap().get("pages"), Some(&1));
+    assert!(after.changed(&before).len() > 3, "the edit reflowed the pages after");
+    // The query found the first pages in the page cache: their content is
+    // shared, not laid out again.
+    for (i, page) in first.pages.pages.iter().enumerate() {
+        assert_eq!(page, &after.pages[i]);
+        assert_eq!(body_items(page), body_items(&after.pages[i]), "page {i}");
+    }
+}
+
 #[test]
 fn an_edit_that_forces_a_full_reparse_reuses_calls_of_unchanged_closures() {
     // An unbalanced `]` at the top level cannot be reparsed incrementally,

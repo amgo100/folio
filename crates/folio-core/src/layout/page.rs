@@ -365,11 +365,12 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
     let page_refs = resolution(db, build)
         .map(|r| r.pages.clone())
         .unwrap_or_default();
-    let pages = build_pages(
+    let (pages, _) = build_pages(
         &input,
         db.layout_cache(),
         db.page_cache(),
         Regions::default(),
+        None,
         // An edit stops the query between pages (SPEC §2.3).
         &mut || db.unwind_if_revision_cancelled(),
         &mut |out, rebroken| {
@@ -383,6 +384,63 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
         },
     );
     Some(Pages { page_refs, ..pages })
+}
+
+/// The first pages of a build ([`pages_through`]).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct FirstPages {
+    /// The pages laid out: the first pages of what [`pages()`] gives, the
+    /// same in every respect, through the page asked for or to the end.
+    pub pages: Pages,
+    /// Whether they are all the build's pages.
+    pub complete: bool,
+}
+
+/// The pages of a build through the page with index `last`, or all of
+/// them when it has no more; or `None` when the document could not be
+/// styled. The preview lays out the pages a reader sees before the rest
+/// (SPEC §12.2): page breaking is strictly forward, so the pages before
+/// the last visible one are needed anyway, and those after it are not.
+///
+/// Each page is what [`pages()`] makes of it, through the same page
+/// cache, so that [`pages()`] finds these pages there afterwards and only
+/// lays out the rest. A blank page that `break-before` pads with counts
+/// as a page, so the result may hold a page more than asked for. This is
+/// not a query: it reports nothing, and [`pages()`] reports what the
+/// pages relax or cannot fit. An edit stops it between pages, as it does
+/// [`pages()`]. A build whose page-number references need the bounded
+/// fixpoint (SPEC §2.3) runs its layout passes first, as the build's
+/// styled tree depends on them.
+pub fn pages_through(db: &dyn Db, build: Build<'_>, last: usize) -> Option<FirstPages> {
+    let lines = lines(db, build).as_ref()?;
+    let text = text(db, build).as_ref()?;
+    let styled = step_styled(db, build)?;
+    let props = &styled.properties;
+    let fonts = fonts(db, build.project(db));
+    let (master, _) = PageMaster::checked(&styled.page, props);
+    let input = Input {
+        text,
+        lines,
+        props,
+        fonts,
+        master,
+    };
+    let page_refs = resolution(db, build)
+        .map(|r| r.pages.clone())
+        .unwrap_or_default();
+    let (pages, complete) = build_pages(
+        &input,
+        db.layout_cache(),
+        db.page_cache(),
+        Regions::default(),
+        Some(last),
+        &mut || db.unwind_if_revision_cancelled(),
+        &mut |_, _| {},
+    );
+    Some(FirstPages {
+        pages: Pages { page_refs, ..pages },
+        complete,
+    })
 }
 
 /// The pages of a build as [`pages()`] makes them, from the stages before
@@ -406,7 +464,7 @@ pub fn paginate(
         fonts,
         master,
     };
-    build_pages(&input, cache, pages, regions, &mut || {}, &mut |_, _| {})
+    build_pages(&input, cache, pages, regions, None, &mut || {}, &mut |_, _| {}).0
 }
 
 /// What the page builder reads of the stages before it.
@@ -422,17 +480,19 @@ struct Input<'a> {
 /// build's text, whose lines it broke.
 type Notes<'a> = dyn FnMut(&PageOut, &[(usize, &ParagraphLayout)]) + 'a;
 
-/// Builds the pages, calling `check` before each, which may unwind, and
-/// `notes` with each page and the paragraphs, by index, whose lines it
-/// reports.
+/// Builds the pages, through the page with index `last` when it is given,
+/// calling `check` before each, which may unwind, and `notes` with each
+/// page and the paragraphs, by index, whose lines it reports; with whether
+/// the pages are all the build's.
 fn build_pages(
     input: &Input<'_>,
     layout_cache: &Cache,
     cache: &PageCache,
     regions: Regions<'_>,
+    last: Option<usize>,
     check: &mut dyn FnMut(),
     notes: &mut Notes<'_>,
-) -> Pages {
+) -> (Pages, bool) {
     let Input {
         text,
         lines,
@@ -492,7 +552,12 @@ fn build_pages(
     let mut hashes = EcoVec::new();
     let mut state = State::START;
     let mut queue: EcoVec<Carried> = EcoVec::new();
+    let mut complete = true;
     while state.item < flow.items.len() || !queue.is_empty() {
+        if last.is_some_and(|last| pages.len() > last) {
+            complete = false;
+            break;
+        }
         // The cache still forgets what it would have when `check` unwinds.
         let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut *check));
         if let Err(cancelled) = checked {
@@ -546,12 +611,13 @@ fn build_pages(
         queue = out.queue.clone();
     }
     cache.sweep(now);
-    Pages {
+    let pages = Pages {
         master,
         pages,
         hashes,
         page_refs: PageNumbers::default(),
-    }
+    };
+    (pages, complete)
 }
 
 /// A hash of what a page shows: its fragments' sizes, positions,

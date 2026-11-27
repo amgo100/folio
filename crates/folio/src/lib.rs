@@ -497,6 +497,32 @@ pub fn pages(
     })
 }
 
+/// Lays out the pages of a variant of the world's document for a target
+/// through the page with index `last`, or all of them when there are no
+/// more ([`layout::pages_through`]): what the preview shows first (SPEC
+/// §12.2). Each page is the page [`pages`] gives, and [`pages`] finds the
+/// pages laid out here in the page cache afterwards. `None` when the
+/// document could not be styled, or, in a long-lived world
+/// ([`WorldBuilder::long_lived`]), when a query panicked, which
+/// [`check`] then reports. It reports no diagnostics. Fails only when an
+/// edit to the world cancels it.
+pub fn pages_through(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    last: usize,
+) -> Result<Option<layout::FirstPages>, Cancelled> {
+    let run = || {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        layout::pages_through(db, build, last)
+    };
+    match world.kept() {
+        None => catch(world, run),
+        Some(_) => Ok(isolate(world, run)?.ok().flatten()),
+    }
+}
+
 /// Compiles every variant and target the manifest declares
 /// ([`World::builds`]), in parallel, each on its own handle of the world.
 /// Queries that do not read the variant or target run once and are shared.
