@@ -22,8 +22,8 @@
 //! - an uncertainty follows the value after `±`, and the two are put in
 //!   parentheses when a unit or a shared power of ten follows:
 //!   `(2.31 ± 0.02) m`;
-//! - units are upright and separated from the number and from each other by
-//!   a thin space (U+2009), except that the degree, minute and second of
+//! - units are upright symbols, not words, and are separated from the
+//!   number and from each other by a thin space (U+2009) and nothing more, except that the degree, minute and second of
 //!   plane angle follow the number directly (`30°`); negative powers stay
 //!   powers (`m s⁻²`), as written.
 
@@ -33,7 +33,7 @@ use std::sync::Arc;
 use ecow::{EcoString, EcoVec};
 use folio_syntax::Span;
 
-use crate::{Atom, Attach, Delimited, MathClass, Node, Row};
+use crate::{Atom, Attach, Delimited, MathClass, MathVariant, Node, Row, Styled};
 
 /// The minus sign (U+2212) that negative numbers and powers are written
 /// with.
@@ -624,7 +624,7 @@ impl Unit {
             if i > 0 {
                 out.push(thin_space(span));
             }
-            let symbol = Node::text(factor.symbol.clone(), span);
+            let symbol = unit_symbol(&factor.symbol, span);
             if factor.power == 1 {
                 out.push(symbol);
             } else {
@@ -638,6 +638,23 @@ impl Unit {
             }
         }
     }
+}
+
+/// The node of a unit's symbol: one atom, set upright, that spaces as a
+/// letter does, so that it is shaped as one run (`kg`, `°C`). Quoted text
+/// would be spaced from its neighbours like a word, which a unit is not:
+/// only the thin spaces [`Quantity::lower`] puts in separate it from its
+/// number and from the other factors.
+fn unit_symbol(symbol: &EcoString, span: Span) -> Node {
+    Node::Styled(Arc::new(Styled {
+        variant: MathVariant::Upright,
+        body: Row::new([Node::Ident(Atom {
+            text: symbol.clone(),
+            class: MathClass::Alphabetic,
+            span,
+        })]),
+        span,
+    }))
 }
 
 /// The words of a text separated by whitespace, with the byte offset each

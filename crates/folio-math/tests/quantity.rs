@@ -36,11 +36,11 @@ fn quantity_with_a_unit() {
     let g = quantity(Some("9.81"), None, Some("m s^-2"));
     assert_eq!(
         en(&g),
-        "[num(9.81), space(_), text(\"m\"), space(_), attach([text(\"s\")], sup: [vary(−), num(2)])]"
+        "[num(9.81), space(_), upright([m]), space(_), attach([upright([s])], sup: [vary(−), num(2)])]"
     );
     assert_eq!(
         pl(&g),
-        "[num(9,81), space(_), text(\"m\"), space(_), attach([text(\"s\")], sup: [vary(−), num(2)])]"
+        "[num(9,81), space(_), upright([m]), space(_), attach([upright([s])], sup: [vary(−), num(2)])]"
     );
 }
 
@@ -49,8 +49,8 @@ fn units_alone() {
     let unit = quantity(None, None, Some("kg m^2 s^-1"));
     assert_eq!(
         en(&unit),
-        "[text(\"kg\"), space(_), attach([text(\"m\")], sup: [num(2)]), space(_), \
-         attach([text(\"s\")], sup: [vary(−), num(1)])]"
+        "[upright([kg]), space(_), attach([upright([m])], sup: [num(2)]), space(_), \
+         attach([upright([s])], sup: [vary(−), num(1)])]"
     );
     assert_eq!(en(&unit), pl(&unit));
 }
@@ -70,7 +70,7 @@ fn numbers_with_powers_of_ten() {
     assert_eq!(
         pl(&small),
         "[vary(−), num(1,6), bin(×), attach([num(10)], sup: [vary(−), num(19)]), space(_), \
-         text(\"C\")]"
+         upright([C])]"
     );
 }
 
@@ -79,11 +79,11 @@ fn uncertainties() {
     let length = quantity(Some("2.31"), Some("0.02"), Some("m"));
     assert_eq!(
         en(&length),
-        "[delim('(', [num(2.31), vary(±), num(0.02)], ')'), space(_), text(\"m\")]"
+        "[delim('(', [num(2.31), vary(±), num(0.02)], ')'), space(_), upright([m])]"
     );
     assert_eq!(
         pl(&length),
-        "[delim('(', [num(2,31), vary(±), num(0,02)], ')'), space(_), text(\"m\")]"
+        "[delim('(', [num(2,31), vary(±), num(0,02)], ')'), space(_), upright([m])]"
     );
     // Without a unit, no parentheses.
     assert_eq!(
@@ -94,7 +94,7 @@ fn uncertainties() {
     assert_eq!(
         en(&quantity(Some("2.31e3"), Some("0.02e3"), Some("m"))),
         "[delim('(', [num(2.31), vary(±), num(0.02)], ')'), bin(×), \
-         attach([num(10)], sup: [num(3)]), space(_), text(\"m\")]"
+         attach([num(10)], sup: [num(3)]), space(_), upright([m])]"
     );
 }
 
@@ -102,12 +102,12 @@ fn uncertainties() {
 fn digit_groups_from_five_digits() {
     assert_eq!(
         en(&quantity(Some("1500"), None, Some("J"))),
-        "[num(1500), space(_), text(\"J\")]"
+        "[num(1500), space(_), upright([J])]"
     );
     assert_eq!(
         en(&quantity(Some("299792458"), None, Some("m s^-1"))),
-        "[num(299~792~458), space(_), text(\"m\"), space(_), \
-         attach([text(\"s\")], sup: [vary(−), num(1)])]"
+        "[num(299~792~458), space(_), upright([m]), space(_), \
+         attach([upright([s])], sup: [vary(−), num(1)])]"
     );
     assert_eq!(
         pl(&quantity(Some("12345.67891"), None, None)),
@@ -120,10 +120,10 @@ fn digit_groups_from_five_digits() {
 fn angles_follow_their_number() {
     assert_eq!(
         en(&quantity(Some("30"), None, Some("deg"))),
-        "[num(30), text(\"°\")]"
+        "[num(30), upright([°])]"
     );
     assert_eq!(
         pl(&quantity(Some("20.5"), None, Some("degC"))),
-        "[num(20,5), space(_), text(\"°C\")]"
+        "[num(20,5), space(_), upright([°C])]"
     );
 }
