@@ -309,3 +309,61 @@ fn a_sixteen_bit_png_counts_its_bytes() {
         "this PNG image is too large: 8192 × 8192 pixels, 512 MB decoded, more than the 256 MB Folio reads"
     );
 }
+
+/// A build of a figure that is read, within [`BOUND`], with no error.
+fn read(bytes: Vec<u8>, name: &str) {
+    let world = world(bytes, name);
+    let start = Instant::now();
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(start.elapsed() < BOUND, "build took {:?}", start.elapsed());
+    assert!(
+        compiled
+            .diagnostics
+            .iter()
+            .all(|d| d.severity != Severity::Error),
+        "{:#?}",
+        compiled.diagnostics
+    );
+}
+
+/// An image drawn many times counts once: one decoding of it is in memory
+/// at a time.
+#[test]
+fn an_image_drawn_often_counts_once() {
+    let image = stream(
+        "/Type /XObject /Subtype /Image /Width 4000 /Height 4000 /ColorSpace /DeviceRGB \
+         /BitsPerComponent 8",
+        b"",
+    );
+    let content = "q 5 0 0 5 0 0 cm /I Do Q ".repeat(20);
+    read(
+        pdf(
+            "/Resources << /XObject << /I 5 0 R >> >>",
+            content.as_bytes(),
+            &[image],
+        ),
+        "often.pdf",
+    );
+}
+
+/// JBIG2 and CCITT images take their size from their own data or decode
+/// parameters, not the image dictionary; one that claims a huge page is
+/// not decoded (the figure is drawn without it), rather than taking
+/// gigabytes.
+#[test]
+fn a_huge_ccitt_image_behind_a_small_dictionary() {
+    let image = stream(
+        "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray \
+         /BitsPerComponent 1 /Filter /CCITTFaxDecode \
+         /DecodeParms << /K -1 /Columns 1000000 /Rows 100000 >>",
+        b"\x00\x00\x00\x00",
+    );
+    read(
+        pdf(
+            "/Resources << /XObject << /I 5 0 R >> >>",
+            b"100 0 0 100 0 0 cm /I Do",
+            &[image],
+        ),
+        "ccitt.pdf",
+    );
+}

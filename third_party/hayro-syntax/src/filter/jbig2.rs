@@ -23,6 +23,17 @@ pub(crate) fn decode(
 
     let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref()).ok()?;
 
+    // Folio: an image whose page would take more memory decoded than
+    // `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn, is not
+    // decoded. Its size comes from the JBIG2 data, not the image dictionary.
+    if u64::from(image.width())
+        .saturating_mul(u64::from(image.height()))
+        .saturating_mul(4)
+        > crate::MAX_IMAGE_BYTES
+    {
+        return None;
+    }
+
     // Whenever possible (if we don't have an indexed color space), we convert
     // the data as 8-bit instead of 1-bit, so that it can be easier converted
     // into an RGBA8 image.

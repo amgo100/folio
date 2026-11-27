@@ -34,8 +34,11 @@ Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
 - `src/object/array.rs`: an array item that cannot be read ends the
   iteration instead of panicking (an input found by Folio's `image` fuzz
   target, through `hayro-write`).
-- `src/filter/jpx.rs`: a JPEG 2000 image whose header says it would take
-  more than `MAX_IMAGE_BYTES` decoded is not decoded.
+- `src/filter/jpx.rs`, `src/filter/jbig2.rs`, `src/filter/ccitt.rs`: an
+  image whose own header (JPEG 2000, JBIG2) or decode parameters (CCITT)
+  say it would take more than `MAX_IMAGE_BYTES` decoded, at four bytes a
+  pixel or more, is not decoded; its size there need not match the image
+  dictionary's, which `hayro-interpret` checks.
 
 The whole change is `third_party/patches/hayro-syntax.patch` in Folio's repository;
 `scripts/patch-third-party.sh` rebuilds this directory from the release and

@@ -25,10 +25,19 @@ pub(crate) const MAX_WORK: u64 = 10_000_000;
 /// The work a nested interpretation costs (Folio).
 pub(crate) const NESTED_COST: u64 = 100;
 
+/// The images an interpretation has decoded: their bytes together, and
+/// the objects among them, which count once however often they are drawn
+/// (Folio).
+#[derive(Default)]
+pub(crate) struct Images {
+    bytes: u64,
+    objects: Vec<(i32, i32)>,
+}
+
 #[derive(Default)]
 pub(crate) struct Budget {
     work: AtomicU64,
-    image_bytes: AtomicU64,
+    images: Mutex<Images>,
     exhausted: AtomicBool,
     forms: Mutex<Vec<(i32, i32)>>,
 }
@@ -48,14 +57,28 @@ impl Budget {
     }
 
     /// Takes `bytes` of decoded image data from what the interpretation may
-    /// decode; `false` when that is more than is left.
-    pub(crate) fn take_image_bytes(&self, bytes: u64, sink: &crate::WarningSinkFn) -> bool {
-        let before = self.image_bytes.fetch_add(bytes, Ordering::Relaxed);
-        if before.saturating_add(bytes) <= hayro_syntax::MAX_IMAGE_BYTES {
+    /// decode; `false`, taking nothing, when that is more than is left. An
+    /// image object (`id`) is taken once: it is decoded again where it is
+    /// drawn again, but one decoding is in memory at a time.
+    pub(crate) fn take_image_bytes(
+        &self,
+        id: Option<(i32, i32)>,
+        bytes: u64,
+        sink: &crate::WarningSinkFn,
+    ) -> bool {
+        let mut images = self.images.lock().unwrap();
+        if id.is_some_and(|id| images.objects.contains(&id)) {
             return true;
         }
-        sink(crate::InterpreterWarning::ImageTooLarge);
-        false
+        let total = images.bytes.saturating_add(bytes);
+        if total > hayro_syntax::MAX_IMAGE_BYTES {
+            drop(images);
+            sink(crate::InterpreterWarning::ImageTooLarge);
+            return false;
+        }
+        images.bytes = total;
+        images.objects.extend(id);
+        true
     }
 
     /// Marks a form XObject as being drawn; `false` when it already is,

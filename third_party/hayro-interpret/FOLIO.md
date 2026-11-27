@@ -39,8 +39,10 @@ warning sink, so that Folio can refuse the figure:
 - `src/cache.rs`: the object cache, which every nested context of one
   interpretation shares, carries a `Budget`: the work done (an operator
   is one unit, a form XObject, pattern, soft mask or Type 3 glyph 100) up
-  to `MAX_WORK` (10,000,000), the bytes of images decoded up to
-  `hayro_syntax::MAX_IMAGE_BYTES`, and the form XObjects being drawn.
+  to `MAX_WORK` (10,000,000), the bytes of the images decoded up to
+  `hayro_syntax::MAX_IMAGE_BYTES` (an image object counts once, however
+  often it is drawn; one refused takes nothing), and the form XObjects
+  being drawn.
 - `src/interpret/mod.rs`: three new warnings, `FormCycle`, `TooComplex`
   and `ImageTooLarge`; `interpret` spends a unit of work for each
   operator and stops when the work is used up.

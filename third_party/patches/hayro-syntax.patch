@@ -1,7 +1,7 @@
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 14:55:46.037335574 +0000
-@@ -0,0 +1,42 @@
++++ b/FOLIO.md	2026-11-27 15:19:55.522909306 +0000
+@@ -0,0 +1,45 @@
 +# hayro-syntax 0.7.2, patched for Folio
 +
 +This is the crates.io release of `hayro-syntax` 0.7.2
@@ -38,15 +38,18 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +- `src/object/array.rs`: an array item that cannot be read ends the
 +  iteration instead of panicking (an input found by Folio's `image` fuzz
 +  target, through `hayro-write`).
-+- `src/filter/jpx.rs`: a JPEG 2000 image whose header says it would take
-+  more than `MAX_IMAGE_BYTES` decoded is not decoded.
++- `src/filter/jpx.rs`, `src/filter/jbig2.rs`, `src/filter/ccitt.rs`: an
++  image whose own header (JPEG 2000, JBIG2) or decode parameters (CCITT)
++  say it would take more than `MAX_IMAGE_BYTES` decoded, at four bytes a
++  pixel or more, is not decoded; its size there need not match the image
++  dictionary's, which `hayro-interpret` checks.
 +
 +The whole change is `third_party/patches/hayro-syntax.patch` in Folio's repository;
 +`scripts/patch-third-party.sh` rebuilds this directory from the release and
 +the patch, and `third_party/README.md` says how to move to a new release.
 diff -ruN a/src/byte_reader.rs b/src/byte_reader.rs
 --- a/src/byte_reader.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/byte_reader.rs	2026-11-27 14:55:46.037315667 +0000
++++ b/src/byte_reader.rs	2026-11-27 15:19:55.522893702 +0000
 @@ -9,19 +9,42 @@
      pub data: &'a [u8],
      /// The current byte-offset.
@@ -92,9 +95,53 @@ diff -ruN a/src/byte_reader.rs b/src/byte_reader.rs
      }
  
      /// Returns `true` if the reader has reached the end of the data.
+diff -ruN a/src/filter/ccitt.rs b/src/filter/ccitt.rs
+--- a/src/filter/ccitt.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/ccitt.rs	2026-11-27 15:19:55.522383683 +0000
+@@ -18,6 +18,19 @@
+     let rows = params.get::<u32>(ROWS).unwrap_or(image_params.height);
+     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
+ 
++    // Folio: an image whose columns and rows would take more memory decoded
++    // than `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn, is not
++    // decoded. Its size comes from the decode parameters, not the image
++    // dictionary.
++    let columns = params.get::<usize>(COLUMNS).unwrap_or(1728) as u64;
++    if columns
++        .saturating_mul(u64::from(rows.max(image_params.height)))
++        .saturating_mul(4)
++        > crate::MAX_IMAGE_BYTES
++    {
++        return None;
++    }
++
+     let settings = DecodeSettings {
+         columns: params.get::<usize>(COLUMNS).unwrap_or(1728) as u32,
+         rows,
+diff -ruN a/src/filter/jbig2.rs b/src/filter/jbig2.rs
+--- a/src/filter/jbig2.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/jbig2.rs	2026-11-27 15:19:55.522412673 +0000
+@@ -23,6 +23,17 @@
+ 
+     let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref()).ok()?;
+ 
++    // Folio: an image whose page would take more memory decoded than
++    // `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn, is not
++    // decoded. Its size comes from the JBIG2 data, not the image dictionary.
++    if u64::from(image.width())
++        .saturating_mul(u64::from(image.height()))
++        .saturating_mul(4)
++        > crate::MAX_IMAGE_BYTES
++    {
++        return None;
++    }
++
+     // Whenever possible (if we don't have an indexed color space), we convert
+     // the data as 8-bit instead of 1-bit, so that it can be easier converted
+     // into an RGBA8 image.
 diff -ruN a/src/filter/jpx.rs b/src/filter/jpx.rs
 --- a/src/filter/jpx.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/filter/jpx.rs	2026-11-27 14:55:46.036675516 +0000
++++ b/src/filter/jpx.rs	2026-11-27 15:19:55.522347760 +0000
 @@ -48,6 +48,15 @@
          },
      };
@@ -113,7 +160,7 @@ diff -ruN a/src/filter/jpx.rs b/src/filter/jpx.rs
      let (mut data, mut alpha) = if !has_alpha {
 diff -ruN a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/lib.rs	2026-11-27 14:55:46.036304840 +0000
++++ b/src/lib.rs	2026-11-27 15:19:55.521893611 +0000
 @@ -111,3 +111,12 @@
  pub use data::PdfData;
  pub use filter::*;
@@ -129,7 +176,7 @@ diff -ruN a/src/lib.rs b/src/lib.rs
 +pub const MAX_NESTING: u32 = 256;
 diff -ruN a/src/math.rs b/src/math.rs
 --- a/src/math.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/math.rs	2026-11-27 14:55:46.036839860 +0000
++++ b/src/math.rs	2026-11-27 15:19:55.522471852 +0000
 @@ -40,11 +40,8 @@
  
  #[inline(always)]
@@ -146,7 +193,7 @@ diff -ruN a/src/math.rs b/src/math.rs
          let mut base = x;
 diff -ruN a/src/object/array.rs b/src/object/array.rs
 --- a/src/object/array.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/object/array.rs	2026-11-27 14:55:46.036906638 +0000
++++ b/src/object/array.rs	2026-11-27 15:19:55.522520697 +0000
 @@ -70,6 +70,14 @@
  
  impl Skippable for Array<'_> {
@@ -186,7 +233,7 @@ diff -ruN a/src/object/array.rs b/src/object/array.rs
          None
 diff -ruN a/src/object/dict.rs b/src/object/dict.rs
 --- a/src/object/dict.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/object/dict.rs	2026-11-27 14:55:46.036927078 +0000
++++ b/src/object/dict.rs	2026-11-27 15:19:55.522536759 +0000
 @@ -158,6 +158,14 @@
  
  impl Skippable for Dict<'_> {

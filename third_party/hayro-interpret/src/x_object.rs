@@ -442,9 +442,10 @@ fn decode_context<'a>(
         height: obj.height,
     };
 
-    // Folio: an image is decoded only if it fits, with the images decoded
-    // before it, in `hayro_syntax::MAX_IMAGE_BYTES`, at four bytes a pixel
-    // or more (RGBA as it is drawn, or more components and bits).
+    // Folio: an image is decoded only if it fits, with the other images
+    // decoded before it, in `hayro_syntax::MAX_IMAGE_BYTES`, at four bytes a
+    // pixel or more (RGBA as it is drawn, or more components and bits). An
+    // image object counts once, however often it is drawn.
     let bytes_per_pixel = (u64::from(decode_params.num_components.unwrap_or(4))
         * u64::from(dict_bpc.unwrap_or(8)))
     .div_ceil(8)
@@ -452,7 +453,12 @@ fn decode_context<'a>(
     let bytes = u64::from(obj.width)
         .saturating_mul(u64::from(obj.height))
         .saturating_mul(bytes_per_pixel);
-    if !obj.cache.1.take_image_bytes(bytes, &obj.warning_sink) {
+    let id = obj
+        .stream
+        .dict()
+        .obj_id()
+        .map(|id| (id.obj_number, id.gen_number));
+    if !obj.cache.1.take_image_bytes(id, bytes, &obj.warning_sink) {
         return None;
     }
 

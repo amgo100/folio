@@ -11,6 +11,7 @@
 //! Each file is read once per content: [`load_image`] is a query on the
 //! file, so an edit elsewhere reads no image again.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use ecow::{EcoString, eco_format};
@@ -162,16 +163,36 @@ fn raster_bytes(format: ImageFormat, bytes: &[u8]) -> Result<u64, String> {
         .saturating_mul(per_pixel))
 }
 
-/// Checks that the rasters an SVG drawing holds (as `data:` URLs, in it or
-/// in the SVG drawings it holds) take at most [`MAX_IMAGE_BYTES`] decoded
-/// together. Each raster counts once, however often it is drawn. Reads
-/// only their headers.
+/// Checks the rasters an SVG drawing holds (as `data:` URLs, in it or in
+/// the SVG drawings it holds): together they take at most
+/// [`MAX_IMAGE_BYTES`] decoded, by their headers, and then each decodes,
+/// one at a time, so that a raster the PDF writer could not decode is
+/// reported by every build, as a raster file is. Each raster counts once,
+/// by its bytes, however often it is drawn.
 fn svg_rasters_fit(tree: &usvg::Tree) -> Result<(), String> {
+    let rasters = svg_rasters(tree);
+    let mut total: u64 = 0;
+    for (format, data) in &rasters {
+        let bytes = raster_bytes(*format, data)
+            .map_err(|e| format!("a {} image in it cannot be read: {e}", format.name()))?;
+        total = total.saturating_add(bytes);
+    }
+    too_large(total)?;
+    for (format, data) in &rasters {
+        decodes(*format, data)
+            .map_err(|e| format!("a {} image in it cannot be read: {e}", format.name()))?;
+    }
+    Ok(())
+}
+
+/// The distinct rasters of an SVG drawing and of the SVG drawings it holds,
+/// in document order.
+fn svg_rasters(tree: &usvg::Tree) -> Vec<(ImageFormat, Arc<Vec<u8>>)> {
     fn walk(
         group: &usvg::Group,
-        seen: &mut Vec<*const Vec<u8>>,
-        total: &mut u64,
-    ) -> Result<(), String> {
+        seen: &mut HashSet<Arc<Vec<u8>>>,
+        out: &mut Vec<(ImageFormat, Arc<Vec<u8>>)>,
+    ) {
         for node in group.children() {
             if let usvg::Node::Image(image) = node {
                 let (format, data) = match image.kind() {
@@ -180,34 +201,23 @@ fn svg_rasters_fit(tree: &usvg::Tree) -> Result<(), String> {
                     usvg::ImageKind::GIF(data) => (ImageFormat::Gif, data),
                     usvg::ImageKind::WEBP(data) => (ImageFormat::Webp, data),
                     usvg::ImageKind::SVG(tree) => {
-                        walk(tree.root(), seen, total)?;
+                        walk(tree.root(), seen, out);
                         continue;
                     }
                 };
-                if seen.contains(&Arc::as_ptr(data)) {
-                    continue;
+                if seen.insert(data.clone()) {
+                    out.push((format, data.clone()));
                 }
-                seen.push(Arc::as_ptr(data));
-                let bytes = raster_bytes(format, data)
-                    .map_err(|e| format!("a {} image in it cannot be read: {e}", format.name()))?;
-                *total = total.saturating_add(bytes);
             }
             if let usvg::Node::Group(group) = node {
-                walk(group, seen, total)?;
+                walk(group, seen, out);
             }
-            let mut result = Ok(());
-            node.subroots(|root| {
-                if result.is_ok() {
-                    result = walk(root, seen, total);
-                }
-            });
-            result?;
+            node.subroots(|root| walk(root, seen, out));
         }
-        Ok(())
     }
-    let mut total = 0;
-    walk(tree.root(), &mut Vec::new(), &mut total)?;
-    too_large(total)
+    let mut out = Vec::new();
+    walk(tree.root(), &mut HashSet::new(), &mut out);
+    out
 }
 
 /// The error for rasters in a figure that take more than
@@ -240,12 +250,18 @@ fn pdf_page_fits(page: &hayro_syntax::page::Page<'_>) -> Result<(), String> {
         }),
         ..InterpreterSettings::default()
     };
-    hayro_svg::convert(
-        page,
-        &hayro_svg::RenderCache::new(),
-        &settings,
-        &hayro_svg::SvgRenderSettings::default(),
-    );
+    // A panic in the reader, on a file it does not expect, is the file's
+    // fault: it is reported as the file not read, as the writers would not
+    // read it either.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hayro_svg::convert(
+            page,
+            &hayro_svg::RenderCache::new(),
+            &settings,
+            &hayro_svg::SvgRenderSettings::default(),
+        )
+    }))
+    .map_err(|_| "the PDF reader failed on its page".to_string())?;
     let warnings = warnings.lock().map_err(|e| e.to_string())?;
     for warning in warnings.iter() {
         match warning {
@@ -401,6 +417,101 @@ mod tests {
         assert_eq!(
             error,
             "this PDF file cannot be read: a form XObject in it draws itself"
+        );
+    }
+
+    /// A PNG of a size, 8-bit RGBA, with a header and no pixels.
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let start = out.len();
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            let crc = crc32(&out[start..]);
+            out.extend_from_slice(&crc.to_be_bytes());
+        };
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        chunk(b"IHDR", &ihdr);
+        chunk(b"IDAT", &[0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff]);
+        chunk(b"IEND", &[]);
+        out
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    fn svg_of(pngs: &[Vec<u8>]) -> usvg::Tree {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let base64 = |bytes: &[u8]| {
+            let mut out = String::new();
+            for chunk in bytes.chunks(3) {
+                let n = chunk
+                    .iter()
+                    .enumerate()
+                    .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+                for i in 0..4 {
+                    out.push(if i <= chunk.len() {
+                        ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char
+                    } else {
+                        '='
+                    });
+                }
+            }
+            out
+        };
+        let images: String = pngs
+            .iter()
+            .enumerate()
+            .map(|(i, png)| {
+                format!(
+                    r#"<image x="{i}" width="1" height="1" href="data:image/png;base64,{}"/>"#,
+                    base64(png)
+                )
+            })
+            .collect();
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">{images}</svg>"#
+        );
+        usvg::Tree::from_data(svg.as_bytes(), &svg_options()).unwrap()
+    }
+
+    /// A raster an SVG drawing repeats counts once, by its bytes; distinct
+    /// ones count together (#333).
+    #[test]
+    fn svg_rasters_count_once_each() {
+        let png = png_header(6_000, 6_000);
+        let repeated = svg_of(&vec![png.clone(); 10]);
+        assert_eq!(svg_rasters(&repeated).len(), 1);
+        let distinct = svg_of(&[png, png_header(6_000, 6_001)]);
+        assert_eq!(svg_rasters(&distinct).len(), 2);
+        let error = svg_rasters_fit(&distinct).unwrap_err();
+        assert!(error.contains("more than the 256 MB"), "{error}");
+    }
+
+    /// A raster in an SVG drawing that does not decode is reported, as the
+    /// PDF writer would fail on it.
+    #[test]
+    fn a_broken_raster_in_an_svg() {
+        let error = svg_rasters_fit(&svg_of(&[png_header(10, 10)])).unwrap_err();
+        assert!(
+            error.starts_with("a PNG image in it cannot be read"),
+            "{error}"
         );
     }
 

@@ -18,6 +18,19 @@ pub(crate) fn decode(
     let rows = params.get::<u32>(ROWS).unwrap_or(image_params.height);
     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
 
+    // Folio: an image whose columns and rows would take more memory decoded
+    // than `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn, is not
+    // decoded. Its size comes from the decode parameters, not the image
+    // dictionary.
+    let columns = params.get::<usize>(COLUMNS).unwrap_or(1728) as u64;
+    if columns
+        .saturating_mul(u64::from(rows.max(image_params.height)))
+        .saturating_mul(4)
+        > crate::MAX_IMAGE_BYTES
+    {
+        return None;
+    }
+
     let settings = DecodeSettings {
         columns: params.get::<usize>(COLUMNS).unwrap_or(1728) as u32,
         rows,
