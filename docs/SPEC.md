@@ -1446,7 +1446,7 @@ Reference machine: a four-core laptop processor from 2023 with 16 GB of memory, 
 | Three variants, warm, in parallel | 1.3× one variant | 2× |
 | Peak memory of the core process | 300 MB | 600 MB |
 
-These are release criteria: the three editor rows for the Folio Studio beta (S2, §15), the others for 1.0. Benchmarks run on every merge on a dedicated runner; the regression gate uses instruction counts (Gungraun, formerly `iai-callgrind`), which are stable on shared hardware, and fails above 3%. Wall-clock targets are checked nightly on the reference machine.
+The typing rows hold for a source without syntax errors. While a file has one, an edit parses the whole file (§14.2), about 6 ms on the reference document, so the parse is kept correct before it is kept fast; parsing only from the first erroneous or edited item is follow-up work (D-334-1 = C). These are release criteria: the three editor rows for the Folio Studio beta (S2, §15), the others for 1.0. Benchmarks run on every merge on a dedicated runner; the regression gate uses instruction counts (Gungraun, formerly `iai-callgrind`), which are stable on shared hardware, and fails above 3%. Wall-clock targets are checked nightly on the reference machine.
 
 ### 14.2 Testing
 
