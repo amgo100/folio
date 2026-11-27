@@ -483,12 +483,16 @@ impl Vm<'_> {
                 },
                 false => self.math_arg_value(expr)?,
             };
+            let spelling = match value {
+                Value::Float(_) => math_spelling(expr),
+                _ => None,
+            };
             items.push(Arg {
                 span,
                 name,
                 scope: None,
                 value,
-                spelling: None,
+                spelling,
             });
         }
         Ok(Args::new(args.span(), items.into_iter().collect()))
@@ -759,6 +763,11 @@ impl Vm<'_> {
                 }
                 Err(_) => {}
             }
+        }
+        // A float literal in code keeps its spelling too: `#3.00e8`.
+        if let Some(spelling) = super::float_spelling(expr) {
+            return Number::parse(&spelling)
+                .map_err(|message| EvalError::new(span, message).into());
         }
         match self.value_in_math(expr)? {
             Some(value) => number_of(&value, span),
@@ -1046,6 +1055,17 @@ fn literal_text(expr: ast::Expr<'_>) -> Option<String> {
             .filter(|c| !c.is_whitespace())
             .collect(),
     )
+}
+
+/// The spelling of a float literal as an argument in an equation, which a
+/// script's function hands on to `qty` or `num` (D-324-1): a decimal
+/// literal of math as written (`3.00e8`), or a float literal of code after
+/// `#`.
+fn math_spelling(expr: ast::Expr<'_>) -> Option<EcoString> {
+    match literal_text(expr) {
+        Some(text) => Number::parse(&text).is_ok().then(|| text.into()),
+        None => super::float_spelling(expr),
+    }
 }
 
 /// A number as a script's value: an integer when it is one that fits, a

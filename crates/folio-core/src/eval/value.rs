@@ -1554,13 +1554,16 @@ impl Args {
 
     /// The arguments with the spans of the call and of each argument
     /// detached, which makes the same call at two sites equal. The values
-    /// keep their own spans.
+    /// keep their own spans. The spellings of float literals go too: a
+    /// closure without a sink binds its arguments' values, which have none,
+    /// so `f(2.0)` and `f(2.00)` are the same call.
     pub(crate) fn without_spans(&self) -> Self {
         let items = self
             .items
             .iter()
             .map(|arg| Arg {
                 span: Span::detached(),
+                spelling: None,
                 ..arg.clone()
             })
             .collect();

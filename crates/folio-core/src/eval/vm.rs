@@ -2132,7 +2132,7 @@ fn label_without_element(span: Span) -> EvalError {
 /// The text of a float literal written as an argument, with a sign before
 /// it if there is one: `3.00e8`, `-1.6e-19`. `qty` and `num` write the
 /// number as it was written (D-324-1). `None` for any other expression.
-fn float_spelling(expr: ast::Expr<'_>) -> Option<EcoString> {
+pub(crate) fn float_spelling(expr: ast::Expr<'_>) -> Option<EcoString> {
     match expr {
         ast::Expr::Float(float) => Some(float.to_untyped().leaf_text().clone()),
         ast::Expr::Unary(unary) => {

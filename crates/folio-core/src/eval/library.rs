@@ -171,7 +171,7 @@ fn quantity_func(vm: &mut Vm<'_>, args: &mut Args, value: bool, unit: bool) -> E
             .items()
             .iter()
             .rev()
-            .find(|arg| arg.name.as_deref() == Some("pm"))
+            .find(|arg| arg.name.as_deref() == Some("pm") && arg.scope.is_none())
             .and_then(|arg| arg.spelling.clone());
         let pm = match args.named::<Value>("pm")? {
             Some(v) => Some((
@@ -203,11 +203,12 @@ fn quantity_func(vm: &mut Vm<'_>, args: &mut Args, value: bool, unit: bool) -> E
 /// The number of an argument of `qty` or `num` in text: a float literal as
 /// it was written, which keeps its digits and its power of ten as in an
 /// equation (`3.00e8`, `2.0`; D-324-1), or the number its value gives.
+/// A literal that cannot be read (too many digits, too large a power of
+/// ten) is an error that says why, as in an equation.
 fn spelled_number(arg: &Arg) -> EvalResult<folio_math::Number> {
-    if let (Value::Float(_), Some(spelling)) = (&arg.value, &arg.spelling)
-        && let Ok(number) = folio_math::Number::parse(spelling)
-    {
-        return Ok(number);
+    if let (Value::Float(_), Some(spelling)) = (&arg.value, &arg.spelling) {
+        return folio_math::Number::parse(spelling)
+            .map_err(|message| EvalError::new(arg.span, message).into());
     }
     super::math::number_of(&arg.value, arg.span)
 }

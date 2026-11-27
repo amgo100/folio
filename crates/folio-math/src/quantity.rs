@@ -582,6 +582,9 @@ const SI_PREFIXES: &[(&str, &str)] = &[
     ("m", "m"),
     ("micro", "µ"),
     ("µ", "µ"),
+    // The Greek small letter mu (U+03BC), which looks the same as the
+    // micro sign and is what many keyboards type.
+    ("μ", "µ"),
     ("n", "n"),
     ("p", "p"),
     ("f", "f"),
@@ -760,8 +763,11 @@ fn expand(symbol: &str) -> Option<EcoString> {
     }
     if let Some(rest) = symbol.strip_prefix("micro")
         && !rest.is_empty()
-        // A name that takes no prefix takes no `micro` either: `microdeg`.
+        // A name that takes no prefix takes no `micro` either
+        // (`microdeg`), and one that takes a prefix takes only one
+        // (`microkohm`).
         && !UNIT_NAMES.iter().any(|(name, _)| *name == rest)
+        && !PREFIXED_NAMES.iter().any(|name| rest.ends_with(name))
     {
         let mut out = EcoString::from("µ");
         out.push_str(&expand(rest)?);
@@ -959,6 +965,7 @@ mod tests {
         assert_eq!(unit("Gohm"), "GΩ");
         assert_eq!(unit("microohm"), "µΩ");
         assert_eq!(unit("µohm"), "µΩ");
+        assert_eq!(unit("\u{3bc}ohm"), "µΩ");
         assert_eq!(unit("daohm"), "daΩ");
         assert_eq!(unit("kohm m"), "kΩ m");
         assert_eq!(unit("V kohm^-1"), "V kΩ^-1");
@@ -992,6 +999,8 @@ mod tests {
             "Mangstrom",
             "kiloohm",
             "microxohm",
+            "microkohm",
+            "micromohm",
         ] {
             assert!(Unit::parse(bad).is_err(), "{bad}");
         }

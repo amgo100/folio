@@ -161,6 +161,21 @@ fn floats_in_text_as_written() {
             "[qty(1.5e3)]",
         ]
     );
+    // A script's function hands the spelling on, in text and in an
+    // equation alike, and code after `#` in an equation keeps it too.
+    assert_eq!(
+        formulas(
+            "#let speed(..a) = qty(..a, \"m s^-1\")\n\
+             #speed(3.00e8) $c = speed(#3.00e8)$ $qty(#3.00e8, \"m\")$ \
+             #qty(2.31, \"m\", pm: 0.020)"
+        ),
+        [
+            "[qty(3.00e8, unit: \"m s^-1\")]",
+            "[c, rel(=), qty(3.00e8, unit: \"m s^-1\")]",
+            "[qty(3.00e8, unit: \"m\")]",
+            "[qty(2.31, pm: 0.020, unit: \"m\")]",
+        ]
+    );
     // Text matches the same call in an equation.
     assert_eq!(
         formulas("$qty(3.00e8, \"m s^-1\")$ $qty(2.0, \"m\")$"),
@@ -204,6 +219,20 @@ fn prefixed_unit_names() {
             // In text the error points at the whole string, as for any unit.
             error("`kilo` is not an SI prefix of `ohm`", "\"kiloohm\""),
             error("`degC` takes no prefix, so `kdegC` is not a unit", "kdegC"),
+        ]
+    );
+    // A literal that cannot be read says why, in text as in an equation.
+    assert_eq!(
+        errors("#qty(1e10000, \"m\") $qty(1e10000, \"m\")$"),
+        [
+            error(
+                "a power of ten can be at most 9999 in either direction",
+                "1e10000"
+            ),
+            error(
+                "a power of ten can be at most 9999 in either direction",
+                "1e10000"
+            ),
         ]
     );
 }
