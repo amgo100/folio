@@ -96,6 +96,11 @@ struct Out<'a> {
     sections: u16,
     /// For a heading with text, where its first box is: its page and top.
     top: Option<(usize, f32)>,
+    /// The node it is a kid of, if any.
+    parent: Option<usize>,
+    /// Whether it or a node inside it holds content, so that it is in the
+    /// tree written.
+    shows: bool,
 }
 
 /// What a node written is.
@@ -145,11 +150,17 @@ impl<'a> Tagger<'a> {
             }
         }
         feet(root, &mut tagger.feet);
-        tagger.push(Kind::Top, std::slice::from_ref(root), 0);
+        tagger.push(Kind::Top, std::slice::from_ref(root), 0, None);
         tagger
     }
 
-    fn push(&mut self, kind: Kind<'a>, children: &'a [Tag], sections: u16) -> usize {
+    fn push(
+        &mut self,
+        kind: Kind<'a>,
+        children: &'a [Tag],
+        sections: u16,
+        parent: Option<usize>,
+    ) -> usize {
         self.nodes.push(Out {
             kind,
             kids: Vec::new(),
@@ -160,6 +171,8 @@ impl<'a> Tagger<'a> {
             body: None,
             sections,
             top: None,
+            parent,
+            shows: false,
         });
         self.nodes.len() - 1
     }
@@ -214,7 +227,7 @@ impl<'a> Tagger<'a> {
         let tag = &children[index];
         let sections = out.sections + u16::from(tag.role == Role::Section);
         let parent = self.container(node, tag.role);
-        let child = self.push(Kind::Input(tag), &tag.children, sections);
+        let child = self.push(Kind::Input(tag), &tag.children, sections, Some(parent));
         // A note found behind the cursor goes before the nodes entered
         // after it in document order, so the tree keeps the source's order.
         let later: Vec<usize> = self.nodes[node].entered[index + 1..]
@@ -271,7 +284,7 @@ impl<'a> Tagger<'a> {
             Some(out) => out,
             None => {
                 let sections = self.nodes[target].sections;
-                let out = self.push(Kind::Link, &[], sections);
+                let out = self.push(Kind::Link, &[], sections, Some(target));
                 self.nodes[target].kids.push(Kid::Node(out));
                 self.links[link] = Some(out);
                 out
@@ -294,22 +307,32 @@ impl<'a> Tagger<'a> {
         kids.insert(at, Kid::Annotation(id));
     }
 
-    /// Notes a heading for the outline when `target`, which content is
-    /// about to be added to, is a heading that shows nothing yet: it is in
-    /// the outline once it shows something, as it is in the tree only
-    /// then.
+    /// Notes the headings for the outline that `target`, which content is
+    /// about to be added to, shows for the first time: `target` itself or
+    /// a node around it, such as the heading around a formula or an image.
+    /// A heading is in the outline once it shows something, as it is in
+    /// the tree only then; without text, it cannot have a title.
     fn note_heading(&mut self, target: usize) {
-        let out = &self.nodes[target];
-        if let Kind::Input(tag) = out.kind
-            && tag.role == Role::Heading
-            && out.kids.is_empty()
-        {
-            match (tag.text.as_ref().filter(|t| !t.is_empty()), out.top) {
-                (Some(text), Some((page, y))) => {
-                    let level = out.sections.clamp(1, 6);
-                    self.headings.push((level, text.clone(), page, y));
+        let mut at = Some(target);
+        // The nodes around one that shows show too, so the walk stops at
+        // the first that does.
+        while let Some(node) = at {
+            let out = &mut self.nodes[node];
+            if out.shows {
+                break;
+            }
+            out.shows = true;
+            at = out.parent;
+            if let Kind::Input(tag) = out.kind
+                && tag.role == Role::Heading
+            {
+                match (tag.text.as_ref().filter(|t| !t.is_empty()), out.top) {
+                    (Some(text), Some((page, y))) => {
+                        let level = out.sections.clamp(1, 6);
+                        self.headings.push((level, text.clone(), page, y));
+                    }
+                    _ => self.untitled.push(tag.source),
                 }
-                _ => self.untitled.push(tag.source),
             }
         }
     }
@@ -341,7 +364,7 @@ impl<'a> Tagger<'a> {
             return body;
         }
         let sections = self.nodes[node].sections;
-        let body = self.push(Kind::ListBody, &[], sections);
+        let body = self.push(Kind::ListBody, &[], sections, Some(node));
         self.nodes[node].kids.push(Kid::Node(body));
         self.nodes[node].body = Some(body);
         body
@@ -373,7 +396,7 @@ impl<'a> Tagger<'a> {
         }
         let parent = self.container(node, Role::Paragraph);
         let sections = self.nodes[node].sections;
-        let text = self.push(Kind::Text, &[], sections);
+        let text = self.push(Kind::Text, &[], sections, Some(parent));
         self.nodes[parent].kids.push(Kid::Node(text));
         self.nodes[node].text = Some(text);
         text

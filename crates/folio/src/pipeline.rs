@@ -21,6 +21,8 @@
 //! would, without writing. `folio check`, the language server and the
 //! preview stop there; [`compile_build`] goes on to [`emit`].
 
+use std::ops::Range;
+
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{FontId, Location, QualifiedName, SourceRef, Target};
 use folio_core::db::{Build, Bytes, Db, build_output, source_file};
@@ -398,18 +400,54 @@ fn formula_alt(math: &TextMath) -> Option<EcoString> {
 }
 
 /// The text of the paragraphs a block holds directly, as [`clean`] gives
-/// it, without the anchors of footnotes.
+/// it: its inline formulas as their alternate descriptions
+/// ([`formula_alt`]) and its images as their `alt` text, without the
+/// anchors of footnotes. A heading's title and bookmark are this text
+/// (SPEC §11.1).
 fn block_text(block: &TextBlock, text: &Text) -> Option<EcoString> {
     let mut words = String::new();
     for child in &block.children {
         if let TextFlow::Paragraph(index) = child {
             let paragraph = &text.paragraphs[*index];
             let shown = paragraph.shaped.text();
+            // What replaces parts of the text, in order: an anchor by
+            // nothing, a formula's first chunk by its reading and its other
+            // chunks by nothing, an image by its description.
+            let mut splices: Vec<(Range<usize>, Option<EcoString>)> = paragraph
+                .notes
+                .iter()
+                .map(|anchor| (anchor.range.clone(), None))
+                .collect();
+            for object in &paragraph.objects {
+                let end = shown[object.at..]
+                    .chars()
+                    .next()
+                    .map_or(object.at, |c| object.at + c.len_utf8());
+                let with = if let Some(m) = object.math {
+                    if m.chunk > 0 {
+                        None
+                    } else {
+                        text.maths.get(m.formula).and_then(formula_alt)
+                    }
+                } else if let Some(image) = &object.image {
+                    image.alt.clone()
+                } else {
+                    continue;
+                };
+                splices.push((object.at..end, with));
+            }
+            splices.sort_by_key(|(range, _)| range.start);
             let mut at = 0;
             words.push(' ');
-            for anchor in &paragraph.notes {
-                words.push_str(&shown[at..anchor.range.start]);
-                at = anchor.range.end;
+            for (range, with) in splices {
+                if range.start < at {
+                    continue;
+                }
+                words.push_str(&shown[at..range.start]);
+                if let Some(with) = with {
+                    words.push_str(&with);
+                }
+                at = range.end;
             }
             words.push_str(&shown[at..]);
         }
