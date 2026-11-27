@@ -434,3 +434,15 @@ fn references_to_items_show_the_pattern_they_were_numbered_with() {
     );
     assert!(messages(&world).is_empty(), "{:?}", messages(&world));
 }
+
+#[test]
+fn a_reference_to_an_item_whose_pattern_counts_nothing_shows_its_values() {
+    // A pattern without a counting symbol is shown as written at the item,
+    // and a reference shows the item's values as `1.1` would.
+    let world = world(
+        "en",
+        "enum { numbering: \"–\"; }\n",
+        "+ One\n+ Two <b>\n\nSee @b.\n",
+    );
+    assert_eq!(paragraphs(&world), ["–~One", "–~Two", "See 2."]);
+}

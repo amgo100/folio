@@ -29,9 +29,10 @@
 //!   `ref-format`: the target's reference word in the reference's language
 //!   ([`crate::locale`]) and its number in the pattern it was numbered
 //!   with (an item's own, or its enum's), trimmed of the pattern's text
-//!   before and after (`Figure 3`, `Section 2.1`, `b` for an item `(b)`). An element without
-//!   `numbering` still counts, and a reference to it shows the values as
-//!   `1.1` would. A reference to a label that no shown element has, or to
+//!   before and after (`Figure 3`, `Section 2.1`, `b` for an item `(b)`).
+//!   An element without `numbering`, or whose pattern has no counting
+//!   symbol, still counts, and a reference to it shows the values as `1.1`
+//!   would. A reference to a label that no shown element has, or to
 //!   an element without a counter, is a warning, and shows [`UNRESOLVED`].
 //!
 //! - **Footnotes** (SPEC §7.8): a footnote counts with the counter
@@ -587,9 +588,9 @@ struct Walk<'a> {
     refs: Vec<PendingRef>,
     /// The style of each target, for its `ref-format`.
     styles: HashMap<Location, ComputedStyle>,
-    /// The pattern each element instance was numbered with, where it has
-    /// one: its own `numbering`, or, for an item, its enum's. A reference
-    /// shows the number as the target does.
+    /// The pattern each labelled element instance was numbered with, where
+    /// it has one: its own `numbering`, or, for an item, its enum's. A
+    /// reference shows the number as the target does.
     patterns: HashMap<Location, Pattern>,
 }
 
@@ -804,7 +805,10 @@ impl Walk<'_> {
         pattern: Option<&Pattern>,
     ) {
         let number = pattern.map(|p| p.format(&values));
-        if let Some(pattern) = pattern {
+        // Only a labelled element can be referred to.
+        if let Some(pattern) = pattern
+            && element.label.is_some()
+        {
             self.patterns.insert(element.location, pattern.clone());
         }
         self.out.numbers.push(Number {
@@ -998,9 +1002,10 @@ impl Walk<'_> {
         // The pattern the target was numbered with: an item's own, or its
         // enum's (#325).
         let pattern = self.patterns.get(&labelled.target.location);
-        // An element without `numbering` still has its counter's values:
-        // the reference shows them as `1.1` would.
-        let shown = match pattern {
+        // An element without `numbering`, or with a pattern that shows no
+        // values, still has its counter's values: the reference shows them
+        // as `1.1` would.
+        let shown = match pattern.filter(|p| p.counts()) {
             Some(pattern) => pattern.format_trimmed(&number.values),
             None => Pattern::parse("1.1").format(&number.values),
         };
