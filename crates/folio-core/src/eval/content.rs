@@ -140,13 +140,6 @@ impl Content {
     /// when the document model locates them ([`Origin::nested`]), so
     /// stamping costs one step per node at the top level, however deeply
     /// the content nests.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "evaluation stamps frames once its loops and calls record them (#339)"
-        )
-    )]
     pub(crate) fn stamp(&mut self, frame: Frame) {
         if !self
             .nodes
@@ -296,13 +289,6 @@ impl Debug for Content {
 
 /// Records that `frame`, an iteration or a call, made `value`: on the
 /// content it is or holds in arrays and dictionaries ([`Content::stamp`]).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "evaluation stamps frames once its loops and calls record them (#339)"
-    )
-)]
 pub(crate) fn stamp(value: &mut Value, frame: Frame) {
     match value {
         Value::Content(content) => content.stamp(frame),
@@ -328,13 +314,6 @@ pub(crate) fn stamp(value: &mut Value, frame: Frame) {
 }
 
 /// Whether a value is content or may hold some.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "evaluation stamps frames once its loops and calls record them (#339)"
-    )
-)]
 fn holds_content(value: &Value) -> bool {
     matches!(value, Value::Content(_) | Value::Array(_) | Value::Dict(_))
 }
