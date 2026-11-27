@@ -266,7 +266,7 @@ fn notes_take_the_documents_style_and_markers_their_anchors() {
 }
 
 #[test]
-fn notes_keep_the_language_and_font_of_their_anchors() {
+fn notes_keep_the_language_of_their_anchors_and_the_font_of_another() {
     // A note anchored in a Polish passage of an English document is
     // Polish, in the passage's font, but sized like every other note
     // (SPEC §7.8, D-327-4 = B).
@@ -342,4 +342,86 @@ fn notes_keep_the_language_and_font_of_their_anchors() {
             .iter()
             .all(|s| s.lang.as_ref().map(|l| l.as_str()) == Some("pl"))
     );
+}
+
+#[test]
+fn notes_take_the_anchors_font_only_in_another_language() {
+    // A note in a sans heading of the document's language is set in the
+    // document's font; one in a Polish passage in the passage's font
+    // (SPEC §7.8, D-327-5 = B).
+    let mut world = world(
+        Some("styles/main.fsty"),
+        "heading { font: \"Source Sans 3\"; }\n\
+         .pl { lang: \"pl\"; font: \"Source Serif 4\"; }\n\
+         .en { lang: \"en-GB\"; font: \"Source Sans 3\"; }\n",
+    );
+    world
+        .set_source(
+            "main.fol",
+            "= Forces#footnote[In a sans heading.]\n\n\
+             Text.#footnote[In body text.]\n\n\
+             #emph(class: \"pl\")[Tekst.#footnote[W polskim fragmencie.]]\n\n\
+             #emph(class: \"en\")[British.#footnote[In British English.]]\n",
+        )
+        .unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(
+        compiled.diagnostics.is_empty(),
+        "{:?}",
+        compiled.diagnostics
+    );
+    let styled = styled(&world);
+    let font = |node| get(&styled, node, "font");
+    let notes: Vec<_> = all(&styled, "footnote")
+        .into_iter()
+        .map(|n| n.note_style().expect("a note part"))
+        .collect();
+    let document = font(&styled.root);
+    assert_ne!(font(first(&styled, "heading")), document);
+    assert_eq!(font(notes[0]), document, "a note in a heading");
+    assert_eq!(font(notes[1]), document, "a note in body text");
+    assert_eq!(
+        font(notes[2]),
+        font(all(&styled, "emph")[0]),
+        "a note in a Polish passage"
+    );
+    assert_ne!(font(notes[2]), document);
+    // English in another region is the same language: the document's font,
+    // the passage's tag.
+    assert_eq!(font(notes[3]), document, "a note in a British passage");
+    assert_eq!(get(&styled, notes[3], "lang"), Value::Str("en-GB".into()));
+}
+
+#[test]
+fn another_script_is_another_language_for_notes() {
+    // The note in a passage of the document's language and in one of
+    // another: its font and the passage's.
+    let note_fonts = |sheet: &str, text: &str| {
+        let mut w = world(Some("styles/main.fsty"), sheet);
+        w.set_source("main.fol", text).unwrap();
+        let s = styled(&w);
+        let font = |node: &StyledNode| get(&s, node, "font");
+        let notes: Vec<Value> = all(&s, "footnote")
+            .into_iter()
+            .map(|n| font(n.note_style().expect("a note part")))
+            .collect();
+        let passage = all(&s, "emph").first().map(|e| font(e));
+        (notes, font(&s.root), passage)
+    };
+    // `sr-Latn` in a `sr-Cyrl` document: the same language in another
+    // script, whose font the note keeps.
+    let (notes, document, passage) = note_fonts(
+        "doc { lang: \"sr-Cyrl\"; }\n.latn { lang: \"sr-Latn\"; font: \"Source Sans 3\"; }\n",
+        "Text.#footnote[A.]\n\n#emph(class: \"latn\")[Tekst.#footnote[B.]]\n",
+    );
+    assert_eq!(notes[0], document);
+    assert_eq!(Some(notes[1].clone()), passage);
+    assert_ne!(notes[1], document);
+    // `sr-Cyrl` in a document whose language is `sr`, which writes no
+    // script: one language, the document's font.
+    let (notes, document, _) = note_fonts(
+        "doc { lang: \"sr\"; }\n.cyrl { lang: \"sr-Cyrl\"; font: \"Source Sans 3\"; }\n",
+        "#emph(class: \"cyrl\")[Текст.#footnote[Б.]]\n",
+    );
+    assert_eq!(notes[0], document);
 }
