@@ -61,7 +61,7 @@ page 2 595.28 × 841.89, 8 line(s)
         box (0.00, 474.91) 481.89 × 226.75 main.fol:21:2 baselines 196.33..223.56
           box (0.00, 0.00) 481.89 × 202.11 main.fol:21:10 baselines 196.33..196.33
             box (48.19, 3.57) 385.51 × 192.76 main.fol:21:10
-              image (0.00, 0.00) 385.51 × 192.76 PDF 2ef12013ccda1e83 main.fol:21:10
+              image (0.00, 0.00) 385.51 × 192.76 PDF 6c79c3476daac8b5 main.fol:21:10
           box (0.00, 207.61) 481.89 × 19.14 main.fol:21:2 baselines 15.95..15.95
             text (150.19, 15.95) NewCM10-Italic 11.00 w 181.50 36 glyph(s) "Figure\u{a0}5: Colour swatches and blends"
 page 3 595.28 × 841.89, 5 line(s)
