@@ -22,10 +22,11 @@
 //! - an uncertainty follows the value after `±`, and the two are put in
 //!   parentheses when a unit or a shared power of ten follows:
 //!   `(2.31 ± 0.02) m`;
-//! - units are upright and separated from the number and from each other by
-//!   a thin space (U+2009), except that the degree, minute and second of
-//!   plane angle follow the number directly (`30°`); negative powers stay
-//!   powers (`m s⁻²`), as written.
+//! - units are upright symbols, not words, and are separated from the
+//!   number and from each other by a thin space (U+2009) and nothing
+//!   more, except that the degree, minute and second of plane angle
+//!   follow the number directly (`30°`); negative powers stay powers
+//!   (`m s⁻²`), as written.
 
 use std::fmt::{self, Debug, Display, Formatter, Write};
 use std::sync::Arc;
@@ -624,7 +625,7 @@ impl Unit {
             if i > 0 {
                 out.push(thin_space(span));
             }
-            let symbol = Node::text(factor.symbol.clone(), span);
+            let symbol = unit_symbol(&factor.symbol, span);
             if factor.power == 1 {
                 out.push(symbol);
             } else {
@@ -638,6 +639,21 @@ impl Unit {
             }
         }
     }
+}
+
+/// The node of a unit's symbol: one symbol atom of the ordinary class,
+/// shaped as one run (`kg`, `°C`). Layout sets it upright, or in the
+/// alphabet chosen around the formula (bold, sans), as it sets numbers, and
+/// spaces it as an ordinary atom. Quoted text would be spaced from its
+/// neighbours like a word, which a unit is not: only the thin spaces
+/// [`Quantity::lower`] and [`Unit::lower`] put in separate it from its
+/// number and from the other factors.
+fn unit_symbol(symbol: &EcoString, span: Span) -> Node {
+    Node::Symbol(Atom {
+        text: symbol.clone(),
+        class: MathClass::Normal,
+        span,
+    })
 }
 
 /// The words of a text separated by whitespace, with the byte offset each
