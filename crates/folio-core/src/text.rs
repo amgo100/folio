@@ -756,7 +756,8 @@ impl Collector<'_> {
     /// Collects the blocks of footnote `index` into a tree of their own,
     /// whose root is the footnote's block (SPEC §7.8). The block, and the
     /// marker before the note, take the note's style, which inherits from
-    /// the document rather than from the anchor ([`StyledNode::note_style`]).
+    /// the document rather than from the anchor, but for the anchor's
+    /// `lang` and `font` ([`StyledNode::note_style`]).
     fn note(&mut self, element: &Element, node: &StyledNode, index: usize) {
         let restyled;
         let node = match node.note_style() {
