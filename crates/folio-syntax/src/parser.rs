@@ -24,7 +24,8 @@ const MAX_DEPTH: u32 = 256;
 /// How tall an operator chain may make the tree (#380). Nesting alone within
 /// `MAX_DEPTH` makes a tree about three levels tall per level of depth (766
 /// for `#f(` nested 255 times), and short operator chains at each level of
-/// a formula make it up to about five (`a(…)^2/x` nested). This leaves room
+/// a formula make it up to about five (`a(…)^2/x` nested), or six with a
+/// signed script, which wraps its sign and operand (`a(…)^-2/x`). This leaves room
 /// for both, so in practice only a long chain reaches it; math that deep is
 /// past the evaluator's limit of 100 rows in any case. The bound depends on
 /// nothing around the chain, only on its operands. A cut chain is an error,
@@ -473,7 +474,7 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
 /// stops before them (`stop_set`), as a regular parse does.
 fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8, stop_set: SyntaxSet) {
     let m = from.unwrap_or_else(|| p.marker());
-    if from.is_none() && !math_chain_operand(p) {
+    if from.is_none() && !math_chain_operand(p, false) {
         // Nothing here can be an operand (a label or the end of the
         // equation): a regular parse would say so too.
         p.expected("expression");
@@ -488,12 +489,13 @@ fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8, stop
         && let Some((_, assoc, prec)) = math_op(p.current(), p.had_trivia())
         && prec >= min_prec
     {
+        let script = p.at_set(syntax_set!(Hat, Underscore));
         if p.at(SyntaxKind::Bang) {
             p.convert_and_eat(SyntaxKind::MathText);
         } else {
             p.eat();
         }
-        if assoc.is_some() && !math_chain_operand(p) {
+        if assoc.is_some() && !math_chain_operand(p, script) {
             break;
         }
     }
@@ -516,13 +518,15 @@ const TOO_DEEP: &str = "maximum parsing depth exceeded";
 /// Eats one operand of a chain for [`math_chain_error`]: a token or a
 /// bracketed group, then the groups directly after it. Returns `false`, having
 /// eaten nothing, when no operand starts here.
-fn math_chain_operand(p: &mut Parser<'_>) -> bool {
+fn math_chain_operand(p: &mut Parser<'_>, script: bool) -> bool {
     const END: SyntaxSet = syntax_set!(Dollar, End, Label);
     if p.at_set(END) {
         return false;
     }
-    // A sign takes the operand after it, as in a regular parse: `x^-1`.
-    if math_sign_binds(p) {
+    // A sign takes the operand after it in a script, as in a regular parse:
+    // `x^-1` ([`math_script`]). The operand at the depth limit itself comes
+    // after a sign that `math_script` has already taken.
+    if script && math_sign_binds(p) {
         p.eat();
     }
     // A root takes the operand after it, as in a regular parse: `√x`.
@@ -589,8 +593,7 @@ fn math_script(p: &mut Parser<'_>, prec: u8, stop_set: SyntaxSet) {
 }
 
 /// Whether the parser is at a sign (`-`, `+`, `−`, `±` or `∓`) directly
-/// followed by
-/// something that starts an operand: a name, a number or letter, a large
+/// followed by something that starts an operand: a name, a number or letter, a large
 /// operator such as `∑`, a bracket, a root, a string, an escape or embedded
 /// code. A fence such as `|` or a `.` starts no operand of a script, signed or
 /// not: `x^|x|` raises only the `|`.
