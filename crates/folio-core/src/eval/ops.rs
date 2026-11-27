@@ -25,10 +25,13 @@ fn with_token_advice<'a>(
     message: EcoString,
     operands: impl IntoIterator<Item = &'a V>,
 ) -> EcoString {
-    match operands.into_iter().find_map(|v| match v {
-        V::Token(name) => Some(name),
-        _ => None,
-    }) {
+    match operands
+        .into_iter()
+        .find_map(first_token)
+        .and_then(|v| match v {
+            V::Token(name) => Some(name),
+            _ => None,
+        }) {
         Some(name) => eco_format!(
             "{message}: a token's value is known only when the document is styled, \
              so compute with it in a `#rule` or a stylesheet, as `${name}`"
@@ -41,7 +44,7 @@ fn with_token_advice<'a>(
 /// is known only when the document is styled, so a comparison would always
 /// be false. `None` when neither operand is one.
 pub(crate) fn token_error(op: &str, lhs: &V, rhs: &V) -> Option<EcoString> {
-    if !matches!(lhs, V::Token(_)) && !matches!(rhs, V::Token(_)) {
+    if !holds_token(lhs) && !holds_token(rhs) {
         return None;
     }
     let message = eco_format!(
@@ -50,6 +53,27 @@ pub(crate) fn token_error(op: &str, lhs: &V, rhs: &V) -> Option<EcoString> {
         short_repr(rhs)
     );
     Some(with_token_advice(message, [lhs, rhs]))
+}
+
+/// Whether a value is a token reference or holds one in an array or a
+/// dictionary (SPEC §5.4).
+pub(crate) fn holds_token(value: &V) -> bool {
+    match value {
+        V::Token(_) => true,
+        V::Array(items) => items.iter().any(holds_token),
+        V::Dict(dict) => dict.iter().any(|(_, v)| holds_token(v)),
+        _ => false,
+    }
+}
+
+/// The first token reference a value is or holds.
+fn first_token(value: &V) -> Option<&V> {
+    match value {
+        V::Token(_) => Some(value),
+        V::Array(items) => items.iter().find_map(first_token),
+        V::Dict(dict) => dict.iter().find_map(|(_, v)| first_token(v)),
+        _ => None,
+    }
 }
 
 /// The error of a unary operator that does not apply to a value.
@@ -403,6 +427,9 @@ pub(crate) fn short_repr(value: &V) -> EcoString {
 
 /// `a in b`.
 pub(crate) fn contains(item: &V, collection: &V) -> StrResult<bool> {
+    if let Some(message) = token_error("in", item, collection) {
+        return Err(message);
+    }
     match (item, collection) {
         (V::Str(a), V::Str(b)) => Ok(b.contains(a.as_str())),
         (V::Str(key), V::Dict(d)) => Ok(d.get(key).is_some()),
@@ -422,6 +449,14 @@ pub(crate) fn contains(item: &V, collection: &V) -> StrResult<bool> {
 /// `none` disappears, strings and content concatenate, arrays concatenate,
 /// dictionaries merge.
 pub(crate) fn join(lhs: V, rhs: V) -> StrResult<V> {
+    if holds_token(&lhs) || holds_token(&rhs) {
+        let message = eco_format!(
+            "cannot join {} with {}",
+            a_type(lhs.type_name()),
+            a_type(rhs.type_name())
+        );
+        return Err(with_token_advice(message, [&lhs, &rhs]));
+    }
     Ok(match (lhs, rhs) {
         (a, V::None) => a,
         (V::None, b) => b,
@@ -485,6 +520,18 @@ mod tests {
             format!("cannot compare tok.body-size and \"dark\" with `==`: {advice}")
         );
         assert_eq!(token_error("==", &V::Int(1), &V::Int(1)), None);
+        // Inside an array, too.
+        let list = || V::Array([size(), V::Int(2)].into_iter().collect());
+        assert!(token_error("==", &list(), &V::Int(1)).is_some());
+        assert!(
+            contains(&size(), &V::Array([V::Int(1)].into_iter().collect()))
+                .unwrap_err()
+                .ends_with(advice)
+        );
+        assert_eq!(
+            join(V::Str("Size: ".into()), size()).unwrap_err(),
+            format!("cannot join a str with a token: {advice}")
+        );
         // A token reference is equal to itself only.
         assert!(equal(&size(), &size()));
         assert!(!equal(&size(), &V::Token("gap".into())));

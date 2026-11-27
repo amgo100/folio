@@ -246,6 +246,13 @@ impl<'a> Vm<'a> {
                 .with_hint("use it as the value of an `override` entry or a layout hint")
                 .into());
             }
+            other if ops::holds_token(&other) => {
+                bail!(
+                    span,
+                    "{} holds a stylesheet token and cannot be shown as text",
+                    ops::short_repr(&other)
+                );
+            }
             other => Content::node(Node::Text {
                 text: self.repr(&other, span)?,
                 span,
