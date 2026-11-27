@@ -11,6 +11,8 @@
 //! - [`fuzz`] holds the bodies of the `cargo fuzz` targets in `fuzz/`, so
 //!   that the inputs that once failed are replayed on stable Rust by
 //!   `cargo test` (`tests/fuzz.rs`).
+//! - [`fuzz_image`] holds the body of the `image` fuzz target (image files
+//!   read, written to PDF and rendered), until it joins [`fuzz`].
 //! - [`refdoc`] generates the reference document of SPEC §14.1 and smaller
 //!   documents of the same make-up.
 //!
@@ -23,6 +25,7 @@
 
 pub mod corpus;
 pub mod fuzz;
+pub mod fuzz_image;
 pub mod golden;
 pub mod refdoc;
 

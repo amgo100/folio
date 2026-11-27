@@ -1,0 +1,27 @@
+#doc(title: [Kinematics worksheet], subject: "Year 12 physics")
+
+= Motion in a straight line
+
+A car starts from rest and reaches a speed of #qty(18, "m s^-1") in #qty(6.0, "s") with a uniform acceleration.
+
+Sketch a graph of the car's velocity against time for these #qty(6.0, "s"). Use the box below.
+
+#figure(class: "working")[]
+
+Calculate the acceleration $a$ of the car, using $v = u + a t$.
+
+#figure(class: "answer")[]
+
+Calculate the distance the car travels in this time, and explain how the graph you sketched shows this distance.
+
+#figure(class: "answer long")[]
+
+A ball is dropped from rest from a height of #qty(20, "m"). Take the acceleration of free fall as #qty(9.81, "m s^-2") and ignore air resistance.
+
+Calculate the time the ball takes to reach the ground.
+
+#figure(class: "answer")[]
+
+Explain why an object falling freely near the surface of the Earth is said to move with uniform acceleration.
+
+#figure(class: "answer")[]

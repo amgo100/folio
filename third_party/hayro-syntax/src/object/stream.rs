@@ -240,6 +240,10 @@ pub enum DecodeFailure {
     Decryption,
     /// An unknown failure occurred.
     Unknown,
+    /// An image stream would take more memory decoded than
+    /// [`crate::MAX_IMAGE_BYTES`], by its own header or decode parameters,
+    /// and was not decoded (Folio).
+    ImageTooLarge,
 }
 
 /// An image color space.
