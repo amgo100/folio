@@ -825,7 +825,7 @@ fn scoped_rules_use_the_stylesheet_grammar() {
             .clone()
     };
     assert!(block(&content).spanless_eq(&block(&sheet)));
-    let (errors, _) = Source::detached(&format!("#rule q {decls}"))
+    let (errors, _) = Source::detached(format!("#rule q {decls}"))
         .root()
         .errors_and_warnings();
     assert!(errors.is_empty(), "{errors:?}");
