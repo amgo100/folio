@@ -282,16 +282,16 @@ fn drawn(world: &World) -> (Vec<String>, Vec<String>) {
 }
 
 #[test]
-fn every_formula_is_a_pdf_formula_with_its_source_as_alt_text() {
+fn every_formula_is_a_pdf_formula_with_a_reading_of_its_tree_as_alt_text() {
     let world = world(
         "",
-        "Speed $v = u + a t$ and $:tex \\frac{1}{2}$ here.\n\n$ s = u t $\n",
+        "Speed $v = u + a t /* a note */$ and $:tex \\frac{1}{2}$ here.\n\n$ s = u t $\n",
     );
     let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
     let pdf = compiled.output.expect("a PDF");
     let pdf = String::from_utf8_lossy(pdf.as_ref());
     assert_eq!(pdf.matches("/S/Formula").count(), 3, "three formulas");
-    for alt in ["/Alt(v = u + a t)", "/Alt(\\\\frac{1}{2})", "/Alt(s = u t)"] {
+    for alt in ["/Alt(v = u + a t)", "/Alt(1/2)", "/Alt(s = u t)"] {
         assert!(pdf.contains(alt), "{alt}");
     }
 }

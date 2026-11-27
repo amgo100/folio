@@ -24,6 +24,9 @@
 //! | atoms and text | `m:r` runs; `m:nor` for text |
 //! | lines with alignment points | `m:eqArr` with `&` in its runs |
 //!
+//! A PDF `Formula` is described by [`Formula::reading`], a linear reading
+//! of the tree in the style of native math (see [`reading`]).
+//!
 //! Every node keeps the span of the source it came from, so errors,
 //! span maps and the editor can point at it. Rows cache their hash and
 //! their depth, and share their parts, so that a script can build large
@@ -33,6 +36,7 @@
 
 pub mod layout;
 pub mod quantity;
+pub mod reading;
 mod symbols;
 pub mod tex;
 
