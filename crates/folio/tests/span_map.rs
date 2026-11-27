@@ -568,3 +568,23 @@ fn a_cursor_in_an_inner_elements_arguments_marks_it_not_the_label() {
     );
     assert!(!marks(&found, &markers), "{found:?}");
 }
+
+/// A display equation's number stands for the whole equation: a cursor in
+/// the formula marks the formula's glyphs alone.
+#[test]
+fn a_cursor_in_a_numbered_display_marks_its_formula_not_its_number() {
+    let text = "Text.\n\n$ F = m a $\n";
+    let style = "math { numbering: \"(1)\"; }\n";
+    let m = text.find("m a").unwrap();
+    let at = text.find("$ F").unwrap();
+    let (found, markers) = find_styled(style, text, at, m..m);
+    assert!(!markers.is_empty(), "the display has no number");
+    assert!(
+        !found.is_empty() && found.iter().all(|f| f.glyphs),
+        "{found:?}"
+    );
+    assert!(!marks(&found, &markers), "{found:?}");
+    // At its opening `$`, the number.
+    let (found, markers) = find_styled(style, text, at, at..at);
+    assert!(marks(&found, &markers), "{found:?}");
+}

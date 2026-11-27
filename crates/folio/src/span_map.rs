@@ -494,12 +494,12 @@ impl Index {
 
 /// The bytes of an element's body: its markup, from the start of the first
 /// part to the end of the last (an item's or heading's text, a term and its
-/// description), or the arguments of a call. `None` for a node with
-/// neither, or whose body is empty.
+/// description), an equation's formula, or the arguments of a call. `None`
+/// for a node with none of them, or whose body is empty.
 fn body(node: &LinkedNode<'_>) -> Option<Range<usize>> {
     let parts: Vec<Range<usize>> = node
         .children()
-        .filter(|child| child.kind() == SyntaxKind::Markup)
+        .filter(|child| matches!(child.kind(), SyntaxKind::Markup | SyntaxKind::Math))
         .map(|child| child.range())
         .collect();
     let body = match (parts.first(), parts.last()) {
