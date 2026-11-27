@@ -283,22 +283,43 @@ impl Number {
         }
     }
 
-    /// A float, in the shortest form that reads back as the same float:
-    /// `0.1`, `9`, or with a power of ten where Rust writes one (`1e-7`,
-    /// `6.02e23`). A whole float has no decimals: the `.0` Rust writes is
-    /// a figure nobody wrote. `None` for NaN and the infinities.
+    /// A float that has no written form (computed by a script, or bound to
+    /// a name), in the shortest digits that read back as the same float,
+    /// written plain or with a power of ten, whichever literal is shorter,
+    /// plain on a tie (D-324-2): `3e8` (not `300000000`), `1500` (not
+    /// `1.5e3`), `1.2e5`, `0.05`, `1e-3`, `1e3`. A whole float has no
+    /// decimals: the `.0` of Rust's form is a figure nobody wrote. `None`
+    /// for NaN and the infinities.
     pub fn from_float(value: f64) -> Option<Self> {
         if !value.is_finite() {
             return None;
         }
-        let mut number = Self::parse(&format!("{value:?}")).ok()?;
-        if number.frac == "0" {
-            number.frac = EcoString::new();
-        }
-        // `-0.0` is zero.
-        if value == 0.0 {
-            number.negative = false;
-        }
+        // Rust writes the shortest digits that read back as the same
+        // float, one before the point: `-1.5e3`.
+        let scientific = format!("{:e}", value.abs());
+        let (mantissa, exponent) = scientific.split_once('e')?;
+        let exponent: i64 = exponent.parse().ok()?;
+        let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+        // Where the decimal point falls in `digits` when written plain.
+        let point = 1 + exponent;
+        let plain = if value == 0.0 {
+            "0".to_string()
+        } else if point >= digits.len() as i64 {
+            let zeros = usize::try_from(point).ok()? - digits.len();
+            format!("{digits}{}", "0".repeat(zeros))
+        } else if point <= 0 {
+            format!("0.{}{digits}", "0".repeat(usize::try_from(-point).ok()?))
+        } else {
+            let (int, frac) = digits.split_at(usize::try_from(point).ok()?);
+            format!("{int}.{frac}")
+        };
+        let text = if scientific.len() < plain.len() {
+            &scientific
+        } else {
+            &plain
+        };
+        let mut number = Self::parse(text).ok()?;
+        number.negative = value < 0.0;
         Some(number)
     }
 
@@ -838,11 +859,24 @@ mod tests {
     fn floats_in_shortest_form() {
         assert_eq!(Number::from_float(0.1).unwrap().to_string(), "0.1");
         assert_eq!(Number::from_float(6.02e23).unwrap().to_string(), "6.02e23");
-        assert_eq!(Number::from_float(-0.0).unwrap().to_string(), "0");
-        assert_eq!(Number::from_float(2.0).unwrap().to_string(), "2");
-        assert_eq!(Number::from_float(-1500.0).unwrap().to_string(), "-1500");
-        assert_eq!(Number::from_float(1e21).unwrap().to_string(), "1e21");
-        assert_eq!(Number::from_float(2.5).unwrap().to_string(), "2.5");
+        let float = |value: f64| Number::from_float(value).unwrap().to_string();
+        assert_eq!(float(-0.0), "0");
+        assert_eq!(float(2.0), "2");
+        assert_eq!(float(2.5), "2.5");
+        assert_eq!(float(-1500.0), "-1500");
+        assert_eq!(float(2.0 * 1.5e8), "3e8");
+        assert_eq!(float(1.2e5), "1.2e5");
+        assert_eq!(float(0.05), "0.05");
+        assert_eq!(float(0.001), "1e-3");
+        assert_eq!(float(100.0), "100");
+        assert_eq!(float(1000.0), "1e3");
+        assert_eq!(float(9.81), "9.81");
+        assert_eq!(float(-1.602e-19), "-1.602e-19");
+        assert_eq!(float(6.62607015e-34), "6.62607015e-34");
+        assert_eq!(float(123456.789), "123456.789");
+        assert_eq!(float(1e21), "1e21");
+        assert_eq!(float(f64::MAX).len(), "1.7976931348623157e308".len());
+        assert_eq!(float(f64::MIN_POSITIVE), "2.2250738585072014e-308");
         assert_eq!(Number::from_float(f64::NAN), None);
         assert_eq!(Number::from_int(-42).to_string(), "-42");
     }
