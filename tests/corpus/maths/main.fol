@@ -29,3 +29,9 @@ and the potential of a charged sphere of radius $R$ is
 $ V(r) = cases((Q) / (4 pi epsilon_0 r) & r >= R, (Q) / (4 pi epsilon_0 R) & r < R) $
 
 $:tex \lim_{n \to \infty} \left(1 + \frac{1}{n}\right)^n = e $
+
+= Data
+
+#let c = 3.00e8
+
+The constants of a data section are written as the author gives them: the speed of light in vacuum is #qty(3.00e8, "m s^-1"), the elementary charge #qty(1.60e-19, "C") and the Planck constant #qty(6.63e-34, "J s"), and a reading of #qty(2.0, "V") keeps its last figure. A value a script computes is written in the shorter of its plain and power-of-ten forms: light travels #qty(c * 2.0, "m") in two seconds and #qty(c / 200000.0, "m") in five microseconds. A resistor of #qty(4.7, "kohm") in series with one of #qty(2.2, "Mohm") has a total resistance of $R = qty(2.2047, "Mohm", digits: 3)$, and a contact resistance of #qty(15, "mohm") is negligible.
