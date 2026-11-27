@@ -251,7 +251,16 @@ fn system_fonts_depend_on_the_build_mode() {
             .map(|s| (s, message.to_string()))
             .into_iter()
             .collect();
-        assert_eq!(messages(&compiled), expected, "{mode:?} {extra}");
+        let mut found = messages(&compiled);
+        // Strict mode also warns that it checks no overrides yet (#330).
+        if extra == STRICT {
+            let at = found
+                .iter()
+                .position(|(_, m)| m.starts_with("strict mode is not implemented yet"))
+                .expect("the strict-mode warning");
+            assert_eq!(found.remove(at).0, Severity::Warning);
+        }
+        assert_eq!(found, expected, "{mode:?} {extra}");
     }
 
     // A system font that `folio.lock` locks pins the build.
