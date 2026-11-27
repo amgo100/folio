@@ -10,8 +10,8 @@
 //! file the reader accepts must also be drawn without a panic. A panic, an
 //! abort or a run past libFuzzer's time or memory limit is a failure.
 //!
-//! It is in a module of its own until it is registered with the other
-//! targets in [`crate::fuzz`].
+//! It is registered with the other targets in [`crate::fuzz`], whose tests
+//! replay its seeds and `fuzz/regressions/image/`.
 
 use std::fs;
 

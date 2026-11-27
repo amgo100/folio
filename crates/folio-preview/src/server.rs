@@ -188,6 +188,10 @@ async fn read_head(stream: &mut TcpStream) -> std::io::Result<Option<Request>> {
 }
 
 /// The viewer page, which loads its script and stylesheet with the token.
+///
+/// Its policy names no `frame-ancestors`, so that an editor can show the
+/// viewer in a frame beside the source (see "Security" in the crate's
+/// documentation).
 fn page(shared: &Shared) -> Vec<u8> {
     let body = PAGE.replace("{token}", &shared.token);
     http::response(
@@ -196,7 +200,7 @@ fn page(shared: &Shared) -> Vec<u8> {
         &[(
             "Content-Security-Policy",
             "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
-             connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+             connect-src 'self'; base-uri 'none'; form-action 'none'",
         )],
         body.as_bytes(),
     )

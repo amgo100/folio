@@ -619,7 +619,7 @@ impl<'a> Walker<'a> {
     fn inline_decl(&self, key: &str, name: &str, value: &Value, span: Span) -> Option<Decl> {
         let prop = self.compiler.property_named(name, span)?;
         let property = self.cascade.properties.get(prop);
-        let declared = Declared::Value(value.clone());
+        let declared = self.resolve_tokens(value, span)?;
         if let Err(message) = check(&declared, &property.ty, true) {
             diag::report(
                 self.db,
@@ -637,6 +637,18 @@ impl<'a> Walker<'a> {
             value: DeclValue::Value(declared),
             span,
         })
+    }
+
+    /// The declared value of a field's value, with its token references
+    /// (`tok.warn`, SPEC §5.4) resolved against the build's tokens: as the
+    /// whole value, or as items of a list. `None` after an error, such as
+    /// an unknown token, which is reported at `span`.
+    fn resolve_tokens(&self, value: &Value, span: Span) -> Option<Declared> {
+        if !holds_token(value) {
+            return Some(Declared::Value(value.clone()));
+        }
+        let values = Values::new(self.compiler.values, self.file_of(span));
+        resolve_tokens(&values, value, span)
     }
 
     /// The view of child `i` of `siblings` with a need of a set of rules:
@@ -683,6 +695,34 @@ impl<'a> Walker<'a> {
             prev,
             children,
         }
+    }
+}
+
+/// Whether a value is a token reference or a list with one as an item. It
+/// looks one level deep only: values can share parts, and a walk of all of
+/// them could take exponential time.
+fn holds_token(value: &Value) -> bool {
+    match value {
+        Value::Token(_) => true,
+        Value::Array(items) => items.iter().any(|v| matches!(v, Value::Token(_))),
+        _ => false,
+    }
+}
+
+/// A value with its token references resolved; see
+/// [`Walker::resolve_tokens`].
+fn resolve_tokens(values: &Values<'_>, value: &Value, span: Span) -> Option<Declared> {
+    match value {
+        Value::Token(name) => values.token(name, span),
+        Value::Array(items) if holds_token(value) => items
+            .iter()
+            .map(|item| match item {
+                Value::Token(name) => values.token(name, span),
+                _ => Some(Declared::Value(item.clone())),
+            })
+            .collect::<Option<EcoVec<_>>>()
+            .map(Declared::List),
+        _ => Some(Declared::Value(value.clone())),
     }
 }
 
