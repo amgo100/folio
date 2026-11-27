@@ -1301,7 +1301,15 @@ fn a_note_after_a_formula_on_its_anchors_line_is_found_and_written_last() {
                         vec![
                             run("of the metal2 is", 13),
                             located(6, 0, vec![run("4.9", 16)]),
-                            boxed(4, vec![boxed(5, vec![run("2 The resistivity.", 15)])]),
+                            boxed(
+                                4,
+                                vec![
+                                    // A part of the note: a box of the note's
+                                    // own source, drawn once, with it.
+                                    boxed(4, vec![run("2", 14)]),
+                                    boxed(5, vec![run("The resistivity.", 15)]),
+                                ],
+                            ),
                         ],
                     ),
                     boxed(
@@ -1315,8 +1323,12 @@ fn a_note_after_a_formula_on_its_anchors_line_is_found_and_written_last() {
     )])];
     let document = document(&pages, &structure);
     let (tree, _) = tagged(&document);
-    assert!(tree.contains("Note"), "{tree}");
-    assert!(tree.contains("Formula"), "{tree}");
+    // The note keeps its place before the formula, as in the source.
+    let (note, formula) = (tree.find("Note"), tree.find("Formula"));
+    assert!(
+        note.is_some() && formula.is_some() && note < formula,
+        "{tree}"
+    );
     let mut body = Vec::new();
     let mut notes = Vec::new();
     let rendered = render_with(&document, true, &mut |tree: &TagTree, _| {
@@ -1325,7 +1337,8 @@ fn a_note_after_a_formula_on_its_anchors_line_is_found_and_written_last() {
     });
     assert!(rendered.result.is_ok(), "{:?}", rendered.result.err());
     let body: Vec<i32> = body.into_iter().filter(|id| !notes.contains(id)).collect();
-    assert!(!notes.is_empty() && body.len() >= 3, "{body:?} {notes:?}");
+    // The note's part and its paragraph, both drawn.
+    assert!(notes.len() >= 2 && body.len() >= 3, "{body:?} {notes:?}");
     let last_body = body.iter().max().unwrap();
     assert!(
         notes.iter().all(|n| n > last_body),

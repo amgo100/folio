@@ -4,7 +4,9 @@
 //! The writer walks each page's fragments in painting order. A group is a
 //! box of a node of the [`Tag`] tree: of a child of the node whose box
 //! holds it, found by its location (source and instance) among the
-//! children not yet entered, in document order; or, at the top of a page,
+//! children not yet entered, in document order (a footnote's note, whose box
+//! comes after its anchor's line, also among those before the last child
+//! entered, which leaves that child the last entered); or, at the top of a page,
 //! the child last entered if the group has its location, which continues
 //! from the page before. The instance tells apart the blocks that a loop
 //! or the calls of a closure make from one source. A group that matches
@@ -19,6 +21,7 @@
 //! it, so levels never skip, as PDF/UA-1 asks (§7.4.2), whatever levels
 //! the source wrote.
 
+use std::collections::HashMap;
 use std::num::NonZeroU16;
 
 use ecow::EcoString;
@@ -48,8 +51,9 @@ pub(crate) struct Tagger<'a> {
     undescribed: Vec<SourceRef>,
     /// The `Link` node of each run of a link's glyphs, by the run's index.
     links: Vec<Option<usize>>,
-    /// The nodes of the input that are footnotes' notes ([`Tag::foot`]).
-    feet: Vec<&'a Tag>,
+    /// The nodes of the input that are footnotes' notes ([`Tag::foot`]),
+    /// by source, with their instances.
+    feet: HashMap<SourceRef, Vec<u32>>,
 }
 
 /// What the tagger gives: the tag tree, the headings for the outline, and
@@ -130,11 +134,11 @@ impl<'a> Tagger<'a> {
             untitled: Vec::new(),
             undescribed: Vec::new(),
             links: Vec::new(),
-            feet: Vec::new(),
+            feet: HashMap::new(),
         };
-        fn feet<'a>(tag: &'a Tag, out: &mut Vec<&'a Tag>) {
+        fn feet(tag: &Tag, out: &mut HashMap<SourceRef, Vec<u32>>) {
             if tag.foot {
-                out.push(tag);
+                out.entry(tag.source).or_default().push(tag.instance);
             }
             for child in &tag.children {
                 feet(child, out);
@@ -211,7 +215,20 @@ impl<'a> Tagger<'a> {
         let sections = out.sections + u16::from(tag.role == Role::Section);
         let parent = self.container(node, tag.role);
         let child = self.push(Kind::Input(tag), &tag.children, sections);
-        self.nodes[parent].kids.push(Kid::Node(child));
+        // A note found behind the cursor goes before the nodes entered
+        // after it in document order, so the tree keeps the source's order.
+        let later: Vec<usize> = self.nodes[node].entered[index + 1..]
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        let kids = &mut self.nodes[parent].kids;
+        let at = kids
+            .iter()
+            .position(|kid| matches!(kid, Kid::Node(n) if later.contains(n)))
+            .filter(|_| !moves)
+            .unwrap_or(kids.len());
+        kids.insert(at, Kid::Node(child));
         let out = &mut self.nodes[node];
         if moves {
             out.cursor = Some(index);
@@ -232,7 +249,13 @@ impl<'a> Tagger<'a> {
     /// Whether a box of the element instance at `location` is a footnote's
     /// note, whether or not its node could be entered.
     pub(crate) fn is_foot_box(&self, location: Location) -> bool {
-        self.feet.iter().any(|tag| is_box_of(tag, location))
+        self.feet.get(&location.source).is_some_and(|instances| {
+            instances.iter().any(|&i| {
+                i == location.instance
+                    || i == Location::UNKNOWN_INSTANCE
+                    || location.instance == Location::UNKNOWN_INSTANCE
+            })
+        })
     }
 
     /// Adds marked content to `node`: to the `Link` of run `link` in it,

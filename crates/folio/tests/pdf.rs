@@ -641,8 +641,10 @@ temperature, which is why the alloy is used for resistors.] is #qty(4.9e-7, \"oh
 A microphone connected to an oscilloscope detects the sound from a loudspeaker.
 ";
 
-/// The note of [`SECTIONED_FOOTNOTES`] is written after the whole page's
-/// body; with `FOLIO_PDF_OUT` set, `tests/pdf/corpus.py` checks the order.
+/// The note of [`SECTIONED_FOOTNOTES`] keeps its `Note` tag, and the
+/// expected text puts it after the whole page's body; with
+/// `FOLIO_PDF_OUT` set, `tests/pdf/corpus.py` checks that the PDF's content
+/// order matches. `folio-pdf`'s own tests check the content order itself.
 #[test]
 fn a_note_in_a_section_follows_the_whole_page() {
     let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\

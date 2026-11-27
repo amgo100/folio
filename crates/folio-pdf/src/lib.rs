@@ -872,6 +872,9 @@ struct Writer<'a> {
     /// The boxes of footnotes met on the page being drawn, each with where
     /// it is and its structure node, drawn after the rest of the page.
     deferred: Vec<(Fragment, Point, usize)>,
+    /// Whether the deferred notes are being drawn, when nothing inside
+    /// them is deferred again.
+    in_feet: bool,
     /// The link of each glyph of each run of the page being drawn, by the
     /// run's address, assigned in the order of the page's fragments before
     /// it is drawn, so that drawing footnotes last takes no link from the
@@ -1181,6 +1184,7 @@ impl<'a> Writer<'a> {
             ua: false,
             images: HashMap::new(),
             deferred: Vec::new(),
+            in_feet: false,
             assigned: HashMap::new(),
             assigning: None,
         }
@@ -1227,13 +1231,16 @@ impl Writer<'_> {
                 other => self.item(surface, other, *offset, Tagger::TOP),
             }
         }
-        // From the top of the footnote area down, as they are read.
+        // From the top of the footnote area down, as they are read; notes
+        // at the same height keep the order the page holds them in.
         let mut deferred = std::mem::take(&mut self.deferred);
         deferred.sort_by(|a, b| a.1.y.to_pt().total_cmp(&b.1.y.to_pt()));
+        self.in_feet = true;
         for (note, at, node) in deferred {
             self.fragment(surface, &note, at, node);
             self.tagger.advance();
         }
+        self.in_feet = false;
     }
 
     /// Assigns the glyphs of the runs in `fragment` to links, in the order
@@ -1292,11 +1299,12 @@ impl Writer<'_> {
                 let child = self.tagger.enter(node, group.location(), at.y);
                 // A note's box is drawn last whether or not its node was
                 // found, so that content order never breaks a sentence.
-                let foot = if child != node {
-                    self.tagger.is_foot(child)
-                } else {
-                    self.tagger.is_foot_box(group.location())
-                };
+                let foot = !self.in_feet
+                    && if child != node {
+                        self.tagger.is_foot(child)
+                    } else {
+                        self.tagger.is_foot_box(group.location())
+                    };
                 if foot {
                     self.deferred.push((group.clone(), at, child));
                 } else {
