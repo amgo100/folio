@@ -209,3 +209,58 @@ fn project_stylesheets_win_whatever_their_specificity() {
         Value::Bool(false)
     );
 }
+
+#[test]
+fn notes_take_the_documents_style_and_markers_their_anchors() {
+    // A note looks the same wherever its anchor is (SPEC §7.8, D-327-1 =
+    // A), and the marker at the anchor scales with it (D-327-3 = B).
+    let mut world = World::builder()
+        .build(
+            "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n",
+            None,
+        )
+        .unwrap();
+    world
+        .set_source(
+            "main.fol",
+            "#doc(title: [Forces#footnote[In the title.]])\n\n\
+             = Laws#footnote[In a heading.]\n\n\
+             Text.#footnote[In body text.]\n\n\
+             #figure[Body#footnote[In a figure.]][Caption]\n",
+        )
+        .unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(
+        compiled.diagnostics.is_empty(),
+        "{:?}",
+        compiled.diagnostics
+    );
+    let styled = styled(&world);
+    let size = |node| match get(&styled, node, "font-size") {
+        Value::Length(size) => (size.to_pt() * 100.0).round() / 100.0,
+        other => panic!("{other:?}"),
+    };
+    let doc_align = get(&styled, &styled.root, "align");
+    let notes = all(&styled, "footnote");
+    assert_eq!(notes.len(), 4);
+    let mut markers = Vec::new();
+    for note in notes {
+        markers.push(size(note));
+        let part = note.note_style().expect("a footnote has a note part");
+        assert_eq!(size(part), 7.7, "0.7 of the 11pt body");
+        assert_eq!(get(&styled, part, "align"), doc_align);
+        let paragraph = note
+            .children
+            .iter()
+            .find(|c| matches!(&c.name, NodeName::Element(n) if n.to_string() == "paragraph"))
+            .expect("a note holds a paragraph");
+        assert_eq!(size(paragraph), 8.8, "0.8 of the 11pt body");
+        assert_eq!(get(&styled, paragraph, "align"), doc_align);
+        // Not centred like the figure a note is anchored in.
+        assert_ne!(get(&styled, paragraph, "align"), kw("center"));
+        assert_eq!(get(&styled, paragraph, "font-weight"), kw("normal"));
+    }
+    // The markers at the anchors: 0.7 of the title's, the heading's, the
+    // body's and the figure's size.
+    assert_eq!(markers, [12.32, 10.78, 7.7, 7.7]);
+}

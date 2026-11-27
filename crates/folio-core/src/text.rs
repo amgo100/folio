@@ -708,8 +708,21 @@ impl Collector<'_> {
     }
 
     /// Collects the blocks of footnote `index` into a tree of their own,
-    /// whose root is the footnote's block (SPEC §7.8).
+    /// whose root is the footnote's block (SPEC §7.8). The block, and the
+    /// marker before the note, take the note's style, which inherits from
+    /// the document rather than from the anchor ([`StyledNode::note_style`]).
     fn note(&mut self, element: &Element, node: &StyledNode, index: usize) {
+        let restyled;
+        let node = match node.note_style() {
+            Some(note) => {
+                restyled = StyledNode {
+                    style: note.style.clone(),
+                    ..node.clone()
+                };
+                &restyled
+            }
+            None => node,
+        };
         let blocks = std::mem::take(&mut self.blocks);
         let root = self.root.take();
         let markers = std::mem::take(&mut self.markers);
