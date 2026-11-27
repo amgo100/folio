@@ -32,7 +32,26 @@ fn long_fraction_chains_end_at_the_nesting_limit() {
         }
     }
 
-    // A chain within the limit evaluates.
-    let chain = vec!["x"; 90].join("/");
-    assert_eq!(evaluate_on_small_stack(format!("A ${chain}$\n")), [""; 0]);
+    // A line of 98 nested fractions is 99 rows deep, and the equation
+    // that holds it 100 levels, the most there may be. Two more fractions
+    // are an error of the formula, once.
+    let chain = |terms: usize| vec!["x"; terms].join("/");
+    assert_eq!(
+        evaluate_on_small_stack(format!("A ${}$\n", chain(99))),
+        [""; 0]
+    );
+    assert_eq!(
+        evaluate_on_small_stack(format!("A ${}$\n", chain(101))),
+        ["math is nested more than 100 deep"]
+    );
+}
+
+#[test]
+fn an_equation_in_code_in_an_equation_counts_from_its_own_top() {
+    // Each formula is 61 rows deep; the inner one is never placed in the
+    // outer one, so neither is too deep.
+    let inner = vec!["x"; 61].join("/");
+    let outer = vec!["x"; 60].join("/");
+    let script = format!("A ${outer}/#{{ let a = ${inner}$; none }}$\n");
+    assert_eq!(evaluate_on_small_stack(script), [""; 0]);
 }

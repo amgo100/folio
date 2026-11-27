@@ -64,6 +64,15 @@ impl Vm<'_> {
     /// Evaluates an equation's body into a formula of one line per part
     /// between top-level line breaks.
     pub(super) fn formula(&mut self, body: ast::Math<'_>, span: Span) -> EvalResult<Formula> {
+        // An equation in code in another equation is a formula of its own:
+        // it nests only as deeply as it is placed, which `row_of` checks.
+        let outer = std::mem::replace(&mut self.math_depth, 0);
+        let formula = self.formula_rows(body, span);
+        self.math_depth = outer;
+        formula
+    }
+
+    fn formula_rows(&mut self, body: ast::Math<'_>, span: Span) -> EvalResult<Formula> {
         let mut lines = Vec::new();
         let mut nodes = Vec::new();
         let mut label: Option<math::Label> = None;
@@ -192,8 +201,10 @@ impl Vm<'_> {
     /// The row is checked against [`MAX_NESTING`] before its expression is
     /// evaluated: a chain such as `1/1/…/x` nests as deeply as it is long,
     /// and a check on the way back up would come after the stack ran out.
+    /// The line that holds the rows is one level more, so this fails just
+    /// where [`Vm::row_of`]'s check of the line would.
     fn math_row(&mut self, expr: ast::Expr<'_>, level: Level) -> EvalResult<Row> {
-        if self.math_depth >= MAX_NESTING {
+        if self.math_depth + 1 >= MAX_NESTING {
             return Err(nesting_exceeded(expr.span(), "math is").into());
         }
         self.math_depth += 1;
