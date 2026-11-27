@@ -1054,3 +1054,46 @@ fn the_first_pages_show_settled_page_numbers() {
     assert!(runs.contains("page\u{a0}3"), "{runs:?}");
     assert_first_pages(style, REFS);
 }
+
+#[test]
+fn an_item_without_text_sets_its_number_beside_its_display() {
+    // An item that holds only a display, or a figure whose body is one,
+    // keeps its number: where a text item's number starts, on the
+    // display's first baseline (SPEC §4.5, D-326-1).
+    let world = world(
+        "",
+        "+ first item\n+ $ x = 1 $\n+ #figure[Fig body][Cap]\n\
+         + #figure[$ y = 2 $][Cap two]\n+ fifth item\n",
+    );
+    let runs = page_runs(&pages(&world).pages[0]);
+    let at = |text: &str| {
+        runs.iter()
+            .find(|(_, t)| t == text)
+            .unwrap_or_else(|| panic!("no {text:?} in {runs:?}"))
+            .0
+    };
+    let first = at("1.\u{a0}");
+    for (number, formula) in [("2.\u{a0}", "𝑥"), ("4.\u{a0}", "𝑦")] {
+        let marker = at(number);
+        assert_eq!(marker.x, first.x, "{number}");
+        assert_eq!(marker.y, at(formula).y, "{number}");
+        // The formula keeps clear of it.
+        assert!(at(formula).x > marker.x + Abs::pt(10.0), "{number}");
+    }
+    assert_eq!(at("5.\u{a0}").x, first.x);
+    // A figure with text in its body sets the number there, as before.
+    assert_eq!(at("3.\u{a0}").y, at("Fig body").y);
+    let diags = diagnostics(&world);
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn a_marker_with_nothing_to_start_is_reported() {
+    let world = world("", "+ first\n+ #figure(class: \"answer\")[]\n+ third\n");
+    let diags = diagnostics(&world);
+    assert_eq!(
+        warnings_containing(&diags, "marker is not set"),
+        1,
+        "{diags:?}"
+    );
+}

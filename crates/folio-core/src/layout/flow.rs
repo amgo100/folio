@@ -51,11 +51,12 @@ use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
 use super::master::{BlockBox, BreakBefore, Rules, length};
-use super::math::{Display, Maths, display_content, laid_image};
+use super::math::{Display, Lead, Maths, display_content, laid_image};
 use super::page::{SizeBlock, SizeObject};
 use super::paragraph::{
     LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
 };
+use super::set::set_line;
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
@@ -256,6 +257,8 @@ pub(super) struct DisplayAt {
     pub display: Arc<Display>,
     pub size: Abs,
     pub width: Abs,
+    /// The markers set beside it, where it starts an element with one.
+    pub lead: Option<Arc<Lead>>,
 }
 
 impl BlockObject {
@@ -265,7 +268,12 @@ impl BlockObject {
     pub(super) fn at_width(object: &Arc<Self>, body: Abs, width: Abs) -> Arc<Self> {
         match &object.display {
             Some(at) if width != body => {
-                let content = display_content(&at.display, at.width + (width - body), at.size);
+                let content = display_content(
+                    &at.display,
+                    at.width + (width - body),
+                    at.size,
+                    at.lead.as_deref(),
+                );
                 Arc::new(Self {
                     size: content.size,
                     content: Some(content.items),
@@ -1180,7 +1188,7 @@ impl Builder<'_> {
 
     /// The content of the block of a display, as wide as the block's
     /// content box.
-    fn display(&self, block: &TextBlock, boxed: &BlockBox) -> Option<BlockObject> {
+    fn display(&mut self, block: &TextBlock, boxed: &BlockBox) -> Option<BlockObject> {
         if block.part.is_some() {
             return None;
         }
@@ -1188,7 +1196,8 @@ impl Builder<'_> {
         let display = self.sizes.maths.display(index)?;
         let size = length(&block.style, self.props, "font-size");
         let width = boxed.content().1;
-        let content = display_content(display, width, size);
+        let lead = self.lead(index);
+        let content = display_content(display, width, size, lead.as_deref());
         Some(BlockObject {
             size: content.size,
             location: block.location,
@@ -1198,9 +1207,29 @@ impl Builder<'_> {
                 display: display.clone(),
                 size,
                 width,
+                lead,
             }),
             rule: None,
         })
+    }
+
+    /// The markers set beside display `index` (SPEC §4.5, D-326-1): the
+    /// first line of their paragraph, from the start of its baseline.
+    fn lead(&mut self, index: usize) -> Option<Arc<Lead>> {
+        let paragraph = self.text.maths.get(index)?.lead?;
+        let info = self.paragraph_info(paragraph)?;
+        let line = info.layout.lines.first()?.clone();
+        // Drawn from the start of its first line, wherever its slot is.
+        let mut at = (*info).clone();
+        at.slot.offset = -line.x - info.indent;
+        let mut items = Vec::new();
+        set_line(&at, 0, Abs::zero(), &mut items);
+        Some(Arc::new(Lead {
+            width: line.width,
+            ascent: line.ascent,
+            descent: line.descent,
+            items: items.into_iter().collect(),
+        }))
     }
 
     /// The ruled lines of a block (SPEC §6.3), after its content: a leaf

@@ -119,6 +119,12 @@ pub struct TextMath {
     pub location: Location,
     /// Whether it is a display.
     pub display: bool,
+    /// For a display that starts an element with a marker and no paragraph
+    /// before it, such as a list item that holds only an equation: the
+    /// paragraph of the markers, as an index into [`Text::paragraphs`],
+    /// which is in no block. Layout sets it beside the display, at its
+    /// first line (SPEC §4.5, D-326-1).
+    pub lead: Option<usize>,
 }
 
 /// What a formula is set with, from its element's style.
@@ -558,9 +564,35 @@ impl Collector<'_> {
             });
         }
         self.element_content(element, node);
+        if self.markers.len() > markers {
+            // No paragraph or display of the element took its marker.
+            self.report_once(
+                eco_format!("marker-not-set:{:?}", element.location),
+                Diagnostic::warning(
+                    element.span,
+                    "this element's marker is not set, as it holds no text or display to \
+                     start",
+                )
+                .with_hint("start it with text, or hide the marker with `marker: none`"),
+            );
+        }
         self.markers.truncate(markers);
         self.owner = owner;
         self.close();
+    }
+
+    /// The paragraph of the markers waiting for one, for the display
+    /// `element`: in no block, as a display's block holds no paragraphs,
+    /// and in the style of the innermost marker's element, whose number it
+    /// is (SPEC §4.5, D-326-1). `None` when no marker waits.
+    fn lead(&mut self, element: &Element) -> Option<usize> {
+        let style = self.markers.last()?.style.clone();
+        let builder = self.builder();
+        let blocks = std::mem::take(&mut self.blocks);
+        let index = self.pending.len();
+        self.finish(builder, &style, element);
+        self.blocks = blocks;
+        (self.pending.len() > index).then_some(index)
     }
 
     /// Makes an element the owner of text without a node of its own,
@@ -596,8 +628,10 @@ impl Collector<'_> {
                 .any(|(_, value)| matches!(value, eval::Value::Content(_)))
         {
             // A display is laid out by math layout, as its block's
-            // content; images are reported as such.
-            if self.formula(element, node, true).is_some() {
+            // content; images are reported as such. The markers waiting
+            // for a paragraph go beside it.
+            if let Some(index) = self.formula(element, node, true) {
+                self.maths[index].lead = self.lead(element);
                 return;
             }
             // An image where blocks stand is a paragraph of its own.
@@ -997,6 +1031,7 @@ impl Collector<'_> {
             span: element.span,
             location: node.location,
             display,
+            lead: None,
         });
         Some(self.maths.len() - 1)
     }
