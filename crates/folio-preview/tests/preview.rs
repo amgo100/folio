@@ -702,3 +702,143 @@ fn pages_kept_from_an_earlier_revision_find_no_source() {
     ws.send(Message::text(click.to_string())).unwrap();
     assert!(message_of(&mut ws, "source")["location"].is_null());
 }
+
+/// A project of `sections` sections of prose, many pages long, in a
+/// temporary directory.
+fn long_project(sections: usize) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("folio.toml"),
+        "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+         lang = \"en\"\n",
+    )
+    .unwrap();
+    let mut text = String::new();
+    for s in 0..sections {
+        text.push_str(&format!("= Section {s}\n\n"));
+        for p in 0..4 {
+            for w in 0..15 {
+                text.push_str(&format!("Sentence {w} of paragraph {p} in section {s}. "));
+            }
+            text.push_str("\n\n");
+        }
+    }
+    std::fs::write(dir.path().join("main.fol"), text).unwrap();
+    dir
+}
+
+#[test]
+fn the_visible_pages_are_laid_out_first() {
+    let dir = long_project(30);
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    assert!(first.pages >= 10, "{} pages", first.pages);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    receive_from(&mut ws, first.revision);
+    ws.send(Message::text(r#"{"type":"visible","pages":[0,1]}"#))
+        .unwrap();
+    // A click is answered after the visible pages are recorded.
+    let click = serde_json::json!({
+        "type": "click", "revision": first.revision, "page": 0, "x": 100.0, "y": 100.0,
+    });
+    ws.send(Message::text(click.to_string())).unwrap();
+    message_of(&mut ws, "source");
+
+    // A sentence added at the top reflows every page.
+    let file = edit(
+        dir.path(),
+        "main.fol",
+        "Sentence 0 of paragraph 0 in section 0.",
+        "Sentence 0 of paragraph 0 in section 0, said again at length.",
+    );
+    preview.changed([file]);
+    let deadline = Instant::now() + TIMEOUT;
+    let (revision, laid, early) = loop {
+        match events.recv_deadline(deadline) {
+            Ok(Event::FirstPages {
+                revision,
+                laid,
+                pages,
+                lists,
+                spans,
+            }) => {
+                assert!(revision > first.revision);
+                assert_eq!(pages, first.pages, "the pages after stay");
+                assert!(spans.is_empty(), "{spans:?}");
+                break (revision, laid, lists);
+            }
+            Ok(Event::Updated(update)) if update.revision > first.revision => {
+                panic!(
+                    "checked before the first pages were sent: {:?}",
+                    update.lists
+                )
+            }
+            Ok(_) => {}
+            Err(_) => panic!("no first pages in time"),
+        }
+    };
+    // Through the last visible page, and not the whole document.
+    assert!(
+        (2..first.pages).contains(&laid),
+        "{laid} pages laid out first"
+    );
+    assert!(!early.is_empty());
+    assert!(early.iter().all(|&i| i < laid), "{early:?}");
+    let next = updated(&events, |u| u.revision == revision);
+    assert!(next.banner.is_none());
+    // The rest follows; the pages laid out first are not sent again.
+    assert!(next.lists.iter().all(|&i| i >= laid), "{:?}", next.lists);
+    assert!(next.lists.len() > first.pages / 2, "{:?}", next.lists);
+    indexed(&events, revision);
+
+    // The client receives each page that changed once, the first pages
+    // first, whether in an update of their own or, when the server sends
+    // only the latest, together with the rest.
+    let mut sent = Vec::new();
+    while sent.len() < early.len() + next.lists.len() {
+        let received = receive_from(&mut ws, revision);
+        assert_eq!(received.update["revision"], revision);
+        let frames: Vec<usize> = received.frames.iter().map(|(i, _)| *i as usize).collect();
+        if received.update["partial"] == true {
+            assert!(frames.iter().all(|&i| i < laid), "{frames:?}");
+        } else {
+            assert_eq!(received.update["partial"], false);
+        }
+        sent.extend(frames);
+    }
+    let mut expected = early.clone();
+    expected.extend(&next.lists);
+    assert_eq!(sent.len(), expected.len(), "{sent:?}");
+    assert_eq!(&sent[..2], &[0, 1], "{sent:?}");
+    sent.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(sent, expected);
+    preview.stop();
+}
+
+#[test]
+fn without_a_visible_page_the_revision_is_sent_at_once() {
+    let dir = long_project(30);
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    let file = edit(
+        dir.path(),
+        "main.fol",
+        "Sentence 0 of paragraph 0 in section 0.",
+        "Sentence 0 of paragraph 0 in section 0, said again at length.",
+    );
+    preview.changed([file]);
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match events.recv_deadline(deadline) {
+            Ok(Event::FirstPages { .. }) => panic!("no client said what it shows"),
+            Ok(Event::Updated(update)) if update.revision > first.revision => {
+                assert!(update.lists.contains(&0), "{:?}", update.lists);
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => panic!("no update in time"),
+        }
+    }
+    preview.stop();
+}
