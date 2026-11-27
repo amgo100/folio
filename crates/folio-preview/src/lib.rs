@@ -172,7 +172,8 @@ pub struct Options {
     pub today: Option<folio::Date>,
     /// Called with every build the manifest declares, compiled, once the
     /// project has been unchanged for [`Self::idle`] after a revision, to
-    /// write them. Without it, nothing is written.
+    /// write them; not while `folio.toml` or `folio.lock` has errors or
+    /// cannot be read. Without it, nothing is written.
     pub on_outputs: Option<OutputsHook>,
     /// Called on every [`Event`], on the thread where it happens. It must
     /// not block.

@@ -491,6 +491,51 @@ fn nothing_is_written_while_the_manifest_has_errors() {
 }
 
 #[test]
+fn nothing_is_written_while_the_manifest_is_missing() {
+    let dir = project("exam");
+    let written: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let sink = written.clone();
+    let idle = Duration::from_millis(200);
+    let (preview, events) = start(dir.path(), |o| {
+        o.watch(false)
+            .idle(idle)
+            .on_outputs(move |outputs: &Outputs| sink.lock().unwrap().push(outputs.revision))
+    });
+    let first = updated(&events, |u| u.pages > 0);
+
+    // The manifest is gone before the first write: the world keeps it,
+    // but `folio build` would find no project, so nothing is written.
+    let manifest = dir.path().join("folio.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::remove_file(&manifest).unwrap();
+    preview.changed([&manifest]);
+    let gone = updated(&events, |u| u.revision > first.revision);
+    let quiet = Instant::now() + idle * 5;
+    while let Ok(event) = events.recv_deadline(quiet) {
+        assert!(
+            !matches!(event, Event::Written { .. }),
+            "written while the manifest is missing: {event:?}"
+        );
+    }
+    assert!(written.lock().unwrap().is_empty());
+
+    std::fs::write(&manifest, text).unwrap();
+    preview.changed([&manifest]);
+    let back = updated(&events, |u| u.revision > gone.revision);
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match events.recv_deadline(deadline) {
+            Ok(Event::Written { revision }) => {
+                assert_eq!(revision, back.revision);
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => panic!("nothing was written"),
+        }
+    }
+}
+
+#[test]
 fn pages_that_look_the_same_get_new_span_maps() {
     let dir = project("exam");
     let (preview, events) = start(dir.path(), |o| o.watch(false));
