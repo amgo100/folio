@@ -32,8 +32,9 @@ a comment that starts with `Folio:`.
 - `Cargo.toml`: depends on `libm`.
 
 Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
-#333). These changes bound the time and memory one interpretation of a
-page may take, and report each limit reached through the settings'
+#333). These changes limit the work, nesting and image memory one
+interpretation of a page may take (decompressed streams are not limited
+yet, Folio #376), and report each limit reached through the settings'
 warning sink, so that Folio can refuse the figure:
 
 - `src/cache.rs`: the object cache, which every nested context of one
@@ -41,8 +42,8 @@ warning sink, so that Folio can refuse the figure:
   is one unit, a form XObject, pattern, soft mask or Type 3 glyph 100) up
   to `MAX_WORK` (10,000,000), the bytes of the images decoded up to
   `hayro_syntax::MAX_IMAGE_BYTES` (an image object counts once, however
-  often it is drawn; one refused takes nothing), and the form XObjects
-  being drawn.
+  often it is drawn; one refused takes nothing; every decoding also
+  spends a unit of work a kilobyte), and the form XObjects being drawn.
 - `src/interpret/mod.rs`: three new warnings, `FormCycle`, `TooComplex`
   and `ImageTooLarge`; `interpret` spends a unit of work for each
   operator and stops when the work is used up.
@@ -51,7 +52,8 @@ warning sink, so that Folio can refuse the figure:
   draws itself, is not drawn again (`FormCycle`); before an image is
   decoded, its size at four bytes a pixel or more (its components and bits
   per component) is taken from what is left of `MAX_IMAGE_BYTES`, and an
-  image that does not fit is not drawn (`ImageTooLarge`).
+  image that does not fit is not drawn (`ImageTooLarge`, also sent when
+  `hayro-syntax` refuses an image by its own header).
 
 The whole change is `third_party/patches/hayro-interpret.patch` in Folio's repository;
 `scripts/patch-third-party.sh` rebuilds this directory from the release and

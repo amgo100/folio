@@ -8,6 +8,25 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
 
+// Folio: whether an image's page would take more memory decoded than
+// `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn. Its size comes
+// from the JBIG2 data, not the image dictionary.
+pub(crate) fn too_large(data: &[u8], params: &Dict<'_>) -> bool {
+    let globals = params
+        .get::<Stream<'_>>(JBIG2_GLOBALS)
+        .and_then(|g| g.decoded().ok());
+    hayro_jbig2::Image::new_embedded(data, globals.as_deref())
+        .is_ok_and(|image| image_too_large(&image))
+}
+
+// Folio: see `too_large`.
+fn image_too_large(image: &hayro_jbig2::Image<'_>) -> bool {
+    u64::from(image.width())
+        .saturating_mul(u64::from(image.height()))
+        .saturating_mul(4)
+        > crate::MAX_IMAGE_BYTES
+}
+
 /// Decode JBIG2 data from a PDF stream.
 ///
 /// The `params` dictionary may contain a `JBIG2Globals` entry pointing to
@@ -23,14 +42,9 @@ pub(crate) fn decode(
 
     let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref()).ok()?;
 
-    // Folio: an image whose page would take more memory decoded than
-    // `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn, is not
-    // decoded. Its size comes from the JBIG2 data, not the image dictionary.
-    if u64::from(image.width())
-        .saturating_mul(u64::from(image.height()))
-        .saturating_mul(4)
-        > crate::MAX_IMAGE_BYTES
-    {
+    // Folio: an image too large for `MAX_IMAGE_BYTES` is not decoded (see
+    // `too_large`, which `Filter::apply` checks first).
+    if image_too_large(&image) {
         return None;
     }
 

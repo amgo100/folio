@@ -8,6 +8,18 @@ use alloc::vec::Vec;
 use core::iter;
 use hayro_ccitt::{DecodeSettings, Decoder, DecoderContext, EncodingMode};
 
+// Folio: whether an image's columns and rows would take more memory
+// decoded than `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn. Its
+// size comes from the decode parameters, not the image dictionary.
+pub(crate) fn too_large(params: &Dict<'_>, image_params: &ImageDecodeParams) -> bool {
+    let rows = params.get::<u32>(ROWS).unwrap_or(image_params.height);
+    let columns = params.get::<usize>(COLUMNS).unwrap_or(1728) as u64;
+    columns
+        .saturating_mul(u64::from(rows.max(image_params.height)))
+        .saturating_mul(4)
+        > crate::MAX_IMAGE_BYTES
+}
+
 pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
@@ -18,16 +30,9 @@ pub(crate) fn decode(
     let rows = params.get::<u32>(ROWS).unwrap_or(image_params.height);
     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
 
-    // Folio: an image whose columns and rows would take more memory decoded
-    // than `MAX_IMAGE_BYTES`, at four bytes a pixel as it is drawn, is not
-    // decoded. Its size comes from the decode parameters, not the image
-    // dictionary.
-    let columns = params.get::<usize>(COLUMNS).unwrap_or(1728) as u64;
-    if columns
-        .saturating_mul(u64::from(rows.max(image_params.height)))
-        .saturating_mul(4)
-        > crate::MAX_IMAGE_BYTES
-    {
+    // Folio: an image too large for `MAX_IMAGE_BYTES` is not decoded (see
+    // `too_large`, which `Filter::apply` checks first).
+    if too_large(params, image_params) {
         return None;
     }
 

@@ -11,7 +11,7 @@
 //! Each file is read once per content: [`load_image`] is a query on the
 //! file, so an edit elsewhere reads no image again.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ecow::{EcoString, eco_format};
@@ -165,34 +165,58 @@ fn raster_bytes(format: ImageFormat, bytes: &[u8]) -> Result<u64, String> {
 
 /// Checks the rasters an SVG drawing holds (as `data:` URLs, in it or in
 /// the SVG drawings it holds): together they take at most
-/// [`MAX_IMAGE_BYTES`] decoded, by their headers, and then each decodes,
-/// one at a time, so that a raster the PDF writer could not decode is
-/// reported by every build, as a raster file is. Each raster counts once,
-/// by its bytes, however often it is drawn.
+/// [`MAX_IMAGE_BYTES`] decoded, by their headers, each counted once by its
+/// bytes however often it is drawn; drawn as often as they are, at most
+/// [`MAX_DRAWN_BYTES`], as a renderer decodes a raster where it is drawn.
+/// Then each decodes, one at a time, so that a raster the PDF writer could
+/// not decode is reported by every build, as a raster file is.
 fn svg_rasters_fit(tree: &usvg::Tree) -> Result<(), String> {
     let rasters = svg_rasters(tree);
-    let mut total: u64 = 0;
-    for (format, data) in &rasters {
-        let bytes = raster_bytes(*format, data)
-            .map_err(|e| format!("a {} image in it cannot be read: {e}", format.name()))?;
+    let (mut total, mut drawn) = (0u64, 0u64);
+    for raster in &rasters {
+        let bytes = raster_bytes(raster.format, &raster.data)
+            .map_err(|e| format!("a {} image in it cannot be read: {e}", raster.format.name()))?;
         total = total.saturating_add(bytes);
+        drawn = drawn.saturating_add(bytes.saturating_mul(raster.uses));
     }
     too_large(total)?;
-    for (format, data) in &rasters {
-        decodes(*format, data)
-            .map_err(|e| format!("a {} image in it cannot be read: {e}", format.name()))?;
+    if drawn > MAX_DRAWN_BYTES {
+        return Err(format!(
+            "its images are drawn so often that drawing them decodes {}, more than the {} Folio draws",
+            megabytes(drawn),
+            megabytes(MAX_DRAWN_BYTES)
+        ));
+    }
+    for raster in &rasters {
+        decodes(raster.format, &raster.data)
+            .map_err(|e| format!("a {} image in it cannot be read: {e}", raster.format.name()))?;
     }
     Ok(())
 }
 
+/// The most bytes the rasters of an SVG drawing may take decoded, counted
+/// as often as they are drawn: four times [`MAX_IMAGE_BYTES`].
+pub const MAX_DRAWN_BYTES: u64 = MAX_IMAGE_BYTES * 4;
+
+/// A distinct raster of an SVG drawing.
+struct SvgRaster {
+    format: ImageFormat,
+    data: Arc<Vec<u8>>,
+    /// How many images draw it.
+    uses: u64,
+}
+
 /// The distinct rasters of an SVG drawing and of the SVG drawings it holds,
-/// in document order.
-fn svg_rasters(tree: &usvg::Tree) -> Vec<(ImageFormat, Arc<Vec<u8>>)> {
-    fn walk(
-        group: &usvg::Group,
-        seen: &mut HashSet<Arc<Vec<u8>>>,
-        out: &mut Vec<(ImageFormat, Arc<Vec<u8>>)>,
-    ) {
+/// in document order. Images that share their data (as `use` elements
+/// copy them) are told apart without reading it; others by their bytes.
+fn svg_rasters(tree: &usvg::Tree) -> Vec<SvgRaster> {
+    #[derive(Default)]
+    struct Seen {
+        by_pointer: HashMap<*const Vec<u8>, usize>,
+        by_bytes: HashMap<Arc<Vec<u8>>, usize>,
+        out: Vec<SvgRaster>,
+    }
+    fn walk(group: &usvg::Group, seen: &mut Seen) {
         for node in group.children() {
             if let usvg::Node::Image(image) = node {
                 let (format, data) = match image.kind() {
@@ -201,23 +225,37 @@ fn svg_rasters(tree: &usvg::Tree) -> Vec<(ImageFormat, Arc<Vec<u8>>)> {
                     usvg::ImageKind::GIF(data) => (ImageFormat::Gif, data),
                     usvg::ImageKind::WEBP(data) => (ImageFormat::Webp, data),
                     usvg::ImageKind::SVG(tree) => {
-                        walk(tree.root(), seen, out);
+                        walk(tree.root(), seen);
                         continue;
                     }
                 };
-                if seen.insert(data.clone()) {
-                    out.push((format, data.clone()));
-                }
+                let index = match seen.by_pointer.get(&Arc::as_ptr(data)) {
+                    Some(&index) => index,
+                    None => {
+                        let next = seen.out.len();
+                        let index = *seen.by_bytes.entry(data.clone()).or_insert(next);
+                        if index == next {
+                            seen.out.push(SvgRaster {
+                                format,
+                                data: data.clone(),
+                                uses: 0,
+                            });
+                        }
+                        seen.by_pointer.insert(Arc::as_ptr(data), index);
+                        index
+                    }
+                };
+                seen.out[index].uses += 1;
             }
             if let usvg::Node::Group(group) = node {
-                walk(group, seen, out);
+                walk(group, seen);
             }
-            node.subroots(|root| walk(root, seen, out));
+            node.subroots(|root| walk(root, seen));
         }
     }
-    let mut out = Vec::new();
-    walk(tree.root(), &mut HashSet::new(), &mut out);
-    out
+    let mut seen = Seen::default();
+    walk(tree.root(), &mut seen);
+    seen.out
 }
 
 /// The error for rasters in a figure that take more than
@@ -497,7 +535,11 @@ mod tests {
     fn svg_rasters_count_once_each() {
         let png = png_header(6_000, 6_000);
         let repeated = svg_of(&vec![png.clone(); 10]);
-        assert_eq!(svg_rasters(&repeated).len(), 1);
+        let rasters = svg_rasters(&repeated);
+        assert_eq!(rasters.len(), 1);
+        assert_eq!(rasters[0].uses, 10);
+        let error = svg_rasters_fit(&repeated).unwrap_err();
+        assert!(error.contains("drawn so often"), "{error}");
         let distinct = svg_of(&[png, png_header(6_000, 6_001)]);
         assert_eq!(svg_rasters(&distinct).len(), 2);
         let error = svg_rasters_fit(&distinct).unwrap_err();

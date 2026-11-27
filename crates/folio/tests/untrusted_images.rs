@@ -348,8 +348,7 @@ fn an_image_drawn_often_counts_once() {
 
 /// JBIG2 and CCITT images take their size from their own data or decode
 /// parameters, not the image dictionary; one that claims a huge page is
-/// not decoded (the figure is drawn without it), rather than taking
-/// gigabytes.
+/// refused before it is decoded, rather than taking gigabytes.
 #[test]
 fn a_huge_ccitt_image_behind_a_small_dictionary() {
     let image = stream(
@@ -358,12 +357,32 @@ fn a_huge_ccitt_image_behind_a_small_dictionary() {
          /DecodeParms << /K -1 /Columns 1000000 /Rows 100000 >>",
         b"\x00\x00\x00\x00",
     );
-    read(
-        pdf(
-            "/Resources << /XObject << /I 5 0 R >> >>",
-            b"100 0 0 100 0 0 cm /I Do",
-            &[image],
-        ),
-        "ccitt.pdf",
+    let bytes = pdf(
+        "/Resources << /XObject << /I 5 0 R >> >>",
+        b"100 0 0 100 0 0 cm /I Do",
+        &[image],
     );
+    let message = error(bytes, "ccitt.pdf");
+    cannot_be_read(&message, "PDF");
+    assert!(message.contains("256 MB"), "{message}");
+}
+
+/// An image within the limit drawn over and over is work: each drawing
+/// decodes it again.
+#[test]
+fn a_large_image_drawn_over_and_over() {
+    let image = stream(
+        "/Type /XObject /Subtype /Image /Width 8192 /Height 8192 /ColorSpace /DeviceRGB \
+         /BitsPerComponent 8",
+        b"",
+    );
+    let content = "/I Do ".repeat(10_000);
+    let bytes = pdf(
+        "/Resources << /XObject << /I 5 0 R >> >>",
+        content.as_bytes(),
+        &[image],
+    );
+    let message = error(bytes, "over.pdf");
+    cannot_be_read(&message, "PDF");
+    assert!(message.contains("more work"), "{message}");
 }

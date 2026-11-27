@@ -465,7 +465,16 @@ fn decode_context<'a>(
     let decoded = obj
         .stream
         .decoded_image(&decode_params)
-        .map_err(|_| (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure))
+        // Folio: an image that its own header or decode parameters say is too
+        // large is reported as such.
+        .map_err(|e| {
+            (obj.warning_sink)(match e {
+                hayro_syntax::object::stream::DecodeFailure::ImageTooLarge => {
+                    InterpreterWarning::ImageTooLarge
+                }
+                _ => InterpreterWarning::ImageDecodeFailure,
+            })
+        })
         .ok()?;
 
     let (mut scale_x, mut scale_y) = (1.0, 1.0);

@@ -31,7 +31,7 @@ pub(crate) const NESTED_COST: u64 = 100;
 #[derive(Default)]
 pub(crate) struct Images {
     bytes: u64,
-    objects: Vec<(i32, i32)>,
+    objects: std::collections::HashSet<(i32, i32)>,
 }
 
 #[derive(Default)]
@@ -59,13 +59,19 @@ impl Budget {
     /// Takes `bytes` of decoded image data from what the interpretation may
     /// decode; `false`, taking nothing, when that is more than is left. An
     /// image object (`id`) is taken once: it is decoded again where it is
-    /// drawn again, but one decoding is in memory at a time.
+    /// drawn again, but one decoding is in memory at a time. Each decoding
+    /// also spends work.
     pub(crate) fn take_image_bytes(
         &self,
         id: Option<(i32, i32)>,
         bytes: u64,
         sink: &crate::WarningSinkFn,
     ) -> bool {
+        // Every decoding is work, in proportion to its size (a unit a
+        // kilobyte), so that one image drawn over and over ends too.
+        if !self.spend(bytes / 1024, sink) {
+            return false;
+        }
         let mut images = self.images.lock().unwrap();
         if id.is_some_and(|id| images.objects.contains(&id)) {
             return true;
