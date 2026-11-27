@@ -10,11 +10,37 @@ use super::error::StrResult;
 use super::value::{Angle, Duration, Equality, Fraction, Length, Value as V, compare_once};
 
 fn mismatch(op: &str, lhs: &V, rhs: &V) -> ecow::EcoString {
-    eco_format!(
+    let message = eco_format!(
         "cannot {op} {} and {}",
         a_type(lhs.type_name()),
         a_type(rhs.type_name())
-    )
+    );
+    with_token_advice(message, [lhs, rhs])
+}
+
+/// An operator's error, with advice when an operand is a token reference
+/// (SPEC §5.4): its value is known only when the document is styled, so it
+/// can be computed with only where the style stage evaluates values.
+fn with_token_advice<'a>(
+    message: ecow::EcoString,
+    operands: impl IntoIterator<Item = &'a V>,
+) -> ecow::EcoString {
+    match operands.into_iter().find_map(|v| match v {
+        V::Token(name) => Some(name),
+        _ => None,
+    }) {
+        Some(name) => eco_format!(
+            "{message}: a token's value is known only when the document is styled, \
+             so compute with it in a `#rule` or a stylesheet, as `${name}`"
+        ),
+        None => message,
+    }
+}
+
+/// The error of a unary operator that does not apply to a value.
+fn unary_mismatch(op: &str, value: &V) -> ecow::EcoString {
+    let message = eco_format!("cannot apply {op} to {}", a_type(value.type_name()));
+    with_token_advice(message, [value])
 }
 
 /// A type name with its article: "an int", "a string".
@@ -45,10 +71,7 @@ pub(crate) fn pos(value: V) -> StrResult<V> {
         | V::Ratio(_)
         | V::Fraction(_)
         | V::Duration(_) => Ok(value),
-        v => Err(eco_format!(
-            "cannot apply unary `+` to {}",
-            a_type(v.type_name())
-        )),
+        v => Err(unary_mismatch("unary `+`", &v)),
     }
 }
 
@@ -68,7 +91,7 @@ pub(crate) fn neg(value: V) -> StrResult<V> {
         V::Ratio(v) => V::Ratio(-v),
         V::Fraction(v) => V::Fraction(Fraction(Scalar::new(-v.get()))),
         V::Duration(v) => V::Duration(Duration(Scalar::new(-v.seconds()))),
-        v => bail_str!("cannot apply unary `-` to {}", a_type(v.type_name())),
+        v => return Err(unary_mismatch("unary `-`", &v)),
     })
 }
 
@@ -76,17 +99,9 @@ pub(crate) fn neg(value: V) -> StrResult<V> {
 pub(crate) fn not(value: V) -> StrResult<V> {
     match value {
         V::Bool(b) => Ok(V::Bool(!b)),
-        v => Err(eco_format!(
-            "cannot apply `not` to {}",
-            a_type(v.type_name())
-        )),
+        v => Err(unary_mismatch("`not`", &v)),
     }
 }
-
-macro_rules! bail_str {
-    ($($fmt:tt)*) => { return Err(eco_format!($($fmt)*)) };
-}
-use bail_str;
 
 /// `a + b`. Strings, arrays and content concatenate, dictionaries merge.
 /// The left operand is extended in place when nothing else holds it.
@@ -386,5 +401,37 @@ pub(crate) fn join(lhs: V, rhs: V) -> StrResult<V> {
 impl From<Content> for V {
     fn from(content: Content) -> Self {
         V::Content(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operators_on_a_token_reference_point_to_a_scoped_rule() {
+        let size = || V::Token("body-size".into());
+        let advice = "a token's value is known only when the document is styled, \
+                      so compute with it in a `#rule` or a stylesheet, as `$body-size`";
+        assert_eq!(
+            mul(size(), V::Float(Scalar::new(1.2))).unwrap_err(),
+            format!("cannot multiply a token and a float: {advice}")
+        );
+        assert_eq!(
+            add(V::Int(1), size()).unwrap_err(),
+            format!("cannot add an int and a token: {advice}")
+        );
+        assert_eq!(
+            neg(size()).unwrap_err(),
+            format!("cannot apply unary `-` to a token: {advice}")
+        );
+        // Without a token, the error is as before.
+        assert_eq!(
+            sub(V::Bool(true), V::Int(1)).unwrap_err(),
+            "cannot subtract a bool and an int"
+        );
+        // A token reference is equal to itself only.
+        assert!(equal(&size(), &size()));
+        assert!(!equal(&size(), &V::Token("gap".into())));
     }
 }
