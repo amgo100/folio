@@ -325,7 +325,10 @@ compiler = \"0.0.0\"
 
 /// What [`differential`] inserts into content: markup that opens and closes
 /// blocks, scripts, equations, references and labels, words, and breaks, so that
-/// random edits restructure the document as well as reflow it.
+/// random edits restructure the document as well as reflow it; and footnotes
+/// (one long enough to split across pages), page-number references and
+/// images, so that edits reach the page cache's queue of carried notes, the
+/// layout passes that settle page references, and footnote numbers per page.
 pub const CONTENT_SNIPPETS: &[&str] = &[
     "x",
     "word ",
@@ -366,11 +369,18 @@ pub const CONTENT_SNIPPETS: &[&str] = &[
     "żółć ",
     "biało-czerwony ",
     "A sentence long enough to move a line break or two further down the page. ",
+    "#footnote[A note.]",
+    "#footnote[A note long enough to be split across two pages when its anchor falls near the foot of one: it runs on over several lines, so that the page builder places as much of it as fits below the separator, carries the rest to the next page after a continuation mark, and keeps the carried part in the key of the next page's cache entry. It goes on a little longer still, to be sure that at least one line has to move.]",
+    "#ref(<l>, form: \"page\")",
+    "#ref(<eq:l>, form: \"page\")",
+    "#image(\"assets/wave.png\", alt: \"A wave\", width: 40%)",
+    "#figure[#image(\"assets/sledge.svg\", alt: \"A sledge\", width: 50%)][A sledge.] <l>",
 ];
 
 /// What [`differential`] inserts into stylesheets: rules, declarations of
-/// properties that layout reads, and the punctuation that opens and
-/// closes them.
+/// properties that layout reads (box properties, widows and orphans, page
+/// breaks, the page size and footnote numbering per page), and the
+/// punctuation that opens and closes them.
 pub const SHEET_SNIPPETS: &[&str] = &[
     "{",
     "}",
@@ -395,6 +405,14 @@ pub const SHEET_SNIPPETS: &[&str] = &[
     "page { margin-top: 60mm; }\n",
     "font-size: 9pt;",
     "space-after: 30pt;",
+    "figure { padding: 6pt 10pt; border: 2pt solid #000000; background: #eeeeee; }\n",
+    "paragraph { border: 1pt; padding: 4pt; }\n",
+    "doc { widows: 4; orphans: 4; }\n",
+    "heading { break-before: page; }\n",
+    "heading[level=1] { break-before: odd-page; }\n",
+    "page { page-size: A6; }\n",
+    "page { counter-reset: footnote; }\n",
+    "footnote { font-size: 14pt; }\n",
 ];
 
 /// How many edits [`differential`] applies at most, so that one input stays
