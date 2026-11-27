@@ -1,9 +1,9 @@
 //! The immutable font cache: font files locked in `folio.lock`, stored
-//! under their hash (SPEC §2.3, §2.4).
+//! under their hash (SPEC §2.4, §2.5).
 //!
 //! A file in the cache is named by the SHA-256 hash of its contents. A
 //! file that [`FontCache::insert`] wrote is written once, to a temporary
-//! file that is made read-only and renamed into place, and never changed
+//! file that is renamed into place and made read-only, and never changed
 //! afterwards: a different font has a different hash and so a different
 //! file. That is what makes it safe to memory-map, which this module alone
 //! does in the compiler (the audited exception of SPEC §14.2). A file put
@@ -77,9 +77,10 @@ impl FontCache {
     ///
     /// A file that [`Self::insert`] wrote, which is read-only and carries
     /// the modification time `insert` gives it, is memory-mapped, once per
-    /// process. Any other file, such as one copied into the cache by hand,
-    /// could change while it is in use, so it is read into memory, once per
-    /// process while its length and modification time stay the same.
+    /// process; so is a copy that keeps both. Any other file, such as one
+    /// copied into the cache by hand, could change while it is in use, so
+    /// it is read into memory, once per process while its length and
+    /// modification time stay the same.
     ///
     /// Fails when the file cannot be read, or when its contents do not have
     /// the hash it is stored under: the cache was changed from outside.
@@ -120,10 +121,11 @@ impl FontCache {
     }
 
     /// Stores a font file under its hash, unless the cache has it, and
-    /// returns the hash. The file is written to a temporary file of its own,
-    /// given the modification time that marks it as written here
-    /// ([`stamp`]), made read-only and renamed into place, so a reader never
-    /// sees it half-written and nothing changes it afterwards.
+    /// returns the hash. The file is written to a temporary file of its own
+    /// and given the modification time that marks it as written here
+    /// ([`stamp`]), then renamed into place and made read-only, so a reader
+    /// never sees it half-written and nothing changes it afterwards. Until
+    /// it is read-only, [`Self::get`] reads it rather than mapping it.
     pub fn insert(&self, data: &[u8]) -> io::Result<FontHash> {
         let hash = FontHash::of(data);
         let path = self.path(hash);
@@ -131,24 +133,18 @@ impl FontCache {
             return Ok(hash);
         }
         fs::create_dir_all(&self.dir)?;
-        // Unique per call, so that threads of one process storing the same
-        // file at once do not write to one temporary file.
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let temp = self.dir.join(format!(
-            ".{}.{}.{}.tmp",
-            hash.hex(),
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let (mut file, temp) = self.temporary(hash)?;
         let result = (|| {
-            let mut file = File::create_new(&temp)?;
             file.write_all(data)?;
-            file.set_modified(stamp(hash))?;
+            // Without the stamp the file is only read, never mapped.
+            let _ = file.set_modified(stamp(hash));
             file.sync_all()?;
+            fs::rename(&temp, &path)?;
+            // Read-only after the rename, so that a temporary file left by
+            // a failed rename can still be removed on Windows.
             let mut permissions = file.metadata()?.permissions();
             permissions.set_readonly(true);
-            fs::set_permissions(&temp, permissions)?;
-            fs::rename(&temp, &path)
+            file.set_permissions(permissions)
         })();
         if result.is_err() {
             let _ = fs::remove_file(&temp);
@@ -158,6 +154,27 @@ impl FontCache {
             }
         }
         result.map(|()| hash)
+    }
+
+    /// A new temporary file in the cache for a file with this hash, with a
+    /// name unique per call, so that threads of one process storing the
+    /// same file at once do not write to one file. A name taken by a file
+    /// that a crashed process left behind is passed over.
+    fn temporary(&self, hash: FontHash) -> io::Result<(File, PathBuf)> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        loop {
+            let temp = self.dir.join(format!(
+                ".{}.{}.{}.tmp",
+                hash.hex(),
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match File::create_new(&temp) {
+                Ok(file) => return Ok((file, temp)),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
@@ -178,10 +195,13 @@ fn check(path: &Path, hash: FontHash, found: FontHash) -> io::Result<()> {
 
 /// The modification time [`FontCache::insert`] gives the file it stores
 /// under a hash: a time taken from the hash, which a file copied into the
-/// cache keeps only by a rare coincidence.
+/// cache keeps only by a rare coincidence or when the copy keeps times
+/// (`cp -a`). It is a whole, even number of seconds before 2038, so that
+/// file systems with 32-bit times or 2-second precision store it as given.
 fn stamp(hash: FontHash) -> SystemTime {
     let [a, b, c, d, ..] = hash.0;
-    SystemTime::UNIX_EPOCH + Duration::from_secs(u32::from_be_bytes([a, b, c, d]).into())
+    let seconds = u32::from_be_bytes([a, b, c, d]) & 0x7FFF_FFFE;
+    SystemTime::UNIX_EPOCH + Duration::from_secs(seconds.into())
 }
 
 /// Whether a file of the cache shows that [`FontCache::insert`] wrote it,
@@ -215,14 +235,14 @@ mod map {
         // the metadata of the open handle, that `FontCache::insert` wrote
         // it: read-only for everyone, with the modification time `insert`
         // gives it. `insert` writes each file once to a temporary file of
-        // its own, makes it read-only and renames it into place under the
-        // hash of its contents, and never writes to a file that exists. Any
-        // other file, such as one copied into the cache by hand, is read
+        // its own, renames it into place under the hash of its contents and
+        // makes it read-only, and never writes to a file that exists; a copy
+        // that keeps both marks is read-only too. Any other file, such as one copied into the cache by hand, is read
         // into memory instead. The caller checks the contents against the
         // hash after mapping. What remains is a file changed from outside
         // Folio, against its read-only permission, while a compile runs:
         // the risk accepted by every program that maps fonts, and the
-        // reason only these files are mapped (SPEC §2.3, §14.2).
+        // reason only these files are mapped (SPEC §2.5, §14.2).
         let map = unsafe { Mmap::map(file)? };
         Ok(FontData::from_owner(map))
     }

@@ -320,25 +320,31 @@ fn system_fonts_depend_on_the_build_mode() {
         assert_eq!(found, expected, "{mode:?} {extra}");
         // The hints say what to put in `folio.lock` and where the file
         // goes, and name no command (#328).
-        if let Some(diagnostic) = compiled.diagnostics.iter().find(|d| d.message == message) {
-            assert_eq!(
-                diagnostic.hints[..],
-                [
-                    format!(
-                        "the system font `{}` is not locked: lock it with a `[[font]]` entry \
-                         in `folio.lock` (family `Source Serif 4`, postscript-name \
-                         `SourceSerif4-Regular` and the `sha256:` hash of its file), or put \
-                         the file in the project's `fonts` directory",
-                        system.path
-                    ),
-                    "a locked font is found among the system fonts, or, on a machine that does \
-                     not have it, in the font cache as `fonts/<the hash's 64 hex digits>` in \
-                     Folio's cache directory (`$FOLIO_CACHE_DIR`, by default `folio` in the \
-                     user's cache directory)"
-                        .to_string(),
-                ]
-            );
+        if expected.is_empty() {
+            continue;
         }
+        let diagnostic = compiled
+            .diagnostics
+            .iter()
+            .find(|d| d.message == message)
+            .unwrap();
+        assert_eq!(
+            diagnostic.hints[..],
+            [
+                format!(
+                    "the system font `{}` is not locked: lock it with a `[[font]]` entry \
+                     in `folio.lock` (family `Source Serif 4`, postscript-name \
+                     `SourceSerif4-Regular` and the `sha256:` hash of its file), or put \
+                     the file in the project's `fonts` directory",
+                    system.path
+                ),
+                "a locked font is found among the system fonts, or, on a machine that does \
+                 not have it, in the font cache as `fonts/<the hash's 64 hex digits>` in \
+                 Folio's cache directory (`$FOLIO_CACHE_DIR`, by default `folio` in the \
+                 user's cache directory)"
+                    .to_string(),
+            ]
+        );
     }
 
     // A system font that `folio.lock` locks pins the build.
