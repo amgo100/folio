@@ -144,6 +144,16 @@ impl FontCache {
             // Without the stamp the file is only read, never mapped.
             let _ = file.set_modified(stamp(hash));
             file.sync_all()?;
+            // Windows renames nothing over a read-only file, such as a copy
+            // that kept its mode but not the stamp.
+            #[cfg(windows)]
+            if let Ok(meta) = fs::metadata(&path)
+                && meta.permissions().readonly()
+            {
+                let mut permissions = meta.permissions();
+                permissions.set_readonly(false);
+                let _ = fs::set_permissions(&path, permissions);
+            }
             fs::rename(&temp, &path)?;
             // Read-only after the rename, so that a temporary file left by
             // a failed rename can still be removed on Windows.
