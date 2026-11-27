@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# The patched upstream crates (below) are dependencies, not members: they
+# keep their own lints and tests.
+exclude = ["third_party"]
 
 [workspace.package]
 version = "0.0.0"
@@ -147,3 +150,16 @@ opt-level = 2
 
 [profile.release]
 debug = "line-tables-only"
+
+# Upstream crates whose floating-point code called the platform's maths
+# library, patched to call `libm` (SPEC §2.4, D-300-1), so that SVG figures
+# give the same PDF bytes on every platform. third_party/README.md says what
+# each patch changes; scripts/patch-third-party.sh rebuilds the copies from
+# the crates.io releases. fuzz/Cargo.toml has the same table.
+[patch.crates-io]
+kurbo = { path = "third_party/kurbo" }
+resvg = { path = "third_party/resvg" }
+svgtypes = { path = "third_party/svgtypes" }
+tiny-skia = { path = "third_party/tiny-skia" }
+tiny-skia-path = { path = "third_party/tiny-skia-path" }
+usvg = { path = "third_party/usvg" }
