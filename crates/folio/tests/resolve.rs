@@ -445,4 +445,5 @@ fn a_reference_to_an_item_whose_pattern_counts_nothing_shows_its_values() {
         "+ One\n+ Two <b>\n\nSee @b.\n",
     );
     assert_eq!(paragraphs(&world), ["–~One", "–~Two", "See 2."]);
+    assert!(messages(&world).is_empty(), "{:?}", messages(&world));
 }

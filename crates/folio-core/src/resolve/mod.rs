@@ -365,10 +365,7 @@ impl Resolution {
                 let entry = &mut self.numbers.make_mut()[n];
                 // A reference to the footnote shows its number as the
                 // footnote does: the number, after its supplement if any.
-                let shown = |values: &[u64]| match &footnote.pattern {
-                    Some(pattern) => pattern.format_trimmed(values),
-                    None => Pattern::parse("1.1").format(values),
-                };
+                let shown = |values: &[u64]| shown(footnote.pattern.as_ref(), values);
                 let (old, new) = (shown(&entry.values), shown(&[value]));
                 entry.values = EcoVec::from([value]);
                 entry.number = number.clone();
@@ -1002,13 +999,7 @@ impl Walk<'_> {
         // The pattern the target was numbered with: an item's own, or its
         // enum's (#325).
         let pattern = self.patterns.get(&labelled.target.location);
-        // An element without `numbering`, or with a pattern that shows no
-        // values, still has its counter's values: the reference shows them
-        // as `1.1` would.
-        let shown = match pattern.filter(|p| p.counts()) {
-            Some(pattern) => pattern.format_trimmed(&number.values),
-            None => Pattern::parse("1.1").format(&number.values),
-        };
+        let shown = shown(pattern, &number.values);
         let number_only = matches!(
             style.as_ref().and_then(|s| s.value(self.props, self.ids.ref_format)),
             Some(StyleValue::Keyword(k)) if k.as_str() == "number"
@@ -1122,6 +1113,17 @@ impl Walk<'_> {
         if self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
+    }
+}
+
+/// A number as a reference shows it: formatted by the pattern its element
+/// was numbered with, without the pattern's text before and after. An
+/// element without a pattern, or with one that shows no values, still has
+/// its counter's values, shown as `1.1` would.
+fn shown(pattern: Option<&Pattern>, values: &[u64]) -> EcoString {
+    match pattern.filter(|p| p.counts()) {
+        Some(pattern) => pattern.format_trimmed(values),
+        None => Pattern::parse("1.1").format(values),
     }
 }
 
