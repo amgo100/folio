@@ -10,7 +10,7 @@ use folio_syntax::ast::{self, AstNode, Unit};
 use indexmap::IndexSet;
 
 use super::captures::{captures, free_variables};
-use super::content::{Content, Node};
+use super::content::{Content, Node, stamp};
 use super::element;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::library;
@@ -22,7 +22,9 @@ use super::value::{
 use super::{Cost, Limits, MAX_NESTING, Memo, Mode, eval_file_for, globals, reachable, today};
 use crate::component::Reason;
 use crate::db::{Db, Project, component_host, source_file};
+use crate::locate::Frame;
 use crate::project::ProjectPath;
+use crate::variants;
 
 /// How much stack must be left before an expression is evaluated: enough
 /// for the frames between two expressions, a call through its query
@@ -1482,7 +1484,13 @@ impl<'a> Vm<'a> {
         self.take_on(&memo.recovered);
         self.charge(memo.cost, span)?;
         match &memo.outcome {
-            Ok(value) => Ok(value.clone()),
+            // The memo is shared between call sites: the call's result
+            // takes this site's frame (SPEC §2.3).
+            Ok(value) => {
+                let mut value = value.clone();
+                stamp(&mut value, Frame::Call { span });
+                Ok(value)
+            }
             Err(Stop::Error(error)) => {
                 let mut error = (**error).clone();
                 error.trace_point(
@@ -1687,17 +1695,23 @@ impl<'a> Vm<'a> {
     fn while_loop(&mut self, while_loop: ast::WhileLoop<'_>) -> EvalResult<Value> {
         let mut output = Value::None;
         let body = while_loop.body();
+        let span = while_loop.span();
+        let mut index = 0;
         loop {
-            self.step(while_loop.span())?;
+            self.step(span)?;
             if !self.condition(while_loop.condition())? {
                 break;
             }
-            let value = self.expr(body)?;
+            let mut value = self.expr(body)?;
+            stamp(&mut value, Frame::Iteration { span, index });
+            index += 1;
             output = self.join(output, value, body.span())?;
             if self.leave_loop() {
                 break;
             }
         }
+        // A `while` loop iterates over nothing but its count.
+        variants::record(self.db, span, &[Value::Int(index as i64)], &output);
         Ok(output)
     }
 
@@ -1736,18 +1750,30 @@ impl<'a> Vm<'a> {
         };
         let mut output = Value::None;
         let body = for_loop.body();
-        for item in items {
-            self.step(for_loop.span())?;
+        let span = for_loop.span();
+        for (index, item) in items.iter().cloned().enumerate() {
+            self.step(span)?;
             self.enter();
             let result = self
                 .pattern(for_loop.pattern(), item, true)
                 .and_then(|()| self.expr(body));
             self.exit();
-            output = self.join(output, result?, body.span())?;
+            // Each iteration's instances take its frame, so that iteration
+            // `index` pairs across variants (SPEC §6.1).
+            let mut value = result?;
+            stamp(
+                &mut value,
+                Frame::Iteration {
+                    span,
+                    index: index as u64,
+                },
+            );
+            output = self.join(output, value, body.span())?;
             if self.leave_loop() {
                 break;
             }
         }
+        variants::record(self.db, span, items.iter(), &output);
         Ok(output)
     }
 

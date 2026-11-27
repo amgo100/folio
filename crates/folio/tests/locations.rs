@@ -393,3 +393,53 @@ fn a_loop_over_different_items_is_an_error() {
     ));
     assert!(loop_errors(&world, "exam").is_empty());
 }
+
+#[test]
+fn the_issue_example_pairs_in_a_for_loop() {
+    // #339's example: a `#for` loop whose body reads `variant`.
+    let world = grouped(&format!(
+        "{BANK}#for q in bank {{ if variant == \"markscheme\" or not q.hidden \
+         [= #q.t\n\n] }}\n"
+    ));
+    let exam = headings(&world, "exam");
+    let markscheme = headings(&world, "markscheme");
+    assert_eq!(exam.len(), 2);
+    assert_eq!(markscheme.len(), 3);
+    assert_eq!(exam[0], markscheme[0]);
+    assert_eq!(exam[1], markscheme[2]);
+    assert!(loop_errors(&world, "exam").is_empty());
+    assert!(loop_errors(&world, "markscheme").is_empty());
+
+    // Filtered before the loop, iteration 1 is another question in each
+    // variant: a clear error at the loop instead of wrong numbering.
+    let world = grouped(&format!(
+        "{BANK}#for q in bank.filter(q => variant == \"markscheme\" or not q.hidden) \
+         [= #q.t\n\n]\n"
+    ));
+    for variant in ["exam", "markscheme"] {
+        assert_eq!(loop_errors(&world, variant).len(), 1, "{variant}");
+    }
+}
+
+#[test]
+fn an_inserted_call_renumbers_nothing() {
+    // Each call is named by its call site, so a new call of a helper
+    // before the others leaves their instances alone (#339, item 3).
+    let text = "#let q(t) = [= #t\n\n]\n#q(\"Forces\")\n#q(\"Energy\")\n";
+    let mut world = world(text);
+    let before = elements(&document(&world));
+    let heads = |all: &[(String, String, Location)]| {
+        all.iter()
+            .filter(|(n, ..)| n == "heading")
+            .map(|(_, t, l)| (t.clone(), *l))
+            .collect::<Vec<_>>()
+    };
+    let at = text.find("#q(\"Forces\")").unwrap();
+    world
+        .edit_source("main.fol", at..at, "#q(\"Waves\")\n")
+        .unwrap();
+    let after = elements(&document(&world));
+    let (before, after) = (heads(&before), heads(&after));
+    assert_eq!(after.len(), 3);
+    assert_eq!(&after[1..], &before[..]);
+}

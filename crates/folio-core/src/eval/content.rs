@@ -288,13 +288,15 @@ impl Debug for Content {
 }
 
 /// Records that `frame`, an iteration or a call, made `value`: on the
-/// content it is or holds in arrays and dictionaries ([`Content::stamp`]).
+/// content it is, or that an array or dictionary holds as an item. Content
+/// nested deeper in data is not stamped, so that a call returning a large
+/// table pays nothing for it; its instances are told apart by number.
 pub(crate) fn stamp(value: &mut Value, frame: Frame) {
     match value {
         Value::Content(content) => content.stamp(frame),
         Value::Array(array) => {
             for i in 0..array.len() {
-                if holds_content(&array[i]) {
+                if matches!(array[i], Value::Content(_)) {
                     array.update(i, |item| stamp(item, frame));
                 }
             }
@@ -302,7 +304,7 @@ pub(crate) fn stamp(value: &mut Value, frame: Frame) {
         Value::Dict(dict) => {
             let keys: Vec<EcoString> = dict
                 .iter()
-                .filter(|(_, v)| holds_content(v))
+                .filter(|(_, v)| matches!(v, Value::Content(_)))
                 .map(|(k, _)| k.clone())
                 .collect();
             for key in keys {
@@ -311,11 +313,6 @@ pub(crate) fn stamp(value: &mut Value, frame: Frame) {
         }
         _ => {}
     }
-}
-
-/// Whether a value is content or may hold some.
-fn holds_content(value: &Value) -> bool {
-    matches!(value, Value::Content(_) | Value::Array(_) | Value::Dict(_))
 }
 
 /// A node of the content tree.
