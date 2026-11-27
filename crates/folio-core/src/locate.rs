@@ -208,16 +208,19 @@ impl Frame {
 }
 
 /// A fingerprint of an item a loop iterates over, for
-/// [`Frame::Iteration`]: its data, without the content it holds, which a
-/// variant may make otherwise (an answer shown only in the mark scheme,
-/// `none` in the exam) while the item stays the same; content and `none`
-/// count alike. It walks at most a few hundred values of
-/// the item, so that a large item costs little, and is compared within one
-/// process, never written out.
+/// [`Frame::Iteration`]: its data, not what a variant may make otherwise
+/// while the item stays the same. Content held in the item's data counts
+/// alike, and so does `none` (an answer that is content in the mark scheme
+/// and `none` in the exam); an item that is content itself counts as the
+/// nodes it starts with, by their spans. Functions, arguments and modules
+/// count by their kind alone, since a closure may capture what a variant
+/// sets. It walks at most a few hundred values of the item, so that a
+/// large item costs little, and is compared within one process, never
+/// written out.
 pub(crate) fn item_key(item: &crate::eval::Value) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
 
-    use crate::eval::Value;
+    use crate::eval::{Node, Value};
 
     fn walk(value: &Value, hasher: &mut DefaultHasher, budget: &mut u32) {
         if *budget == 0 {
@@ -225,7 +228,6 @@ pub(crate) fn item_key(item: &crate::eval::Value) -> u64 {
         }
         *budget -= 1;
         match value {
-            // Content, or none where a variant gives none.
             Value::Content(_) | Value::None => 0u8.hash(hasher),
             Value::Array(items) => {
                 1u8.hash(hasher);
@@ -242,6 +244,10 @@ pub(crate) fn item_key(item: &crate::eval::Value) -> u64 {
                     walk(item, hasher, budget);
                 }
             }
+            Value::Func(_) | Value::Args(_) | Value::Module(_) => {
+                4u8.hash(hasher);
+                value.type_name().hash(hasher);
+            }
             other => {
                 3u8.hash(hasher);
                 other.hash(hasher);
@@ -250,7 +256,22 @@ pub(crate) fn item_key(item: &crate::eval::Value) -> u64 {
     }
 
     let mut hasher = DefaultHasher::new();
-    walk(item, &mut hasher, &mut 256);
+    match item {
+        Value::Content(content) => {
+            5u8.hash(&mut hasher);
+            for node in content.nodes().iter().take(16) {
+                let span = match node {
+                    Node::Text { span, .. } | Node::Quote { span, .. } => *span,
+                    Node::Space(span) | Node::Linebreak(span) | Node::Parbreak(span) => *span,
+                    Node::Element(element) => element.span,
+                    Node::Slot(slot) => slot.span,
+                    Node::Rule(rule) => rule.span(),
+                };
+                span.into_raw().get().hash(&mut hasher);
+            }
+        }
+        _ => walk(item, &mut hasher, &mut 256),
+    }
     hasher.finish()
 }
 

@@ -141,7 +141,9 @@ fn compile_now(world: &World, target: Target, variant: Option<&Name>) -> Compile
     let built = pipeline::compile_build(db, build);
     let mut diagnostics = collect(pipeline::compile_build::accumulated::<Reported>(db, build));
     diagnostics.extend(pairing(world, variant));
-    let files = files(pipeline::compile_build::accumulated::<Read>(db, build));
+    let mut read = pipeline::compile_build::accumulated::<Read>(db, build);
+    read.extend(pairing_reads(world, variant));
+    let files = files(read);
     Compiled {
         sources: built.sources.clone(),
         files,
@@ -261,7 +263,11 @@ fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
     diagnostics.extend(pairing(world, variant));
     Checked {
         sources: checked.sources.clone(),
-        files: files(pipeline::check_build::accumulated::<Read>(db, build)),
+        files: files({
+            let mut read = pipeline::check_build::accumulated::<Read>(db, build);
+            read.extend(pairing_reads(world, variant));
+            read
+        }),
         writes: checked.writes,
         diagnostics,
     }
@@ -273,6 +279,16 @@ fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
 /// evaluating them reports belongs to their own builds.
 fn pairing(world: &World, variant: Option<&Name>) -> EcoVec<Diagnostic> {
     folio_core::variants::check_pairing(world.db(), world.project(), variant.cloned()).clone()
+}
+
+/// The files the pairing check read for the other variants of the group,
+/// so that a watcher checks the build again when one of them changes.
+fn pairing_reads<'a>(world: &'a World, variant: Option<&Name>) -> Vec<&'a Read> {
+    folio_core::variants::check_pairing::accumulated::<Read>(
+        world.db(),
+        world.project(),
+        variant.cloned(),
+    )
 }
 
 /// The diagnostics a query and the queries it depends on reported, each

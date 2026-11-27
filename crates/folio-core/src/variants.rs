@@ -103,6 +103,15 @@ pub fn check_pairing(db: &dyn Db, project: Project, variant: Option<Name>) -> Ec
             .map(|(_, (span, name, _))| (*span, name.clone()))
             .collect();
         differ.sort_by_key(|(span, _)| span.into_raw().get());
+        // The variants in the order the group names them, so that each
+        // variant's build reports the same error.
+        let (first, second) = if group.variants.iter().position(|v| v.v == variant)
+            < group.variants.iter().position(|v| v.v == other.v)
+        {
+            (&variant, &other.v)
+        } else {
+            (&other.v, &variant)
+        };
         for (span, name) in differ {
             if !reported.insert(span) {
                 continue;
@@ -111,10 +120,10 @@ pub fn check_pairing(db: &dyn Db, project: Project, variant: Option<Name>) -> Ec
                 Diagnostic::error(
                     span,
                     format!(
-                        "this `{name}` is made by the same loop iteration in `{variant}` and \
-                         `{}` from different items, so numbering group `{}` cannot share its \
-                         number",
-                        other.v, group.name.v
+                        "this `{name}` is made by the same loop iteration in `{first}` and \
+                         `{second}` from different items, so numbering group `{}` cannot \
+                         share its number",
+                        group.name.v
                     ),
                 )
                 .with_code("variant-loop-differs")

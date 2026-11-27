@@ -1203,8 +1203,6 @@ fn array_method(
             }
             Value::Array(out)
         }
-        // Each call's result is an iteration of the call (SPEC §6.1), so
-        // the instances it makes pair across variants by item.
         // Each call is an iteration of the call (SPEC §6.1), so the
         // instances it makes pair across variants by item.
         "map" => {

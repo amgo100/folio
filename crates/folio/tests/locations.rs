@@ -386,6 +386,11 @@ fn a_loop_over_different_items_is_an_error() {
         assert_eq!(errors.len(), 1, "{variant}: {errors:?}");
         assert!(errors[0].contains("this `heading`"), "{errors:?}");
     }
+    // Each variant's build reports the same error, so it is shown once.
+    assert_eq!(
+        loop_errors(&world, "exam"),
+        loop_errors(&world, "markscheme")
+    );
     // A loop that makes nothing a shared counter counts may differ.
     let world = grouped(&format!(
         "{BANK}#bank.filter(q => variant == \"markscheme\" or not q.hidden)\
@@ -572,4 +577,28 @@ fn content_of_an_item_does_not_tell_items_apart() {
          #for q in bank { if variant == \"markscheme\" or not q.hidden [= #q.t\n\n] }\n",
     );
     pairs_by_text(&world);
+}
+
+#[test]
+fn content_made_before_a_loop_and_closures_in_items() {
+    // Content made before a loop keeps the location it was made with:
+    // a loop that places some of it by variant pairs each piece with
+    // itself, so it is no error (#360 review).
+    pairs_by_text(&grouped(
+        "#let qs = ([= A\n\n], [= B\n\n], [= C\n\n])\n\
+         #for q in qs.enumerate().filter(p => variant == \"markscheme\" or p.at(0) != 1) { \
+         q.at(1) }\n",
+    ));
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#let qs = bank.map(q => [= #q.t\n\n])\n\
+         #for q in qs.enumerate().filter(p => variant == \"markscheme\" or p.at(0) != 1) {{ \
+         q.at(1) }}\n"
+    )));
+    // A closure in an item, which captures what a variant sets, does not
+    // make the items differ.
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#let mark = if variant == \"markscheme\" {{ 2 }} else {{ 0 }}\n\
+         #for q in bank.map(q => (t: q.t, hidden: q.hidden, fmt: x => x * mark)) {{ \
+         if variant == \"markscheme\" or not q.hidden [= #q.t\n\n] }}\n"
+    )));
 }
