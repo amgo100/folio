@@ -1,0 +1,114 @@
+#doc(title: [Physics: Paper 1], subject: "A-level Physics practice paper: mechanics, electricity and waves")
+
+// The acceptance exam of SPEC §15: a question paper written as a physics
+// teacher would write it, with maths, quantities, references, footnotes
+// and figures. Its mark scheme follows with the exam component (M2).
+
+*Time allowed:* 1 hour 15 minutes. *Total for this paper:* 50 marks.
+
+Answer *all* questions in the spaces provided. The marks for each question are shown in brackets.
+
+- Use black ink or ball-point pen. You may use a pencil for diagrams.
+- Show your working in every calculation, and give units with your answers.
+- Data and formulae that you may need are given at the end of the paper, on #ref(<sec:data>, form: "page").
+
+= Uniform acceleration <q:cyclist>
+
+A cyclist rides along a straight, level road. She passes a marker post at #qty(4.0, "m s^-1") and then accelerates uniformly at #qty("0.80", "m s^-2") for #qty(6.0, "s").
+
++ Calculate her speed at the end of the acceleration. *[2]*
++ Show that she travels about #qty(38, "m") while she accelerates. *[2]*
++ The combined mass of the cyclist and her bicycle is #qty(85, "kg"). Newton's second law relates the resultant force on a body to its acceleration: $vec(F) = m vec(a)$.
+  + Explain why the law is written in terms of vectors. *[1]*
+  + Calculate the resultant force on the cyclist while she accelerates. *[1]*
+
+= Projectile motion <q:ball>
+
+A ball is kicked from level ground with a velocity of #qty(18, "m s^-1") at #qty(35, "deg") to the horizontal.#footnote[Treat the ball as a particle, and ignore air resistance in parts (a) to (c).] Use the equations of motion, (@eq:v[]) to (@eq:s2[]) on #ref(<eq:v>, form: "page").
+
++ Calculate the horizontal and vertical components of the ball's initial velocity. *[2]*
++ Show that the ball is in the air for about #qty(2.1, "s"). *[2]*
++ Calculate the horizontal distance the ball travels before it lands. *[2]*
++ State and explain how the distance would change if air resistance were not negligible. *[2]*
+
+= Forces in equilibrium <q:sledge>
+
+A child pulls a sledge across level snow with a rope, as shown in @fig:sledge. The tension $T$ in the rope is #qty(40, "N") and the rope is at an angle $theta = qty(25, "deg")$ to the horizontal. The sledge has a mass of #qty(12, "kg") and moves at a constant velocity.
+
+#figure[#image("assets/sledge.svg", alt: "A sledge on level snow pulled by a rope to the right at an angle theta above the horizontal. Arrows show the tension T along the rope, the weight W straight down, the normal contact force R straight up and the friction F to the left along the snow.", width: 70%)][The forces on the sledge: the tension $T$, the weight $W$, the normal contact force $R$ and the friction $F$.] <fig:sledge>
+
++ Explain why the resultant force on the sledge is zero. *[1]*
++ Calculate the frictional force $F$ on the sledge. *[2]*
++ Calculate the normal contact force $R$ on the sledge. *[2]*
++ Calculate the work done by the tension in the rope as the sledge moves #qty(25, "m"). *[2]*
+
+= Resistivity and internal resistance <q:wire>
+
+A student makes a resistor from a wire of length #qty("1.50", "m") and cross-sectional area #qty("0.20", "mm^2"). The resistivity of the metal#footnote[The resistivity of constantan at #qty(20, "degC"). It changes little with temperature, which is why the alloy is used for resistors.] is #qty(4.9e-7, "ohm m").
+
++ Show that the resistance of the wire is about #qty(3.7, "ohm"). *[2]*
++ The wire is connected across a cell of electromotive force $epsilon = qty(1.50, "V")$ and internal resistance $r = qty(0.80, "ohm")$.
+  + Calculate the current in the wire. *[2]*
+  + Calculate the potential difference across the terminals of the cell. *[1]*
++ Calculate the number of electrons that pass through the wire in #qty(2.0, "min"). *[2]*
+
+= Progressive waves <q:scope>
+
+A microphone connected to an oscilloscope detects the sound from a loudspeaker. @fig:trace shows the trace on the screen. The time-base is set to #qty("0.50", "ms") per division and the Y-gain to #qty(2.0, "V") per division.
+
+#figure[#image("assets/trace.png", alt: "An oscilloscope screen of ten by eight divisions showing a sine wave. One cycle spans four horizontal divisions, and the peaks are two and a half divisions above and below the centre line.", width: 55%)][The trace on the oscilloscope screen.] <fig:trace>
+
++ Determine the frequency of the sound. *[2]*
++ Determine the peak voltage of the signal from the microphone. *[1]*
++ The speed of sound in air is #qty(340, "m s^-1"). Calculate the wavelength of the sound. *[2]*
++ Explain the difference between a progressive wave and a stationary wave in terms of the phase of neighbouring points. *[3]*
+
+= Interference <q:slits>
+
+Light of wavelength #qty(633, "nm") from a laser passes through two narrow slits. The slit separation is $s = qty(0.25, "mm", pm: 0.01)$ and the fringes are seen on a screen at a distance $D = qty(2.40, "m")$ from the slits.
+
++ Calculate the fringe separation $w$, using equation (@eq:young[]). *[2]*
++ Explain why the two slits act as coherent sources. *[2]*
++ Calculate the percentage uncertainty in $w$ that the uncertainty in $s$ alone gives. *[2]*
+
+= Stationary waves <q:string>
+
+A string of length #qty(0.65, "m") is stretched between two fixed points with a tension of #qty(52, "N"). Its mass per unit length is $mu = qty(1.2e-3, "kg m^-1")$. The frequency of its first harmonic is given by equation (@eq:string[]), which is equivalent to $f = 1/(2 L) sqrt(T/mu)$.
+
++ Calculate the frequency of the first harmonic. *[3]*
++ State the positions of the nodes and the antinodes when the string vibrates at its first harmonic. *[2]*
++ The tension is increased to four times its value. State the new frequency of the first harmonic, and explain your answer. *[2]*
++ @q:ball[Question], on #ref(<q:ball>, form: "page"), assumed no air resistance. Suggest why a similar assumption is reasonable for the string in this question. *[1]*
+
+= Data and formulae <sec:data>
+
+*Data.* The acceleration of free fall is $g = qty(9.81, "m s^-2")$ and the elementary charge is $e = qty(1.60e-19, "C")$.#footnote[Values are given to three significant figures, which is enough for every question in this paper.]
+
+*Uniformly accelerated motion*
+
+$ v &= u + a t <eq:v> \
+  s &= u t + 1/2 a t^2 <eq:s> \
+  v^2 &= u^2 + 2 a s <eq:v2> \
+  s &= 1/2 (u + v) t <eq:s2> $
+
+*Forces and work*
+
+$ vec(F) = m vec(a) <eq:newton> $
+
+$ W = F s cos theta <eq:work> $
+
+*Electricity*
+
+$ R = (rho L) / A <eq:rho> $
+
+$ epsilon = I (R + r) <eq:emf> $
+
+$ Delta Q = I Delta t <eq:charge> $
+
+*Waves*
+
+$ v = f lambda <eq:wave> $
+
+$ w = (lambda D) / s <eq:young> $
+
+$:tex f = \frac{1}{2L} \sqrt{\frac{T}{\mu}} \label{eq:string} $

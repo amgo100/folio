@@ -1,0 +1,23 @@
+// The look of the acceptance exam (SPEC §15): an A-level question paper.
+// Until the exam component exists (M2), questions are numbered headings
+// and their parts numbered lists.
+page { page-size: A4; margin-top: 22mm; margin-bottom: 22mm; margin-inner: 20mm; margin-outer: 20mm; }
+doc { font: "STIX Two Text"; font-size: 11pt; math-font: "STIX Two Math"; justify: true; hyphenate: true; }
+doc > title { font: "Source Sans 3"; font-size: 18pt; }
+
+// Questions: "1 Uniform acceleration", numbered through the paper.
+heading { font: "Source Sans 3"; font-size: 13pt; space-before: 16pt; space-after: 6pt; }
+heading[level=1] { numbering: "1"; }
+#{sec:data} { numbering: none; }
+
+// Parts (a), (b) and their parts (i), (ii).
+enum { numbering: "(a)"; }
+enum enum { numbering: "(i)"; }
+enum-item { space-before: 5pt; }
+list-item { marker: "•"; }
+
+// Equations of the data section are numbered, figures are captioned
+// "Figure 1: …".
+math { numbering: "(1)"; space-before: 4pt; space-after: 4pt; }
+figure { numbering: "1"; space-before: 10pt; space-after: 10pt; }
+figure > caption { font-style: italic; }

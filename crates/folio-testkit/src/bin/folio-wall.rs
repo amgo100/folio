@@ -11,7 +11,7 @@
 //! - the scenarios: each runs once to warm up, then `N` times (20 by
 //!   default), and its 95th percentile is compared with its bounds. The
 //!   M1 exit check, the preview updated within 80 ms of an edit, is
-//!   `watch-edit`: the exam of the test corpus served by `folio watch`'s
+//!   `watch-edit`: the acceptance exam of the test corpus served by `folio watch`'s
 //!   preview ([`folio_preview`]), an edit written to disk, and the time
 //!   until a websocket client has received the display lists of the pages
 //!   it changed;
@@ -107,13 +107,13 @@ struct Watching {
     edited: String,
 }
 
-/// The corpus project that `watch-edit` previews: the exam, until the
-/// acceptance exam replaces it (#57).
-const WATCHED: &str = "exam";
+/// The corpus project that `watch-edit` previews: the acceptance exam of
+/// SPEC §15, whose preview the M1 exit check times.
+const WATCHED: &str = "acceptance";
 
-/// The edit `watch-edit` writes: a number in a question on the second
-/// page.
-const WATCH_EDIT: (&str, &str) = ("weight 260 N", "weight 261 N");
+/// The edit `watch-edit` writes: a quantity in a question on the second
+/// page, under the figure of the sledge.
+const WATCH_EDIT: (&str, &str) = ("sledge moves #qty(25,", "sledge moves #qty(26,");
 
 /// Copies a directory into another, recursively.
 fn copy_dir(from: &Path, to: &Path) {
@@ -152,7 +152,7 @@ fn watching() -> Prepared {
     let text = std::fs::read_to_string(&file).expect("the entry file");
     assert!(
         text.contains(WATCH_EDIT.0),
-        "the edit's text is in the exam"
+        "the edit's text is in the acceptance exam"
     );
     let edited = text.replacen(WATCH_EDIT.0, WATCH_EDIT.1, 1);
     Prepared::Watching(Box::new(Watching {
@@ -399,7 +399,7 @@ fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             name: "watch-edit",
-            what: "the corpus exam in `folio watch`, an edit on disk to changed display lists",
+            what: "the acceptance exam in `folio watch`, an edit on disk to changed display lists",
             bounds: Some(Bounds {
                 gated: true,
                 ..PREVIEW

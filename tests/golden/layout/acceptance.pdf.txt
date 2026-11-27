@@ -1,0 +1,649 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 595.28 × 841.89, 4 page(s)
+page 1 595.28 × 841.89, 26 line(s)
+  box (56.69, 62.36) 481.89 × 717.17 main.fol:1:2 baselines 21.57..644.72
+    box (0.00, 0.00) 481.89 × 647.34 main.fol:1:2 baselines 21.57..644.72
+      box (0.00, 0.00) 481.89 × 31.02 main.fol:1:2 baselines 21.57..21.57 keep penalty 10000
+        text (0.00, 21.57) SourceSans3-Bold 18.00 w 128.21 16 glyph(s) "Physics: Paper 1"
+      box (0.00, 49.02) 481.89 × 18.15 main.fol:7:1 baselines 11.96..11.96
+        text (0.00, 11.96) STIXTwoText-Bold 11.00 w 73.05 13 glyph(s) "Time allowed:"
+        text (73.05, 11.96) STIXTwoText-Regular 11.00 w 92.38 20 glyph(s) " 1 hour 15 minutes. "
+        text (165.43, 11.96) STIXTwoText-Bold 11.00 w 100.86 21 glyph(s) "Total for this paper:"
+        text (266.29, 11.96) STIXTwoText-Regular 11.00 w 47.89 10 glyph(s) " 50 marks."
+      box (0.00, 72.67) 481.89 × 18.15 main.fol:9:1 baselines 11.96..11.96
+        text (0.00, 11.96) STIXTwoText-Regular 11.00 w 38.63 7 glyph(s) "Answer "
+        text (38.63, 11.96) STIXTwoText-Bold 11.00 w 13.00 3 glyph(s) "all"
+        text (51.63, 11.96) STIXTwoText-Regular 11.00 w 396.54 85 glyph(s) " questions in the spaces provided. The marks for each question are shown in brackets."
+      box (0.00, 96.32) 481.89 × 58.85 main.fol:11:1 baselines 11.96..52.66
+        box (16.50, 0.00) 465.39 × 18.15 main.fol:11:1 baselines 11.96..11.96
+          box (0.00, 0.00) 465.39 × 18.15 main.fol:11:3 baselines 11.96..11.96
+            text (0.00, 11.96) STIXTwoText-Regular 11.00 w 7.61 2 glyph(s) "•\u{a0}"
+            text (7.61, 11.96) STIXTwoText-Regular 11.00 w 310.04 67 glyph(s) "Use black ink or ball-point pen. You may use a pencil for diagrams."
+        box (16.50, 20.35) 465.39 × 18.15 main.fol:12:1 baselines 11.96..11.96
+          box (0.00, 0.00) 465.39 × 18.15 main.fol:12:3 baselines 11.96..11.96
+            text (0.00, 11.96) STIXTwoText-Regular 11.00 w 7.61 2 glyph(s) "•\u{a0}"
+            text (7.61, 11.96) STIXTwoText-Regular 11.00 w 345.83 73 glyph(s) "Show your working in every calculation, and give units with your answers."
+        box (16.50, 40.70) 465.39 × 18.15 main.fol:13:1 baselines 11.96..11.96
+          box (0.00, 0.00) 465.39 × 18.15 main.fol:13:3 baselines 11.96..11.96
+            text (0.00, 11.96) STIXTwoText-Regular 11.00 w 7.61 2 glyph(s) "•\u{a0}"
+            text (7.61, 11.96) STIXTwoText-Regular 11.00 w 346.73 74 glyph(s) "Data and formulae that you may need are given at the end of the paper, on "
+            text (354.34, 11.96) STIXTwoText-Regular 11.00 w 29.70 6 glyph(s) "page\u{a0}4"
+            text (384.04, 11.96) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+      box (0.00, 171.17) 481.89 × 202.62 main.fol:15:1 baselines 16.58..196.43
+        box (0.00, 0.00) 481.89 × 24.39 main.fol:15:1 baselines 16.58..16.58 keep penalty 10000
+          text (0.00, 16.58) SourceSans3-Bold 13.00 w 129.66 22 glyph(s) "1\u{a0}Uniform acceleration"
+        box (0.00, 30.39) 481.89 × 37.34 main.fol:17:1 baselines 12.46..31.14
+          text (0.00, 12.46) STIXTwoText-Regular 11.00 w 334.40 74 glyph(s) "A cyclist rides along a straight, level road. She passes a marker post at "
+          box (334.40, 3.58) 48.10 × 9.00 main.fol:17:76
+            text (0.00, 8.88) STIXTwoMath-Regular 11.00 w 13.59 3 glyph(s) "4.0"
+            text (19.09, 8.88) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+            text (33.96, 8.88) STIXTwoMath-Regular 11.00 w 4.35 1 glyph(s) "s"
+            text (38.30, 4.92) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+            text (43.85, 4.92) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "1"
+          text (382.50, 12.46) STIXTwoText-Regular 11.00 w 99.39 21 glyph(s) " and then accelerates"
+          text (0.00, 31.14) STIXTwoText-Regular 11.00 w 60.66 13 glyph(s) "uniformly at "
+          box (60.66, 22.22) 53.54 × 9.05 main.fol:17:130
+            text (0.00, 8.92) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "0.80"
+            text (24.53, 8.92) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+            text (39.40, 8.92) STIXTwoMath-Regular 11.00 w 4.35 1 glyph(s) "s"
+            text (43.75, 4.96) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+            text (49.29, 4.96) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
+          text (114.21, 31.14) STIXTwoText-Regular 11.00 w 18.38 5 glyph(s) " for "
+          box (132.59, 24.04) 23.43 × 7.24 main.fol:17:157
+            text (0.00, 7.11) STIXTwoMath-Regular 11.00 w 13.59 3 glyph(s) "6.0"
+            text (19.09, 7.11) STIXTwoMath-Regular 11.00 w 4.35 1 glyph(s) "s"
+          text (156.02, 31.14) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+        box (0.00, 73.22) 481.89 × 129.40 main.fol:19:1 baselines 11.96..123.21
+          box (16.50, 0.00) 465.39 × 18.15 main.fol:19:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:19:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.41 4 glyph(s) "(a)\u{a0}"
+              text (15.41, 11.96) STIXTwoText-Regular 11.00 w 233.65 52 glyph(s) "Calculate her speed at the end of the acceleration. "
+              text (249.06, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 23.15) 465.39 × 18.15 main.fol:20:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:20:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.87 4 glyph(s) "(b)\u{a0}"
+              text (15.87, 11.96) STIXTwoText-Regular 11.00 w 129.76 28 glyph(s) "Show that she travels about "
+              box (145.63, 4.84) 25.76 × 7.26 main.fol:20:32
+                text (0.00, 7.12) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "38"
+                text (16.39, 7.12) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+              text (171.39, 11.96) STIXTwoText-Regular 11.00 w 105.34 24 glyph(s) " while she accelerates. "
+              text (276.73, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 46.30) 465.39 × 83.10 main.fol:21:1 baselines 11.96..76.91
+            box (0.00, 0.00) 465.39 × 36.30 main.fol:21:3 baselines 11.96..30.11
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 14.23 4 glyph(s) "(c)\u{a0}"
+              text (14.23, 11.96) STIXTwoText-Regular 11.00 w 231.78 52 glyph(s) "The combined mass of the cyclist and her bicycle is "
+              box (246.00, 4.19) 27.57 × 10.35 main.fol:21:56
+                text (0.00, 7.77) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "85"
+                text (16.39, 7.77) STIXTwoMath-Regular 11.00 w 11.18 2 glyph(s) "kg"
+              text (273.57, 11.96) STIXTwoText-Regular 11.00 w 191.82 43 glyph(s) ". Newton’s second law relates the resultant"
+              text (0.00, 30.11) STIXTwoText-Regular 11.00 w 160.12 37 glyph(s) "force on a body to its acceleration: "
+              box (160.12, 22.88) 20.83 × 7.23 main.fol:21:150
+                text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 6.80 1 glyph(s) "𝐅"
+                text (9.85, 7.23) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+              box (180.95, 24.76) 14.94 × 5.47 main.fol:21:150
+                text (0.00, 5.35) STIXTwoMath-Regular 11.00 w 9.13 1 glyph(s) "𝑚"
+                text (9.13, 5.35) STIXTwoMath-Regular 11.00 w 5.81 1 glyph(s) "𝐚"
+              text (195.88, 30.11) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+            box (0.00, 41.80) 465.39 × 41.30 main.fol:22:3 baselines 11.96..35.11
+              box (16.50, 0.00) 448.89 × 18.15 main.fol:22:3 baselines 11.96..11.96
+                box (0.00, 0.00) 448.89 × 18.15 main.fol:22:5 baselines 11.96..11.96
+                  text (0.00, 11.96) STIXTwoText-Regular 11.00 w 13.27 4 glyph(s) "(i)\u{a0}"
+                  text (13.27, 11.96) STIXTwoText-Regular 11.00 w 234.91 52 glyph(s) "Explain why the law is written in terms of vectors. "
+                  text (248.17, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[1]"
+              box (16.50, 23.15) 448.89 × 18.15 main.fol:23:3 baselines 11.96..11.96
+                box (0.00, 0.00) 448.89 × 18.15 main.fol:23:5 baselines 11.96..11.96
+                  text (0.00, 11.96) STIXTwoText-Regular 11.00 w 16.40 5 glyph(s) "(ii)\u{a0}"
+                  text (16.40, 11.96) STIXTwoText-Regular 11.00 w 300.20 68 glyph(s) "Calculate the resultant force on the cyclist while she accelerates. "
+                  text (316.60, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[1]"
+      box (0.00, 389.79) 481.89 × 160.29 main.fol:25:1 baselines 16.57..154.09
+        box (0.00, 0.00) 481.89 × 24.39 main.fol:25:1 baselines 16.57..16.57 keep penalty 10000
+          text (0.00, 16.57) SourceSans3-Bold 13.00 w 108.61 19 glyph(s) "2\u{a0}Projectile motion"
+        box (0.00, 30.39) 481.89 × 36.80 main.fol:27:1 baselines 12.46..30.61
+          text (0.00, 12.46) STIXTwoText-Regular 11.00 w 235.62 54 glyph(s) "A ball is kicked from level ground with a velocity of "
+          box (235.62, 3.57) 45.40 × 9.01 main.fol:27:56
+            text (0.00, 8.88) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "18"
+            text (16.39, 8.88) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+            text (31.26, 8.88) STIXTwoMath-Regular 11.00 w 4.35 1 glyph(s) "s"
+            text (35.61, 4.92) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+            text (41.15, 4.92) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "1"
+          text (281.03, 12.46) STIXTwoText-Regular 11.00 w 12.85 4 glyph(s) " at "
+          box (293.87, 4.78) 19.06 × 7.82 main.fol:27:78
+            text (0.00, 7.68) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "35"
+            text (14.56, 7.68) STIXTwoMath-Regular 11.00 w 4.50 1 glyph(s) "°"
+          text (312.93, 12.46) STIXTwoText-Regular 11.00 w 81.03 19 glyph(s) " to the horizontal."
+          text (393.96, 9.76) STIXTwoText-Regular 7.70 w 3.81 1 glyph(s) "1"
+          text (397.78, 12.46) STIXTwoText-Regular 11.00 w 84.11 18 glyph(s) " Use the equations"
+          box (0.00, 286.33) 481.89 × 10.66 main.fol:27:112 baselines 8.56..8.56
+            box (0.00, 0.00) 481.89 × 10.66 main.fol:27:121 baselines 8.56..8.56
+              text (0.00, 5.87) STIXTwoText-Regular 7.70 w 5.62 2 glyph(s) "1\u{a0}"
+              text (5.62, 8.56) STIXTwoText-Regular 8.80 w 256.68 76 glyph(s) "Treat the ball as a particle, and ignore air resistance in parts (a) to (c)."
+          text (0.00, 30.61) STIXTwoText-Regular 11.00 w 54.84 12 glyph(s) "of motion, ("
+          text (54.84, 30.61) STIXTwoText-Regular 11.00 w 5.45 1 glyph(s) "1"
+          text (60.28, 30.61) STIXTwoText-Regular 11.00 w 21.78 6 glyph(s) ") to ("
+          text (82.06, 30.61) STIXTwoText-Regular 11.00 w 5.45 1 glyph(s) "4"
+          text (87.50, 30.61) STIXTwoText-Regular 11.00 w 20.93 5 glyph(s) ") on "
+          text (108.44, 30.61) STIXTwoText-Regular 11.00 w 29.70 6 glyph(s) "page\u{a0}4"
+          text (138.14, 30.61) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+        box (0.00, 72.69) 481.89 × 87.60 main.fol:29:1 baselines 11.96..81.41
+          box (16.50, 0.00) 465.39 × 18.15 main.fol:29:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:29:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.41 4 glyph(s) "(a)\u{a0}"
+              text (15.41, 11.96) STIXTwoText-Regular 11.00 w 358.18 81 glyph(s) "Calculate the horizontal and vertical components of the ball’s initial velocity. "
+              text (373.59, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 23.15) 465.39 × 18.15 main.fol:30:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:30:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.87 4 glyph(s) "(b)\u{a0}"
+              text (15.87, 11.96) STIXTwoText-Regular 11.00 w 186.44 43 glyph(s) "Show that the ball is in the air for about "
+              box (202.31, 4.87) 23.43 × 7.21 main.fol:30:47
+                text (0.00, 7.08) STIXTwoMath-Regular 11.00 w 13.59 3 glyph(s) "2.1"
+                text (19.09, 7.08) STIXTwoMath-Regular 11.00 w 4.35 1 glyph(s) "s"
+              text (225.74, 11.96) STIXTwoText-Regular 11.00 w 5.28 2 glyph(s) ". "
+              text (231.02, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 46.30) 465.39 × 18.15 main.fol:31:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:31:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.04 4 glyph(s) "(c)\u{a0}"
+              text (15.04, 11.96) STIXTwoText-Regular 11.00 w 297.11 68 glyph(s) "Calculate the horizontal distance the ball travels before it lands. "
+              text (312.15, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 69.45) 465.39 × 18.15 main.fol:32:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:32:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 16.06 4 glyph(s) "(d)\u{a0}"
+              text (16.06, 11.96) STIXTwoText-Regular 11.00 w 398.52 87 glyph(s) "State and explain how the distance would change if air resistance were not negligible. "
+              text (414.58, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+      box (0.00, 566.08) 481.89 × 81.26 main.fol:34:1 baselines 16.57..78.64
+        box (0.00, 0.00) 481.89 × 24.39 main.fol:34:1 baselines 16.57..16.57 keep penalty 10000
+          text (0.00, 16.57) SourceSans3-Bold 13.00 w 129.92 23 glyph(s) "3\u{a0}Forces in equilibrium"
+        box (0.00, 30.39) 481.89 × 50.87 main.fol:36:1 baselines 11.96..48.26
+          text (0.00, 11.96) STIXTwoText-Regular 11.00 w 306.44 66 glyph(s) "A child pulls a sledge across level snow with a rope, as shown in "
+          text (306.44, 11.96) STIXTwoText-Regular 11.00 w 38.91 8 glyph(s) "Figure\u{a0}1"
+          text (345.35, 11.96) STIXTwoText-Regular 11.00 w 64.13 14 glyph(s) ". The tension "
+          box (409.48, 4.73) 7.43 × 7.23 main.fol:36:92
+            text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 7.43 1 glyph(s) "𝑇"
+          text (416.90, 11.96) STIXTwoText-Regular 11.00 w 64.99 15 glyph(s) " in the rope is"
+          box (0.00, 22.88) 24.55 × 7.35 main.fol:36:112
+            text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "40"
+            text (16.39, 7.23) STIXTwoMath-Regular 11.00 w 8.16 1 glyph(s) "N"
+          text (24.55, 30.11) STIXTwoText-Regular 11.00 w 126.26 29 glyph(s) " and the rope is at an angle "
+          box (150.81, 22.22) 19.96 × 8.04 main.fol:36:153
+            text (0.00, 7.89) STIXTwoMath-Regular 11.00 w 5.93 1 glyph(s) "𝜃"
+            text (8.98, 7.89) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          box (170.77, 22.43) 19.06 × 7.82 main.fol:36:153
+            text (0.00, 7.68) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "25"
+            text (14.56, 7.68) STIXTwoMath-Regular 11.00 w 4.50 1 glyph(s) "°"
+          text (189.82, 30.11) STIXTwoText-Regular 11.00 w 200.97 45 glyph(s) " to the horizontal. The sledge has a mass of "
+          box (390.80, 22.34) 27.57 × 10.35 main.fol:36:223
+            text (0.00, 7.77) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "12"
+            text (16.39, 7.77) STIXTwoMath-Regular 11.00 w 11.18 2 glyph(s) "kg"
+          text (418.37, 30.11) STIXTwoText-Regular 11.00 w 63.52 13 glyph(s) " and moves at"
+          text (0.00, 48.26) STIXTwoText-Regular 11.00 w 88.03 20 glyph(s) "a constant velocity."
+    shape (0.00, 703.51) M(0.00, 0.00) L(160.63, 0.00) stroke #000000ff 0.50 Butt Miter
+page 2 595.28 × 841.89, 18 line(s)
+  box (56.69, 62.36) 481.89 × 717.17 main.fol:1:2 baselines 215.51..638.09
+    box (0.00, 0.00) 481.89 × 640.70 main.fol:1:2 baselines 215.51..638.09
+      box (0.00, 0.00) 481.89 × 342.54 main.fol:34:1 baselines 215.51..336.34
+        box (0.00, 0.00) 481.89 × 244.94 main.fol:38:2 baselines 215.51..238.74
+          box (0.00, 0.00) 481.89 × 221.29 main.fol:38:10 baselines 215.51..215.51
+            box (72.28, 0.00) 337.32 × 215.51 main.fol:38:10
+              image (0.00, 0.00) 337.32 × 215.51 SVG e4b8f71af57aa68e main.fol:38:10
+          box (0.00, 226.79) 481.89 × 18.15 main.fol:38:2 baselines 11.96..11.96
+            text (0.00, 11.96) STIXTwoText-Italic 11.00 w 202.81 48 glyph(s) "Figure\u{a0}1: The forces on the sledge: the tension "
+            box (202.81, 4.73) 7.43 × 7.23 main.fol:38:345
+              text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 7.43 1 glyph(s) "𝑇"
+            text (210.24, 11.96) STIXTwoText-Italic 11.00 w 53.08 13 glyph(s) ", the weight "
+            box (263.31, 4.73) 11.14 × 7.29 main.fol:38:361
+              text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 11.14 1 glyph(s) "𝑊"
+            text (274.46, 11.96) STIXTwoText-Italic 11.00 w 116.52 27 glyph(s) ", the normal contact force "
+            box (390.98, 4.73) 6.99 × 7.23 main.fol:38:391
+              text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 6.99 1 glyph(s) "𝑅"
+            text (397.96, 11.96) STIXTwoText-Italic 11.00 w 74.14 18 glyph(s) " and the friction "
+            box (472.10, 4.73) 7.13 × 7.23 main.fol:38:412
+              text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 7.13 1 glyph(s) "𝐹"
+            text (479.23, 11.96) STIXTwoText-Italic 11.00 w 2.66 1 glyph(s) "."
+        box (0.00, 254.94) 481.89 × 87.60 main.fol:40:1 baselines 11.96..81.41
+          box (16.50, 0.00) 465.39 × 18.15 main.fol:40:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:40:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.41 4 glyph(s) "(a)\u{a0}"
+              text (15.41, 11.96) STIXTwoText-Regular 11.00 w 246.63 55 glyph(s) "Explain why the resultant force on the sledge is zero. "
+              text (262.04, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[1]"
+          box (16.50, 23.15) 465.39 × 18.15 main.fol:41:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:41:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.87 4 glyph(s) "(b)\u{a0}"
+              text (15.87, 11.96) STIXTwoText-Regular 11.00 w 134.79 31 glyph(s) "Calculate the frictional force "
+              box (150.67, 4.73) 7.13 × 7.23 main.fol:41:34
+                text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 7.13 1 glyph(s) "𝐹"
+              text (157.80, 11.96) STIXTwoText-Regular 11.00 w 68.91 16 glyph(s) " on the sledge. "
+              text (226.71, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 46.30) 465.39 × 18.15 main.fol:42:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:42:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.04 4 glyph(s) "(c)\u{a0}"
+              text (15.04, 11.96) STIXTwoText-Regular 11.00 w 162.75 35 glyph(s) "Calculate the normal contact force "
+              box (177.78, 4.73) 6.99 × 7.23 main.fol:42:38
+                text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 6.99 1 glyph(s) "𝑅"
+              text (184.77, 11.96) STIXTwoText-Regular 11.00 w 68.91 16 glyph(s) " on the sledge. "
+              text (253.68, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 69.45) 465.39 × 18.15 main.fol:43:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:43:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 16.06 4 glyph(s) "(d)\u{a0}"
+              text (16.06, 11.96) STIXTwoText-Regular 11.00 w 330.59 71 glyph(s) "Calculate the work done by the tension in the rope as the sledge moves "
+              box (346.65, 4.87) 25.76 × 7.23 main.fol:43:75
+                text (0.00, 7.08) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "25"
+                text (16.39, 7.08) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+              text (372.42, 11.96) STIXTwoText-Regular 11.00 w 5.28 2 glyph(s) ". "
+              text (377.70, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+      box (0.00, 358.54) 481.89 × 203.05 main.fol:45:1 baselines 16.57..196.86
+        box (0.00, 0.00) 481.89 × 24.39 main.fol:45:1 baselines 16.57..16.57 keep penalty 10000
+          text (0.00, 16.57) SourceSans3-Bold 13.00 w 202.88 37 glyph(s) "4\u{a0}Resistivity and internal resistance"
+        box (0.00, 30.39) 481.89 × 37.27 main.fol:47:1 baselines 12.49..31.07
+          text (0.00, 12.49) STIXTwoText-Regular 11.00 w 220.61 49 glyph(s) "A student makes a resistor from a wire of length "
+          box (220.61, 5.43) 33.90 × 7.21 main.fol:47:51
+            text (0.00, 7.06) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "1.50"
+            text (24.53, 7.06) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+          text (254.51, 12.49) STIXTwoText-Regular 11.00 w 113.93 26 glyph(s) " and cross-sectional area "
+          box (368.44, 3.57) 43.86 × 9.04 main.fol:47:94
+            text (0.00, 8.92) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "0.20"
+            text (20.86, 8.92) STIXTwoMath-Regular 11.00 w 18.74 2 glyph(s) "mm"
+            text (39.61, 4.96) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
+          text (412.30, 12.49) STIXTwoText-Regular 11.00 w 69.59 17 glyph(s) ". The resistivity"
+          text (0.00, 31.07) STIXTwoText-Regular 11.00 w 56.00 12 glyph(s) "of the metal"
+          text (56.00, 28.38) STIXTwoText-Regular 7.70 w 3.81 1 glyph(s) "2"
+          text (59.81, 31.07) STIXTwoText-Regular 11.00 w 12.65 4 glyph(s) " is "
+          box (72.46, 22.26) 79.67 × 9.10 main.fol:47:291
+            text (0.00, 8.81) STIXTwoMath-Regular 11.00 w 13.59 3 glyph(s) "4.9"
+            text (16.03, 8.81) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "×"
+            text (26.39, 8.81) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "10"
+            text (37.28, 4.85) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+            text (42.83, 4.85) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "7"
+            text (52.58, 8.81) STIXTwoMath-Regular 11.00 w 8.55 1 glyph(s) "Ω"
+            text (70.29, 8.81) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+          text (152.13, 31.07) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+          box (0.00, 317.58) 481.89 × 10.66 main.fol:47:144 baselines 8.56..8.56
+            box (0.00, 0.00) 481.89 × 10.66 main.fol:47:153 baselines 8.56..8.56
+              text (0.00, 5.87) STIXTwoText-Regular 7.70 w 5.62 2 glyph(s) "2\u{a0}"
+              text (5.62, 8.56) STIXTwoText-Regular 8.80 w 116.45 33 glyph(s) "The resistivity of constantan at "
+              box (122.07, 2.42) 22.61 × 6.24 main.fol:47:187
+                text (0.00, 6.14) STIXTwoMath-Regular 8.80 w 8.71 2 glyph(s) "20"
+                text (13.11, 6.14) STIXTwoMath-Regular 8.80 w 9.50 2 glyph(s) "°C"
+              text (144.68, 8.56) STIXTwoText-Regular 8.80 w 290.70 83 glyph(s) ". It changes little with temperature, which is why the alloy is used for resistors."
+        box (0.00, 73.15) 481.89 × 129.90 main.fol:49:1 baselines 11.96..123.71
+          box (16.50, 0.00) 465.39 × 18.15 main.fol:49:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:49:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.41 4 glyph(s) "(a)\u{a0}"
+              text (15.41, 11.96) STIXTwoText-Regular 11.00 w 207.55 46 glyph(s) "Show that the resistance of the wire is about "
+              box (222.96, 4.60) 27.63 × 7.50 main.fol:49:50
+                text (0.00, 7.36) STIXTwoMath-Regular 11.00 w 13.59 3 glyph(s) "3.7"
+                text (19.09, 7.36) STIXTwoMath-Regular 11.00 w 8.55 1 glyph(s) "Ω"
+              text (250.59, 11.96) STIXTwoText-Regular 11.00 w 5.28 2 glyph(s) ". "
+              text (255.87, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 23.15) 465.39 × 83.10 main.fol:50:1 baselines 11.96..76.91
+            box (0.00, 0.00) 465.39 × 36.30 main.fol:50:3 baselines 11.96..30.11
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 16.33 4 glyph(s) "(b)\u{a0}"
+              text (16.33, 11.96) STIXTwoText-Regular 11.00 w 270.46 59 glyph(s) "The wire is connected across a cell of electromotive force "
+              box (286.79, 6.67) 18.37 × 5.44 main.fol:50:62
+                text (0.00, 5.29) STIXTwoMath-Regular 11.00 w 4.33 1 glyph(s) "𝜀"
+                text (7.39, 5.29) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+              box (305.16, 4.73) 32.01 × 7.37 main.fol:50:62
+                text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "1.50"
+                text (24.53, 7.23) STIXTwoMath-Regular 11.00 w 7.48 1 glyph(s) "V"
+              text (337.17, 11.96) STIXTwoText-Regular 11.00 w 112.72 25 glyph(s) " and internal resistance "
+              box (449.88, 6.69) 18.56 × 5.27 main.fol:50:113
+                text (0.00, 5.27) STIXTwoMath-Regular 11.00 w 4.53 1 glyph(s) "𝑟"
+                text (7.59, 5.27) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+              box (0.00, 22.75) 33.08 × 7.49 main.fol:50:113
+                text (0.00, 7.36) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "0.80"
+                text (24.53, 7.36) STIXTwoMath-Regular 11.00 w 8.55 1 glyph(s) "Ω"
+              text (33.08, 30.11) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+            box (0.00, 41.80) 465.39 × 41.30 main.fol:51:3 baselines 11.96..35.11
+              box (16.50, 0.00) 448.89 × 18.15 main.fol:51:3 baselines 11.96..11.96
+                box (0.00, 0.00) 448.89 × 18.15 main.fol:51:5 baselines 11.96..11.96
+                  text (0.00, 11.96) STIXTwoText-Regular 11.00 w 13.27 4 glyph(s) "(i)\u{a0}"
+                  text (13.27, 11.96) STIXTwoText-Regular 11.00 w 156.23 35 glyph(s) "Calculate the current in the wire. "
+                  text (169.50, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+              box (16.50, 23.15) 448.89 × 18.15 main.fol:52:3 baselines 11.96..11.96
+                box (0.00, 0.00) 448.89 × 18.15 main.fol:52:5 baselines 11.96..11.96
+                  text (0.00, 11.96) STIXTwoText-Regular 11.00 w 16.40 5 glyph(s) "(ii)\u{a0}"
+                  text (16.40, 11.96) STIXTwoText-Regular 11.00 w 303.62 69 glyph(s) "Calculate the potential difference across the terminals of the cell. "
+                  text (320.02, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[1]"
+          box (16.50, 111.75) 465.39 × 18.15 main.fol:53:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:53:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.04 4 glyph(s) "(c)\u{a0}"
+              text (15.04, 11.96) STIXTwoText-Regular 11.00 w 296.72 64 glyph(s) "Calculate the number of electrons that pass through the wire in "
+              box (311.76, 4.55) 37.93 × 7.52 main.fol:53:68
+                text (0.00, 7.40) STIXTwoMath-Regular 11.00 w 13.59 3 glyph(s) "2.0"
+                text (19.09, 7.40) STIXTwoMath-Regular 11.00 w 18.84 3 glyph(s) "min"
+              text (349.69, 11.96) STIXTwoText-Regular 11.00 w 5.28 2 glyph(s) ". "
+              text (354.97, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+      box (0.00, 577.59) 481.89 × 63.11 main.fol:55:1 baselines 16.57..60.49
+        box (0.00, 0.00) 481.89 × 24.39 main.fol:55:1 baselines 16.57..16.57 keep penalty 10000
+          text (0.00, 16.57) SourceSans3-Bold 13.00 w 115.32 19 glyph(s) "5\u{a0}Progressive waves"
+        box (0.00, 30.39) 481.89 × 32.72 main.fol:57:1 baselines 11.96..30.11
+          text (0.00, 11.96) STIXTwoText-Regular 11.00 w 391.90 80 glyph(s) "A microphone connected to an oscilloscope detects the sound from a loudspeaker. "
+          text (391.90, 11.96) STIXTwoText-Regular 11.00 w 39.26 8 glyph(s) "Figure\u{a0}2"
+          text (431.16, 11.96) STIXTwoText-Regular 11.00 w 50.73 10 glyph(s) " shows the"
+          text (0.00, 30.11) STIXTwoText-Regular 11.00 w 198.00 45 glyph(s) "trace on the screen. The time-base is set to "
+          box (198.00, 23.04) 38.25 × 7.21 main.fol:57:148
+            text (0.00, 7.06) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "0.50"
+            text (24.53, 7.06) STIXTwoMath-Regular 11.00 w 13.72 2 glyph(s) "ms"
+          text (236.25, 30.11) STIXTwoText-Regular 11.00 w 141.44 32 glyph(s) " per division and the Y-gain to "
+          box (377.68, 22.88) 26.57 × 7.35 main.fol:57:198
+            text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 13.59 3 glyph(s) "2.0"
+            text (19.09, 7.23) STIXTwoMath-Regular 11.00 w 7.48 1 glyph(s) "V"
+          text (404.25, 30.11) STIXTwoText-Regular 11.00 w 60.02 14 glyph(s) " per division."
+    shape (0.00, 703.51) M(0.00, 0.00) L(160.63, 0.00) stroke #000000ff 0.50 Butt Miter
+page 3 595.28 × 841.89, 20 line(s)
+  box (56.69, 62.36) 481.89 × 717.17 main.fol:1:2 baselines 212.03..686.40
+    box (0.00, 0.00) 481.89 × 689.02 main.fol:1:2 baselines 212.03..686.40
+      box (0.00, 0.00) 481.89 × 357.70 main.fol:55:1 baselines 212.03..351.51
+        box (0.00, 0.00) 481.89 × 241.46 main.fol:59:2 baselines 212.03..235.26
+          box (0.00, 0.00) 481.89 × 217.81 main.fol:59:10 baselines 212.03..212.03
+            box (108.43, 0.00) 265.04 × 212.03 main.fol:59:10
+              image (0.00, 0.00) 265.04 × 212.03 PNG 67bad26ac140c95f main.fol:59:10
+          box (0.00, 223.31) 481.89 × 18.15 main.fol:59:2 baselines 11.96..11.96
+            text (139.79, 11.96) STIXTwoText-Italic 11.00 w 202.31 47 glyph(s) "Figure\u{a0}2: The trace on the oscilloscope screen."
+        box (0.00, 251.46) 481.89 × 106.25 main.fol:61:1 baselines 11.96..100.06
+          box (16.50, 0.00) 465.39 × 18.15 main.fol:61:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:61:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.41 4 glyph(s) "(a)\u{a0}"
+              text (15.41, 11.96) STIXTwoText-Regular 11.00 w 182.14 38 glyph(s) "Determine the frequency of the sound. "
+              text (197.55, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 23.15) 465.39 × 18.15 main.fol:62:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:62:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.87 4 glyph(s) "(b)\u{a0}"
+              text (15.87, 11.96) STIXTwoText-Regular 11.00 w 294.62 62 glyph(s) "Determine the peak voltage of the signal from the microphone. "
+              text (310.50, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[1]"
+          box (16.50, 46.30) 465.39 × 18.65 main.fol:63:1 baselines 12.46..12.46
+            box (0.00, 0.00) 465.39 × 18.65 main.fol:63:3 baselines 12.46..12.46
+              text (0.00, 12.46) STIXTwoText-Regular 11.00 w 15.04 4 glyph(s) "(c)\u{a0}"
+              text (15.04, 12.46) STIXTwoText-Regular 11.00 w 130.23 29 glyph(s) "The speed of sound in air is "
+              box (145.27, 3.57) 50.85 × 9.02 main.fol:63:33
+                text (0.00, 8.88) STIXTwoMath-Regular 11.00 w 16.34 3 glyph(s) "340"
+                text (21.83, 8.88) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+                text (36.71, 8.88) STIXTwoMath-Regular 11.00 w 4.35 1 glyph(s) "s"
+                text (41.05, 4.92) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+                text (46.60, 4.92) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "1"
+              text (196.11, 12.46) STIXTwoText-Regular 11.00 w 188.39 41 glyph(s) ". Calculate the wavelength of the sound. "
+              text (384.50, 12.46) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 69.95) 465.39 × 36.30 main.fol:64:1 baselines 11.96..30.11
+            box (0.00, 0.00) 465.39 × 36.30 main.fol:64:3 baselines 11.96..30.11
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 16.12 4 glyph(s) "(d)\u{a0}"
+              text (16.12, 11.96) STIXTwoText-Regular 11.00 w 449.27 96 glyph(s) "Explain the difference between a progressive wave and a stationary wave in terms of the phase of"
+              text (0.00, 30.11) STIXTwoText-Regular 11.00 w 99.59 21 glyph(s) "neighbouring points. "
+              text (99.59, 30.11) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[3]"
+      box (0.00, 373.70) 481.89 × 136.64 main.fol:66:1 baselines 16.57..130.44
+        box (0.00, 0.00) 481.89 × 24.39 main.fol:66:1 baselines 16.57..16.57 keep penalty 10000
+          text (0.00, 16.57) SourceSans3-Bold 13.00 w 80.16 14 glyph(s) "6\u{a0}Interference"
+        box (0.00, 30.39) 481.89 × 36.30 main.fol:68:1 baselines 11.96..30.11
+          text (0.00, 11.96) STIXTwoText-Regular 11.00 w 99.62 20 glyph(s) "Light of wavelength "
+          box (99.62, 4.85) 37.54 × 7.25 main.fol:68:22
+            text (0.00, 7.11) STIXTwoMath-Regular 11.00 w 16.34 3 glyph(s) "633"
+            text (21.83, 7.11) STIXTwoMath-Regular 11.00 w 15.71 2 glyph(s) "nm"
+          text (137.16, 11.96) STIXTwoText-Regular 11.00 w 329.51 70 glyph(s) " from a laser passes through two narrow slits. The slit separation is "
+          box (466.67, 6.69) 18.28 × 5.39 main.fol:68:106
+            text (0.00, 5.27) STIXTwoMath-Regular 11.00 w 4.25 1 glyph(s) "𝑠"
+            text (7.30, 5.27) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          box (0.00, 22.14) 82.97 × 10.25 main.fol:68:106
+            text (0.00, 8.10) STIXTwoMath-Regular 11.00 w 3.93 1 glyph(s) "("
+            text (3.93, 7.96) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "0.25"
+            text (25.40, 7.96) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "±"
+            text (35.77, 7.96) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "0.01"
+            text (54.80, 8.10) STIXTwoMath-Regular 11.00 w 3.93 1 glyph(s) ")"
+            text (64.22, 7.96) STIXTwoMath-Regular 11.00 w 18.74 2 glyph(s) "mm"
+          text (82.97, 30.11) STIXTwoText-Regular 11.00 w 230.34 52 glyph(s) " and the fringes are seen on a screen at a distance "
+          box (313.31, 22.88) 21.97 × 7.23 main.fol:68:189
+            text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 7.94 1 glyph(s) "𝐷"
+            text (11.00, 7.23) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          box (335.28, 23.01) 33.90 × 7.22 main.fol:68:189
+            text (0.00, 7.10) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "2.40"
+            text (24.53, 7.10) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+          text (369.18, 30.11) STIXTwoText-Regular 11.00 w 66.24 16 glyph(s) " from the slits."
+        box (0.00, 72.19) 481.89 × 64.45 main.fol:70:1 baselines 11.96..58.26
+          box (16.50, 0.00) 465.39 × 18.15 main.fol:70:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:70:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.41 4 glyph(s) "(a)\u{a0}"
+              text (15.41, 11.96) STIXTwoText-Regular 11.00 w 145.13 32 glyph(s) "Calculate the fringe separation "
+              box (160.55, 6.69) 8.16 × 5.37 main.fol:70:35
+                text (0.00, 5.27) STIXTwoMath-Regular 11.00 w 8.16 1 glyph(s) "𝑤"
+              text (168.71, 11.96) STIXTwoText-Regular 11.00 w 80.61 18 glyph(s) ", using equation ("
+              text (249.32, 11.96) STIXTwoText-Regular 11.00 w 10.89 2 glyph(s) "11"
+              text (260.21, 11.96) STIXTwoText-Regular 11.00 w 9.05 3 glyph(s) "). "
+              text (269.26, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 23.15) 465.39 × 18.15 main.fol:71:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:71:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.87 4 glyph(s) "(b)\u{a0}"
+              text (15.87, 11.96) STIXTwoText-Regular 11.00 w 231.14 51 glyph(s) "Explain why the two slits act as coherent sources. "
+              text (247.02, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 46.30) 465.39 × 18.15 main.fol:72:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:72:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.04 4 glyph(s) "(c)\u{a0}"
+              text (15.04, 11.96) STIXTwoText-Regular 11.00 w 185.60 40 glyph(s) "Calculate the percentage uncertainty in "
+              box (200.64, 6.69) 8.16 × 5.37 main.fol:72:43
+                text (0.00, 5.27) STIXTwoMath-Regular 11.00 w 8.16 1 glyph(s) "𝑤"
+              text (208.80, 11.96) STIXTwoText-Regular 11.00 w 109.66 25 glyph(s) " that the uncertainty in "
+              box (318.46, 6.69) 4.25 × 5.39 main.fol:72:71
+                text (0.00, 5.27) STIXTwoMath-Regular 11.00 w 4.25 1 glyph(s) "𝑠"
+              text (322.71, 11.96) STIXTwoText-Regular 11.00 w 59.08 14 glyph(s) " alone gives. "
+              text (381.79, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+      box (0.00, 526.34) 481.89 × 162.68 main.fol:74:1 baselines 16.58..160.06
+        box (0.00, 0.00) 481.89 × 24.39 main.fol:74:1 baselines 16.58..16.58 keep penalty 10000
+          text (0.00, 16.58) SourceSans3-Bold 13.00 w 108.37 18 glyph(s) "7\u{a0}Stationary waves"
+        box (0.00, 30.39) 481.89 × 70.91 main.fol:76:1 baselines 11.96..56.84
+          text (0.00, 11.96) STIXTwoText-Regular 11.00 w 84.25 19 glyph(s) "A string of length "
+          box (84.25, 4.85) 33.90 × 7.25 main.fol:76:21
+            text (0.00, 7.11) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "0.65"
+            text (24.53, 7.11) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+          text (118.15, 11.96) STIXTwoText-Regular 11.00 w 256.72 57 glyph(s) " is stretched between two fixed points with a tension of "
+          box (374.87, 4.73) 24.55 × 7.37 main.fol:76:93
+            text (0.00, 7.23) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "52"
+            text (16.39, 7.23) STIXTwoMath-Regular 11.00 w 8.16 1 glyph(s) "N"
+          text (399.42, 11.96) STIXTwoText-Regular 11.00 w 82.47 19 glyph(s) ". Its mass per unit"
+          text (0.00, 30.64) STIXTwoText-Regular 11.00 w 42.85 10 glyph(s) "length is "
+          box (42.85, 25.44) 20.50 × 7.59 main.fol:76:135
+            text (0.00, 5.20) STIXTwoMath-Regular 11.00 w 6.47 1 glyph(s) "𝜇"
+            text (9.52, 5.20) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          box (63.35, 21.72) 88.42 × 11.50 main.fol:76:135
+            text (0.00, 8.92) STIXTwoMath-Regular 11.00 w 13.59 3 glyph(s) "1.2"
+            text (16.03, 8.92) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "×"
+            text (26.39, 8.92) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "10"
+            text (37.28, 4.96) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+            text (42.83, 4.96) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "3"
+            text (52.58, 8.92) STIXTwoMath-Regular 11.00 w 11.18 2 glyph(s) "kg"
+            text (69.26, 8.92) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+            text (78.63, 4.96) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+            text (84.17, 4.96) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "1"
+          text (151.77, 30.64) STIXTwoText-Regular 11.00 w 270.63 60 glyph(s) ". The frequency of its first harmonic is given by equation ("
+          text (422.40, 30.64) STIXTwoText-Regular 11.00 w 10.89 2 glyph(s) "12"
+          text (433.29, 30.64) STIXTwoText-Regular 11.00 w 48.60 11 glyph(s) "), which is"
+          text (0.00, 56.84) STIXTwoText-Regular 11.00 w 62.90 14 glyph(s) "equivalent to "
+          box (62.90, 49.02) 20.60 × 10.30 main.fol:76:262
+            text (0.00, 7.82) STIXTwoMath-Regular 11.00 w 6.57 1 glyph(s) "𝑓"
+            text (9.62, 7.82) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          box (83.50, 40.41) 30.74 × 26.93 main.fol:76:262
+            text (3.29, 9.99) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "1"
+            text (1.10, 22.86) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
+            text (4.91, 22.86) STIXTwoMath-Regular 7.70 w 4.38 1 glyph(s) "𝐿"
+            shape (1.10, 13.22) M(0.00, 0.00) L(8.19, 0.00) L(8.19, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:267
+            text (10.39, 24.01) STIXTwoMath-Regular 11.00 w 12.95 1 glyph(s) "√"
+            shape (23.34, 0.86) M(0.00, 0.00) L(7.40, 0.00) L(7.40, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:275
+            text (24.44, 9.99) STIXTwoMath-Regular 7.70 w 5.20 1 glyph(s) "𝑇"
+            text (24.77, 22.86) STIXTwoMath-Regular 7.70 w 4.53 1 glyph(s) "𝜇"
+            shape (24.44, 13.22) M(0.00, 0.00) L(5.20, 0.00) L(5.20, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:76:280
+          text (114.23, 56.84) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+        box (0.00, 106.80) 481.89 × 55.87 main.fol:78:1 baselines 11.96..53.26
+          box (16.50, 0.00) 465.39 × 18.15 main.fol:78:1 baselines 11.96..11.96
+            box (0.00, 0.00) 465.39 × 18.15 main.fol:78:3 baselines 11.96..11.96
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 15.41 4 glyph(s) "(a)\u{a0}"
+              text (15.41, 11.96) STIXTwoText-Regular 11.00 w 213.97 47 glyph(s) "Calculate the frequency of the first harmonic. "
+              text (229.38, 11.96) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[3]"
+          box (16.50, 23.15) 465.39 × 32.72 main.fol:79:1 baselines 11.96..30.11
+            box (0.00, 0.00) 465.39 × 32.72 main.fol:79:3 baselines 11.96..30.11
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 16.37 4 glyph(s) "(b)\u{a0}"
+              text (16.37, 11.96) STIXTwoText-Regular 11.00 w 449.02 98 glyph(s) "State the positions of the nodes and the antinodes when the string vibrates at its first harmonic."
+              text (0.00, 30.11) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+page 4 595.28 × 841.89, 10 line(s)
+  box (56.69, 62.36) 481.89 × 717.17 main.fol:1:2 baselines 8.38..472.94
+    box (0.00, 0.00) 481.89 × 485.11 main.fol:1:2 baselines 8.38..472.94
+      box (0.00, 0.00) 481.89 × 74.02 main.fol:74:1 baselines 8.38..67.83
+        box (0.00, 0.00) 481.89 × 74.02 main.fol:78:1 baselines 8.38..67.83
+          box (16.50, 0.00) 465.39 × 32.73 main.fol:80:1 baselines 8.38..26.53
+            box (0.00, 0.00) 465.39 × 32.73 main.fol:80:3 baselines 8.38..26.53
+              text (0.00, 8.38) STIXTwoText-Regular 11.00 w 14.91 4 glyph(s) "(c)\u{a0}"
+              text (14.91, 8.38) STIXTwoText-Regular 11.00 w 450.48 100 glyph(s) "The tension is increased to four times its value. State the new frequency of the first harmonic, and"
+              text (0.00, 26.53) STIXTwoText-Regular 11.00 w 98.56 21 glyph(s) "explain your answer. "
+              text (98.56, 26.53) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[2]"
+          box (16.50, 37.72) 465.39 × 36.30 main.fol:81:1 baselines 11.96..30.11
+            box (0.00, 0.00) 465.39 × 36.30 main.fol:81:3 baselines 11.96..30.11
+              text (0.00, 11.96) STIXTwoText-Regular 11.00 w 16.04 4 glyph(s) "(d)\u{a0}"
+              text (16.04, 11.96) STIXTwoText-Regular 11.00 w 50.42 10 glyph(s) "Question\u{a0}2"
+              text (66.46, 11.96) STIXTwoText-Regular 11.00 w 19.81 5 glyph(s) ", on "
+              text (86.27, 11.96) STIXTwoText-Regular 11.00 w 29.68 6 glyph(s) "page\u{a0}1"
+              text (115.94, 11.96) STIXTwoText-Regular 11.00 w 349.45 75 glyph(s) ", assumed no air resistance. Suggest why a similar assumption is reasonable"
+              text (0.00, 30.11) STIXTwoText-Regular 11.00 w 139.92 33 glyph(s) "for the string in this question. "
+              text (139.92, 30.11) STIXTwoText-Bold 11.00 w 14.11 3 glyph(s) "[1]"
+      box (0.00, 90.02) 481.89 × 395.08 main.fol:83:1 baselines 16.58..382.91
+        box (0.00, 0.00) 481.89 × 24.39 main.fol:83:1 baselines 16.58..16.58 keep penalty 10000
+          text (0.00, 16.58) SourceSans3-Bold 13.00 w 105.90 17 glyph(s) "Data and formulae"
+        box (0.00, 30.39) 481.89 × 18.70 main.fol:85:1 baselines 12.51..12.51
+          text (0.00, 12.51) STIXTwoText-Bold 11.00 w 27.28 5 glyph(s) "Data."
+          text (27.28, 12.51) STIXTwoText-Regular 11.00 w 141.86 34 glyph(s) " The acceleration of free fall is "
+          box (169.14, 7.24) 19.56 × 7.74 main.fol:85:42
+            text (0.00, 5.27) STIXTwoMath-Regular 11.00 w 5.53 1 glyph(s) "𝑔"
+            text (8.59, 5.27) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          box (188.70, 3.59) 53.54 × 9.06 main.fol:85:42
+            text (0.00, 8.92) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "9.81"
+            text (24.53, 8.92) STIXTwoMath-Regular 11.00 w 9.37 1 glyph(s) "m"
+            text (39.40, 8.92) STIXTwoMath-Regular 11.00 w 4.35 1 glyph(s) "s"
+            text (43.75, 4.96) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+            text (49.29, 4.96) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
+          text (242.24, 12.51) STIXTwoText-Regular 11.00 w 139.02 30 glyph(s) " and the elementary charge is "
+          box (381.26, 7.24) 18.70 × 5.40 main.fol:85:97
+            text (0.00, 5.27) STIXTwoMath-Regular 11.00 w 4.66 1 glyph(s) "𝑒"
+            text (7.72, 5.27) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          box (399.96, 3.58) 69.21 × 9.22 main.fol:85:97
+            text (0.00, 8.93) STIXTwoMath-Regular 11.00 w 19.03 4 glyph(s) "1.60"
+            text (21.47, 8.93) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "×"
+            text (31.84, 8.93) STIXTwoMath-Regular 11.00 w 10.89 2 glyph(s) "10"
+            text (42.73, 4.97) STIXTwoMath-Regular 7.70 w 5.54 1 glyph(s) "−"
+            text (48.27, 4.97) STIXTwoMath-Regular 7.70 w 7.62 2 glyph(s) "19"
+            text (61.84, 8.93) STIXTwoMath-Regular 11.00 w 7.37 1 glyph(s) "C"
+          text (469.16, 12.51) STIXTwoText-Regular 11.00 w 2.69 1 glyph(s) "."
+          text (471.86, 9.81) STIXTwoText-Regular 7.70 w 3.81 1 glyph(s) "3"
+          box (0.00, 586.10) 481.89 × 10.66 main.fol:85:123 baselines 8.56..8.56
+            box (0.00, 0.00) 481.89 × 10.66 main.fol:85:132 baselines 8.56..8.56
+              text (0.00, 5.87) STIXTwoText-Regular 7.70 w 5.62 2 glyph(s) "3\u{a0}"
+              text (5.62, 8.56) STIXTwoText-Regular 8.80 w 344.32 96 glyph(s) "Values are given to three significant figures, which is enough for every question in this paper."
+        box (0.00, 54.59) 481.89 × 18.15 main.fol:87:1 baselines 11.96..11.96
+          text (0.00, 11.96) STIXTwoText-Bold 11.00 w 155.43 28 glyph(s) "Uniformly accelerated motion"
+        box (0.00, 78.24) 481.89 × 81.56 main.fol:89:1 baselines 8.10..74.52
+          text (210.80, 8.10) STIXTwoMath-Regular 11.00 w 5.71 1 glyph(s) "𝑣"
+          text (219.57, 8.10) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (230.54, 8.10) STIXTwoMath-Regular 11.00 w 6.21 1 glyph(s) "𝑢"
+          text (239.20, 8.10) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "+"
+          text (249.57, 8.10) STIXTwoMath-Regular 11.00 w 6.11 1 glyph(s) "𝑎"
+          text (255.67, 8.10) STIXTwoMath-Regular 11.00 w 3.88 1 glyph(s) "𝑡"
+          text (212.27, 29.75) STIXTwoMath-Regular 11.00 w 4.25 1 glyph(s) "𝑠"
+          text (219.57, 29.75) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (230.54, 29.75) STIXTwoMath-Regular 11.00 w 6.21 1 glyph(s) "𝑢"
+          text (236.76, 29.75) STIXTwoMath-Regular 11.00 w 3.88 1 glyph(s) "𝑡"
+          text (243.09, 29.75) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "+"
+          text (254.55, 22.72) STIXTwoMath-Regular 11.00 w 5.45 1 glyph(s) "1"
+          text (254.55, 36.80) STIXTwoMath-Regular 11.00 w 5.45 1 glyph(s) "2"
+          shape (254.55, 26.54) M(0.00, 0.00) L(5.45, 0.00) L(5.45, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:90:14
+          text (261.10, 29.75) STIXTwoMath-Regular 11.00 w 6.11 1 glyph(s) "𝑎"
+          text (267.20, 29.75) STIXTwoMath-Regular 11.00 w 3.88 1 glyph(s) "𝑡"
+          text (271.08, 25.79) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
+          text (206.55, 52.86) STIXTwoMath-Regular 11.00 w 5.71 1 glyph(s) "𝑣"
+          text (212.26, 48.90) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
+          text (219.57, 52.86) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (230.54, 52.86) STIXTwoMath-Regular 11.00 w 6.21 1 glyph(s) "𝑢"
+          text (236.76, 48.90) STIXTwoMath-Regular 7.70 w 3.81 1 glyph(s) "2"
+          text (243.46, 52.86) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "+"
+          text (253.82, 52.86) STIXTwoMath-Regular 11.00 w 5.45 1 glyph(s) "2"
+          text (259.27, 52.86) STIXTwoMath-Regular 11.00 w 6.11 1 glyph(s) "𝑎"
+          text (265.37, 52.86) STIXTwoMath-Regular 11.00 w 4.25 1 glyph(s) "𝑠"
+          text (212.27, 74.52) STIXTwoMath-Regular 11.00 w 4.25 1 glyph(s) "𝑠"
+          text (219.57, 74.52) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (231.64, 67.48) STIXTwoMath-Regular 11.00 w 5.45 1 glyph(s) "1"
+          text (231.64, 81.56) STIXTwoMath-Regular 11.00 w 5.45 1 glyph(s) "2"
+          shape (231.64, 71.31) M(0.00, 0.00) L(5.45, 0.00) L(5.45, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:92:8
+          text (238.19, 74.65) STIXTwoMath-Regular 11.00 w 3.93 1 glyph(s) "("
+          text (242.12, 74.52) STIXTwoMath-Regular 11.00 w 6.21 1 glyph(s) "𝑢"
+          text (250.78, 74.52) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "+"
+          text (261.14, 74.52) STIXTwoMath-Regular 11.00 w 5.71 1 glyph(s) "𝑣"
+          text (266.85, 74.65) STIXTwoMath-Regular 11.00 w 3.93 1 glyph(s) ")"
+          text (270.78, 74.52) STIXTwoMath-Regular 11.00 w 3.88 1 glyph(s) "𝑡"
+          text (468.59, 8.10) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(1)"
+          text (468.59, 29.75) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(2)"
+          text (468.59, 52.86) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(3)"
+          text (468.59, 74.52) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(4)"
+        box (0.00, 165.30) 481.89 × 18.15 main.fol:94:1 baselines 11.96..11.96
+          text (0.00, 11.96) STIXTwoText-Bold 11.00 w 84.73 15 glyph(s) "Forces and work"
+        box (0.00, 188.95) 481.89 × 10.25 main.fol:96:1 baselines 8.10..8.10
+          text (223.06, 8.10) STIXTwoMath-Regular 11.00 w 6.80 1 glyph(s) "𝐅"
+          text (232.91, 8.10) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (243.89, 8.10) STIXTwoMath-Regular 11.00 w 9.13 1 glyph(s) "𝑚"
+          text (253.02, 8.10) STIXTwoMath-Regular 11.00 w 5.81 1 glyph(s) "𝐚"
+          text (468.59, 8.10) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(5)"
+        box (0.00, 203.20) 481.89 × 10.25 main.fol:98:1 baselines 8.10..8.10
+          text (210.42, 8.10) STIXTwoMath-Regular 11.00 w 11.14 1 glyph(s) "𝑊"
+          text (224.62, 8.10) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (235.59, 8.10) STIXTwoMath-Regular 11.00 w 7.13 1 glyph(s) "𝐹"
+          text (242.72, 8.10) STIXTwoMath-Regular 11.00 w 4.25 1 glyph(s) "𝑠"
+          text (248.80, 8.10) STIXTwoMath-Regular 11.00 w 14.90 3 glyph(s) "cos"
+          text (265.54, 8.10) STIXTwoMath-Regular 11.00 w 5.93 1 glyph(s) "𝜃"
+          text (468.59, 8.10) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(6)"
+        box (0.00, 218.96) 481.89 × 18.15 main.fol:100:1 baselines 11.96..11.96
+          text (0.00, 11.96) STIXTwoText-Bold 11.00 w 53.82 11 glyph(s) "Electricity"
+        box (0.00, 242.61) 481.89 × 21.50 main.fol:102:1 baselines 14.46..14.46
+          text (223.20, 14.46) STIXTwoMath-Regular 11.00 w 6.99 1 glyph(s) "𝑅"
+          text (233.24, 14.46) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (245.31, 7.23) STIXTwoMath-Regular 11.00 w 6.02 1 glyph(s) "𝜌"
+          text (251.33, 7.23) STIXTwoMath-Regular 11.00 w 6.26 1 glyph(s) "𝐿"
+          text (247.71, 21.50) STIXTwoMath-Regular 11.00 w 7.49 1 glyph(s) "𝐴"
+          shape (245.31, 11.25) M(0.00, 0.00) L(12.28, 0.00) L(12.28, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:102:7
+          text (468.59, 14.46) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(7)"
+        box (0.00, 268.11) 481.89 × 10.38 main.fol:104:1 baselines 8.10..8.10
+          text (213.54, 8.10) STIXTwoMath-Regular 11.00 w 4.33 1 glyph(s) "𝜀"
+          text (220.93, 8.10) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (231.90, 8.10) STIXTwoMath-Regular 11.00 w 4.27 1 glyph(s) "𝐼"
+          text (236.17, 8.23) STIXTwoMath-Regular 11.00 w 3.93 1 glyph(s) "("
+          text (240.10, 8.10) STIXTwoMath-Regular 11.00 w 6.99 1 glyph(s) "𝑅"
+          text (249.53, 8.10) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "+"
+          text (259.89, 8.10) STIXTwoMath-Regular 11.00 w 4.53 1 glyph(s) "𝑟"
+          text (264.42, 8.23) STIXTwoMath-Regular 11.00 w 3.93 1 glyph(s) ")"
+          text (468.59, 8.10) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(8)"
+        box (0.00, 282.50) 481.89 × 10.25 main.fol:106:1 baselines 8.10..8.10
+          text (218.52, 8.10) STIXTwoMath-Regular 11.00 w 7.34 1 glyph(s) "Δ"
+          text (225.86, 8.10) STIXTwoMath-Regular 11.00 w 8.00 1 glyph(s) "𝑄"
+          text (236.91, 8.10) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (247.88, 8.10) STIXTwoMath-Regular 11.00 w 4.27 1 glyph(s) "𝐼"
+          text (252.15, 8.10) STIXTwoMath-Regular 11.00 w 7.34 1 glyph(s) "Δ"
+          text (259.49, 8.10) STIXTwoMath-Regular 11.00 w 3.88 1 glyph(s) "𝑡"
+          text (468.59, 8.10) STIXTwoMath-Regular 11.00 w 13.30 3 glyph(s) "(9)"
+        box (0.00, 298.25) 481.89 × 18.15 main.fol:108:1 baselines 11.96..11.96
+          text (0.00, 11.96) STIXTwoText-Bold 11.00 w 32.66 5 glyph(s) "Waves"
+        box (0.00, 321.90) 481.89 × 10.57 main.fol:110:1 baselines 8.10..8.10
+          text (224.90, 8.10) STIXTwoMath-Regular 11.00 w 5.71 1 glyph(s) "𝑣"
+          text (233.67, 8.10) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (244.64, 8.10) STIXTwoMath-Regular 11.00 w 6.57 1 glyph(s) "𝑓"
+          text (251.21, 8.10) STIXTwoMath-Regular 11.00 w 5.78 1 glyph(s) "𝜆"
+          text (463.15, 8.10) STIXTwoMath-Regular 11.00 w 18.74 4 glyph(s) "(10)"
+        box (0.00, 336.47) 481.89 × 21.96 main.fol:112:1 baselines 14.80..14.80
+          text (221.89, 14.80) STIXTwoMath-Regular 11.00 w 8.16 1 glyph(s) "𝑤"
+          text (233.11, 14.80) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (245.18, 7.75) STIXTwoMath-Regular 11.00 w 5.78 1 glyph(s) "𝜆"
+          text (250.96, 7.75) STIXTwoMath-Regular 11.00 w 7.94 1 glyph(s) "𝐷"
+          text (249.92, 21.83) STIXTwoMath-Regular 11.00 w 4.25 1 glyph(s) "𝑠"
+          shape (245.18, 11.58) M(0.00, 0.00) L(13.72, 0.00) L(13.72, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:112:7
+          text (463.15, 14.80) STIXTwoMath-Regular 11.00 w 18.74 4 glyph(s) "(11)"
+        box (0.00, 362.43) 481.89 × 32.66 main.fol:114:1 baselines 20.49..20.49
+          text (212.45, 20.49) STIXTwoMath-Regular 11.00 w 6.57 1 glyph(s) "𝑓"
+          text (222.07, 20.49) STIXTwoMath-Regular 11.00 w 7.92 1 glyph(s) "="
+          text (237.27, 13.45) STIXTwoMath-Regular 11.00 w 5.45 1 glyph(s) "1"
+          text (234.14, 27.53) STIXTwoMath-Regular 11.00 w 5.45 1 glyph(s) "2"
+          text (239.59, 27.53) STIXTwoMath-Regular 11.00 w 6.26 1 glyph(s) "𝐿"
+          shape (234.14, 17.28) M(0.00, 0.00) L(11.70, 0.00) L(11.70, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:114:6
+          text (246.95, 29.74) STIXTwoMath-Regular 11.00 w 12.87 1 glyph(s) "√"
+          shape (259.82, 0.86) M(0.00, 0.00) L(9.62, 0.00) L(9.62, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:114:6
+          text (260.92, 13.45) STIXTwoMath-Regular 11.00 w 7.43 1 glyph(s) "𝑇"
+          text (261.40, 27.53) STIXTwoMath-Regular 11.00 w 6.47 1 glyph(s) "𝜇"
+          shape (260.92, 17.28) M(0.00, 0.00) L(7.43, 0.00) L(7.43, 0.75) L(0.00, 0.75) Z fill #000000ff NonZero main.fol:114:6
+          text (463.15, 20.49) STIXTwoMath-Regular 11.00 w 18.74 4 glyph(s) "(12)"
+    shape (0.00, 703.51) M(0.00, 0.00) L(160.63, 0.00) stroke #000000ff 0.50 Butt Miter

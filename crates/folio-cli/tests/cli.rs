@@ -90,7 +90,7 @@ fn builds_the_corpus() {
         assert_eq!(actual, digest, "{built} of {project}");
         checked += 1;
     }
-    assert_eq!(checked, 6);
+    assert_eq!(checked, 7);
 }
 
 #[test]
