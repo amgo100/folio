@@ -266,13 +266,19 @@ impl Tokens {
 
     /// The value of a token, evaluated and reported once.
     fn get(&self, cx: &Values<'_>, name: &str, span: Span) -> VResult<Declared> {
+        self.get_as(cx, name, span, "$")
+    }
+
+    /// [`Self::get`], with an unknown token named as `prefix` writes it:
+    /// `$` in a stylesheet, `tok.` in content (SPEC §5.4).
+    fn get_as(&self, cx: &Values<'_>, name: &str, span: Span, prefix: &str) -> VResult<Declared> {
         if let Some(value) = self.values.borrow().get(name) {
             return value.clone().ok_or(Fail::Reported);
         }
         let Some(def) = self.defs.get(name) else {
-            let mut error = EvalError::new(span, eco_format!("unknown token `${name}`"));
+            let mut error = EvalError::new(span, eco_format!("unknown token `{prefix}{name}`"));
             if let Some(close) = closest(name, self.defs.keys()) {
-                error = error.with_hint(eco_format!("did you mean `${close}`?"));
+                error = error.with_hint(eco_format!("did you mean `{prefix}{close}`?"));
             }
             return Err(error.into());
         };
@@ -373,11 +379,10 @@ impl<'a> Values<'a> {
         self.report(self.expr(expr))
     }
 
-    /// The value of the token `name`, as `$name` gives it, reporting
-    /// errors at `span`: for a token reference in content, `tok.name`
-    /// (SPEC §5.4).
+    /// The value of the token that content names `tok.name` (SPEC §5.4),
+    /// as `$name` gives it, reporting errors at `span`.
     pub(super) fn token(&self, name: &str, span: Span) -> Option<Declared> {
-        self.report(self.tokens.get(self, name, span))
+        self.report(self.tokens.get_as(self, name, span, "tok."))
     }
 
     fn report(&self, result: VResult<Declared>) -> Option<Declared> {

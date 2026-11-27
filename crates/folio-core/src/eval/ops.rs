@@ -371,11 +371,8 @@ pub(crate) fn compare(lhs: &V, rhs: &V) -> StrResult<Ordering> {
             return result;
         }
         (a, b) => {
-            return Err(eco_format!(
-                "cannot compare {} and {}",
-                short_repr(a),
-                short_repr(b)
-            ));
+            let message = eco_format!("cannot compare {} and {}", short_repr(a), short_repr(b));
+            return Err(with_token_advice(message, [a, b]));
         }
     })
 }
@@ -395,11 +392,14 @@ pub(crate) fn contains(item: &V, collection: &V) -> StrResult<bool> {
         (V::Str(a), V::Str(b)) => Ok(b.contains(a.as_str())),
         (V::Str(key), V::Dict(d)) => Ok(d.get(key).is_some()),
         (a, V::Array(items)) => Ok(items.iter().any(|b| equal(a, b))),
-        (a, b) => Err(eco_format!(
-            "cannot apply `in` to {} and {}",
-            a_type(a.type_name()),
-            a_type(b.type_name())
-        )),
+        (a, b) => {
+            let message = eco_format!(
+                "cannot apply `in` to {} and {}",
+                a_type(a.type_name()),
+                a_type(b.type_name())
+            );
+            Err(with_token_advice(message, [a, b]))
+        }
     }
 }
 
@@ -415,11 +415,12 @@ pub(crate) fn join(lhs: V, rhs: V) -> StrResult<V> {
             Err(_) => return Err("cannot join these values".into()),
         },
         (a, b) => {
-            return Err(eco_format!(
+            let message = eco_format!(
                 "cannot join {} with {}",
                 a_type(a.type_name()),
                 a_type(b.type_name())
-            ));
+            );
+            return Err(with_token_advice(message, [&a, &b]));
         }
     })
 }
@@ -455,6 +456,14 @@ mod tests {
         assert_eq!(
             sub(V::Bool(true), V::Int(1)).unwrap_err(),
             "cannot subtract a bool and an int"
+        );
+        assert_eq!(
+            compare(&size(), &V::Int(1)).unwrap_err(),
+            format!("cannot compare tok.body-size and 1: {advice}")
+        );
+        assert_eq!(
+            join(V::Int(1), size()).unwrap_err(),
+            format!("cannot join an int with a token: {advice}")
         );
         // A token reference is equal to itself only.
         assert!(equal(&size(), &size()));

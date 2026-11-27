@@ -481,9 +481,15 @@ fn token_references_in_content() {
         ["`width` is not implemented yet for `figure`, so it has no effect"]
     );
 
-    // An unknown token is an error at the element, in the build.
-    let unknown = world("#figure(override: (space-before: tok.gpa))[]\n", &[]);
-    assert_eq!(messages(&unknown), ["unknown token `$gpa`"]);
+    // An unknown token is an error at the element, in the build, named as
+    // content writes it.
+    let unknown = world(
+        "#figure(override: (space-before: tok.gpa))[]\n",
+        &[("styles/main.fsty", "$gap: 6pt;\n")],
+    );
+    let compiled = folio::compile(&unknown, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert_eq!(compiled.diagnostics[0].message, "unknown token `tok.gpa`");
+    assert_eq!(compiled.diagnostics[0].hints[0], "did you mean `tok.gap`?");
 
     // A script cannot compute with a token reference.
     let computed = world("#figure(override: (space-before: tok.gap * 2))[]\n", &[]);
