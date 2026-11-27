@@ -144,12 +144,14 @@
 //! figures as SVG through `/figure/<hash>.svg`: `<hash>` is the content
 //! hash of the file's bytes (`Image::content_hash` of `folio-component`)
 //! as 16 lowercase hexadecimal digits. The answer is the SVG that
-//! `folio-render` writes of the figure alone, at the size of the box it
-//! fills, with the figure embedded as a `data:` URI (a PDF figure as the
-//! SVG it converts to), under a policy that allows nothing else. A hash no
-//! SVG or PDF figure of the current revision has is `404`. The viewer
-//! keeps decoded images by their hash while a page shows them, so a page
-//! sent again does not decode them again.
+//! `folio-render` writes of the figure alone, at the size of the first box
+//! that holds it and with `preserveAspectRatio="none"` on its root, so that
+//! it stretches to any box as the figure does, with the figure embedded as
+//! a `data:` URI (a PDF figure as the SVG it converts to), under a policy
+//! that allows nothing else. A hash no SVG or PDF figure of the current
+//! revision has is `404`. The viewer hashes an image when it first draws
+//! it and keeps decoded images by their hash while the pages it has drawn
+//! show them, so a page sent again does not decode them again.
 
 #![forbid(unsafe_code)]
 

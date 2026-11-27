@@ -184,7 +184,8 @@ function command(tag, r) {
       const n = r.count(1);
       const bytes = r.bytes.subarray(r.pos, r.pos + n);
       r.pos += n;
-      return { kind: "image", rect, format, bytes, key: contentHash(bytes) };
+      // The key is hashed when the image is first drawn.
+      return { kind: "image", rect, format, bytes, key: null };
     }
     default: return { kind: "unknown" }; // A command of a later version.
   }
@@ -193,24 +194,26 @@ function command(tag, r) {
 // The content hash of an image file's bytes, as 16 hexadecimal digits: the
 // hash `folio_component::Image::content_hash` takes, in 64-bit arithmetic
 // on pairs of 32-bit halves, so that the viewer names a figure to the
-// server as the server does.
+// server as the server does. `preview.rs` checks it against the server's.
 function contentHash(bytes) {
-  // a * b mod 2^64, of halves (high, low); returns [high, low].
-  const mul = (ah, al, bh, bl) => {
-    const a0 = al & 0xffff, a1 = al >>> 16, b0 = bl & 0xffff, b1 = bl >>> 16;
-    const p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
-    const mid = (p00 >>> 16) + (p01 & 0xffff) + (p10 & 0xffff);
-    const lo = (((mid & 0xffff) << 16) | (p00 & 0xffff)) >>> 0;
-    const hi = (p11 + (p01 >>> 16) + (p10 >>> 16) + Math.floor(mid / 0x10000)
-      + Math.imul(ah, bl) + Math.imul(al, bh)) >>> 0;
-    return [hi, lo];
-  };
-  const KH = 0x517cc1b7, KL = 0x27220a95;
   let h = 0x243f6a88, l = 0x85a308d3;
+  // (h, l) = (h, l) * (bh, bl) mod 2^64.
+  const mul = (bh, bl) => {
+    const a0 = l & 0xffff, a1 = l >>> 16, b0 = bl & 0xffff, b1 = bl >>> 16;
+    const p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0;
+    const mid = (p00 >>> 16) + (p01 & 0xffff) + (p10 & 0xffff);
+    const hi = (a1 * b1 + (p01 >>> 16) + (p10 >>> 16) + Math.floor(mid / 0x10000)
+      + Math.imul(h, bl) + Math.imul(l, bh)) >>> 0;
+    l = (((mid & 0xffff) << 16) | (p00 & 0xffff)) >>> 0;
+    h = hi;
+  };
+  // state = (state.rotate_left(5) ^ word) * K.
   const mix = (wh, wl) => {
     const rh = ((h << 5) | (l >>> 27)) >>> 0;
     const rl = ((l << 5) | (h >>> 27)) >>> 0;
-    [h, l] = mul((rh ^ wh) >>> 0, (rl ^ wl) >>> 0, KH, KL);
+    h = (rh ^ wh) >>> 0;
+    l = (rl ^ wl) >>> 0;
+    mul(0x517cc1b7, 0x27220a95);
   };
   mix(Math.floor(bytes.length / 0x100000000), bytes.length >>> 0);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -224,7 +227,7 @@ function contentHash(bytes) {
   }
   // The final avalanche: h ^= h >> 33, h *= C, h ^= h >> 33.
   l = (l ^ (h >>> 1)) >>> 0;
-  [h, l] = mul(h, l, 0xff51afd7, 0xed558ccd);
+  mul(0xff51afd7, 0xed558ccd);
   l = (l ^ (h >>> 1)) >>> 0;
   return h.toString(16).padStart(8, "0") + l.toString(16).padStart(8, "0");
 }
@@ -236,49 +239,64 @@ function contentHash(bytes) {
 // 4 (SVG) and 5 (PDF) are figures the server converts.
 const RASTER_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
-// Content hash → { source, failed } once settled: `source` an ImageBitmap
-// or an <img> to draw, or null when the image cannot be shown; undefined
-// while it is decoded or fetched.
+// Content hash → { source } once settled, `source` an ImageBitmap or an
+// <img> to draw, or null when the image cannot be shown; undefined while
+// it is decoded or fetched, or waits to be fetched again.
 let imageCache = new Map();
+// Content hash → how many times fetching a figure has failed.
+const imageFailures = new Map();
+// How many times a figure is fetched again after a failure that may pass.
+const IMAGE_RETRIES = 3;
 
 // The image of a list item to draw, or undefined while it is not ready
 // (the page is drawn again when it is); null when it cannot be shown.
+// An item's bytes are hashed when it is first drawn, so pages that are
+// not shown cost nothing.
 function imageOf(item) {
-  const cached = imageCache.get(item.key);
-  if (cached !== undefined || imageCache.has(item.key)) return cached && cached.source;
-  imageCache.set(item.key, undefined);
-  const cache = imageCache;
-  const settle = (source, retry) => {
-    if (cache !== imageCache) {
+  if (item.key === null) item.key = contentHash(item.bytes);
+  const key = item.key;
+  if (imageCache.has(key)) {
+    const cached = imageCache.get(key);
+    return cached && cached.source;
+  }
+  imageCache.set(key, undefined);
+  // Settles the request, unless the image was dropped meanwhile.
+  const settle = (source) => {
+    if (!imageCache.has(key) || imageCache.get(key) !== undefined) {
       if (source && source.close) source.close();
       return;
     }
-    if (source === null && retry) {
-      // A failure that may pass (the network, the server): asked again
-      // after a while.
-      setTimeout(() => {
-        if (cache.get(item.key) === null) cache.delete(item.key);
-        repaintImages();
-      }, RETRY_AFTER);
-      cache.set(item.key, null);
-    } else {
-      cache.set(item.key, { source });
-    }
+    imageCache.set(key, { source });
     repaintImages();
   };
   if (item.format < RASTER_TYPES.length) {
     createImageBitmap(new Blob([item.bytes], { type: RASTER_TYPES[item.format] })).then(
-      (bitmap) => settle(bitmap, false),
-      () => settle(null, false), // Bytes that do not decode never will.
+      (bitmap) => settle(bitmap),
+      () => settle(null), // Bytes that do not decode never will.
     );
   } else if (item.format === 4 || item.format === 5) {
     const img = new Image();
     img.decoding = "async";
-    img.onload = () => settle(img, false);
-    img.onerror = () => settle(null, true);
-    img.src = `/figure/${item.key}.svg?token=${encodeURIComponent(token)}`;
+    img.onload = () => {
+      imageFailures.delete(key);
+      settle(img);
+    };
+    img.onerror = () => {
+      // A failure that may pass (the network, the server): fetched again
+      // after a while, a few times, waiting longer each time.
+      const failures = (imageFailures.get(key) || 0) + 1;
+      imageFailures.set(key, failures);
+      if (failures > IMAGE_RETRIES) return settle(null);
+      setTimeout(() => {
+        if (imageCache.has(key) && imageCache.get(key) === undefined) {
+          imageCache.delete(key);
+          repaintImages();
+        }
+      }, RETRY_AFTER * 2 ** (failures - 1));
+    };
+    img.src = `/figure/${key}.svg?token=${encodeURIComponent(token)}`;
   } else {
-    cache.set(item.key, { source: null }); // A format of a later version.
+    imageCache.set(key, { source: null }); // A format of a later version.
   }
   return undefined;
 }
@@ -289,17 +307,20 @@ function repaintImages() {
   redrawVisible();
 }
 
-// Drops the images no page's list holds any more.
+// Drops the images that no page's list holds as far as the viewer knows:
+// lists not drawn yet have not hashed their images, so an image only they
+// hold is decoded again when they are drawn.
 function pruneImages() {
   const used = new Set();
   for (const page of pages) {
     if (!page || !page.list) continue;
-    for (const item of page.list.items) if (item.kind === "image") used.add(item.key);
+    for (const item of page.list.items) if (item.kind === "image" && item.key) used.add(item.key);
   }
   for (const [key, entry] of imageCache) {
     if (used.has(key)) continue;
     if (entry && entry.source && entry.source.close) entry.source.close();
     imageCache.delete(key);
+    imageFailures.delete(key);
   }
 }
 
@@ -877,7 +898,6 @@ function apply({ update, frames }) {
     }
     // A span map changes nothing that is drawn.
   }
-  pruneImages();
   if (fitting || !zoom) zoom = fitZoom();
   for (const page of pages) if (page) layoutPage(page);
   diagnostics = update.diagnostics || [];
@@ -888,6 +908,8 @@ function apply({ update, frames }) {
   const what = update.variant ? `${update.variant} (${update.target})` : update.target;
   statusLine.textContent = `${what}: ${update.pages} page${update.pages === 1 ? "" : "s"}, revision ${update.revision}`;
   redrawVisible();
+  // After drawing, so that the visible pages have hashed their images.
+  pruneImages();
   sendVisible();
 }
 

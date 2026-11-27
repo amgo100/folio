@@ -428,6 +428,71 @@ fn node(script: &str, url: &str) {
 }
 
 #[test]
+fn the_viewer_hashes_images_as_the_server_does() {
+    // The viewer names figures to `/figure/` by `Image::content_hash`,
+    // which `contentHash` in `viewer.js` computes again. Needs Node.js only.
+    let has_node = std::process::Command::new("node")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !has_node {
+        eprintln!("skipped: Node.js is not installed");
+        return;
+    }
+    let script = include_str!("../src/viewer/viewer.js");
+    let start = script.find("function contentHash(").expect("contentHash");
+    let end = start + script[start..].find("\n}\n").expect("its end") + 3;
+    let mut inputs: Vec<Vec<u8>> = [0, 1, 7, 8, 9, 15, 16, 17, 1000]
+        .iter()
+        .map(|&n| (0..n).map(|i: usize| (i * 151 + 7) as u8).collect())
+        .collect();
+    inputs.push(vec![0xff; 64]);
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+    for file in ["acceptance/assets/sledge.svg", "figures/assets/field.pdf"] {
+        inputs.push(std::fs::read(corpus.join(file)).unwrap());
+    }
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let program = format!(
+        "{}\nfor (const line of require('fs').readFileSync(0, 'utf8').split('\\n')) {{\n\
+         if (line === '') continue;\n\
+         console.log(contentHash(Uint8Array.from(Buffer.from(line.slice(1), 'hex'))));\n}}",
+        &script[start..end]
+    );
+    let mut child = std::process::Command::new("node")
+        .args(["-e", &program])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin: String = inputs.iter().map(|i| format!("x{}\n", hex(i))).collect();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let got: Vec<String> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let want: Vec<String> = inputs
+        .iter()
+        .map(|bytes| {
+            let image = folio_component::Image::new(
+                bytes.as_slice().into(),
+                folio_component::ImageFormat::Png,
+            );
+            format!("{:016x}", image.content_hash())
+        })
+        .collect();
+    assert_eq!(got, want);
+}
+
+#[test]
 fn figures_are_served_as_svg() {
     use folio_component::ImageFormat;
     let dir = project("figures");
@@ -463,7 +528,11 @@ fn figures_are_served_as_svg() {
             let policy = header(&head, "Content-Security-Policy").expect("a policy");
             assert!(policy.contains("default-src 'none'"), "{policy}");
             let svg = String::from_utf8(body).unwrap();
-            assert!(svg.starts_with("<svg"), "{svg:.100}");
+            // Stretched to any box that holds the figure, as in the PDF.
+            assert!(
+                svg.starts_with("<svg preserveAspectRatio=\"none\" "),
+                "{svg:.100}"
+            );
             // The figure itself, embedded: a PDF figure as the SVG it
             // converts to.
             assert!(
