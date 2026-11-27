@@ -132,6 +132,16 @@ pub enum InterpreterWarning {
     UnsupportedFont,
     /// An image failed to decode.
     ImageDecodeFailure,
+    // Folio: the limits of one interpretation (see `cache::Budget`).
+    /// A form XObject draws itself; it is not drawn again (Folio).
+    FormCycle,
+    /// The page takes more work to draw than the interpreter does; the rest
+    /// is not drawn (Folio).
+    TooComplex,
+    /// An image, or the images drawn together, would take more memory
+    /// decoded than `hayro_syntax::MAX_IMAGE_BYTES`; it is not drawn
+    /// (Folio).
+    ImageTooLarge,
 }
 
 /// interpret the contents of the page and render them into the device.
@@ -227,6 +237,15 @@ pub fn interpret<'a>(
     context.save_state();
 
     while let Some(op) = ops.next() {
+        // Folio: every operator is a unit of the interpretation's work.
+        if !context
+            .interpreter_cache
+            .object_cache
+            .1
+            .spend(1, &context.settings.warning_sink)
+        {
+            break;
+        }
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
             TypedInstruction::StrokeColorDeviceRgb(s) => {

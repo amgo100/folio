@@ -18,7 +18,7 @@ use folio_component::{ElementKind, Location, Name, QualifiedName};
 use folio_syntax::{Span, SyntaxNode};
 
 use super::value::{Dict, Equality, LazyHash, TooLong, Value, compare_once, write_str_repr};
-use crate::locate::{Frame, Origin};
+use crate::locate::Origin;
 
 /// A sequence of content nodes.
 ///
@@ -134,25 +134,75 @@ impl Content {
             })
     }
 
-    /// Records that `frame`, an iteration or a call, made this content:
-    /// on its elements at the top level, and those of its slots' bodies.
-    /// Elements inside them take the frame from the element around them
-    /// when the document model locates them ([`Origin::nested`]), so
-    /// stamping costs one step per node at the top level, however deeply
-    /// the content nests.
-    pub(crate) fn stamp(&mut self, frame: Frame) {
-        if !self
-            .nodes
-            .iter()
-            .any(|node| matches!(node, Node::Element(_) | Node::Slot(_)))
-        {
+    /// Whether two contents are equal but for the origins of their
+    /// elements, as `==` compares content: the loop iteration or call that
+    /// made content does not make it other content, though it gives its
+    /// elements other locations.
+    pub(crate) fn same_but_origins(&self, other: &Self) -> bool {
+        if self.nodes.as_ptr() == other.nodes.as_ptr() && self.len() == other.len() {
+            return true;
+        }
+        if self.len() != other.len() {
+            return false;
+        }
+        compare_once(
+            self.nodes.as_ptr() as usize,
+            other.nodes.as_ptr() as usize,
+            Equality::ButOrigins,
+            || {
+                self.nodes
+                    .iter()
+                    .zip(other.nodes.iter())
+                    .all(|(a, b)| match (a, b) {
+                        (Node::Element(a), Node::Element(b)) => {
+                            a.name == b.name
+                                && a.kind == b.kind
+                                && a.label == b.label
+                                && a.span == b.span
+                                && a.location == b.location
+                                && dicts_same_but_origins(&a.fields, &b.fields)
+                        }
+                        (Node::Slot(a), Node::Slot(b)) => {
+                            a.parent == b.parent
+                                && a.name == b.name
+                                && a.span == b.span
+                                && a.body.same_but_origins(&b.body)
+                        }
+                        (a, b) => a == b,
+                    })
+            },
+        )
+    }
+
+    /// Whether the content holds an open element at the top level, or in a
+    /// slot's body.
+    fn has_open(&self) -> bool {
+        self.nodes.iter().any(|node| match node {
+            Node::Element(element) => element.origin.is_open(),
+            Node::Slot(slot) => slot.body.has_open(),
+            _ => false,
+        })
+    }
+
+    /// Anchors what a closure call made, at the call site `site` in code
+    /// at the origin `at` (`Origin::anchor`): the open elements at the
+    /// top level, and those of its slots' bodies. Elements inside them
+    /// take their origin from the element around them when the document
+    /// model locates them (`Origin::nested`), and elements that were made
+    /// before the call, such as its arguments, are not open: so anchoring
+    /// costs one step per node at the top level, however deeply the content
+    /// nests, and changes nothing it was given.
+    pub(crate) fn anchor(&mut self, at: Origin, site: Span) {
+        if !self.has_open() {
             return;
         }
         self.changed();
         for node in self.nodes.make_mut() {
             match node {
-                Node::Element(element) => element.origin = element.origin.within(frame),
-                Node::Slot(slot) => slot.body.stamp(frame),
+                Node::Element(element) if element.origin.is_open() => {
+                    element.origin = element.origin.anchor(at, site);
+                }
+                Node::Slot(slot) => slot.body.anchor(at, site),
                 _ => {}
             }
         }
@@ -287,35 +337,60 @@ impl Debug for Content {
     }
 }
 
-/// Records that `frame`, an iteration or a call, made `value`: on the
-/// content it is or holds in arrays and dictionaries ([`Content::stamp`]).
-pub(crate) fn stamp(value: &mut Value, frame: Frame) {
+/// Whether two values are equal but for the origins of the elements of the
+/// content they hold ([`Content::same_but_origins`]).
+fn same_but_origins(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Content(a), Value::Content(b)) => a.same_but_origins(b),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len()
+                && compare_once(a.storage(), b.storage(), Equality::ButOrigins, || {
+                    a.iter().zip(b.iter()).all(|(a, b)| same_but_origins(a, b))
+                })
+        }
+        (Value::Dict(a), Value::Dict(b)) => dicts_same_but_origins(a, b),
+        (a, b) => a == b,
+    }
+}
+
+/// Whether two dictionaries are equal but for the origins of the elements
+/// of the content they hold.
+fn dicts_same_but_origins(a: &Dict, b: &Dict) -> bool {
+    a.len() == b.len()
+        && compare_once(a.storage(), b.storage(), Equality::ButOrigins, || {
+            a.iter()
+                .zip(b.iter())
+                .all(|((ka, va), (kb, vb))| ka == kb && same_but_origins(va, vb))
+        })
+}
+
+/// Anchors what a closure call made in the value it returned, at the call
+/// site `site` in code at the origin `at` ([`Content::anchor`]): the
+/// content it is, or that an array or dictionary holds as an item. Content
+/// nested deeper in data is not anchored, so that a call returning a large
+/// table pays nothing for it; its instances are told apart by number.
+pub(crate) fn anchor(value: &mut Value, at: Origin, site: Span) {
     match value {
-        Value::Content(content) => content.stamp(frame),
+        Value::Content(content) => content.anchor(at, site),
         Value::Array(array) => {
             for i in 0..array.len() {
-                if holds_content(&array[i]) {
-                    array.update(i, |item| stamp(item, frame));
+                if matches!(array[i], Value::Content(_)) {
+                    array.update(i, |item| anchor(item, at, site));
                 }
             }
         }
         Value::Dict(dict) => {
             let keys: Vec<EcoString> = dict
                 .iter()
-                .filter(|(_, v)| holds_content(v))
+                .filter(|(_, v)| matches!(v, Value::Content(_)))
                 .map(|(k, _)| k.clone())
                 .collect();
             for key in keys {
-                dict.update(&key, false, |v| stamp(v, frame));
+                dict.update(&key, false, |v| anchor(v, at, site));
             }
         }
         _ => {}
     }
-}
-
-/// Whether a value is content or may hold some.
-fn holds_content(value: &Value) -> bool {
-    matches!(value, Value::Content(_) | Value::Array(_) | Value::Dict(_))
 }
 
 /// A node of the content tree.
@@ -444,24 +519,34 @@ mod tests {
     }
 
     #[test]
-    fn stamps_reach_top_level_elements_only() {
+    fn anchoring_reaches_open_top_level_elements_only() {
         let leaf = Content::node(Node::Text {
             text: "x".into(),
             span: Span::detached(),
         });
-        let content = doubled(&doubled(&leaf));
-        let frame = Frame::Call {
-            span: Span::detached(),
-        };
-        let mut value = Value::Array([Value::Content(content.clone()), Value::Int(1)].into());
-        stamp(&mut value, frame);
+        // Content a call made: its elements are open.
+        let mut made = doubled(&doubled(&leaf));
+        for element in made.elements_mut() {
+            element.origin = Origin::OPEN;
+        }
+        // An argument it was given, made before the call.
+        let given = doubled(&leaf);
+        let mut value = Value::Array(
+            [
+                Value::Content(made.clone()),
+                Value::Content(given.clone()),
+                Value::Int(1),
+            ]
+            .into(),
+        );
+        anchor(&mut value, Origin::ROOT, Span::detached());
         let Value::Array(array) = &value else {
             unreachable!()
         };
-        let Value::Content(stamped) = &array[0] else {
-            unreachable!()
-        };
-        let origins = |content: &Content| -> Vec<Origin> {
+        let origins = |value: &Value| -> Vec<Origin> {
+            let Value::Content(content) = value else {
+                unreachable!()
+            };
             content
                 .nodes()
                 .iter()
@@ -471,18 +556,28 @@ mod tests {
                 })
                 .collect()
         };
-        let within = Origin::ROOT.within(frame);
-        assert_eq!(origins(stamped), [within, within]);
-        assert_ne!(stamped, &content);
-        // The elements inside take the frame from the element around
-        // them when they are located: they keep their own origin.
-        let Node::Element(first) = &stamped.nodes()[0] else {
+        let anchored = Origin::OPEN.anchor(Origin::ROOT, Span::detached());
+        assert!(!anchored.is_open());
+        assert_eq!(origins(&array[0]), [anchored, anchored]);
+        // What it was given is left alone, and so are the elements inside.
+        assert_eq!(array[1], Value::Content(given));
+        let Value::Content(first) = &array[0] else {
+            unreachable!()
+        };
+        let Node::Element(first) = &first.nodes()[0] else {
             unreachable!()
         };
         let Some(Value::Content(inner)) = first.field("body") else {
             unreachable!()
         };
-        assert_eq!(origins(inner), [Origin::ROOT, Origin::ROOT]);
+        assert_eq!(
+            inner
+                .nodes()
+                .iter()
+                .filter(|n| matches!(n, Node::Element(_)))
+                .count(),
+            2
+        );
     }
 
     #[test]

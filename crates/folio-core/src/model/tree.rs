@@ -403,16 +403,8 @@ fn made<'f>(name: &str, fields: impl IntoIterator<Item = (&'f str, Value)>, span
 /// the element around it ([`Origin::ROOT`] for the root).
 fn locate(locator: &mut Locator, element: &mut Element, outer: Origin) {
     let made = made_by(&element.name);
-    let own = match made {
-        Made::Evaluated => element.origin,
-        // The model makes paragraphs, lists and sections around evaluated
-        // content: they take the origin of the first element they hold,
-        // the heading of a section, so that one made from an iteration's
-        // content is told apart from another iteration's.
-        _ => first_origin(element),
-    };
-    let origin = outer.nested(own);
-    element.location = locator.locate(element.span, made, origin);
+    let (own, inner) = origins(element, outer);
+    element.location = locator.locate(element.span, made, own);
     let keys: Vec<EcoString> = element
         .fields
         .iter()
@@ -428,11 +420,50 @@ fn locate(locator: &mut Locator, element: &mut Element, outer: Origin) {
                     .any(|n| matches!(n, Node::Element(_)))
             {
                 for child in content.elements_mut() {
-                    locate(locator, child, origin);
+                    locate(locator, child, inner);
                 }
             }
         });
     }
+}
+
+/// The origin of an element inside one whose origin is `outer`, and the
+/// origin it gives the elements of its content.
+///
+/// An evaluated element nests its own origin in `outer`, and gives its
+/// content the result. The model makes paragraphs, lists and sections
+/// around evaluated content: such an element takes the origin of the first
+/// element it holds, the heading of a section, so that one made from an
+/// iteration's content is told apart from another iteration's, but passes
+/// `outer` on, so that what it holds does not depend on which element
+/// comes first.
+fn origins(element: &Element, outer: Origin) -> (Origin, Origin) {
+    match made_by(&element.name) {
+        Made::Evaluated => {
+            let origin = outer.nested(element.origin);
+            (origin, origin)
+        }
+        _ => (outer.nested(first_origin(element)), outer),
+    }
+}
+
+/// Calls `f` with every element of the tree under `root` and the origin
+/// its location was built from, in document order.
+pub(crate) fn visit_origins(root: &Element, f: &mut dyn FnMut(&Element, Origin)) {
+    fn walk(element: &Element, outer: Origin, f: &mut dyn FnMut(&Element, Origin)) {
+        let (own, inner) = origins(element, outer);
+        f(element, own);
+        for (_, value) in element.fields.iter() {
+            if let Value::Content(content) = value {
+                for node in content.nodes() {
+                    if let Node::Element(child) = node {
+                        walk(child, inner, f);
+                    }
+                }
+            }
+        }
+    }
+    walk(root, Origin::ROOT, f);
 }
 
 /// The origin of the first element in an element's body, as evaluation

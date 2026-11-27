@@ -415,6 +415,9 @@ pub(crate) enum Equality {
     Loose,
     /// The order of `<` and sorting: the pairs it found equal.
     Order,
+    /// `==` on content: structural, but for the origins of elements
+    /// ([`super::content::Content::same_but_origins`]).
+    ButOrigins,
 }
 
 /// The comparisons running on a thread, and the pairs of containers they

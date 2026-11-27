@@ -4,185 +4,135 @@
 //! element instances of a group's variants by location: by span and the
 //! loop iterations and calls that made them ([`crate::locate::Origin`]).
 //! Iteration `i` of a loop is the same in every variant only if the loop
-//! iterates over the same items in each. Evaluation records what each loop
-//! iterated over ([`LoopRun`]), and [`check_loops`] reports a loop whose
-//! items differ between the variants of a group when it makes an element
-//! that a shared counter counts: its numbering cannot be shared, so the
+//! iterates over the same items in each, which the origin's fingerprint of
+//! those items tells. [`check_pairing`] reports an instance that a shared
+//! counter counts, paired with an instance of another variant of its group
+//! that was made from other items: its numbering cannot be shared, so the
 //! build says so instead of numbering wrongly.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::collections::{HashMap, HashSet};
 
 use ecow::EcoVec;
-use folio_component::Name;
+use folio_component::{ElementKind, Location, Name, QualifiedName};
 use folio_syntax::Span;
 
 use crate::db::{Db, Project};
-use crate::diag::{self, Diagnostic};
-use crate::eval::{self, Value};
+use crate::diag::Diagnostic;
+use crate::eval::Element;
+use crate::model::{document, visit_origins};
 
-/// A run of a loop, or of a function that calls a closure for each item:
-/// what it iterated over and which elements its output holds.
-#[salsa::accumulator]
-#[derive(Debug)]
-pub struct LoopRun {
-    /// The loop, or the call of the function.
-    pub span: Span,
-    /// A hash of the items, in order. It is compared within one process,
-    /// never written out.
-    pub items: u64,
-    /// The names of the elements its output holds, at any depth.
-    pub names: EcoVec<Name>,
+/// Whether a shared counter counts an element: the counter named after
+/// it, or `equation` for display maths (SPEC §4.5). A counter named
+/// without a namespace counts the elements of that name in any, as an
+/// unqualified name may name a component's element (`question` for
+/// `exam.question`).
+fn counts(counter: &QualifiedName, element: &Element) -> bool {
+    let name = &element.name;
+    if counter.namespace.is_some() && counter.namespace != name.namespace {
+        return false;
+    }
+    counter.name == name.name
+        || (counter.namespace.is_none()
+            && name.namespace.is_none()
+            && counter.name.as_str() == "equation"
+            && name.name.as_str() == "math"
+            && element.kind == ElementKind::Block)
 }
 
-/// Records a run of the loop at `span` over `items`, which gave `output`.
-pub(crate) fn record<'a>(
+/// The instances of a variant's document that the shared counters count,
+/// by location: their span, their name and the fingerprint of the items
+/// that made them.
+fn counted(
     db: &dyn Db,
-    span: Span,
-    items: impl IntoIterator<Item = &'a Value>,
-    output: &Value,
-) {
-    use salsa::Accumulator;
-    let mut hasher = DefaultHasher::new();
-    let mut count = 0u64;
-    for item in items {
-        item.hash(&mut hasher);
-        count += 1;
-    }
-    count.hash(&mut hasher);
-    let mut names = BTreeSet::new();
-    element_names(output, &mut names, &mut HashSet::new());
-    LoopRun {
-        span,
-        items: hasher.finish(),
-        names: names.into_iter().collect(),
-    }
-    .accumulate(db);
-}
-
-/// Adds the names of the elements a value holds to `out`, looking at each
-/// shared piece of content once.
-fn element_names(value: &Value, out: &mut BTreeSet<Name>, seen: &mut HashSet<usize>) {
-    match value {
-        Value::Content(content) => {
-            if !seen.insert(content.nodes().as_ptr() as usize) {
-                return;
+    project: Project,
+    variant: &Name,
+    shared: &[QualifiedName],
+) -> HashMap<Location, (Span, QualifiedName, u64)> {
+    let mut out = HashMap::new();
+    if let Some(doc) = document(db, project, Some(variant.clone())) {
+        visit_origins(&doc.root, &mut |element, origin| {
+            if shared.iter().any(|c| counts(c, element)) {
+                out.insert(
+                    element.location,
+                    (element.span, element.name.clone(), origin.items()),
+                );
             }
-            for node in content.nodes() {
-                match node {
-                    eval::Node::Element(element) => {
-                        out.insert(element.name.name.clone());
-                        for (_, field) in element.fields.iter() {
-                            element_names(field, out, seen);
-                        }
-                    }
-                    eval::Node::Slot(slot) => {
-                        element_names(&Value::Content(slot.body.clone()), out, seen);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items.iter() {
-                element_names(item, out, seen);
-            }
-        }
-        Value::Dict(dict) => {
-            for (_, item) in dict.iter() {
-                element_names(item, out, seen);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Whether a shared counter counts the elements of a name: the counter
-/// named after them, or `equation` for display maths (SPEC §4.5).
-fn counts(counter: &Name, element: &Name) -> bool {
-    counter == element || (counter.as_str() == "equation" && element.as_str() == "math")
-}
-
-/// The runs of each loop in the evaluation of a variant: for each loop,
-/// the hashes of what its runs iterated over, sorted, and the names of the
-/// elements they made.
-type Runs = BTreeMap<u64, (Span, Vec<u64>, BTreeSet<Name>)>;
-
-fn runs(db: &dyn Db, project: Project, variant: &Name) -> Runs {
-    let mut out = Runs::new();
-    for run in eval::evaluate::accumulated::<LoopRun>(db, project, Some(variant.clone())) {
-        let entry = out
-            .entry(run.span.into_raw().get())
-            .or_insert_with(|| (run.span, Vec::new(), BTreeSet::new()));
-        entry.1.push(run.items);
-        entry.2.extend(run.names.iter().cloned());
-    }
-    for (_, items, _) in out.values_mut() {
-        items.sort_unstable();
+        });
     }
     out
 }
 
-/// Reports, for a variant in a numbering group, each loop that iterates
-/// over different items in another variant of the group while it makes an
-/// element a shared counter counts (`variant-loop-differs`, SPEC §6.1).
-#[salsa::tracked]
-pub fn check_loops(db: &dyn Db, project: Project, variant: Option<Name>) {
+/// The problems of pairing a variant's instances with those of the other
+/// variants of its numbering group (SPEC §6.1): each instance that a
+/// shared counter counts and that pairs with an instance of another
+/// variant made from other items is a `variant-loop-differs` error.
+///
+/// It reads the other variants' documents, so a build reports these
+/// diagnostics beside its own rather than through its queries: what those
+/// documents report belongs to their own builds.
+#[salsa::tracked(returns(ref))]
+pub fn check_pairing(db: &dyn Db, project: Project, variant: Option<Name>) -> EcoVec<Diagnostic> {
+    let mut out = EcoVec::new();
     let Some(variant) = variant else {
-        return;
+        return out;
     };
     let manifest = project.manifest(db);
     let Some(group) = manifest.numbering_group(variant.as_str()) else {
-        return;
+        return out;
     };
-    let shared: Vec<Name> = group
-        .shared_counters
+    let shared: Vec<QualifiedName> = group.shared_counters.iter().map(|c| c.v.clone()).collect();
+    if shared.is_empty() {
+        return out;
+    }
+    // Every variant's instances, in the order the group names the
+    // variants, so that each variant's build reports the same error.
+    let all: Vec<(&Name, _)> = group
+        .variants
         .iter()
-        .map(|c| c.v.name.clone())
+        .map(|v| (&v.v, counted(db, project, &v.v, &shared)))
         .collect();
-    let own = runs(db, project, &variant);
-    let mut reported = HashSet::new();
-    for other in &group.variants {
-        if other.v == variant {
-            continue;
-        }
-        let theirs = runs(db, project, &other.v);
-        for (key, (span, items, names)) in &own {
-            let (their_items, their_names) = match theirs.get(key) {
-                Some((_, items, names)) => (items.as_slice(), Some(names)),
-                None => (&[][..], None),
-            };
-            if items.as_slice() == their_items {
-                continue;
-            }
-            let counted = shared.iter().find(|counter| {
-                names
-                    .iter()
-                    .chain(their_names.into_iter().flatten())
-                    .any(|name| counts(counter, name))
-            });
-            let Some(counter) = counted else {
-                continue;
-            };
-            if !reported.insert(*key) {
-                continue;
-            }
-            diag::report(
-                db,
-                Diagnostic::error(
-                    *span,
-                    format!(
-                        "this loop runs over different items in `{variant}` and `{}`, so the \
-                         `{counter}` numbering of numbering group `{}` cannot be shared",
-                        other.v, group.name.v
-                    ),
-                )
-                .with_code("variant-loop-differs")
-                .with_hint(
-                    "loop over the same items in every variant and leave items out inside the \
-                     loop with `if`, or hide them with `display` or `#in-variant`",
-                ),
-            );
+    let Some((_, own)) = all.iter().find(|(v, _)| **v == variant) else {
+        return out;
+    };
+    let mut differ: Vec<(Span, &QualifiedName, Vec<&Name>)> = Vec::new();
+    for (location, (span, name, items)) in own {
+        let having: Vec<(&Name, u64)> = all
+            .iter()
+            .filter_map(|(v, counted)| counted.get(location).map(|(.., i)| (*v, *i)))
+            .collect();
+        if having.iter().any(|(_, i)| i != items) {
+            differ.push((*span, name, having.into_iter().map(|(v, _)| v).collect()));
         }
     }
+    // In the order of their spans, so that the diagnostics come in a fixed
+    // order.
+    differ.sort_by_key(|(span, ..)| span.into_raw().get());
+    let mut reported = HashSet::new();
+    for (span, name, variants) in differ {
+        if !reported.insert(span) {
+            continue;
+        }
+        let names: Vec<String> = variants.iter().map(|v| format!("`{v}`")).collect();
+        let listed = match names.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+            None => String::new(),
+        };
+        out.push(
+            Diagnostic::error(
+                span,
+                format!(
+                    "this `{name}` is made by the same loop iteration in {listed} from \
+                     different items, so numbering group `{}` cannot share its number",
+                    group.name.v
+                ),
+            )
+            .with_code("variant-loop-differs")
+            .with_hint(
+                "loop over the same items in every variant and leave items out inside the \
+                 loop with `if`, or hide them with `display` or `#in-variant`",
+            ),
+        );
+    }
+    out
 }

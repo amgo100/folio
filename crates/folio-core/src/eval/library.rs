@@ -9,7 +9,7 @@ use ecow::{EcoString, eco_format};
 use folio_component::{Color, QualifiedName, Scalar};
 use folio_syntax::{Span, ast};
 
-use super::content::{Content, stamp};
+use super::content::Content;
 use super::error::{At, EvalError, EvalResult, StrResult, bail};
 use super::ops::{self, a_type};
 use super::value::{
@@ -18,8 +18,7 @@ use super::value::{
 use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
 use crate::db::{Bytes, FileKind, data_file, report_read, source_file};
-use crate::locate::Frame;
-use crate::variants;
+use crate::locate::{Frame, item_key};
 
 /// The global scope: the library, the built-in elements content can call,
 /// and the elements of the components in use, unqualified where the name
@@ -1204,38 +1203,41 @@ fn array_method(
             }
             Value::Array(out)
         }
-        // Each call's result is an iteration of the call (SPEC §6.1), so
-        // the instances it makes pair across variants by item.
+        // Each call is an iteration of the call (SPEC §6.1), so the
+        // instances it makes pair across variants by item.
         "map" => {
             let func: Func = args.expect("function")?;
             vm.alloc(ITEM * items.len() as u64, span)?;
             let mut out = Array::with_capacity(items.len());
+            let outer = vm.origin;
             for (i, item) in items.iter().enumerate() {
-                let mut value = call_with(vm, &func, std::slice::from_ref(item), span)?;
-                stamp(
-                    &mut value,
-                    Frame::Iteration {
-                        span,
-                        index: i as u64,
-                    },
-                );
-                out.push(value);
+                vm.origin = outer.within(Frame::Iteration {
+                    span,
+                    index: i as u64,
+                    item: item_key(item),
+                });
+                let value = call_with(vm, &func, std::slice::from_ref(item), span);
+                vm.origin = outer;
+                out.push(value?);
             }
-            let out = Value::Array(out);
-            variants::record(vm.db, span, items.iter(), &out);
-            out
+            Value::Array(out)
         }
+        // Each call is an iteration, as for `map`; anchoring a call
+        // reaches only what it made, not the accumulator it was given.
         "fold" => {
             let mut acc: Value = args.expect("initial value")?;
             let func: Func = args.expect("function")?;
-            // The accumulator holds what earlier calls made, so the calls
-            // are not stamped: their instances are told apart by number,
-            // which pairs across variants when the items do, as the
-            // record checks.
-            for item in items.iter() {
-                acc = call_with(vm, &func, &[acc, item.clone()], span)?;
+            let outer = vm.origin;
+            for (i, item) in items.iter().enumerate() {
+                vm.origin = outer.within(Frame::Iteration {
+                    span,
+                    index: i as u64,
+                    item: item_key(item),
+                });
+                let result = call_with(vm, &func, &[acc, item.clone()], span);
+                vm.origin = outer;
+                acc = result?;
             }
-            variants::record(vm.db, span, items.iter(), &acc);
             acc
         }
         "any" | "all" => {

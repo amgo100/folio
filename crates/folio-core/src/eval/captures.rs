@@ -11,6 +11,7 @@ use folio_syntax::ast::{self, AstNode};
 use folio_syntax::{SyntaxKind, SyntaxNode};
 
 use super::value::Value;
+use super::vm::{STACK_RED_ZONE, STACK_SEGMENT};
 
 /// Looks up the free variables of a closure ([`free_variables`]) that the
 /// defining scope has with `lookup`. Variables it does not have are
@@ -177,9 +178,14 @@ impl Visitor {
         }
     }
 
+    /// Visits a node's children, on a new stack segment if the stack is
+    /// running low: a chain of a math operator such as `1/1/…/x` nests the
+    /// syntax as deeply as it is long.
     fn children(&mut self, node: &SyntaxNode) {
-        for child in node.children() {
-            self.visit(child);
-        }
+        stacker::maybe_grow(STACK_RED_ZONE, STACK_SEGMENT, || {
+            for child in node.children() {
+                self.visit(child);
+            }
+        });
     }
 }

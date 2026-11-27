@@ -18,6 +18,27 @@ impl ImageColorSpace {
     }
 }
 
+// Folio: whether an image's header says it would take more memory decoded
+// than `MAX_IMAGE_BYTES`, at four bytes a pixel or more.
+pub(crate) fn too_large(data: &[u8], params: &ImageDecodeParams) -> bool {
+    let settings = DecodeSettings {
+        resolve_palette_indices: false,
+        strict: false,
+        target_resolution: params.target_dimension,
+    };
+    hayro_jpeg2000::Image::new(data, &settings).is_ok_and(|image| image_too_large(&image))
+}
+
+// Folio: see `too_large`.
+fn image_too_large(image: &hayro_jpeg2000::Image<'_>) -> bool {
+    let channels =
+        u64::from(image.color_space().num_channels()) + u64::from(image.has_alpha());
+    u64::from(image.width())
+        .saturating_mul(u64::from(image.height()))
+        .saturating_mul(channels.max(4))
+        > crate::MAX_IMAGE_BYTES
+}
+
 pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
@@ -48,6 +69,11 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
         },
     };
     let has_alpha = image.has_alpha();
+    // Folio: an image too large for `MAX_IMAGE_BYTES` is not decoded (see
+    // `too_large`, which `Filter::apply` checks first).
+    if image_too_large(&image) {
+        return None;
+    }
     let bitmap = image.decode().ok()?;
 
     let (mut data, mut alpha) = if !has_alpha {

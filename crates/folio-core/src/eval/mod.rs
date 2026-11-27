@@ -300,6 +300,9 @@ pub(crate) fn call_closure(
         depth,
         closure.captured().clone(),
     );
+    // What the call makes is open until it returns to its call site, so
+    // the memo serves every site (SPEC §2.3).
+    vm.origin = crate::locate::Origin::OPEN;
     let outcome = vm.closure_body(&closure, args);
     Memo {
         outcome,
