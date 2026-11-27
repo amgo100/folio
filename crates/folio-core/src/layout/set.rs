@@ -6,11 +6,13 @@ use std::ops::Range;
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{
-    Abs, Em, FontId, Fragment, FragmentItem, Glyph, GlyphRun, ObjectBox, Paint, Point, Size,
+    Abs, Em, FontId, Fragment, FragmentItem, Glyph, GlyphRun, Location, ObjectBox, Paint, Point,
+    Size,
 };
 use folio_text::{Item, ItemKind, Paragraph, Segment};
 
 use super::flow::{ParagraphInfo, em, glyphs};
+use crate::text::TextSource;
 
 /// Sets line `index` of a paragraph with its baseline at `baseline`, adding
 /// its glyph runs to `out`. Positions are from the top-left of the body.
@@ -132,6 +134,7 @@ pub(super) fn set_line(
                 range: 0..0,
                 source: info.source(cluster..end.min(text.len())),
             };
+            let instance = instance(&info.sources, cluster..end.min(text.len()));
             pen = runs.push(
                 Key {
                     face,
@@ -141,8 +144,7 @@ pub(super) fn set_line(
                     item: i,
                 },
                 pen,
-                glyph,
-                cluster..end,
+                (glyph, cluster..end, instance),
             );
         }
     }
@@ -269,7 +271,9 @@ struct Current {
     key: Key,
     /// Where the run starts.
     x: Abs,
-    glyphs: Vec<(Glyph, Range<usize>)>,
+    /// The glyphs, the bytes of the paragraph's text each shows, and the
+    /// element instance each comes from.
+    glyphs: Vec<(Glyph, Range<usize>, Location)>,
 }
 
 /// Glyphs collected into runs.
@@ -282,19 +286,20 @@ struct Runs<'a> {
 
 impl Runs<'_> {
     /// Adds a glyph at `pen`, showing the bytes `range` of the paragraph's
-    /// text, and returns the pen after it.
-    fn push(&mut self, key: Key, pen: Abs, glyph: Glyph, range: Range<usize>) -> Abs {
+    /// text, from the element instance `instance` (as [`instance`] gives
+    /// it), and returns the pen after it.
+    fn push(&mut self, key: Key, pen: Abs, glyph: (Glyph, Range<usize>, Location)) -> Abs {
         if self.current.as_ref().is_some_and(|c| c.key != key) {
             self.flush();
         }
         let size = key.size;
-        let advance = glyph.x_advance.at(size);
+        let advance = glyph.0.x_advance.at(size);
         let current = self.current.get_or_insert_with(|| Current {
             key,
             x: pen,
             glyphs: Vec::new(),
         });
-        current.glyphs.push((glyph, range));
+        current.glyphs.push(glyph);
         pen + advance
     }
 
@@ -306,20 +311,27 @@ impl Runs<'_> {
         let lo = current
             .glyphs
             .iter()
-            .map(|(_, r)| r.start)
+            .map(|(_, r, _)| r.start)
             .min()
             .unwrap_or(0);
         let hi = current
             .glyphs
             .iter()
-            .map(|(_, r)| r.end)
+            .map(|(_, r, _)| r.end)
             .max()
             .unwrap_or(lo);
         let text: EcoString = self.text.get(lo..hi).unwrap_or_default().into();
+        let mut instances = EcoVec::new();
+        let mut last = Location::DETACHED;
         let glyphs: EcoVec<Glyph> = current
             .glyphs
             .into_iter()
-            .map(|(mut glyph, range)| {
+            .enumerate()
+            .map(|(i, (mut glyph, range, instance))| {
+                if instance != last {
+                    instances.push((offset(i), instance));
+                    last = instance;
+                }
                 glyph.range = offset(range.start - lo)..offset(range.end - lo);
                 glyph
             })
@@ -332,6 +344,7 @@ impl Runs<'_> {
                 fill: current.key.fill,
                 text,
                 glyphs,
+                instances,
             }),
         ));
     }
@@ -398,6 +411,7 @@ impl Runs<'_> {
             return pen;
         };
         let len = u32::try_from(c.len_utf8()).unwrap_or(1);
+        let from = instance(&info.sources, shows.clone());
         let source = info.source(shows);
         let size = paint.size;
         let count = hyphen.len();
@@ -425,6 +439,11 @@ impl Runs<'_> {
             fill: paint.fill.clone(),
             text: c.to_string().into(),
             glyphs,
+            instances: if from == Location::DETACHED {
+                EcoVec::new()
+            } else {
+                EcoVec::from([(0, from)])
+            },
         };
         let width = run.width();
         self.out.push((
@@ -432,6 +451,22 @@ impl Runs<'_> {
             FragmentItem::Text(run),
         ));
         pen + width
+    }
+}
+
+/// The element instance that the glyph showing the bytes `range` of a
+/// paragraph's text comes from, found as [`ParagraphInfo::source`] finds
+/// its node: [`Location::DETACHED`] for the paragraph's own element.
+fn instance(sources: &[TextSource], range: Range<usize>) -> Location {
+    let probe = if range.is_empty() {
+        range.start.saturating_sub(1)
+    } else {
+        range.start
+    };
+    let i = sources.partition_point(|s| s.range.end <= probe);
+    match sources.get(i) {
+        Some(source) if source.range.start <= probe => source.location,
+        _ => Location::DETACHED,
     }
 }
 

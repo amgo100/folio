@@ -575,13 +575,37 @@ fn set_number(
     })
 }
 
+/// The markers of the element a display starts, such as the number of a
+/// list item that holds only an equation, set as a line (SPEC §4.5,
+/// D-326-1).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct Lead {
+    /// How wide it is, with the space after it.
+    pub width: Abs,
+    /// How far it reaches above its baseline.
+    pub ascent: Abs,
+    /// How far it reaches below it.
+    pub descent: Abs,
+    /// What it draws, from the start of its baseline.
+    pub items: EcoVec<(Point, FragmentItem)>,
+    /// Whether its item is set right to left, so that it stands at the
+    /// right.
+    pub rtl: bool,
+}
+
 /// The content of the block of a display, `width` wide: the formula
 /// centred, and its numbers at the end of the lines they number, or below
-/// it, one after another, where they do not fit beside it. Its items are
-/// positioned from the block's content box, and its height is that of the
-/// formula with its numbers. The baselines are those of its first and last
-/// lines, from its top.
-pub(super) fn display_content(display: &Display, width: Abs, size: Abs) -> DisplayContent {
+/// it, one after another, where they do not fit beside it. A `lead` starts
+/// the first line, where a text item's marker would, and the formula keeps
+/// clear of it. Its items are positioned from the block's content box, and
+/// its height is that of the formula with its numbers. The baselines are
+/// those of its first and last lines, from its top.
+pub(super) fn display_content(
+    display: &Display,
+    width: Abs,
+    size: Abs,
+    lead: Option<&Lead>,
+) -> DisplayContent {
     let math = &display.math;
     let gutter = size * NUMBER_GUTTER;
     // Numbers, each with the baseline it sits on.
@@ -603,11 +627,22 @@ pub(super) fn display_content(display: &Display, width: Abs, size: Abs) -> Displ
         .map(|(n, _)| n.width)
         .max()
         .unwrap_or_default();
-    let centred = (width - math.width) / 2.0;
+    // A lead takes the start of the first line: the left, or the right in
+    // a right-to-left item, where the numbers stand, so that they go below.
+    let lead_width = lead.map_or(Abs::zero(), |l| l.width);
+    let rtl = lead.is_some_and(|l| l.rtl);
+    let (start, end) = if rtl {
+        (Abs::zero(), width - lead_width)
+    } else {
+        (lead_width, width)
+    };
+    let centred = ((width - math.width) / 2.0)
+        .min(end - math.width)
+        .max(start);
     // Beside the formula where it fits with the gutter, at the formula's
     // place moved as far towards the start as needed.
     let beside =
-        numbers.is_empty() || centred.min(width - widest - gutter - math.width) >= Abs::zero();
+        numbers.is_empty() || (!rtl && centred.min(width - widest - gutter - math.width) >= start);
     if !beside {
         // Each number on a line of its own below the formula.
         let mut bottom = math.height;
@@ -621,21 +656,34 @@ pub(super) fn display_content(display: &Display, width: Abs, size: Abs) -> Displ
     } else {
         centred.min(width - widest - gutter - math.width)
     }
-    .max(Abs::zero());
+    .max(start);
+    let first = math.baselines.first().copied().unwrap_or(math.height);
     // Numbers that reach above or below the formula make room for it.
+    let lead_at = lead.map(|l| (l.ascent, l.descent, first));
     let above = numbers
         .iter()
-        .map(|(n, baseline)| n.ascent - *baseline)
+        .map(|(n, baseline)| (n.ascent, n.descent, *baseline))
+        .chain(lead_at)
+        .map(|(ascent, _, baseline)| ascent - baseline)
         .max()
         .unwrap_or_default()
         .max(Abs::zero());
     let below = numbers
         .iter()
-        .map(|(n, baseline)| *baseline + n.descent - math.height)
+        .map(|(n, baseline)| (n.ascent, n.descent, *baseline))
+        .chain(lead_at)
+        .map(|(_, descent, baseline)| baseline + descent - math.height)
         .max()
         .unwrap_or_default()
         .max(Abs::zero());
     let mut items = EcoVec::with_capacity(math.items.len());
+    // The lead first, as it is read first.
+    if let Some(lead) = lead {
+        let lx = if rtl { width - lead_width } else { Abs::zero() };
+        for (pos, item) in &lead.items {
+            items.push((Point::new(pos.x + lx, pos.y + first + above), item.clone()));
+        }
+    }
     for (pos, item) in &math.items {
         items.push((Point::new(pos.x + x, pos.y + above), item.clone()));
     }
@@ -648,7 +696,6 @@ pub(super) fn display_content(display: &Display, width: Abs, size: Abs) -> Displ
             ));
         }
     }
-    let first = math.baselines.first().copied().unwrap_or(math.height);
     let last = math.baselines.last().copied().unwrap_or(math.height);
     DisplayContent {
         size: Size::new(width, above + math.height + below),
@@ -665,9 +712,10 @@ pub(super) struct DisplayContent {
     pub baselines: (Abs, Abs),
 }
 
-/// How far a display is wider than its block's content, or zero.
-pub(super) fn display_overflow(display: &Display, width: Abs) -> Abs {
-    (display.math.width - width).max(Abs::zero())
+/// How far a display, with the lead beside it `lead` wide, is wider than
+/// its block's content, or zero.
+pub(super) fn display_overflow(display: &Display, width: Abs, lead: Abs) -> Abs {
+    (display.math.width + lead - width).max(Abs::zero())
 }
 
 /// The id a face's glyph runs name it by: its index in the build's faces.

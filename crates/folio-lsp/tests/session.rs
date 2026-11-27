@@ -5,6 +5,7 @@
 //! compiler version gets a notice; the errors of `folio.toml` are shown
 //! until it is fixed on disk.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,6 +64,15 @@ struct Client {
     /// `window/showDocument` requests the server sent, in order.
     shown: Vec<Value>,
     next_id: i32,
+    /// The revision the server checks next, from its last `Edited` event.
+    latest: u64,
+    /// Whether the server has changed the world since [`Self::settle`] last
+    /// returned. It starts true: starting the server loads the world.
+    edited: bool,
+    /// The revisions whose checks have started and not yet ended.
+    running: BTreeSet<u64>,
+    /// The checks that ended since [`Self::settle`] last returned.
+    ended: Vec<(u64, Outcome)>,
 }
 
 impl Client {
@@ -99,6 +109,10 @@ impl Client {
             notifications: Vec::new(),
             shown: Vec::new(),
             next_id: 0,
+            latest: 0,
+            edited: true,
+            running: BTreeSet::new(),
+            ended: Vec::new(),
         };
         let response = client.request(
             "initialize",
@@ -151,7 +165,13 @@ impl Client {
             .receiver
             .recv_timeout(TIMEOUT)
             .expect("the server answers");
-        match &message {
+        self.take(&message);
+        message
+    }
+
+    /// Answers a request of the server, or keeps a notification.
+    fn take(&mut self, message: &Message) {
+        match message {
             Message::Request(request) if request.method == "window/showDocument" => {
                 self.shown.push(request.params.clone());
                 self.connection
@@ -169,47 +189,62 @@ impl Client {
             Message::Notification(notification) => self.notifications.push(notification.clone()),
             Message::Response(_) => {}
         }
-        message
     }
 
-    /// Waits for an event of the server.
+    /// Waits for an event of the server. Every event it reads, wanted or
+    /// not, is accounted for in the checks [`Self::settle`] waits for.
     fn event(&mut self, wanted: impl Fn(&Event) -> bool) -> Event {
         loop {
-            let event = self
-                .events
-                .recv_timeout(TIMEOUT)
-                .expect("the server reports");
+            let Ok(event) = self.events.recv_timeout(TIMEOUT) else {
+                panic!(
+                    "the server reports (checks still running: {:?})",
+                    self.running
+                );
+            };
+            match event {
+                Event::Edited { revision } => {
+                    self.latest = revision;
+                    self.edited = true;
+                }
+                Event::Started { revision } => {
+                    self.running.insert(revision);
+                }
+                Event::Checked { revision, outcome } => {
+                    self.running.remove(&revision);
+                    self.ended.push((revision, outcome));
+                }
+                _ => {}
+            }
             if wanted(&event) {
                 return event;
             }
         }
     }
 
-    /// Waits until the check of the latest revision has been published, and
-    /// returns the outcomes of every check that ended meanwhile.
+    /// Waits until the server has changed the world since the last call, the
+    /// check of the latest revision has been published and every check that
+    /// started has ended, and returns the outcomes of the checks that ended
+    /// since the last call.
+    ///
+    /// A cancelled check's thread drops its world handle, which lets the
+    /// next edit through, before it sends its result to the server, so the
+    /// server can emit its `Checked` after that of the check that overtook
+    /// it: waiting for the latest revision alone would miss it.
     fn settle(&mut self) -> Vec<(u64, Outcome)> {
-        let mut latest = 0;
-        let mut outcomes = Vec::new();
         loop {
-            match self.event(|_| true) {
-                Event::Edited { revision } => latest = revision,
-                Event::Checked { revision, outcome } => {
-                    outcomes.push((revision, outcome));
-                    if revision == latest && outcome == Outcome::Published {
-                        break;
-                    }
-                }
-                _ => {}
+            let published = self.ended.contains(&(self.latest, Outcome::Published));
+            if self.edited && published && self.running.is_empty() {
+                break;
             }
+            self.event(|_| true);
         }
         // Every notification of that check is sent before the event; take
         // them in.
         while let Ok(message) = self.connection.receiver.try_recv() {
-            if let Message::Notification(notification) = message {
-                self.notifications.push(notification);
-            }
+            self.take(&message);
         }
-        outcomes
+        self.edited = false;
+        std::mem::take(&mut self.ended)
     }
 
     /// The diagnostics published last for a file, if any were.

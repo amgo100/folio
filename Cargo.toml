@@ -46,7 +46,7 @@ ed25519-dalek = { version = "3.0.0", default-features = false }
 # System font discovery; `memmap` is off, so it reads files instead of
 # mapping them (SPEC §2.3).
 # Shaping (SPEC §2.2); it reads fonts through the same `read-fonts` as skrifa.
-harfrust = "0.16.1"
+harfrust = "0.16.2"
 # Instruction-count benchmarks under Callgrind (SPEC §14.1); the successor
 # of `iai-callgrind`, renamed with 0.17. Benchmarks need the matching
 # `gungraun-runner` and Valgrind.

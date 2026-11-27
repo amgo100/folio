@@ -10,7 +10,7 @@ use folio_syntax::ast::{self, AstNode, Unit};
 use indexmap::IndexSet;
 
 use super::captures::{captures, free_variables};
-use super::content::{Content, Node};
+use super::content::{Content, Node, anchor};
 use super::element;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::library;
@@ -22,6 +22,7 @@ use super::value::{
 use super::{Cost, Limits, MAX_NESTING, Memo, Mode, eval_file_for, globals, reachable, today};
 use crate::component::Reason;
 use crate::db::{Db, Project, component_host, source_file};
+use crate::locate::{Frame, Origin, item_key};
 use crate::project::ProjectPath;
 
 /// How much stack must be left before an expression is evaluated: enough
@@ -95,6 +96,9 @@ pub(crate) struct Vm<'a> {
     /// How many rows of an equation enclose the math expression being
     /// evaluated, which may be at most [`MAX_NESTING`].
     pub(super) math_depth: u32,
+    /// The origin of the elements made now: the loop iterations being
+    /// evaluated, inside the open origin of a closure call (SPEC §2.3).
+    pub(crate) origin: Origin,
 }
 
 /// What an error marker shows (SPEC §12.2).
@@ -174,6 +178,7 @@ impl<'a> Vm<'a> {
             recovered: IndexSet::new(),
             poisoned: BTreeSet::new(),
             math_depth: 0,
+            origin: Origin::ROOT,
         }
     }
 
@@ -235,6 +240,24 @@ impl<'a> Vm<'a> {
                 })
                 .collect(),
             Value::Str(text) => Content::node(Node::Text { text, span }),
+            // A token reference is a value for styling, not text (SPEC §5.4).
+            Value::Token(name) => {
+                return Err(EvalError::new(
+                    span,
+                    eco_format!(
+                        "`tok.{name}` names a stylesheet token and cannot be shown as text"
+                    ),
+                )
+                .with_hint("use it as the value of an `override` entry or a layout hint")
+                .into());
+            }
+            other if ops::holds_token(&other) => {
+                bail!(
+                    span,
+                    "{} holds a stylesheet token and cannot be shown as text",
+                    ops::short_repr(&other)
+                );
+            }
             other => Content::node(Node::Text {
                 text: self.repr(&other, span)?,
                 span,
@@ -1057,6 +1080,13 @@ impl<'a> Vm<'a> {
             Eq | Neq | Lt | Leq | Gt | Geq | In | NotIn => {
                 let lhs = self.expr(binary.lhs())?;
                 let rhs = self.expr(binary.rhs())?;
+                // A token reference has no value yet (SPEC §5.4).
+                if let Eq | Neq = op
+                    && let Some(message) =
+                        ops::token_error(if op == Eq { "==" } else { "!=" }, &lhs, &rhs)
+                {
+                    bail!(span, "{message}");
+                }
                 let result = match op {
                     Eq => ops::equal(&lhs, &rhs),
                     Neq => !ops::equal(&lhs, &rhs),
@@ -1482,7 +1512,13 @@ impl<'a> Vm<'a> {
         self.take_on(&memo.recovered);
         self.charge(memo.cost, span)?;
         match &memo.outcome {
-            Ok(value) => Ok(value.clone()),
+            // The memo is shared between call sites: what the call made
+            // is anchored at this one (SPEC §2.3).
+            Ok(value) => {
+                let mut value = value.clone();
+                anchor(&mut value, self.origin, span);
+                Ok(value)
+            }
             Err(Stop::Error(error)) => {
                 let mut error = (**error).clone();
                 error.trace_point(
@@ -1687,13 +1723,24 @@ impl<'a> Vm<'a> {
     fn while_loop(&mut self, while_loop: ast::WhileLoop<'_>) -> EvalResult<Value> {
         let mut output = Value::None;
         let body = while_loop.body();
+        let span = while_loop.span();
+        let outer = self.origin;
+        let mut index = 0;
         loop {
-            self.step(while_loop.span())?;
+            self.step(span)?;
             if !self.condition(while_loop.condition())? {
                 break;
             }
-            let value = self.expr(body)?;
-            output = self.join(output, value, body.span())?;
+            // What the iteration makes takes its frame (SPEC §2.3).
+            self.origin = outer.within(Frame::Iteration {
+                span,
+                index,
+                item: index,
+            });
+            let value = self.expr(body);
+            self.origin = outer;
+            index += 1;
+            output = self.join(output, value?, body.span())?;
             if self.leave_loop() {
                 break;
             }
@@ -1736,13 +1783,23 @@ impl<'a> Vm<'a> {
         };
         let mut output = Value::None;
         let body = for_loop.body();
-        for item in items {
-            self.step(for_loop.span())?;
+        let span = for_loop.span();
+        let outer = self.origin;
+        for (index, item) in items.into_iter().enumerate() {
+            self.step(span)?;
+            // What the iteration makes takes its frame, so that iteration
+            // `index` pairs across variants (SPEC §6.1).
+            self.origin = outer.within(Frame::Iteration {
+                span,
+                index: index as u64,
+                item: item_key(&item),
+            });
             self.enter();
             let result = self
                 .pattern(for_loop.pattern(), item, true)
                 .and_then(|()| self.expr(body));
             self.exit();
+            self.origin = outer;
             output = self.join(output, result?, body.span())?;
             if self.leave_loop() {
                 break;
@@ -2011,6 +2068,8 @@ fn field(target: Value, name: &str, span: Span) -> EvalResult<Value> {
         },
         Value::Module(module) => match module.scope().get(name) {
             Some(value) => Ok(value.clone()),
+            // `tok.warn`: a token reference (SPEC §5.4).
+            None if let Some(token) = module.token(name) => Ok(token),
             None if module.failed(name) => Err(Stop::Reported),
             None => bail!(span, "module `{}` does not contain `{name}`", module.name()),
         },

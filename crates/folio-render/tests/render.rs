@@ -46,6 +46,7 @@ fn page(font: FontBytes<'_>) -> Fragment {
                 source: (source, i as u32..i as u32 + 1),
             })
             .collect(),
+        instances: Default::default(),
     };
     let mut inner =
         Fragment::new(Size::new(Abs::pt(60.0), Abs::pt(30.0))).with_location(Location {

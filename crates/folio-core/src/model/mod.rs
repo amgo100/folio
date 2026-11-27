@@ -17,6 +17,7 @@ mod tree;
 use folio_component::{ElementSchema, QualifiedName};
 
 pub use self::builtins::{Builtin, builtin, builtins, is_block};
+pub(crate) use self::tree::visit_origins;
 pub use self::tree::{Document, document};
 
 use crate::db::{Db, Project, component_host};

@@ -162,8 +162,8 @@ fn paragraphs_of_blocks_and_inline_elements() {
         [
             "Forces",
             "A bold move, raw text, and \u{FFFC}.\u{2028}Next line.",
-            "First item",
-            "Second item",
+            "•\u{a0}First item",
+            "•\u{a0}Second item",
             "Body of the figure.",
             "A caption",
             "let x = 1;\u{2028}let y = 2;",

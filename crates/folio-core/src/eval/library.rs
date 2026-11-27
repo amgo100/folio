@@ -18,6 +18,7 @@ use super::value::{
 use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
 use crate::db::{Bytes, FileKind, data_file, report_read, source_file};
+use crate::locate::{Frame, item_key};
 
 /// The global scope: the library, the built-in elements content can call,
 /// and the elements of the components in use, unqualified where the name
@@ -37,6 +38,9 @@ pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
         "calc".into(),
         Value::Module(Module::new("calc", calc.into(), Content::new())),
     );
+    // `tok.warn` names a stylesheet token, which the style stage resolves
+    // for each build (SPEC §5.4).
+    scope.insert("tok".into(), Value::Module(Module::tokens()));
 
     // The built-in elements come before components' elements: a component
     // element named like one is reached only qualified (`exam.figure`).
@@ -1202,20 +1206,40 @@ fn array_method(
             }
             Value::Array(out)
         }
+        // Each call is an iteration of the call (SPEC §6.1), so the
+        // instances it makes pair across variants by item.
         "map" => {
             let func: Func = args.expect("function")?;
             vm.alloc(ITEM * items.len() as u64, span)?;
             let mut out = Array::with_capacity(items.len());
-            for item in items.iter() {
-                out.push(call_with(vm, &func, std::slice::from_ref(item), span)?);
+            let outer = vm.origin;
+            for (i, item) in items.iter().enumerate() {
+                vm.origin = outer.within(Frame::Iteration {
+                    span,
+                    index: i as u64,
+                    item: item_key(item),
+                });
+                let value = call_with(vm, &func, std::slice::from_ref(item), span);
+                vm.origin = outer;
+                out.push(value?);
             }
             Value::Array(out)
         }
+        // Each call is an iteration, as for `map`; anchoring a call
+        // reaches only what it made, not the accumulator it was given.
         "fold" => {
             let mut acc: Value = args.expect("initial value")?;
             let func: Func = args.expect("function")?;
-            for item in items.iter() {
-                acc = call_with(vm, &func, &[acc, item.clone()], span)?;
+            let outer = vm.origin;
+            for (i, item) in items.iter().enumerate() {
+                vm.origin = outer.within(Frame::Iteration {
+                    span,
+                    index: i as u64,
+                    item: item_key(item),
+                });
+                let result = call_with(vm, &func, &[acc, item.clone()], span);
+                vm.origin = outer;
+                acc = result?;
             }
             acc
         }

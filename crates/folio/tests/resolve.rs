@@ -100,16 +100,32 @@ fn patterns_by_level() {
 }
 
 #[test]
-fn nothing_is_numbered_by_default() {
-    // The base stylesheet numbers nothing (SPEC §5.1), and no warning.
+fn only_lists_are_marked_by_default() {
+    // The base stylesheet numbers no headings or figures, and marks lists
+    // by depth (SPEC §5.1, D-327-2), with no warning.
     let world = world(
         "en",
         "",
-        "= Forces\n\n+ First\n+ Second\n\n- Bullet\n\n#figure[Body][A caption.]\n",
+        "= Forces\n\n#figure[Body][A caption.]\n\n\
+         + First\n  + Inner\n    + Innermost\n    + Again\n  + Inner too\n+ Second\n\n\
+         - Bullet\n  - Dash\n    - Ring\n",
     );
     assert_eq!(
         paragraphs(&world),
-        ["Forces", "First", "Second", "Bullet", "Body", "A caption."]
+        [
+            "Forces",
+            "Body",
+            "A caption.",
+            "1.~First",
+            "(a)~Inner",
+            "(i)~Innermost",
+            "(ii)~Again",
+            "(b)~Inner too",
+            "2.~Second",
+            "•~Bullet",
+            "–~Dash",
+            "◦~Ring",
+        ]
     );
     assert!(messages(&world).is_empty(), "{:?}", messages(&world));
 }
@@ -380,7 +396,7 @@ fn hanging_markers_are_not_laid_out_yet() {
         ["`marker-position` is not implemented yet, so this declaration has no effect"]
     );
     // The marker stays in the line.
-    assert_eq!(paragraphs(&world), ["1.~One", "Two"]);
+    assert_eq!(paragraphs(&world), ["1.~One", "•~Two"]);
 }
 
 #[test]

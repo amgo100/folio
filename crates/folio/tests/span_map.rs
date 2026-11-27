@@ -124,6 +124,15 @@ fn check_glyph(
             assert!(written.contains(shown), "{what}");
             seen.joined += 1;
         }
+        // An item's marker, which the base stylesheet sets, stands for
+        // the whole item (SPEC §4.5).
+        SyntaxKind::ListItem | SyntaxKind::EnumItem => {
+            assert!(
+                written.starts_with(['-', '+'])
+                    || written.starts_with(|c: char| c.is_ascii_digit()),
+                "{what}"
+            );
+        }
         SyntaxKind::Space => assert!(written.trim().is_empty() && !written.is_empty(), "{what}"),
         SyntaxKind::Escape => assert_eq!(written, format!("\\{shown}"), "{what}"),
         SyntaxKind::Shorthand => assert_eq!(written, "--", "{what}"),

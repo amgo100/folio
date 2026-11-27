@@ -242,3 +242,28 @@ the limits of SPEC §14.1 and §15:
 - typing: one character every 100 ms into a paragraph in the middle of the
   reference document (40 by default, `--keystrokes N`), each timed from
   the edit to the pages, against the M1 exit check's 80 ms.
+
+### Figures at milestone close
+
+The reference machine of SPEC §14.1 is the project's `folio` cloud
+environment. Each milestone's close records `scripts/bench.sh --wall` there:
+two runs, back to back, on an otherwise idle container after
+`target/release` was removed. A 95th percentile moved by up to 12%
+between runs, and the typing session's, from 40 keystrokes, by a third (M1 close).
+
+M1 close, 27 November 2026, at `7c53648`; 4 cores of an Intel Xeon at
+2.10 GHz, 16 GB; the reference document had 97 pages. Run 1 / run 2:
+
+| Scenario | Median | p95 | Target | Limit | Status |
+| --- | --- | --- | --- | --- | --- |
+| `m0-exit` | 27.8 / 30.2 ms | 33.1 / 37.2 ms | | 200 ms | ok |
+| `reference-full` | 247.3 / 266.3 ms | 269.9 / 295.1 ms | 400 ms | 1,000 ms | ok |
+| `reference-edit` | 191.6 / 194.8 ms | 222.6 / 221.3 ms | | 600 ms | ok |
+| `preview-edit` | 71.6 / 75.2 ms | **81.5 / 86.1 ms** | | 80 ms | **over the limit** in both runs |
+| `watch-edit` (M1 exit check) | 21.6 / 21.5 ms | 27.6 / 25.0 ms | | 80 ms | ok |
+| `check-edit` | 85.2 / 85.5 ms | 97.9 / 92.2 ms | | | reported |
+| `stylesheet-edit` | 224.8 / 230.6 ms | 241.3 / 266.1 ms | 400 ms | 1,000 ms | ok |
+| three variants against one (p95) | | 1.38× / 1.30× | 1.3× | 2× | over the target, within the limit |
+| typing, 40 characters, edit to pages | 66.1 / 70.7 ms | **82.4 / 110.2 ms** (max 89.7 / 113.3) | | 80 ms | **over the limit** in both runs |
+
+Emit took 124 ms (median) of the 229 ms full build in run 1.

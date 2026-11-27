@@ -104,6 +104,12 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
             }
             Value::Dict(pairs)
         }
+        // Resolved only as a whole value or an item of a list (SPEC §5.4).
+        V::Token(name) => {
+            return Err(eco_format!(
+                "`tok.{name}` can be a whole value or an item of a list only, not nested deeper"
+            ));
+        }
         other => {
             return Err(eco_format!(
                 "{} cannot be a property value",
@@ -266,13 +272,19 @@ impl Tokens {
 
     /// The value of a token, evaluated and reported once.
     fn get(&self, cx: &Values<'_>, name: &str, span: Span) -> VResult<Declared> {
+        self.get_as(cx, name, span, "$")
+    }
+
+    /// [`Self::get`], with an unknown token named as `prefix` writes it:
+    /// `$` in a stylesheet, `tok.` in content (SPEC §5.4).
+    fn get_as(&self, cx: &Values<'_>, name: &str, span: Span, prefix: &str) -> VResult<Declared> {
         if let Some(value) = self.values.borrow().get(name) {
             return value.clone().ok_or(Fail::Reported);
         }
         let Some(def) = self.defs.get(name) else {
-            let mut error = EvalError::new(span, eco_format!("unknown token `${name}`"));
+            let mut error = EvalError::new(span, eco_format!("unknown token `{prefix}{name}`"));
             if let Some(close) = closest(name, self.defs.keys()) {
-                error = error.with_hint(eco_format!("did you mean `${close}`?"));
+                error = error.with_hint(eco_format!("did you mean `{prefix}{close}`?"));
             }
             return Err(error.into());
         };
@@ -371,6 +383,12 @@ impl<'a> Values<'a> {
     /// errors.
     pub(super) fn single(&self, expr: ast::Expr<'_>) -> Option<Declared> {
         self.report(self.expr(expr))
+    }
+
+    /// The value of the token that content names `tok.name` (SPEC §5.4),
+    /// as `$name` gives it, reporting errors at `span`.
+    pub(super) fn token(&self, name: &str, span: Span) -> Option<Declared> {
+        self.report(self.tokens.get_as(self, name, span, "tok."))
     }
 
     fn report(&self, result: VResult<Declared>) -> Option<Declared> {
@@ -480,6 +498,17 @@ impl<'a> Values<'a> {
                 // A name before a dot is a module of the standard library:
                 // `calc.max`.
                 let target = match access.target() {
+                    // Content names a token `tok.warn`; a stylesheet, and a
+                    // scoped rule, write `$warn` (SPEC §5.4).
+                    ast::Expr::Ident(ident) if ident.get() == "tok" => {
+                        let name = access.field();
+                        return Err(EvalError::new(
+                            span,
+                            eco_format!("`tok.{}` names a token in content only", name.get()),
+                        )
+                        .with_hint(eco_format!("write `${}` here", name.get()))
+                        .into());
+                    }
                     ast::Expr::Ident(ident) => {
                         match eval::globals(self.db, self.project).get(ident.get()) {
                             Some(module @ eval::Value::Module(_)) => module.clone(),
