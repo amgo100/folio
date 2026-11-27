@@ -571,7 +571,9 @@ impl Engine {
                 .iter()
                 .any(|path| self.loader_path(path).is_some_and(|rel| rel == name))
         };
-        let project_file = names(loader::MANIFEST) || names(loader::LOCKFILE);
+        // The project directory itself, as after the watcher lost events,
+        // is read again whole, the manifest and lockfile among it.
+        let project_file = names(loader::MANIFEST) || names(loader::LOCKFILE) || names("");
         let Some(world) = &mut self.world else {
             // The project could not be loaded: try again when a file it
             // reads changes.

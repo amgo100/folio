@@ -502,9 +502,17 @@ fn nothing_is_written_while_the_manifest_is_missing() {
             .on_outputs(move |outputs: &Outputs| sink.lock().unwrap().push(outputs.revision))
     });
     let first = updated(&events, |u| u.pages > 0);
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match events.recv_deadline(deadline) {
+            Ok(Event::Written { revision }) if revision == first.revision => break,
+            Ok(_) => {}
+            Err(_) => panic!("nothing was written"),
+        }
+    }
 
-    // The manifest is gone before the first write: the world keeps it,
-    // but `folio build` would find no project, so nothing is written.
+    // The manifest is gone: the world keeps it, but `folio build` would
+    // find no project, so nothing is written.
     let manifest = dir.path().join("folio.toml");
     let text = std::fs::read_to_string(&manifest).unwrap();
     std::fs::remove_file(&manifest).unwrap();
@@ -517,7 +525,7 @@ fn nothing_is_written_while_the_manifest_is_missing() {
             "written while the manifest is missing: {event:?}"
         );
     }
-    assert!(written.lock().unwrap().is_empty());
+    assert_eq!(*written.lock().unwrap(), [first.revision]);
 
     std::fs::write(&manifest, text).unwrap();
     preview.changed([&manifest]);
