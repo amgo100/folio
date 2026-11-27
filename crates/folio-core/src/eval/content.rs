@@ -413,7 +413,7 @@ pub struct Element {
     /// several times, has none yet ([`Location::DETACHED`]).
     pub location: Location,
     /// The loop iterations and closure calls that made it, as evaluation
-    /// recorded them ([`Content::stamp`]); the document model builds its
+    /// recorded them (`Content::stamp`); the document model builds its
     /// location from it.
     pub origin: Origin,
 }

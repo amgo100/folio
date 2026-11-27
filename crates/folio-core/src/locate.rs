@@ -58,7 +58,7 @@ pub(crate) enum Made {
 /// §6.1). Content made outside any loop or call has the root origin.
 ///
 /// Evaluation stamps the [`Frame`] of an iteration or a call on the
-/// elements of the value it returns ([`crate::eval::Content::stamp`]), and
+/// elements of the value it returns (`Content::stamp`), and
 /// the document model gives an element inside another's content the origin
 /// of the element around it as well ([`Origin::nested`]). An origin is a
 /// hash, mixed by a fixed function so that it is the same on every platform
