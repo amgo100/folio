@@ -18,7 +18,8 @@
 //! when the manifest or a stylesheet does not parse, do the last good
 //! pages stay, with a banner that says why. Output files are written once
 //! the project has been quiet for a second ([`Options::idle`]), through
-//! [`Options::on_outputs`], never on every keystroke.
+//! [`Options::on_outputs`], never on every keystroke, and never while
+//! `folio.toml` or `folio.lock` has errors, as `folio build` refuses them.
 //!
 //! # Security
 //!

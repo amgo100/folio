@@ -437,6 +437,60 @@ fn outputs_are_written_once_the_project_is_quiet() {
 }
 
 #[test]
+fn nothing_is_written_while_the_manifest_has_errors() {
+    let dir = project("exam");
+    let written: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let sink = written.clone();
+    let idle = Duration::from_millis(200);
+    let (preview, events) = start(dir.path(), |o| {
+        o.watch(false)
+            .idle(idle)
+            .on_outputs(move |outputs: &Outputs| sink.lock().unwrap().push(outputs.revision))
+    });
+    let first = updated(&events, |u| u.pages > 0);
+    let wait_written = |after: u64| {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            match events.recv_deadline(deadline) {
+                Ok(Event::Written { revision }) if revision > after => return revision,
+                Ok(_) => {}
+                Err(_) => panic!("nothing was written"),
+            }
+        }
+    };
+    wait_written(0);
+
+    // A broken manifest, then an edit to the content: the preview shows
+    // the edit under the last valid manifest, with its banner, but writes
+    // nothing, as `folio build` would refuse the project.
+    let manifest = edit(dir.path(), "folio.toml", "[project]", "[project");
+    preview.changed([&manifest]);
+    let broken = updated(&events, |u| u.revision > first.revision);
+    assert!(broken.banner.is_some(), "{broken:?}");
+    let file = edit(dir.path(), "main.fol", "= Section A", "= Section A edited");
+    preview.changed([file]);
+    let edited = updated(&events, |u| u.revision > broken.revision);
+    assert!(edited.banner.is_some(), "{edited:?}");
+    assert!(!edited.lists.is_empty(), "the edit is shown: {edited:?}");
+    let quiet = Instant::now() + idle * 5;
+    while let Ok(event) = events.recv_deadline(quiet) {
+        assert!(
+            !matches!(event, Event::Written { .. }),
+            "written while the manifest has errors: {event:?}"
+        );
+    }
+    assert_eq!(*written.lock().unwrap(), [first.revision]);
+
+    // Fixed again: the edit is written.
+    edit(dir.path(), "folio.toml", "[project", "[project]");
+    preview.changed([&manifest]);
+    let fixed = updated(&events, |u| u.revision > edited.revision);
+    assert!(fixed.banner.is_none(), "{fixed:?}");
+    assert_eq!(wait_written(edited.revision), fixed.revision);
+    assert_eq!(*written.lock().unwrap(), [first.revision, fixed.revision]);
+}
+
+#[test]
 fn pages_that_look_the_same_get_new_span_maps() {
     let dir = project("exam");
     let (preview, events) = start(dir.path(), |o| o.watch(false));

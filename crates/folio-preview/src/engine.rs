@@ -797,7 +797,14 @@ impl Engine {
             diagnostics: frame.diagnostics,
             files: frame.files,
         })));
-        if self.world.is_some() && self.written < revision && self.settings.on_outputs.is_some() {
+        // Outputs follow the manifest on disk, as `folio build` does: while
+        // it has errors, the pages follow its last valid version, but
+        // nothing is written under it.
+        if self.world.is_some()
+            && self.errors.is_none()
+            && self.written < revision
+            && self.settings.on_outputs.is_some()
+        {
             self.idle_at = Some(Instant::now() + self.settings.idle);
         }
     }
@@ -909,11 +916,16 @@ impl Engine {
     }
 
     /// Compiles every build on a thread of its own and hands them to the
-    /// outputs hook. An edit cancels the compilation.
+    /// outputs hook, unless `folio.toml` or `folio.lock` has errors. An
+    /// edit cancels the compilation.
     fn write_outputs(&mut self) {
         let (Some(world), Some(hook)) = (&self.world, self.settings.on_outputs.clone()) else {
             return;
         };
+        if self.errors.is_some() {
+            // `folio build` refuses the project; so does the writer.
+            return;
+        }
         let revision = self.revision;
         self.written = revision;
         let handle = world.clone();
