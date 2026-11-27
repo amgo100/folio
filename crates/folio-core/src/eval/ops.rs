@@ -37,6 +37,21 @@ fn with_token_advice<'a>(
     }
 }
 
+/// The error of `==` or `!=` with a token reference (SPEC §5.4): its value
+/// is known only when the document is styled, so a comparison would always
+/// be false. `None` when neither operand is one.
+pub(crate) fn token_error(op: &str, lhs: &V, rhs: &V) -> Option<EcoString> {
+    if !matches!(lhs, V::Token(_)) && !matches!(rhs, V::Token(_)) {
+        return None;
+    }
+    let message = eco_format!(
+        "cannot compare {} and {} with `{op}`",
+        short_repr(lhs),
+        short_repr(rhs)
+    );
+    Some(with_token_advice(message, [lhs, rhs]))
+}
+
 /// The error of a unary operator that does not apply to a value.
 fn unary_mismatch(op: &str, value: &V) -> EcoString {
     let message = eco_format!("cannot apply {op} to {}", a_type(value.type_name()));
@@ -465,6 +480,11 @@ mod tests {
             join(V::Int(1), size()).unwrap_err(),
             format!("cannot join an int with a token: {advice}")
         );
+        assert_eq!(
+            token_error("==", &size(), &V::Str("dark".into())).unwrap(),
+            format!("cannot compare tok.body-size and \"dark\" with `==`: {advice}")
+        );
+        assert_eq!(token_error("==", &V::Int(1), &V::Int(1)), None);
         // A token reference is equal to itself only.
         assert!(equal(&size(), &size()));
         assert!(!equal(&size(), &V::Token("gap".into())));

@@ -491,6 +491,26 @@ fn token_references_in_content() {
     assert_eq!(compiled.diagnostics[0].message, "unknown token `tok.gpa`");
     assert_eq!(compiled.diagnostics[0].hints[0], "did you mean `tok.gap`?");
 
+    // A token reference is not text, and has no value to compare yet.
+    for (source, start) in [
+        (
+            "Course: #tok.gap\n",
+            "`tok.gap` names a stylesheet token and cannot be shown as text",
+        ),
+        (
+            "#if tok.gap == 6pt [A] else [B]\n",
+            "cannot compare tok.gap and 6.0pt with `==`: a token's value is known only",
+        ),
+    ] {
+        let shown = world(source, &[("styles/main.fsty", "$gap: 6pt;\n")]);
+        let compiled = folio::compile(&shown, Target::Pdf, Some(&name("exam"))).unwrap();
+        assert!(
+            compiled.diagnostics[0].message.starts_with(start),
+            "{source:?}: {:?}",
+            compiled.diagnostics
+        );
+    }
+
     // A script cannot compute with a token reference.
     let computed = world("#figure(override: (space-before: tok.gap * 2))[]\n", &[]);
     let compiled = folio::compile(&computed, Target::Pdf, Some(&name("exam"))).unwrap();
