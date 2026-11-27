@@ -4,7 +4,7 @@
 
 A loudspeaker connected to a signal generator faces two microphones, which are connected to an oscilloscope.
 
-+ Set up the apparatus and set the signal generator to #qty(2.0, "kHz"). <part:setup>
++ Set up the apparatus and set the signal generator to 2 kHz. <part:setup>
 + Move one microphone away from the loudspeaker:
   + watch the two traces on the screen as the microphone moves; <part:watch>
   + stop where the peaks of the traces first line up again. <part:stop>
