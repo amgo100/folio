@@ -351,7 +351,10 @@ fn the_viewer_may_be_framed() {
 fn playwright() -> bool {
     let probe = "process.exit(require('fs').existsSync(\
                  require('playwright').chromium.executablePath()) ? 0 : 1)";
+    // From the directory the script runs in, so that both find the same
+    // Playwright.
     std::process::Command::new("node")
+        .current_dir(tests_dir())
         .args(["-e", probe])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -373,18 +376,36 @@ fn the_viewer_draws_pages_inside_an_iframe() {
     let dir = project("exam");
     let (preview, events) = start(dir.path(), |o| o.watch(false));
     updated(&events, |u| u.pages > 0);
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/iframe.cjs");
-    let output = std::process::Command::new("node")
-        .arg(&script)
+    let mut child = std::process::Command::new("node")
+        .current_dir(tests_dir())
+        .arg("iframe.cjs")
         .arg(preview.url())
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .unwrap();
+    // The script's own waits end after 30 s; a browser that hangs on
+    // launch or close is killed here.
+    let deadline = Instant::now() + 2 * TIMEOUT;
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// This crate's `tests` directory, which holds `iframe.cjs`.
+fn tests_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests")
 }
 
 #[test]

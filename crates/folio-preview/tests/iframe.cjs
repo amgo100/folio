@@ -35,8 +35,15 @@ async function main() {
   const problems = [];
   try {
     const page = await browser.newPage();
+    // Errors of the viewer's frame, and the browser's refusal to frame it,
+    // which it reports on the embedding page.
+    const origin = new URL(url).origin;
     page.on('console', (m) => {
-      if (m.type() === 'error') problems.push(m.text());
+      if (m.type() !== 'error') return;
+      const from = m.location().url || '';
+      if (from.startsWith(origin) || /frame-ancestors|Refused to frame|X-Frame-Options/.test(m.text())) {
+        problems.push(m.text());
+      }
     });
     page.on('pageerror', (e) => problems.push(String(e)));
     await page.goto(`http://127.0.0.1:${port}/`);
