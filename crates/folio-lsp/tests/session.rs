@@ -231,10 +231,7 @@ impl Client {
     /// for the latest revision alone would miss it.
     fn settle(&mut self) -> Vec<(u64, Outcome)> {
         loop {
-            let published = self
-                .ended
-                .iter()
-                .any(|&ended| ended == (self.latest, Outcome::Published));
+            let published = self.ended.contains(&(self.latest, Outcome::Published));
             if self.edited && published && self.running.is_empty() {
                 break;
             }
