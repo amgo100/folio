@@ -814,7 +814,14 @@ impl Collector<'_> {
         out: &mut Builder,
         anchored: &mut Vec<Anchored<'a>>,
     ) {
-        let outer = std::mem::replace(&mut out.within, node.location);
+        // A node without a location, such as generated text, is in the
+        // instance around it.
+        let within = if node.location == Location::DETACHED {
+            out.within
+        } else {
+            node.location
+        };
+        let outer = std::mem::replace(&mut out.within, within);
         self.inline_instance(element, node, out, anchored);
         out.within = outer;
     }

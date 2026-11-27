@@ -1222,11 +1222,21 @@ fn array_method(
             }
             Value::Array(out)
         }
+        // Each call is an iteration, as for `map`; anchoring a call
+        // reaches only what it made, not the accumulator it was given.
         "fold" => {
             let mut acc: Value = args.expect("initial value")?;
             let func: Func = args.expect("function")?;
-            for item in items.iter() {
-                acc = call_with(vm, &func, &[acc, item.clone()], span)?;
+            let outer = vm.origin;
+            for (i, item) in items.iter().enumerate() {
+                vm.origin = outer.within(Frame::Iteration {
+                    span,
+                    index: i as u64,
+                    item: item_key(item),
+                });
+                let result = call_with(vm, &func, &[acc, item.clone()], span);
+                vm.origin = outer;
+                acc = result?;
             }
             acc
         }

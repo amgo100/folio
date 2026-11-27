@@ -174,6 +174,16 @@ impl Content {
         )
     }
 
+    /// Whether the content holds an open element at the top level, or in a
+    /// slot's body.
+    fn has_open(&self) -> bool {
+        self.nodes.iter().any(|node| match node {
+            Node::Element(element) => element.origin.is_open(),
+            Node::Slot(slot) => slot.body.has_open(),
+            _ => false,
+        })
+    }
+
     /// Anchors what a closure call made, at the call site `site` in code
     /// at the origin `at` (`Origin::anchor`): the open elements at the
     /// top level, and those of its slots' bodies. Elements inside them
@@ -183,12 +193,7 @@ impl Content {
     /// costs one step per node at the top level, however deeply the content
     /// nests, and changes nothing it was given.
     pub(crate) fn anchor(&mut self, at: Origin, site: Span) {
-        let open = |node: &Node| match node {
-            Node::Element(element) => element.origin.is_open(),
-            Node::Slot(_) => true,
-            _ => false,
-        };
-        if !self.nodes.iter().any(open) {
+        if !self.has_open() {
             return;
         }
         self.changed();

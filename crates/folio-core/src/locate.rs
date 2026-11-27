@@ -211,8 +211,9 @@ impl Frame {
 /// [`Frame::Iteration`]: its data, not what a variant may make otherwise
 /// while the item stays the same. Content held in the item's data counts
 /// alike, and so does `none` (an answer that is content in the mark scheme
-/// and `none` in the exam); an item that is content itself counts as the
-/// nodes it starts with, by their spans. Functions, arguments and modules
+/// and `none` in the exam), as does an item that is content itself, whose
+/// elements keep the locations they were made with. Functions, arguments
+/// and modules
 /// count by their kind alone, since a closure may capture what a variant
 /// sets. It walks at most a few hundred values of the item, so that a
 /// large item costs little, and is compared within one process, never
@@ -220,7 +221,7 @@ impl Frame {
 pub(crate) fn item_key(item: &crate::eval::Value) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
 
-    use crate::eval::{Node, Value};
+    use crate::eval::Value;
 
     fn walk(value: &Value, hasher: &mut DefaultHasher, budget: &mut u32) {
         if *budget == 0 {
@@ -256,22 +257,7 @@ pub(crate) fn item_key(item: &crate::eval::Value) -> u64 {
     }
 
     let mut hasher = DefaultHasher::new();
-    match item {
-        Value::Content(content) => {
-            5u8.hash(&mut hasher);
-            for node in content.nodes().iter().take(16) {
-                let span = match node {
-                    Node::Text { span, .. } | Node::Quote { span, .. } => *span,
-                    Node::Space(span) | Node::Linebreak(span) | Node::Parbreak(span) => *span,
-                    Node::Element(element) => element.span,
-                    Node::Slot(slot) => slot.span,
-                    Node::Rule(rule) => rule.span(),
-                };
-                span.into_raw().get().hash(&mut hasher);
-            }
-        }
-        _ => walk(item, &mut hasher, &mut 256),
-    }
+    walk(item, &mut hasher, &mut 256);
     hasher.finish()
 }
 

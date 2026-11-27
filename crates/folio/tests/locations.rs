@@ -602,3 +602,50 @@ fn content_made_before_a_loop_and_closures_in_items() {
          if variant == \"markscheme\" or not q.hidden [= #q.t\n\n] }}\n"
     )));
 }
+
+#[test]
+fn fourth_review_cases() {
+    // `fold` calls are iterations: leaving items out inside the step
+    // pairs by item.
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#bank.fold((), (acc, q) => if variant == \"markscheme\" or not q.hidden \
+         {{ acc + ([= #q.t\n\n],) }} else {{ acc }}).join()\n"
+    )));
+    // An item that is content which a variant changes is the same item.
+    let world = grouped(
+        "#let qs = ([Q1 #if variant == \"markscheme\" [*Ans* 4]], [Q2])\n\
+         #for q in qs [= #q\n\n]\n",
+    );
+    assert!(loop_errors(&world, "exam").is_empty());
+    assert!(loop_errors(&world, "markscheme").is_empty());
+}
+
+#[test]
+fn every_build_of_a_group_reports_the_same_error() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\nstyles = [\"styles/main.fsty\"]\n\n\
+                    [variants.a]\ntargets = [\"pdf\"]\n\n[variants.b]\ntargets = [\"pdf\"]\n\n\
+                    [variants.c]\ntargets = [\"pdf\"]\n\n\
+                    [numbering-groups.paper]\nvariants = [\"a\", \"b\", \"c\"]\n\
+                    shared-counters = [\"heading\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world.set_source("styles/main.fsty", STYLE).unwrap();
+    world
+        .set_source(
+            "main.fol",
+            &format!(
+                "{BANK}#for q in bank.filter(q => variant != \"a\" or not q.hidden) \
+                 [= #q.t\n\n]\n"
+            ),
+        )
+        .unwrap();
+    let (a, b, c) = (
+        loop_errors(&world, "a"),
+        loop_errors(&world, "b"),
+        loop_errors(&world, "c"),
+    );
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert!(a[0].contains("in `a`, `b` and `c`"), "{a:?}");
+    assert_eq!(a, b);
+    assert_eq!(a, c);
+}

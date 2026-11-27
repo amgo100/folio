@@ -84,55 +84,55 @@ pub fn check_pairing(db: &dyn Db, project: Project, variant: Option<Name>) -> Ec
     if shared.is_empty() {
         return out;
     }
-    let own = counted(db, project, &variant, &shared);
+    // Every variant's instances, in the order the group names the
+    // variants, so that each variant's build reports the same error.
+    let all: Vec<(&Name, _)> = group
+        .variants
+        .iter()
+        .map(|v| (&v.v, counted(db, project, &v.v, &shared)))
+        .collect();
+    let Some((_, own)) = all.iter().find(|(v, _)| **v == variant) else {
+        return out;
+    };
+    let mut differ: Vec<(Span, &QualifiedName, Vec<&Name>)> = Vec::new();
+    for (location, (span, name, items)) in own {
+        let having: Vec<(&Name, u64)> = all
+            .iter()
+            .filter_map(|(v, counted)| counted.get(location).map(|(.., i)| (*v, *i)))
+            .collect();
+        if having.iter().any(|(_, i)| i != items) {
+            differ.push((*span, name, having.into_iter().map(|(v, _)| v).collect()));
+        }
+    }
+    // In the order of their spans, so that the diagnostics come in a fixed
+    // order.
+    differ.sort_by_key(|(span, ..)| span.into_raw().get());
     let mut reported = HashSet::new();
-    for other in &group.variants {
-        if other.v == variant {
+    for (span, name, variants) in differ {
+        if !reported.insert(span) {
             continue;
         }
-        let theirs = counted(db, project, &other.v, &shared);
-        // In the order of their spans, so that the diagnostics come in a
-        // fixed order.
-        let mut differ: Vec<_> = own
-            .iter()
-            .filter(|(location, (.., items))| {
-                theirs
-                    .get(location)
-                    .is_some_and(|(.., their)| their != items)
-            })
-            .map(|(_, (span, name, _))| (*span, name.clone()))
-            .collect();
-        differ.sort_by_key(|(span, _)| span.into_raw().get());
-        // The variants in the order the group names them, so that each
-        // variant's build reports the same error.
-        let (first, second) = if group.variants.iter().position(|v| v.v == variant)
-            < group.variants.iter().position(|v| v.v == other.v)
-        {
-            (&variant, &other.v)
-        } else {
-            (&other.v, &variant)
+        let names: Vec<String> = variants.iter().map(|v| format!("`{v}`")).collect();
+        let listed = match names.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+            None => String::new(),
         };
-        for (span, name) in differ {
-            if !reported.insert(span) {
-                continue;
-            }
-            out.push(
-                Diagnostic::error(
-                    span,
-                    format!(
-                        "this `{name}` is made by the same loop iteration in `{first}` and \
-                         `{second}` from different items, so numbering group `{}` cannot \
-                         share its number",
-                        group.name.v
-                    ),
-                )
-                .with_code("variant-loop-differs")
-                .with_hint(
-                    "loop over the same items in every variant and leave items out inside the \
-                     loop with `if`, or hide them with `display` or `#in-variant`",
+        out.push(
+            Diagnostic::error(
+                span,
+                format!(
+                    "this `{name}` is made by the same loop iteration in {listed} from \
+                     different items, so numbering group `{}` cannot share its number",
+                    group.name.v
                 ),
-            );
-        }
+            )
+            .with_code("variant-loop-differs")
+            .with_hint(
+                "loop over the same items in every variant and leave items out inside the \
+                 loop with `if`, or hide them with `display` or `#in-variant`",
+            ),
+        );
     }
     out
 }
