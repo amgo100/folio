@@ -1,7 +1,7 @@
 //! The project manifest, `folio.toml` (SPEC §4.1).
 
 use ecow::{EcoString, eco_format};
-use folio_syntax::FileId;
+use folio_syntax::{DiagSpan, DiagSpanKind, FileId};
 
 use super::de::{Cx, Invalid, Table, Value, list, suggest};
 use super::values::{
@@ -10,6 +10,7 @@ use super::values::{
     parse_qualified_name, parse_target,
 };
 use super::{ProjectError, Spanned};
+use crate::diag::Diagnostic;
 
 /// A parsed `folio.toml`: the project's entry point, pinned versions,
 /// components, variants, numbering groups, formatting mode and output naming.
@@ -379,7 +380,10 @@ impl Manifest {
         let output = root
             .get("output")
             .and_then(|v| v.table(&mut cx, "`[output]`".into()))
-            .map(|table| read_output(&mut cx, &table, &variants))
+            .map(|table| {
+                let entry = project.as_ref().map(|p| &p.entry.v);
+                read_output(&mut cx, &table, &variants, entry, &components)
+            })
             .unwrap_or_default();
 
         let manifest = project.map(|project| Self {
@@ -391,6 +395,54 @@ impl Manifest {
             output,
         });
         cx.finish(manifest)
+    }
+
+    /// Warnings, for a build of `variant`, about keys that this compiler
+    /// reads but does not act on yet, at each one that is given: strict
+    /// mode, which checks no overrides yet (SPEC §5.5), the other keys of
+    /// strict mode (`strict-paths` at its first path, as an empty list means
+    /// the same as none), and the numbering group the variant belongs to
+    /// (SPEC §6.1). A declared component that cannot be hosted is reported
+    /// with the components ([`crate::component::unhosted`]).
+    pub fn not_implemented(&self, variant: Option<&Name>) -> Vec<Diagnostic> {
+        let given = |span: DiagSpan| !matches!(span.get(), DiagSpanKind::Detached);
+        let mut out = Vec::new();
+        let formatting = &self.formatting;
+        if formatting.mode.v == FormattingMode::Strict && given(formatting.mode.span) {
+            out.push(
+                Diagnostic::warning(
+                    formatting.mode.span,
+                    "strict mode is not implemented yet, so overrides in content are not checked",
+                )
+                .with_hint("until it is, strict mode only makes an unpinned system font an error"),
+            );
+        }
+        if let Some(first) = formatting.strict_paths.first() {
+            out.push(unread(first.span, "strict-paths"));
+        }
+        for (key, value) in [
+            ("allow-overrides-sheet", &formatting.allow_overrides_sheet),
+            ("allow-local-packages", &formatting.allow_local_packages),
+        ] {
+            if given(value.span) {
+                out.push(unread(value.span, key));
+            }
+        }
+        let group = variant.and_then(|v| self.numbering_group(v.as_str()));
+        if let Some(group) = group {
+            out.push(
+                Diagnostic::warning(
+                    group.name.span,
+                    eco_format!(
+                        "numbering groups are not implemented yet, so the variants of `{}` \
+                         number their content separately",
+                        group.name.v
+                    ),
+                )
+                .with_hint("each variant counts only the content it shows"),
+            );
+        }
+        out
     }
 
     /// The variant with the given name.
@@ -724,7 +776,13 @@ fn read_formatting(cx: &mut Cx, table: &Table<'_>) -> Formatting {
     formatting
 }
 
-fn read_output(cx: &mut Cx, table: &Table<'_>, variants: &[Variant]) -> Output {
+fn read_output(
+    cx: &mut Cx,
+    table: &Table<'_>,
+    variants: &[Variant],
+    entry: Option<&ProjectPath>,
+    components: &Components,
+) -> Output {
     table.check_keys(cx, &["path"]);
     let Some(path) = table
         .get("path")
@@ -752,7 +810,7 @@ fn read_output(cx: &mut Cx, table: &Table<'_>, variants: &[Variant]) -> Output {
         && let Some(variant) = variants.iter().find(|v| file_targets(v) > 1)
     {
         cx.error(
-            range,
+            range.clone(),
             eco_format!(
                 "the targets of variant `{}` write to the same file",
                 variant.name.v
@@ -760,5 +818,101 @@ fn read_output(cx: &mut Cx, table: &Table<'_>, variants: &[Variant]) -> Output {
         )
         .hint("add `{ext}` to the path");
     }
+
+    // No output replaces a file the project is made of. The first file
+    // that a build would write there is reported.
+    if let Some(entry) = entry {
+        let files: Vec<EcoString> = if variants.is_empty() {
+            Target::Pdf
+                .extension()
+                .map(|ext| path.v.resolve(entry.stem(), None, ext))
+                .into_iter()
+                .collect()
+        } else {
+            variants
+                .iter()
+                .flat_map(|v| {
+                    v.targets.iter().filter_map(|t| {
+                        let ext = t.v.extension()?;
+                        Some(path.v.resolve(entry.stem(), Some(v.name.v.as_str()), ext))
+                    })
+                })
+                .collect()
+        };
+        if let Some(invalid) = files
+            .iter()
+            .find_map(|file| reserved_output(file, entry, components))
+        {
+            cx.invalid(range, invalid);
+        }
+    }
     Output { path }
 }
+
+/// Why an output may not be written to `file`, a project path, when it would
+/// replace or be read as one of the project's own files (SPEC §4.1): the
+/// entry file, the manifest, the lockfile, a content file or stylesheet, a
+/// hidden file or one in a hidden directory, a file in the font directory,
+/// or one in the directory of a component declared by a path inside the
+/// project. Names are compared without regard to ASCII case, since file
+/// systems that ignore case would replace the file all the same.
+fn reserved_output(file: &str, entry: &ProjectPath, components: &Components) -> Option<Invalid> {
+    const HINT: &str = "an output may not replace the manifest, the lockfile, a content file, a \
+                        stylesheet, a hidden file, a file in the font directory or a file of a \
+                        component";
+    // The path as it is written to, with any `.` or `..` that a placeholder
+    // brought in resolved.
+    let path = ProjectPath::new(file)?;
+    let file = path.as_str();
+    let is = |name: &str| file.eq_ignore_ascii_case(name);
+    let within = |dir: &str| {
+        file.len() > dir.len()
+            && file.as_bytes()[dir.len()] == b'/'
+            && file[..dir.len()].eq_ignore_ascii_case(dir)
+    };
+    let component = components.declared.iter().find_map(|c| match &c.source {
+        ComponentSource::Path(dir) if dir.v.as_str().split('/').next() != Some("..") => {
+            within(dir.v.as_str()).then_some(dir.v.as_str())
+        }
+        _ => None,
+    });
+    let ext = path.extension().map(str::to_ascii_lowercase);
+    let message = if is(entry.as_str()) {
+        eco_format!("the output `{file}` is the entry file")
+    } else if is(MANIFEST_FILE) {
+        eco_format!("the output `{file}` would replace the manifest")
+    } else if is(LOCKFILE_FILE) {
+        eco_format!("the output `{file}` would replace the lockfile")
+    } else if file.split('/').any(|segment| segment.starts_with('.')) {
+        eco_format!("the output `{file}` is a hidden path")
+    } else if within(folio_fonts::PROJECT_FONT_DIR) {
+        eco_format!(
+            "the output `{file}` is in the font directory `{}/`",
+            folio_fonts::PROJECT_FONT_DIR
+        )
+    } else if let Some(dir) = component {
+        eco_format!("the output `{file}` is in the component directory `{dir}/`")
+    } else if ext.as_deref() == Some("fol") {
+        eco_format!("the output `{file}` is a content file")
+    } else if ext.as_deref() == Some("fsty") {
+        eco_format!("the output `{file}` is a stylesheet")
+    } else {
+        return None;
+    };
+    Some(Invalid::new(message).with_hint(HINT))
+}
+
+/// A warning that a manifest key is read but has no effect yet.
+fn unread(span: DiagSpan, key: &str) -> Diagnostic {
+    Diagnostic::warning(
+        span,
+        eco_format!("`{key}` is not implemented yet, so it has no effect"),
+    )
+    .with_hint("strict mode does not check content for overrides yet")
+}
+
+/// The manifest's file name, in the project directory.
+const MANIFEST_FILE: &str = "folio.toml";
+
+/// The lockfile's file name, in the project directory.
+const LOCKFILE_FILE: &str = "folio.lock";

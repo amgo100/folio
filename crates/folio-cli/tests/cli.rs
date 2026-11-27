@@ -382,6 +382,95 @@ fn checks_report_outputs_that_cannot_be_written() {
     assert!(!dir.path().join("a").exists());
 }
 
+/// An output never replaces a file of the project: the manifest, the
+/// lockfile, a source or a hidden file is refused by the manifest, and a
+/// file the build reads by `folio build` and `folio check`.
+#[test]
+fn outputs_never_replace_project_files() {
+    let lockfile = "version = 1\n";
+    for (output, expected) in [
+        (
+            "folio.toml",
+            "the output `folio.toml` would replace the manifest",
+        ),
+        (
+            "folio.lock",
+            "the output `folio.lock` would replace the lockfile",
+        ),
+        ("notes.fol", "the output `notes.fol` is a content file"),
+        (".git/HEAD", "the output `.git/HEAD` is a hidden path"),
+        ("main.fol", "the output `main.fol` is the entry file"),
+        ("{stem}.fol", "the output `main.fol` is the entry file"),
+        (
+            "keep.txt",
+            "cannot write `keep.txt`: a build reads `keep.txt` as a data file",
+        ),
+    ] {
+        let manifest = format!("{MANIFEST}\n[output]\npath = \"{output}\"\n");
+        let files = [
+            ("folio.toml", manifest.as_str()),
+            ("folio.lock", lockfile),
+            ("main.fol", "Text #read(\"keep.txt\").\n"),
+            ("notes.fol", "Notes.\n"),
+            ("keep.txt", "kept"),
+            (".git/HEAD", "ref: refs/heads/main\n"),
+        ];
+        let dir = project(&files);
+        for command in ["check", "build"] {
+            let output = folio(dir.path(), &[command]);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{output:?}: {}",
+                stderr(&output)
+            );
+            assert!(
+                stderr(&output).contains(expected),
+                "{command} {output:?}: {}",
+                stderr(&output)
+            );
+            assert!(!stderr(&output).contains("wrote"), "{}", stderr(&output));
+        }
+        for (path, text) in files {
+            assert_eq!(
+                fs::read_to_string(dir.path().join(path)).unwrap(),
+                text,
+                "{path}"
+            );
+        }
+    }
+}
+
+/// Manifest keys that have no effect yet are reported, not ignored: strict
+/// mode and numbering groups warn, and a declared component that cannot be
+/// loaded fails the build (#330).
+#[test]
+fn reports_manifest_keys_that_have_no_effect_yet() {
+    let strict = format!("{MANIFEST}\n[formatting]\nmode = \"strict\"\n");
+    let dir = project(&[("folio.toml", &strict), ("main.fol", "Text.\n")]);
+    for command in ["check", "build"] {
+        let output = folio(dir.path(), &[command]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("strict mode is not implemented yet"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    let declared = format!("{MANIFEST}\n[components]\ncircuits = {{ version = \"0.3\" }}\n");
+    let dir = project(&[("folio.toml", &declared), ("main.fol", "Text.\n")]);
+    for command in ["check", "build"] {
+        let output = folio(dir.path(), &[command]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("component `circuits` cannot be loaded"),
+            "{}",
+            stderr(&output)
+        );
+    }
+}
+
 /// The `.fol` and `.fsty` files under `dir`, by path relative to it.
 fn sources(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
     let mut entries: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();

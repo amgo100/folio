@@ -140,6 +140,12 @@ impl Pattern {
         }
     }
 
+    /// Whether the pattern has a counting symbol, so that it shows the
+    /// values; one without is shown as written.
+    pub fn counts(&self) -> bool {
+        !self.pieces.is_empty()
+    }
+
     /// Formats a counter's values, as an element shows its number:
     /// `"(a)"` formats 2 as `(b)`.
     pub fn format(&self, values: &[u64]) -> EcoString {
