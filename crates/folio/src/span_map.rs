@@ -44,7 +44,7 @@ use std::ops::Range;
 
 use ecow::EcoString;
 use folio_component::{Fragment, FragmentItem, Glyph, GlyphRun, ObjectBox, Point, Size, SourceRef};
-use folio_syntax::{DiagSpan, FileId, Source};
+use folio_syntax::{DiagSpan, FileId, LinkedNode, Source, SyntaxKind};
 
 pub use folio_core::span_map::{source_ref, span, text_range};
 
@@ -113,8 +113,8 @@ pub struct Found {
 /// its pen position to the next and from a font size above its baseline to
 /// a quarter of it below, as a click finds it. A glyph that stands for a
 /// whole element, such as a list item's marker or a heading's number, is
-/// left out for bytes that start in the element's content, unless they
-/// hold the whole element: a cursor in an item's text marks that text, not
+/// left out for bytes that start in the element's body, unless they hold
+/// the whole element: a cursor in an item's text marks that text, not
 /// the item's label, which a cursor at the item's `+` marks. Where no glyph
 /// shows the bytes, as in the markup of an element's call, the boxes of the
 /// fragments and objects whose nodes hold them, and hold the fewest bytes,
@@ -161,8 +161,6 @@ pub struct Index {
     extent: HashMap<SourceRef, u32>,
     /// The root node of each file, which holds every place and shows none.
     roots: HashSet<SourceRef>,
-    /// The bytes of every node that glyphs show, by file and then by start.
-    shown: Vec<NodePlace>,
 }
 
 /// A node's file and its bytes there.
@@ -314,16 +312,6 @@ impl Index {
             g.whole = whole.clone();
             true
         });
-        index.shown = index
-            .glyphs
-            .iter()
-            .map(|g| (g.file, g.whole.clone()))
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        index
-            .shown
-            .sort_by_key(|(f, r)| (*f, r.start, std::cmp::Reverse(r.end)));
         let mut run: Option<(SourceRef, u32)> = None;
         for g in &index.glyphs {
             match &mut run {
@@ -350,20 +338,6 @@ impl Index {
             true
         });
         index
-    }
-
-    /// Where the content of the element at `whole` in `file` starts: the
-    /// start of the first node inside it that glyphs show, or `None` when
-    /// glyphs show no node inside it.
-    fn content_start(&self, file: FileId, whole: &Range<usize>) -> Option<usize> {
-        let from = self
-            .shown
-            .partition_point(|(f, r)| (*f, r.start) < (file, whole.start));
-        self.shown[from..]
-            .iter()
-            .take_while(|(f, r)| *f == file && r.start < whole.end)
-            .find(|(_, r)| r != whole && r.end <= whole.end)
-            .map(|(_, r)| r.start)
     }
 
     /// The parts of the pages that show the bytes `bytes` of the file at
@@ -437,27 +411,32 @@ impl Index {
         };
         // A glyph that stands for a whole element, such as a list item's
         // marker or a heading's number, is not found for bytes that start
-        // in the element's content, where the first node inside it that
-        // glyphs show starts: there the reveal marks that content alone
-        // (#417). It is found for bytes that start in the element's own
-        // markup before that, as at an item's `+`, and for bytes that hold
-        // the whole element.
-        let shown = |g: &GlyphEntry, r: &Range<usize>| {
-            *r != g.whole
-                || (bytes.start <= r.start && r.end <= bytes.end)
-                || self
-                    .content_start(file, r)
-                    .is_none_or(|start| bytes.start < start)
+        // in the element's body: there the reveal marks the body's glyphs
+        // alone (#417). It is found for bytes that start in the element's
+        // own markup, as at an item's `+`, and for bytes that hold the
+        // whole element.
+        let mut bodies: HashMap<SourceRef, Option<Range<usize>>> = HashMap::new();
+        let mut shown = |g: &GlyphEntry, r: &Range<usize>| {
+            if *r != g.whole || (bytes.start <= r.start && r.end <= bytes.end) {
+                return true;
+            }
+            let body = bodies
+                .entry(g.node)
+                .or_insert_with(|| source.find(span(g.node)).and_then(|node| body(&node)));
+            body.as_ref()
+                .is_none_or(|body| !(body.start <= bytes.start && bytes.start <= body.end))
         };
         let mut hits: Vec<(usize, &GlyphEntry)> = resolved
             .iter()
-            .filter(|(_, g, r)| overlaps(r) && shown(g, r))
+            .filter(|(_, g, r)| overlaps(r))
+            .filter(|(_, g, r)| shown(g, r))
             .map(|&(i, g, _)| (i, g))
             .collect();
         if hits.is_empty() && bytes.is_empty() {
             hits = resolved
                 .iter()
-                .filter(|(_, g, r)| !r.is_empty() && r.end == bytes.start && shown(g, r))
+                .filter(|(_, _, r)| !r.is_empty() && r.end == bytes.start)
+                .filter(|(_, g, r)| shown(g, r))
                 .map(|&(i, g, _)| (i, g))
                 .collect();
         }
@@ -487,6 +466,30 @@ impl Index {
             })
             .collect()
     }
+}
+
+/// The bytes of an element's body: its markup, from the first part to the
+/// last (an item's or heading's text, a term and its description), or the
+/// markup in the content blocks of a call. `None` for a node with neither.
+fn body(node: &LinkedNode<'_>) -> Option<Range<usize>> {
+    let markup = |node: &LinkedNode<'_>| {
+        node.children()
+            .filter(|child| child.kind() == SyntaxKind::Markup)
+            .map(|child| child.range())
+            .collect::<Vec<_>>()
+    };
+    let mut parts = markup(node);
+    if parts.is_empty()
+        && node.kind() == SyntaxKind::FuncCall
+        && let Some(args) = node.children().find(|c| c.kind() == SyntaxKind::Args)
+    {
+        for block in args.children() {
+            if block.kind() == SyntaxKind::ContentBlock {
+                parts.extend(markup(&block));
+            }
+        }
+    }
+    Some(parts.first()?.start..parts.last()?.end)
 }
 
 /// The areas of glyphs, one for each run of glyphs that follow each other

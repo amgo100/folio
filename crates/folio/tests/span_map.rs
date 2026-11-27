@@ -315,7 +315,9 @@ fn marker_glyphs(world: &World, pages: &Pages, at: usize) -> Vec<(usize, f64, f6
             let Some(location) = span_map::locate_glyph(world, placed.glyph) else {
                 continue;
             };
-            let node = source.find(span_map::span(placed.glyph.source.0)).unwrap();
+            let Some(node) = source.find(span_map::span(placed.glyph.source.0)) else {
+                continue;
+            };
             let element = !matches!(node.kind(), SyntaxKind::Text | SyntaxKind::Space);
             if element && node.range() == location.bytes && location.bytes.start == at {
                 let (x, y) = (placed.pos.x.to_pt(), placed.pos.y.to_pt());
@@ -456,6 +458,10 @@ fn inline_markup_and_selections_in_an_item_leave_its_label() {
             "{bytes:?} marks the label: {found:?}"
         );
     }
+    // An item whose text starts with markup: a cursor on its `*`.
+    let (found, markers) = find_with_markers("+ *bold* rest\n", 0, 2..2);
+    assert!(!markers.is_empty());
+    assert!(!marks(&found, &markers), "{found:?}");
     // From the first item's text into the second item: the second label is
     // in the bytes, the first is not.
     let second = text.find("+ Second").unwrap();
@@ -491,4 +497,24 @@ fn a_cursor_in_a_numbered_heading_marks_its_title_not_its_number() {
     let (page, x, y, _) = markers[0];
     let found = index.find("main.fol", 0..0);
     assert!(found.iter().any(|f| covers(f, page, x, y)), "{found:?}");
+}
+
+/// A footnote's anchor stands for the whole footnote: a cursor in the
+/// note's text marks that text alone, one just after the call, at the end
+/// of its paragraph, marks the anchor.
+#[test]
+fn a_footnote_anchor_is_found_after_its_call_not_inside_its_note() {
+    let text = "A claim.#footnote[Source text.]\n\nMore.\n";
+    let at = text.find("#footnote").unwrap() + 1;
+    let after = text.find("]\n").unwrap() + 1;
+    let (found, markers) = find_with_markers(text, at, after..after);
+    assert!(!markers.is_empty(), "the footnote has no anchor");
+    assert!(marks(&found, &markers), "{found:?}");
+    let inside = text.find("text.").unwrap() + 1;
+    let (found, markers) = find_with_markers(text, at, inside..inside);
+    assert!(
+        found.iter().all(|f| f.glyphs) && !found.is_empty(),
+        "{found:?}"
+    );
+    assert!(!marks(&found, &markers), "{found:?}");
 }
