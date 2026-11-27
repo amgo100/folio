@@ -18,6 +18,7 @@ use folio_component::{ElementKind, Location, Name, QualifiedName};
 use folio_syntax::{Span, SyntaxNode};
 
 use super::value::{Dict, Equality, LazyHash, Value, compare_once};
+use crate::locate::{Frame, Origin};
 
 /// A sequence of content nodes.
 ///
@@ -133,6 +134,37 @@ impl Content {
             })
     }
 
+    /// Records that `frame`, an iteration or a call, made this content:
+    /// on its elements at the top level, and those of its slots' bodies.
+    /// Elements inside them take the frame from the element around them
+    /// when the document model locates them ([`Origin::nested`]), so
+    /// stamping costs one step per node at the top level, however deeply
+    /// the content nests.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "evaluation stamps frames once its loops and calls record them (#339)"
+        )
+    )]
+    pub(crate) fn stamp(&mut self, frame: Frame) {
+        if !self
+            .nodes
+            .iter()
+            .any(|node| matches!(node, Node::Element(_) | Node::Slot(_)))
+        {
+            return;
+        }
+        self.changed();
+        for node in self.nodes.make_mut() {
+            match node {
+                Node::Element(element) => element.origin = element.origin.within(frame),
+                Node::Slot(slot) => slot.body.stamp(frame),
+                _ => {}
+            }
+        }
+    }
+
     /// The text of the content without markup, as a test or a lint reads
     /// it: text and the bodies of elements, with spaces and breaks as one
     /// space.
@@ -245,6 +277,51 @@ impl Debug for Content {
     }
 }
 
+/// Records that `frame`, an iteration or a call, made `value`: on the
+/// content it is or holds in arrays and dictionaries ([`Content::stamp`]).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "evaluation stamps frames once its loops and calls record them (#339)"
+    )
+)]
+pub(crate) fn stamp(value: &mut Value, frame: Frame) {
+    match value {
+        Value::Content(content) => content.stamp(frame),
+        Value::Array(array) => {
+            for i in 0..array.len() {
+                if holds_content(&array[i]) {
+                    array.update(i, |item| stamp(item, frame));
+                }
+            }
+        }
+        Value::Dict(dict) => {
+            let keys: Vec<EcoString> = dict
+                .iter()
+                .filter(|(_, v)| holds_content(v))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in keys {
+                dict.update(&key, false, |v| stamp(v, frame));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether a value is content or may hold some.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "evaluation stamps frames once its loops and calls record them (#339)"
+    )
+)]
+fn holds_content(value: &Value) -> bool {
+    matches!(value, Value::Content(_) | Value::Array(_) | Value::Dict(_))
+}
+
 /// A node of the content tree.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Node {
@@ -335,6 +412,10 @@ pub struct Element {
     /// ([`crate::locate`]); evaluated content, which one call may place
     /// several times, has none yet ([`Location::DETACHED`]).
     pub location: Location,
+    /// The loop iterations and closure calls that made it, as evaluation
+    /// recorded them ([`Content::stamp`]); the document model builds its
+    /// location from it.
+    pub origin: Origin,
 }
 
 impl Element {
@@ -360,9 +441,52 @@ mod tests {
                 label: None,
                 span: Span::detached(),
                 location: Location::DETACHED,
+                origin: Origin::ROOT,
             })
         };
         [strong(inner), strong(inner)].into_iter().collect()
+    }
+
+    #[test]
+    fn stamps_reach_top_level_elements_only() {
+        let leaf = Content::node(Node::Text {
+            text: "x".into(),
+            span: Span::detached(),
+        });
+        let content = doubled(&doubled(&leaf));
+        let frame = Frame::Call {
+            span: Span::detached(),
+        };
+        let mut value = Value::Array([Value::Content(content.clone()), Value::Int(1)].into());
+        stamp(&mut value, frame);
+        let Value::Array(array) = &value else {
+            unreachable!()
+        };
+        let Value::Content(stamped) = &array[0] else {
+            unreachable!()
+        };
+        let origins = |content: &Content| -> Vec<Origin> {
+            content
+                .nodes()
+                .iter()
+                .filter_map(|node| match node {
+                    Node::Element(element) => Some(element.origin),
+                    _ => None,
+                })
+                .collect()
+        };
+        let within = Origin::ROOT.within(frame);
+        assert_eq!(origins(stamped), [within, within]);
+        assert_ne!(stamped, &content);
+        // The elements inside take the frame from the element around
+        // them when they are located: they keep their own origin.
+        let Node::Element(first) = &stamped.nodes()[0] else {
+            unreachable!()
+        };
+        let Some(Value::Content(inner)) = first.field("body") else {
+            unreachable!()
+        };
+        assert_eq!(origins(inner), [Origin::ROOT, Origin::ROOT]);
     }
 
     #[test]

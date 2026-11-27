@@ -792,6 +792,7 @@ impl Ctx {
                             fill: self.fill.clone(),
                             text: run.text.clone(),
                             glyphs,
+                            instances: EcoVec::new(),
                         }),
                     ));
                 }

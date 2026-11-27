@@ -188,6 +188,7 @@ impl Vm<'_> {
             label,
             span,
             location: Location::DETACHED,
+            origin: crate::locate::Origin::ROOT,
         })))
     }
 

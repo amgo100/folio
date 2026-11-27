@@ -93,9 +93,27 @@ pub struct GlyphRun {
     pub text: EcoString,
     /// The glyphs, in visual order.
     pub glyphs: EcoVec<Glyph>,
+    /// Which element instance each glyph comes from, for provenance (SPEC
+    /// §6.4): the index of the first glyph from an instance, with its
+    /// location, in the order of the glyphs, wherever the instance changes.
+    /// A glyph before the first entry, or of an entry with
+    /// [`Location::DETACHED`], comes from the instance of the box around
+    /// the run. A run in one instance, such as a run of a formula, has no
+    /// entries.
+    pub instances: EcoVec<(u32, Location)>,
 }
 
 impl GlyphRun {
+    /// The element instance the glyph at `index` comes from, or
+    /// [`Location::DETACHED`] for that of the box around the run.
+    pub fn instance(&self, index: usize) -> Location {
+        let i = self
+            .instances
+            .partition_point(|&(first, _)| first as usize <= index);
+        i.checked_sub(1)
+            .map_or(Location::DETACHED, |i| self.instances[i].1)
+    }
+
     /// The width of the run: the sum of the glyph advances.
     pub fn width(&self) -> Abs {
         self.glyphs.iter().fold(Abs::zero(), |width, glyph| {

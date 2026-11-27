@@ -1809,6 +1809,7 @@ mod preflight_tests {
                     source: (SourceRef(source), range.clone()),
                 })
                 .collect(),
+            instances: Default::default(),
         })
     }
 

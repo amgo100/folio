@@ -58,6 +58,7 @@ fn run_with(text: &str, source: u64, shows: impl Fn(Range<u32>) -> Range<u32>) -
         fill: Paint::Solid(Color::BLACK),
         text: text.into(),
         glyphs,
+        instances: Default::default(),
     })
 }
 
@@ -752,6 +753,7 @@ fn mixed(pieces: &[(&str, u64)]) -> FragmentItem {
         fill: Paint::Solid(Color::BLACK),
         text: text.into(),
         glyphs: glyphs.into(),
+        instances: Default::default(),
     })
 }
 

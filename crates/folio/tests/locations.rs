@@ -259,3 +259,56 @@ fn another_iteration_keeps_the_locations_of_the_earlier_ones() {
         assert!(kept.contains(&(name, location)), "{name} {location:?} lost");
     }
 }
+
+/// Every glyph run on the pages, with the location of the box around it.
+fn runs(world: &World) -> Vec<(folio::GlyphRun, Location)> {
+    fn walk(fragment: &Fragment, out: &mut Vec<(folio::GlyphRun, Location)>) {
+        for (_, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(group) => walk(group, out),
+                FragmentItem::Text(run) => out.push((run.clone(), fragment.location())),
+                _ => {}
+            }
+        }
+    }
+    let pages = folio::pages(world, Target::Pdf, None).unwrap().unwrap();
+    let mut out = Vec::new();
+    for page in &pages.pages {
+        walk(&page.fragment, &mut out);
+    }
+    out
+}
+
+#[test]
+fn glyphs_name_the_instance_they_come_from() {
+    // SPEC §6.4: of two instances made from one node, each glyph names its
+    // own, so the leak check can tell a hidden one from a shown one.
+    let world = world("#for i in (1, 2) [Again a *bold* word.\n\n]\n");
+    let all = elements(&document(&world));
+    let strongs: Vec<Location> = all
+        .iter()
+        .filter(|(n, ..)| n == "strong")
+        .map(|(.., l)| *l)
+        .collect();
+    let paragraphs: Vec<Location> = all
+        .iter()
+        .filter(|(n, ..)| n == "paragraph")
+        .map(|(.., l)| *l)
+        .collect();
+    let mut bold = vec![String::new(); 2];
+    for (run, around) in runs(&world) {
+        for (i, glyph) in run.glyphs.iter().enumerate() {
+            let text = &run.text[glyph.range.start as usize..glyph.range.end as usize];
+            let instance = match run.instance(i) {
+                Location::DETACHED => around,
+                instance => instance,
+            };
+            match strongs.iter().position(|l| *l == instance) {
+                Some(n) => bold[n].push_str(text),
+                None => assert!(paragraphs.contains(&instance), "{text:?}: {instance:?}"),
+            }
+        }
+    }
+    // The glyphs of each `bold` name their own `strong`.
+    assert_eq!(bold, ["bold", "bold"]);
+}

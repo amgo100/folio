@@ -57,15 +57,74 @@ pub(crate) enum Made {
 /// calls that made it, from the outermost inward, as a key (SPEC §2.3,
 /// §6.1). Content made outside any loop or call has the root origin.
 ///
-/// An origin is a hash, mixed by a fixed function so that it is the same on
-/// every platform and in every process; like the spans it is made from, it
-/// is compared, never written to output.
+/// Evaluation stamps the [`Frame`] of an iteration or a call on the
+/// elements of the value it returns ([`crate::eval::Content::stamp`]), and
+/// the document model gives an element inside another's content the origin
+/// of the element around it as well ([`Origin::nested`]). An origin is a
+/// hash, mixed by a fixed function so that it is the same on every platform
+/// and in every process; like the spans it is made from, it is compared,
+/// never written to output.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub(crate) struct Origin(u64);
+pub struct Origin(u64);
 
 impl Origin {
     /// The origin of content made outside any loop or call.
-    pub(crate) const ROOT: Self = Self(0);
+    pub const ROOT: Self = Self(0);
+
+    /// The origin of an instance with this origin that `frame` returns:
+    /// the frame comes before the frames already recorded.
+    #[must_use]
+    pub fn within(self, frame: Frame) -> Self {
+        Self::keyed(mix(frame.key(), self.0))
+    }
+
+    /// The origin of an element whose own origin is `own`, inside the
+    /// content of an element whose origin is `self`.
+    #[must_use]
+    pub fn nested(self, own: Self) -> Self {
+        if own == Self::ROOT {
+            self
+        } else if self == Self::ROOT {
+            own
+        } else {
+            Self::keyed(mix(self.0, own.0))
+        }
+    }
+
+    /// A key, as an origin other than the root.
+    fn keyed(key: u64) -> Self {
+        Self(key.max(1))
+    }
+}
+
+/// One step of an instance's [`Origin`]: an iteration of a loop or a call
+/// of a closure.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum Frame {
+    /// An iteration of a loop, counted from 0: of a `for` or `while` loop,
+    /// at its span, or of a function that calls a closure for each item,
+    /// at the call.
+    Iteration {
+        /// The loop or the call.
+        span: Span,
+        /// Which iteration.
+        index: u64,
+    },
+    /// A call of a closure, at its call site.
+    Call {
+        /// The call site.
+        span: Span,
+    },
+}
+
+impl Frame {
+    /// The frame's key.
+    fn key(self) -> u64 {
+        match self {
+            Self::Iteration { span, index } => mix(mix(1, span.into_raw().get()), index),
+            Self::Call { span } => mix(2, span.into_raw().get()),
+        }
+    }
 }
 
 /// Mixes a word into a key: a step of SplitMix64's finaliser, a bijection
@@ -236,7 +295,10 @@ mod tests {
     #[test]
     fn origins_are_counted_apart() {
         let span = Span::from_raw(NonZeroU64::new((1 << 48) | 2).unwrap());
-        let (x, y) = (Origin(mix(0, 1)), Origin(mix(0, 2)));
+        let call = |n: u64| Frame::Call {
+            span: Span::from_raw(NonZeroU64::new((1 << 48) | n).unwrap()),
+        };
+        let (x, y) = (Origin::ROOT.within(call(7)), Origin::ROOT.within(call(8)));
         // Two orders of the same instances: an origin's instances do not
         // depend on another origin's.
         let mut one = Locator::default();
@@ -256,5 +318,29 @@ mod tests {
         // A second instance of one origin is told apart by its number.
         let again = one.locate(span, Made::Evaluated, x);
         assert_ne!(again, a);
+    }
+
+    #[test]
+    fn frames_compose() {
+        let span = |n: u64| Span::from_raw(NonZeroU64::new((1 << 48) | n).unwrap());
+        let iteration = |index| Frame::Iteration {
+            span: span(4),
+            index,
+        };
+        let root = Origin::ROOT;
+        assert_ne!(root.within(iteration(0)), root);
+        assert_ne!(root.within(iteration(0)), root.within(iteration(1)));
+        // The order of frames counts.
+        let call = Frame::Call { span: span(5) };
+        assert_ne!(
+            root.within(iteration(0)).within(call),
+            root.within(call).within(iteration(0))
+        );
+        // Nesting under the root, or the root under anything, changes
+        // nothing.
+        let x = root.within(call);
+        assert_eq!(root.nested(x), x);
+        assert_eq!(x.nested(root), x);
+        assert_ne!(x.nested(x), x);
     }
 }
