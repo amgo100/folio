@@ -1,6 +1,6 @@
 diff -ruN a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
-+++ b/Cargo.toml	2026-11-27 06:05:39.981263953 +0000
++++ b/Cargo.toml	2026-11-27 06:27:21.109340349 +0000
 @@ -36,7 +36,7 @@
  
  [features]
@@ -10,8 +10,12 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  std = []
  
  [lib]
-@@ -51,7 +51,6 @@
+@@ -49,9 +49,10 @@
+ [dependencies.bytemuck]
+ version = "1.24"
  
++# Folio: libm, not optional, for the float functions whose std versions call
++# the platform's maths library (Folio's SPEC §2.4; see FOLIO.md).
  [dependencies.libm]
  version = "0.2.16"
 -optional = true
@@ -20,7 +24,7 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  version = "0.1"
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 06:05:39.981181575 +0000
++++ b/FOLIO.md	2026-11-27 06:27:21.109176266 +0000
 @@ -0,0 +1,24 @@
 +# tiny-skia-path 0.12.0, patched for Folio
 +
@@ -48,7 +52,7 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +the patch, and `third_party/README.md` says how to move to a new release.
 diff -ruN a/src/path_geometry.rs b/src/path_geometry.rs
 --- a/src/path_geometry.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/path_geometry.rs	2026-11-27 06:05:39.981599054 +0000
++++ b/src/path_geometry.rs	2026-11-27 06:27:21.109768653 +0000
 @@ -350,15 +350,16 @@
      if r2_minus_q3 < 0.0 {
          // we have 3 real roots
@@ -82,7 +86,7 @@ diff -ruN a/src/path_geometry.rs b/src/path_geometry.rs
  // This is SkEvalCubicAt split into three functions.
 diff -ruN a/src/transform.rs b/src/transform.rs
 --- a/src/transform.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/transform.rs	2026-11-27 06:05:39.981778004 +0000
++++ b/src/transform.rs	2026-11-27 06:27:21.109960965 +0000
 @@ -80,8 +80,9 @@
      /// `angle` in degrees.
      pub fn from_rotate(angle: f32) -> Self {

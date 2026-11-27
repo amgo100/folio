@@ -39,6 +39,20 @@ case "${1:-}" in
         ;;
 esac
 
+if [[ -n "$only" ]] && ! grep -q "^$only " third_party/crates.txt; then
+    echo "error: $only is not in third_party/crates.txt" >&2
+    exit 2
+fi
+
+# sha256sum on Linux, shasum on macOS.
+sha256() {
+    if command -v sha256sum >/dev/null; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -48,7 +62,7 @@ upstream() {
     local file="$tmp/$name-$version.crate"
     curl --fail --silent --show-error --location --retry 3 \
         --output "$file" "https://static.crates.io/crates/$name/$name-$version.crate"
-    if [[ "$(sha256sum "$file" | cut -d' ' -f1)" != "$sum" ]]; then
+    if [[ "$(sha256 "$file")" != "$sum" ]]; then
         echo "error: $name $version does not match its checksum in third_party/crates.txt" >&2
         exit 1
     fi
@@ -81,7 +95,12 @@ while read -r name version sum; do
             out="$tmp/patched/$name"
             mkdir -p "$tmp/patched"
             cp -R "$tmp/upstream/$name" "$out"
+            (cd "$out" && find . -name '*.orig' -o -name '*.rej') | sort >"$tmp/before.txt"
             patch --quiet --forward --strip=1 --directory="$out" <"$patch_file"
+            # Backups that patch makes of files a hunk moved in (the
+            # release's own Cargo.toml.orig stays).
+            (cd "$out" && find . -name '*.orig' -o -name '*.rej') | sort |
+                comm -13 "$tmp/before.txt" - | (cd "$out" && xargs rm -f)
             if [[ "$mode" == check ]]; then
                 if ! diff -r "$out" "third_party/$name" >"$tmp/diff.txt"; then
                     echo "error: third_party/$name differs from $name $version with $patch_file:" >&2

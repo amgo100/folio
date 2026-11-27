@@ -1,10 +1,12 @@
 diff -ruN a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
-+++ b/Cargo.toml	2026-11-27 06:05:40.237570921 +0000
-@@ -63,6 +63,9 @@
++++ b/Cargo.toml	2026-11-27 06:27:21.283163609 +0000
+@@ -63,6 +63,11 @@
      "memmap-fonts",
  ]
  
++# Folio: libm, not optional, for the float functions whose std versions call
++# the platform's maths library (Folio's SPEC §2.4; see FOLIO.md).
 +[dependencies.libm]
 +version = "0.2.16"
 +
@@ -13,7 +15,7 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 06:05:40.237371959 +0000
++++ b/FOLIO.md	2026-11-27 06:27:21.283015333 +0000
 @@ -0,0 +1,23 @@
 +# usvg 0.47.0, patched for Folio
 +
@@ -40,7 +42,7 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +the patch, and `third_party/README.md` says how to move to a new release.
 diff -ruN a/src/parser/marker.rs b/src/parser/marker.rs
 --- a/src/parser/marker.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/parser/marker.rs	2026-11-27 06:05:40.238352720 +0000
++++ b/src/parser/marker.rs	2026-11-27 06:27:21.283775348 +0000
 @@ -419,7 +419,8 @@
      }
  
@@ -53,7 +55,7 @@ diff -ruN a/src/parser/marker.rs b/src/parser/marker.rs
  
 diff -ruN a/src/parser/units.rs b/src/parser/units.rs
 --- a/src/parser/units.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/parser/units.rs	2026-11-27 06:05:40.238294155 +0000
++++ b/src/parser/units.rs	2026-11-27 06:27:21.283733916 +0000
 @@ -54,7 +54,9 @@
                      | AId::Y1
                      | AId::Y2 => convert_percent(length, view_box.height()),

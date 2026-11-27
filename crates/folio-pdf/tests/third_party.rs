@@ -77,52 +77,102 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The code of a file without its comments, string literals and
-/// `#[cfg(test)]` items, one string per line.
+/// The code of a file without its comments, string and character literals
+/// and `#[cfg(test)]` items, one string per line.
 fn code(text: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut depth = 0usize;
     let mut skip_from: Option<usize> = None;
     let mut pending_test = false;
     let mut in_block_comment = false;
+    // Inside a string literal: `Some(0)` for a plain one, `Some(n + 1)` for a
+    // raw one closed by `"` and `n` hashes. Strings may span lines.
+    let mut in_str: Option<usize> = None;
     for raw in text.lines() {
         let mut line = String::new();
-        let mut chars = raw.chars().peekable();
-        let mut in_str = false;
-        while let Some(c) = chars.next() {
+        let chars: Vec<char> = raw.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            let next = chars.get(i + 1).copied();
             if in_block_comment {
-                if c == '*' && chars.peek() == Some(&'/') {
-                    chars.next();
+                if c == '*' && next == Some('/') {
                     in_block_comment = false;
+                    i += 1;
                 }
+                i += 1;
                 continue;
             }
-            if in_str {
-                if c == '\\' {
-                    chars.next();
-                } else if c == '"' {
-                    in_str = false;
+            if let Some(hashes) = in_str {
+                if hashes == 0 && c == '\\' {
+                    i += 2;
+                    continue;
                 }
+                if c == '"' {
+                    let closing = if hashes == 0 { 0 } else { hashes - 1 };
+                    if chars[i + 1..].iter().take_while(|&&h| h == '#').count() >= closing {
+                        in_str = None;
+                        i += 1 + closing;
+                        continue;
+                    }
+                }
+                i += 1;
                 continue;
             }
             match c {
-                '"' => in_str = true,
-                '/' if chars.peek() == Some(&'/') => break,
-                '/' if chars.peek() == Some(&'*') => {
-                    chars.next();
+                '"' => in_str = Some(0),
+                'r' if !line.ends_with(|p: char| p.is_alphanumeric() || p == '_')
+                    && matches!(next, Some('"' | '#')) =>
+                {
+                    let hashes = chars[i + 1..].iter().take_while(|&&h| h == '#').count();
+                    if chars.get(i + 1 + hashes) == Some(&'"') {
+                        in_str = Some(hashes + 1);
+                        i += 2 + hashes;
+                        continue;
+                    }
+                    line.push(c);
+                }
+                '\'' => {
+                    // A character literal (`'x'`, `'\n'`, `'\u{7b}'`), or a
+                    // lifetime, which has no closing quote.
+                    if next == Some('\\') {
+                        let close = chars[i + 2..].iter().position(|&q| q == '\'');
+                        i += close.map_or(1, |p| p + 3);
+                        continue;
+                    }
+                    if chars.get(i + 2) == Some(&'\'') {
+                        i += 3;
+                        continue;
+                    }
+                    line.push(c);
+                }
+                '/' if next == Some('/') => break,
+                '/' if next == Some('*') => {
                     in_block_comment = true;
+                    i += 1;
                 }
                 _ => line.push(c),
             }
+            i += 1;
         }
-        if line.trim_start().starts_with("#[cfg(test)]") {
+        let mut item = line.as_str();
+        if let Some(at) = line.find("#[cfg(test)]") {
             pending_test = true;
+            item = &line[at + "#[cfg(test)]".len()..];
         }
         let opens = line.matches('{').count();
         let closes = line.matches('}').count();
-        if pending_test && skip_from.is_none() && opens > 0 {
-            skip_from = Some(depth);
-            pending_test = false;
+        if pending_test && skip_from.is_none() {
+            match (item.find('{'), item.find(';')) {
+                // An item without a body, such as `use`: it ends here.
+                (None, Some(_)) => pending_test = false,
+                (Some(brace), Some(semi)) if semi < brace => pending_test = false,
+                (Some(_), _) => {
+                    skip_from = Some(depth);
+                    pending_test = false;
+                }
+                (None, None) => {}
+            }
         }
         let skipping = skip_from.is_some();
         depth = (depth + opens).saturating_sub(closes);
@@ -136,8 +186,7 @@ fn code(text: &str) -> Vec<String> {
     lines
 }
 
-/// The forbidden calls in a line of code: the methods, each with the
-/// character after its opening parenthesis.
+/// The forbidden calls in a line of code: `.sin(…)` and `f64::sin(…)`.
 fn calls(line: &str) -> Vec<&'static str> {
     let mut found = Vec::new();
     for name in FORBIDDEN {
@@ -149,6 +198,9 @@ fn calls(line: &str) -> Vec<&'static str> {
                 found.push(*name);
             }
             from += at + needle.len();
+        }
+        for ty in ["f32", "f64"] {
+            found.extend(line.matches(&format!("{ty}::{name}(")).map(|_| *name));
         }
     }
     found
@@ -185,7 +237,7 @@ fn patched_crates_call_no_platform_maths() {
                 match allowed {
                     Some((_, _, _, n, _)) if *n == count => {}
                     _ => failures.push(format!(
-                        "third_party/{name}/{rel}:{first}: {count} call(s) of `.{method}(`"
+                        "third_party/{name}/{rel}:{first}: {count} call(s) of `{method}`"
                     )),
                 }
             }
@@ -218,15 +270,29 @@ fn every_build_uses_the_patched_crates() {
                 table.contains(&entry),
                 "{manifest} does not patch {name}: `{entry}`"
             );
-            let package = format!("name = \"{name}\"\nversion = \"{version}\"\n");
-            let at = lock_text
-                .find(&package)
+            // Every release of the crate in the lockfile, not only the
+            // patched one: `[patch.crates-io]` does not reach another
+            // semver-incompatible version that a dependency might pull in.
+            let packages: Vec<&str> = lock_text
+                .split("[[package]]\n")
+                .filter(|p| p.starts_with(&format!("name = \"{name}\"\n")))
+                .collect();
+            assert!(!packages.is_empty(), "{lock} has no {name}");
+            for package in &packages {
+                assert!(
+                    !package.contains("\nsource = "),
+                    "{lock} takes a release of {name} from a registry, not from \
+                     {prefix}/{name}:\n{package}"
+                );
+            }
+            let patched = packages
+                .iter()
+                .find(|p| p.contains(&format!("\nversion = \"{version}\"\n")))
                 .unwrap_or_else(|| panic!("{lock} has no {name} {version}"));
-            let rest = &lock_text[at + package.len()..];
-            let fields = rest.split("\n\n").next().unwrap();
             assert!(
-                !fields.contains("source = "),
-                "{lock} takes {name} {version} from a registry, not from {prefix}/{name}"
+                patched.contains("\n \"libm\",\n"),
+                "{lock} is stale: {name} {version} does not depend on libm, as \
+                 its patched copy does; regenerate the lockfile"
             );
         }
     }

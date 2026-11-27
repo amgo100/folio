@@ -43,6 +43,10 @@ the float functions `clippy.toml` disallows outside comments and tests,
 when either workspace stops using a copy, and when an arrowhead's rotation
 is not the one `libm` gives.
 
+`polycool`, which kurbo uses to find polynomial roots, is not patched: its
+only such calls outside its tests are `2.0f64.powi(-515)`, a power of two,
+which every way of computing `powi` gives exactly.
+
 The copies are not workspace members (`exclude` in the root `Cargo.toml`):
 they keep their own lints, and `cargo test --workspace` does not run their
 tests.

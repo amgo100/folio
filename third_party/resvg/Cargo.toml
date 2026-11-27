@@ -73,6 +73,8 @@ path = "examples/draw_bboxes.rs"
 name = "minimal"
 path = "examples/minimal.rs"
 
+# Folio: libm, not optional, for the float functions whose std versions call
+# the platform's maths library (Folio's SPEC §2.4; see FOLIO.md).
 [dependencies.libm]
 version = "0.2.16"
 

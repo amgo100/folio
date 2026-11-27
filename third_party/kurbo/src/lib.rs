@@ -111,6 +111,9 @@
 #[cfg(not(any(feature = "std", feature = "libm")))]
 compile_error!("kurbo requires either the `std` or `libm` feature");
 
+// Folio: `libm` is always a dependency and always used (`common::LibmFloat`),
+// so the import that silenced its unused-dependency lint is gone.
+
 extern crate alloc;
 
 mod affine;

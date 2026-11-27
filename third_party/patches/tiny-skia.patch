@@ -1,10 +1,12 @@
 diff -ruN a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
-+++ b/Cargo.toml	2026-11-27 06:05:39.577683768 +0000
-@@ -90,6 +90,9 @@
++++ b/Cargo.toml	2026-11-27 06:27:20.934726741 +0000
+@@ -90,6 +90,11 @@
  name = "integration"
  path = "tests/integration/main.rs"
  
++# Folio: libm, not optional, for the float functions whose std versions call
++# the platform's maths library (Folio's SPEC §2.4; see FOLIO.md).
 +[dependencies.libm]
 +version = "0.2.16"
 +
@@ -13,7 +15,7 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 06:05:39.577048876 +0000
++++ b/FOLIO.md	2026-11-27 06:27:20.934382883 +0000
 @@ -0,0 +1,27 @@
 +# tiny-skia 0.12.0, patched for Folio
 +
@@ -44,7 +46,7 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +the patch, and `third_party/README.md` says how to move to a new release.
 diff -ruN a/src/path64/cubic64.rs b/src/path64/cubic64.rs
 --- a/src/path64/cubic64.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/path64/cubic64.rs	2026-11-27 06:05:39.579367738 +0000
++++ b/src/path64/cubic64.rs	2026-11-27 06:27:20.935633895 +0000
 @@ -322,20 +322,21 @@
          // we have 3 real roots
  
@@ -73,7 +75,7 @@ diff -ruN a/src/path64/cubic64.rs b/src/path64/cubic64.rs
              offset += 1;
 diff -ruN a/src/pipeline/highp.rs b/src/pipeline/highp.rs
 --- a/src/pipeline/highp.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/pipeline/highp.rs	2026-11-27 06:05:39.579830387 +0000
++++ b/src/pipeline/highp.rs	2026-11-27 06:27:20.935868623 +0000
 @@ -451,12 +451,14 @@
  blend_fn2!(difference,  |s: f32x8, d, sa, da: f32x8| s + d - two((s * da).min(d * sa)));
  blend_fn2!(exclusion,   |s: f32x8, d,  _,  _| s + d - two(s * d));

@@ -1,6 +1,6 @@
 diff -ruN a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
-+++ b/Cargo.toml	2026-11-27 06:06:15.265180789 +0000
++++ b/Cargo.toml	2026-11-27 06:27:20.390648639 +0000
 @@ -43,7 +43,6 @@
  default = ["std"]
  euclid = ["dep:euclid"]
@@ -9,8 +9,12 @@ diff -ruN a/Cargo.toml b/Cargo.toml
      "polycool/libm",
      "euclid?/libm",
  ]
-@@ -138,7 +137,6 @@
+@@ -136,9 +135,10 @@
+ optional = true
+ default-features = false
  
++# Folio: libm, not optional, for the float functions whose std versions call
++# the platform's maths library (Folio's SPEC §2.4; see FOLIO.md).
  [dependencies.libm]
  version = "0.2.16"
 -optional = true
@@ -19,7 +23,7 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  version = "0.5.9"
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 06:06:15.265171726 +0000
++++ b/FOLIO.md	2026-11-27 06:27:20.390606042 +0000
 @@ -0,0 +1,33 @@
 +# kurbo 0.13.1, patched for Folio
 +
@@ -56,7 +60,7 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +the patch, and `third_party/README.md` says how to move to a new release.
 diff -ruN a/src/affine.rs b/src/affine.rs
 --- a/src/affine.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/affine.rs	2026-11-27 06:06:15.265417348 +0000
++++ b/src/affine.rs	2026-11-27 06:27:20.391571531 +0000
 @@ -3,6 +3,7 @@
  
  //! Affine transforms.
@@ -96,7 +100,7 @@ diff -ruN a/src/affine.rs b/src/affine.rs
                  x: 0.5 * (s1 + s2),
 diff -ruN a/src/arc.rs b/src/arc.rs
 --- a/src/arc.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/arc.rs	2026-11-27 06:06:15.265442202 +0000
++++ b/src/arc.rs	2026-11-27 06:27:20.391625185 +0000
 @@ -3,6 +3,7 @@
  
  //! An ellipse arc.
@@ -139,7 +143,7 @@ diff -ruN a/src/arc.rs b/src/arc.rs
          pt.x * angle_sin + pt.y * angle_cos,
 diff -ruN a/src/circle.rs b/src/circle.rs
 --- a/src/circle.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/circle.rs	2026-11-27 06:06:15.265491931 +0000
++++ b/src/circle.rs	2026-11-27 06:27:20.391771187 +0000
 @@ -3,6 +3,7 @@
  
  //! Implementation of circle shape.
@@ -225,7 +229,7 @@ diff -ruN a/src/circle.rs b/src/circle.rs
              x: angle_cos * radius,
 diff -ruN a/src/common.rs b/src/common.rs
 --- a/src/common.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/common.rs	2026-11-27 06:06:15.265504294 +0000
++++ b/src/common.rs	2026-11-27 06:27:20.391821776 +0000
 @@ -17,6 +17,100 @@
  
  use arrayvec::ArrayVec;
@@ -456,7 +460,7 @@ diff -ruN a/src/common.rs b/src/common.rs
          } else {
 diff -ruN a/src/cubicbez.rs b/src/cubicbez.rs
 --- a/src/cubicbez.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/cubicbez.rs	2026-11-27 06:06:15.265522417 +0000
++++ b/src/cubicbez.rs	2026-11-27 06:27:20.391876351 +0000
 @@ -3,6 +3,7 @@
  
  //! Cubic Bézier segments.
@@ -504,7 +508,7 @@ diff -ruN a/src/cubicbez.rs b/src/cubicbez.rs
      }
 diff -ruN a/src/ellipse.rs b/src/ellipse.rs
 --- a/src/ellipse.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/ellipse.rs	2026-11-27 06:06:15.265541970 +0000
++++ b/src/ellipse.rs	2026-11-27 06:27:20.391926454 +0000
 @@ -3,6 +3,7 @@
  
  //! Implementation of ellipse shape.
@@ -553,7 +557,7 @@ diff -ruN a/src/ellipse.rs b/src/ellipse.rs
          sum -= term;
 diff -ruN a/src/expand.rs b/src/expand.rs
 --- a/src/expand.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/expand.rs	2026-11-27 06:06:15.265555344 +0000
++++ b/src/expand.rs	2026-11-27 06:27:20.392022304 +0000
 @@ -1,6 +1,7 @@
  // Copyright 2026 the Kurbo Authors
  // SPDX-License-Identifier: Apache-2.0 OR MIT
@@ -582,7 +586,7 @@ diff -ruN a/src/expand.rs b/src/expand.rs
                                      n.x,
 diff -ruN a/src/fit.rs b/src/fit.rs
 --- a/src/fit.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/fit.rs	2026-11-27 06:06:15.265571416 +0000
++++ b/src/fit.rs	2026-11-27 06:27:20.392072701 +0000
 @@ -4,6 +4,7 @@
  //! An implementation of cubic Bézier curve fitting based on a quartic
  //! solver making signed area and moment match the source curve.
@@ -622,21 +626,22 @@ diff -ruN a/src/fit.rs b/src/fit.rs
          * (((2. * s1 * c1 * c0 + s0 * (2. * c1 * c1 - 1.)) * c0 - 2. * s1 * c1) * c0
 diff -ruN a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/lib.rs	2026-11-27 06:06:15.265607820 +0000
-@@ -111,10 +111,6 @@
++++ b/src/lib.rs	2026-11-27 06:27:20.392207269 +0000
+@@ -111,9 +111,8 @@
  #[cfg(not(any(feature = "std", feature = "libm")))]
  compile_error!("kurbo requires either the `std` or `libm` feature");
  
 -// Suppress the unused_crate_dependencies lint when both std and libm are specified.
 -#[cfg(all(feature = "std", feature = "libm"))]
 -use libm as _;
--
++// Folio: `libm` is always a dependency and always used (`common::LibmFloat`),
++// so the import that silenced its unused-dependency lint is gone.
+ 
  extern crate alloc;
  
- mod affine;
 diff -ruN a/src/mindist.rs b/src/mindist.rs
 --- a/src/mindist.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/mindist.rs	2026-11-27 06:06:15.265629598 +0000
++++ b/src/mindist.rs	2026-11-27 06:27:20.392313529 +0000
 @@ -7,6 +7,7 @@
  //! two Bézier curves", Chen et al., *Journal of Computational and Applied
  //! Mathematics* 229(2009), 294-301
@@ -656,7 +661,7 @@ diff -ruN a/src/mindist.rs b/src/mindist.rs
  // Binomial co-efficient, but returning zeros for values outside of domain
 diff -ruN a/src/moments.rs b/src/moments.rs
 --- a/src/moments.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/moments.rs	2026-11-27 06:06:15.265640678 +0000
++++ b/src/moments.rs	2026-11-27 06:27:20.392365709 +0000
 @@ -1,6 +1,7 @@
  // Copyright 2025 the Kurbo Authors
  // SPDX-License-Identifier: Apache-2.0 OR MIT
@@ -839,7 +844,7 @@ diff -ruN a/src/moments.rs b/src/moments.rs
                  - r37 * x3
 diff -ruN a/src/offset.rs b/src/offset.rs
 --- a/src/offset.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/offset.rs	2026-11-27 06:06:15.265652933 +0000
++++ b/src/offset.rs	2026-11-27 06:27:20.392409583 +0000
 @@ -6,6 +6,7 @@
  //! The main algorithm in this module is a new technique designed for robustness
  //! and speed. The details are involved; hopefully there will be a paper.
@@ -870,7 +875,7 @@ diff -ruN a/src/offset.rs b/src/offset.rs
          }
 diff -ruN a/src/param_curve.rs b/src/param_curve.rs
 --- a/src/param_curve.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/param_curve.rs	2026-11-27 06:06:15.265671336 +0000
++++ b/src/param_curve.rs	2026-11-27 06:27:20.392455430 +0000
 @@ -3,6 +3,7 @@
  
  //! A trait for curves parameterized by a scalar.
@@ -899,7 +904,7 @@ diff -ruN a/src/param_curve.rs b/src/param_curve.rs
  
 diff -ruN a/src/quadbez.rs b/src/quadbez.rs
 --- a/src/quadbez.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/quadbez.rs	2026-11-27 06:06:15.265694899 +0000
++++ b/src/quadbez.rs	2026-11-27 06:27:20.392542186 +0000
 @@ -3,6 +3,7 @@
  
  //! Quadratic Bézier segments.
@@ -939,7 +944,7 @@ diff -ruN a/src/quadbez.rs b/src/quadbez.rs
  }
 diff -ruN a/src/simplify.rs b/src/simplify.rs
 --- a/src/simplify.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/simplify.rs	2026-11-27 06:06:15.265770354 +0000
++++ b/src/simplify.rs	2026-11-27 06:27:20.392795859 +0000
 @@ -30,6 +30,7 @@
  //! [`fit_to_bezpath`]: crate::fit_to_bezpath
  //! [`fit_to_bezpath_opt`]: crate::fit_to_bezpath_opt
@@ -972,7 +977,7 @@ diff -ruN a/src/simplify.rs b/src/simplify.rs
      // Scale and add chord
 diff -ruN a/src/stroke.rs b/src/stroke.rs
 --- a/src/stroke.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/stroke.rs	2026-11-27 06:06:15.265795073 +0000
++++ b/src/stroke.rs	2026-11-27 06:27:20.392909547 +0000
 @@ -1,6 +1,7 @@
  // Copyright 2023 the Kurbo Authors
  // SPDX-License-Identifier: Apache-2.0 OR MIT
@@ -1019,7 +1024,7 @@ diff -ruN a/src/stroke.rs b/src/stroke.rs
                  let midpoint = c.p0.midpoint(c.p3);
 diff -ruN a/src/svg.rs b/src/svg.rs
 --- a/src/svg.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/svg.rs	2026-11-27 06:06:15.265852292 +0000
++++ b/src/svg.rs	2026-11-27 06:27:20.392965264 +0000
 @@ -3,6 +3,7 @@
  
  //! SVG path representation.
@@ -1039,7 +1044,7 @@ diff -ruN a/src/svg.rs b/src/svg.rs
          let hs_x = (arc.from.x + arc.to.x) * 0.5;
 diff -ruN a/src/vec2.rs b/src/vec2.rs
 --- a/src/vec2.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/vec2.rs	2026-11-27 06:06:15.265896189 +0000
++++ b/src/vec2.rs	2026-11-27 06:27:20.393100465 +0000
 @@ -3,6 +3,7 @@
  
  //! A simple 2D vector.

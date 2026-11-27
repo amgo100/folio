@@ -1135,6 +1135,7 @@ version = "0.13.1"
 dependencies = [
  "arrayvec",
  "euclid",
+ "libm",
  "polycool",
  "smallvec",
 ]
@@ -1566,6 +1567,7 @@ version = "0.47.0"
 dependencies = [
  "gif",
  "image-webp",
+ "libm",
  "log",
  "pico-args",
  "rgb",
@@ -1934,6 +1936,7 @@ name = "svgtypes"
 version = "0.16.2"
 dependencies = [
  "kurbo",
+ "libm",
  "siphasher",
 ]
 
@@ -2026,6 +2029,7 @@ dependencies = [
  "arrayvec",
  "bytemuck",
  "cfg-if",
+ "libm",
  "log",
  "png",
  "tiny-skia-path",
@@ -2037,6 +2041,7 @@ version = "0.12.0"
 dependencies = [
  "arrayref",
  "bytemuck",
+ "libm",
  "strict-num",
 ]
 
@@ -2260,6 +2265,7 @@ dependencies = [
  "fontdb 0.23.0",
  "imagesize",
  "kurbo",
+ "libm",
  "log",
  "pico-args",
  "roxmltree 0.21.2",
