@@ -24,7 +24,8 @@ const MAX_DEPTH: u32 = 256;
 /// How tall an operator chain may make the tree (#380). Nesting alone within
 /// `MAX_DEPTH` makes a tree about three levels tall per level of depth (766
 /// for `#f(` nested 255 times), and short operator chains at each level of
-/// a formula make it up to about five (`a(…)^2/x` nested). This leaves room
+/// a formula make it up to about five (`a(…)^2/x` nested), or six with a
+/// signed script, which wraps its sign and operand (`a(…)^-2/x`). This leaves room
 /// for both, so in practice only a long chain reaches it; math that deep is
 /// past the evaluator's limit of 100 rows in any case. The bound depends on
 /// nothing around the chain, only on its operands. A cut chain is an error,
@@ -427,9 +428,13 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
                 ast::Assoc::Left => prec + 1,
                 ast::Assoc::Right => prec,
             };
-            let m_rhs = p.marker();
-            math_expr_prec(p, prec, chain_set);
-            math_unparen(p, m_rhs);
+            if wrapper == SyntaxKind::MathAttach {
+                math_script(p, prec, chain_set);
+            } else {
+                let m_rhs = p.marker();
+                math_expr_prec(p, prec, chain_set);
+                math_unparen(p, m_rhs);
+            }
         }
 
         // Avoid interrupting a chain when initially parsing a prime.
@@ -439,9 +444,7 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
             while p.at_set(chain_set) {
                 chain_set = chain_set.remove(p.current());
                 p.eat();
-                let m_chain_rhs = p.marker();
-                math_expr_prec(p, prec, chain_set);
-                math_unparen(p, m_chain_rhs);
+                math_script(p, prec, chain_set);
             }
         }
 
@@ -471,7 +474,7 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
 /// stops before them (`stop_set`), as a regular parse does.
 fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8, stop_set: SyntaxSet) {
     let m = from.unwrap_or_else(|| p.marker());
-    if from.is_none() && !math_chain_operand(p) {
+    if from.is_none() && !math_chain_operand(p, false) {
         // Nothing here can be an operand (a label or the end of the
         // equation): a regular parse would say so too.
         p.expected("expression");
@@ -486,12 +489,13 @@ fn math_chain_error(p: &mut Parser<'_>, from: Option<Marker>, min_prec: u8, stop
         && let Some((_, assoc, prec)) = math_op(p.current(), p.had_trivia())
         && prec >= min_prec
     {
+        let script = p.at_set(syntax_set!(Hat, Underscore));
         if p.at(SyntaxKind::Bang) {
             p.convert_and_eat(SyntaxKind::MathText);
         } else {
             p.eat();
         }
-        if assoc.is_some() && !math_chain_operand(p) {
+        if assoc.is_some() && !math_chain_operand(p, script) {
             break;
         }
     }
@@ -514,10 +518,16 @@ const TOO_DEEP: &str = "maximum parsing depth exceeded";
 /// Eats one operand of a chain for [`math_chain_error`]: a token or a
 /// bracketed group, then the groups directly after it. Returns `false`, having
 /// eaten nothing, when no operand starts here.
-fn math_chain_operand(p: &mut Parser<'_>) -> bool {
+fn math_chain_operand(p: &mut Parser<'_>, script: bool) -> bool {
     const END: SyntaxSet = syntax_set!(Dollar, End, Label);
     if p.at_set(END) {
         return false;
+    }
+    // A sign takes the operand after it in a script, as in a regular parse:
+    // `x^-1` ([`math_script`]). The operand at the depth limit itself comes
+    // after a sign that `math_script` has already taken.
+    if script && math_sign_binds(p) {
+        p.eat();
     }
     // A root takes the operand after it, as in a regular parse: `√x`.
     while p.at(SyntaxKind::Root) {
@@ -558,6 +568,63 @@ fn math_chain_group(p: &mut Parser<'_>) {
         if balance == 0 {
             break;
         }
+    }
+}
+
+/// Parses the script after `^` or `_`: one operand, whose parentheses are
+/// removed (`x^(a+b)`).
+///
+/// A sign directly followed by an operand binds to it, so that `10^-3`,
+/// `e^-x` and `x_+1` take the signed operand as their script, as
+/// `10^(-3)` does (SPEC §8.1, D-323-1), and so does a bracket after the
+/// sign: `e^-(x^2/2)` (D-323-2). `±` and `∓` are signs too: `x^±1`
+/// (D-323-3). A sign with a space or nothing after it is the script alone,
+/// as in the electron `e^-` or the ion `Cl^- + Na^+`.
+fn math_script(p: &mut Parser<'_>, prec: u8, stop_set: SyntaxSet) {
+    let m = p.marker();
+    if math_sign_binds(p) {
+        p.eat();
+        math_expr_prec(p, prec, stop_set);
+        p.wrap(m, SyntaxKind::Math);
+    } else {
+        math_expr_prec(p, prec, stop_set);
+        math_unparen(p, m);
+    }
+}
+
+/// Whether the parser is at a sign (`-`, `+`, `−`, `±` or `∓`) directly
+/// followed by something that starts an operand: a name, a number or letter, a large
+/// operator such as `∑`, a bracket, a root, a string, an escape or embedded
+/// code. A fence such as `|` or a `.` starts no operand of a script, signed or
+/// not: `x^|x|` raises only the `|`.
+fn math_sign_binds(p: &Parser<'_>) -> bool {
+    let sign = match p.current() {
+        SyntaxKind::MathShorthand => p.current_text() == "-",
+        SyntaxKind::MathText => matches!(p.current_text(), "+" | "−" | "±" | "∓"),
+        _ => false,
+    };
+    if !sign {
+        return false;
+    }
+    let (kind, node) = p.lexer.clone().next();
+    match kind {
+        SyntaxKind::MathIdent
+        | SyntaxKind::MathFieldAccess
+        | SyntaxKind::Hash
+        | SyntaxKind::LeftParen
+        | SyntaxKind::Root
+        | SyntaxKind::Str
+        | SyntaxKind::Escape => true,
+        // An opening bracket, but not `|]`, which the lexer gives as a brace.
+        SyntaxKind::LeftBrace => true,
+        SyntaxKind::MathText => node.leaf_text().chars().next().is_some_and(|c| {
+            c.is_alphanumeric()
+                || matches!(
+                    default_math_class(c),
+                    Some(MathClass::Alphabetic | MathClass::Normal | MathClass::Large)
+                )
+        }),
+        _ => false,
     }
 }
 

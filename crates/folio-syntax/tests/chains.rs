@@ -441,3 +441,22 @@ fn a_chain_cut_by_its_height_leaves_the_enclosing_scripts() {
         }
     });
 }
+
+#[test]
+fn a_chain_of_signed_scripts_gives_one_error() {
+    small_stack(|| {
+        let text = format!("${}x$\n", "x^-".repeat(5000));
+        assert_eq!(check(text), [DEEP]);
+    });
+}
+
+#[test]
+fn a_sign_binds_in_a_chain_error_only_after_a_script_operator() {
+    small_stack(|| {
+        // Past the depth limit, `/-b` takes only the `-`, as a regular parse
+        // does, and the `b` and the rest of the chain go with it.
+        let text = format!("${}x/-b/c$\n", "x^".repeat(300));
+        let source = Source::detached(text);
+        assert_eq!(errors(&source), [DEEP]);
+    });
+}

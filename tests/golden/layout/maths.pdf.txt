@@ -188,9 +188,9 @@ page 1 419.53 × 595.28, 15 line(s)
             shape (9.22, 6.48) M(0.00, 0.00) L(13.66, 0.00) L(13.66, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:19:117
           text (141.08, 35.70) SourceSerif4-Regular 10.50 w 187.74 41 glyph(s) ". For a set of point masses the potential"
           text (0.00, 57.11) SourceSerif4-Regular 10.50 w 39.54 8 glyph(s) "adds up:"
-page 2 419.53 × 595.28, 4 line(s)
-  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 15.40..222.81
-    box (0.00, 0.00) 328.82 × 231.17 main.fol:1:2 baselines 15.40..222.81
+page 2 419.53 × 595.28, 11 line(s)
+  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 15.40..393.53
+    box (0.00, 0.00) 328.82 × 397.04 main.fol:1:2 baselines 15.40..393.53
       box (0.00, 0.00) 328.82 × 231.17 main.fol:17:1 baselines 15.40..222.81
         box (0.00, 0.00) 328.82 × 26.86 main.fol:21:1 baselines 15.40..15.40
           text (118.76, 15.40) NewCMMath-Regular 10.50 w 8.37 1 glyph(s) "𝑉"
@@ -331,3 +331,61 @@ page 2 419.53 × 595.28, 4 line(s)
           text (190.14, 14.73) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
           text (201.22, 14.73) NewCMMath-Regular 10.50 w 4.89 1 glyph(s) "𝑒"
           text (315.40, 14.73) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "(8)"
+      box (0.00, 241.17) 328.82 × 155.88 main.fol:33:1 baselines 18.41..152.36
+        box (0.00, 0.00) 328.82 × 26.72 main.fol:33:1 baselines 18.41..18.41 keep penalty 10000
+          text (0.00, 18.41) SourceSans3-Bold 15.00 w 160.98 23 glyph(s) "Standard form and signs"
+        box (0.00, 31.97) 328.82 × 123.91 main.fol:35:1 baselines 14.29..120.39
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 80.38 16 glyph(s) "A wavelength of "
+          box (80.38, 7.30) 26.25 × 7.22 main.fol:35:17
+            text (0.00, 6.99) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "5.0"
+            text (15.75, 6.99) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "×"
+          box (106.63, 5.51) 20.58 × 9.01 main.fol:35:17
+            text (0.00, 8.78) NewCMMath-Regular 10.50 w 10.50 2 glyph(s) "10"
+            text (10.50, 4.97) NewCMMath-Regular 7.35 w 5.72 1 glyph(s) "−"
+            text (16.22, 4.97) NewCMMath-Regular 7.35 w 3.77 1 glyph(s) "7"
+          text (127.21, 14.29) SourceSerif4-Regular 10.50 w 27.73 6 glyph(s) " m is "
+          box (154.94, 7.30) 15.75 × 7.22 main.fol:35:40
+            text (0.00, 6.99) NewCMMath-Regular 10.50 w 15.75 3 glyph(s) "500"
+          text (170.69, 14.29) SourceSerif4-Regular 10.50 w 158.12 32 glyph(s) " nm, and a capacitor discharging"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 174.94 38 glyph(s) "through a resistor keeps the fraction "
+          box (174.94, 26.80) 28.82 × 8.82 main.fol:35:116
+            text (0.00, 8.71) NewCMMath-Regular 10.50 w 4.89 1 glyph(s) "𝑒"
+            text (4.89, 4.90) NewCMMath-Regular 7.35 w 5.72 1 glyph(s) "−"
+            text (10.61, 4.90) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "1"
+            text (17.79, 8.71) NewCMMath-Regular 10.50 w 8.12 1 glyph(s) "≈"
+          box (203.76, 28.41) 18.81 × 7.33 main.fol:35:116
+            text (0.00, 7.10) NewCMMath-Regular 10.50 w 18.81 4 glyph(s) "0.37"
+          text (222.57, 35.51) SourceSerif4-Regular 10.50 w 106.25 23 glyph(s) " of its charge after one"
+          text (0.00, 56.73) SourceSerif4-Regular 10.50 w 183.16 41 glyph(s) "time constant, since its charge falls as "
+          box (183.16, 49.33) 22.31 × 9.44 main.fol:35:200
+            text (0.00, 7.40) NewCMMath-Regular 10.50 w 8.31 1 glyph(s) "𝑄"
+            text (11.22, 7.40) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
+          box (205.47, 46.74) 33.28 × 12.75 main.fol:35:200
+            text (0.00, 9.99) NewCMMath-Regular 10.50 w 8.31 1 glyph(s) "𝑄"
+            text (8.10, 12.59) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "0"
+            text (12.36, 9.99) NewCMMath-Regular 10.50 w 4.89 1 glyph(s) "𝑒"
+            text (17.25, 6.18) NewCMMath-Regular 7.35 w 5.72 1 glyph(s) "−"
+            text (26.88, 3.29) NewCMMath-Regular 5.25 w 1.90 1 glyph(s) "𝑡"
+            text (23.70, 8.72) NewCMMath-Regular 5.25 w 4.11 1 glyph(s) "𝑅"
+            text (27.82, 8.72) NewCMMath-Regular 5.25 w 4.14 1 glyph(s) "𝐶"
+            shape (23.70, 4.20) M(0.00, 0.00) L(8.25, 0.00) L(8.25, 0.29) L(0.00, 0.29) Z fill #000000ff NonZero main.fol:35:213
+          text (238.74, 56.73) SourceSerif4-Regular 10.50 w 86.80 18 glyph(s) ". In beta-minus de"
+          text (325.54, 56.73) SourceSerif4-Regular 10.50 w 3.28 1 glyph(s) "-"
+          text (0.00, 77.95) SourceSerif4-Regular 10.50 w 208.09 44 glyph(s) "cay a neutron becomes a proton, an electron "
+          box (208.09, 72.16) 11.20 × 5.91 main.fol:35:284
+            text (0.00, 5.80) NewCMMath-Regular 10.50 w 4.89 1 glyph(s) "𝑒"
+            text (4.89, 1.98) NewCMMath-Regular 7.35 w 5.72 1 glyph(s) "−"
+          text (219.28, 77.95) SourceSerif4-Regular 10.50 w 109.53 24 glyph(s) " and an antineutrino; in"
+          text (0.00, 99.17) SourceSerif4-Regular 10.50 w 194.05 42 glyph(s) "beta-plus decay a proton emits a positron "
+          box (194.05, 91.08) 11.20 × 8.21 main.fol:35:356
+            text (0.00, 8.10) NewCMMath-Regular 10.50 w 4.89 1 glyph(s) "𝑒"
+            text (4.89, 4.29) NewCMMath-Regular 7.35 w 5.72 1 glyph(s) "+"
+          text (205.24, 99.17) SourceSerif4-Regular 10.50 w 64.92 15 glyph(s) ", and the ions "
+          box (270.17, 91.08) 19.55 × 8.21 main.fol:35:376
+            text (0.00, 8.10) NewCMMath-Regular 10.50 w 13.24 2 glyph(s) "Na"
+            text (13.24, 4.29) NewCMMath-Regular 7.35 w 5.72 1 glyph(s) "+"
+          text (289.71, 99.17) SourceSerif4-Regular 10.50 w 22.25 5 glyph(s) " and "
+          box (311.96, 91.77) 16.86 × 7.63 main.fol:35:389
+            text (0.00, 7.40) NewCMMath-Regular 10.50 w 10.55 2 glyph(s) "Cl"
+            text (10.55, 3.59) NewCMMath-Regular 7.35 w 5.72 1 glyph(s) "−"
+          text (0.00, 120.39) SourceSerif4-Regular 10.50 w 53.06 12 glyph(s) "form a salt."
