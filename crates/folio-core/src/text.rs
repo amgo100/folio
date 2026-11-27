@@ -487,6 +487,8 @@ struct Pending {
     text: EcoString,
     style: ComputedStyle,
     span: Span,
+    /// The instance of the element whose marker it is.
+    location: Location,
 }
 
 /// A paragraph's text as it is collected.
@@ -561,6 +563,7 @@ impl Collector<'_> {
                 text: marker.text.clone(),
                 style: node.style.clone(),
                 span: element.span,
+                location: element.location,
             });
         }
         self.element_content(element, node);
@@ -581,16 +584,17 @@ impl Collector<'_> {
         self.close();
     }
 
-    /// The paragraph of the markers waiting for one, for the display
-    /// `element`: in no block, as a display's block holds no paragraphs,
-    /// and in the style of the innermost marker's element, whose number it
-    /// is (SPEC §4.5, D-326-1). `None` when no marker waits.
-    fn lead(&mut self, element: &Element) -> Option<usize> {
-        let style = self.markers.last()?.style.clone();
+    /// The paragraph of the markers waiting for one, beside a display: in
+    /// no block, as a display's block holds no paragraphs, and the content
+    /// of the innermost marker's element, in its style, whose number it is
+    /// (SPEC §4.5, D-326-1). `None` when no marker waits.
+    fn lead(&mut self) -> Option<usize> {
+        let owner = self.markers.last()?;
+        let (style, span, location) = (owner.style.clone(), owner.span, owner.location);
         let builder = self.builder();
         let blocks = std::mem::take(&mut self.blocks);
         let index = self.pending.len();
-        self.finish(builder, &style, element);
+        self.finish_as(builder, &style, span, location);
         self.blocks = blocks;
         (self.pending.len() > index).then_some(index)
     }
@@ -631,7 +635,7 @@ impl Collector<'_> {
             // content; images are reported as such. The markers waiting
             // for a paragraph go beside it.
             if let Some(index) = self.formula(element, node, true) {
-                self.maths[index].lead = self.lead(element);
+                self.maths[index].lead = self.lead();
                 return;
             }
             // An image where blocks stand is a paragraph of its own.
@@ -695,6 +699,7 @@ impl Collector<'_> {
                         text: marker.text.clone(),
                         style: part_node.style.clone(),
                         span: element.span,
+                        location: element.location,
                     });
                 }
                 self.content(content, &part_node.style, element, &mut part_kids);
@@ -1090,7 +1095,19 @@ impl Collector<'_> {
 
     /// Turns a collected paragraph into segments, with fonts by fallback.
     /// `style` is that of the element whose content it is, `owner`.
-    fn finish(&mut self, mut builder: Builder, style: &ComputedStyle, owner: &Element) {
+    fn finish(&mut self, builder: Builder, style: &ComputedStyle, owner: &Element) {
+        self.finish_as(builder, style, owner.span, owner.location);
+    }
+
+    /// As [`Self::finish`], for the content of the element instance at
+    /// `location`, written at `span`.
+    fn finish_as(
+        &mut self,
+        mut builder: Builder,
+        style: &ComputedStyle,
+        span: Span,
+        location: Location,
+    ) {
         builder.flush_quote(None);
         if builder.text.is_empty() {
             return;
@@ -1143,8 +1160,8 @@ impl Collector<'_> {
                 segments,
             },
             style: style.clone(),
-            span: owner.span,
-            location: owner.location,
+            span,
+            location,
             segments: styles,
             sources: builder.sources.into_iter().collect(),
             objects: builder.objects.into_iter().collect(),

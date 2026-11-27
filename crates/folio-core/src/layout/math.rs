@@ -588,6 +588,9 @@ pub(super) struct Lead {
     pub descent: Abs,
     /// What it draws, from the start of its baseline.
     pub items: EcoVec<(Point, FragmentItem)>,
+    /// Whether its item is set right to left, so that it stands at the
+    /// right.
+    pub rtl: bool,
 }
 
 /// The content of the block of a display, `width` wide: the formula
@@ -624,11 +627,22 @@ pub(super) fn display_content(
         .map(|(n, _)| n.width)
         .max()
         .unwrap_or_default();
-    let centred = (width - math.width) / 2.0;
+    // A lead takes the start of the first line: the left, or the right in
+    // a right-to-left item, where the numbers stand, so that they go below.
+    let lead_width = lead.map_or(Abs::zero(), |l| l.width);
+    let rtl = lead.is_some_and(|l| l.rtl);
+    let (start, end) = if rtl {
+        (Abs::zero(), width - lead_width)
+    } else {
+        (lead_width, width)
+    };
+    let centred = ((width - math.width) / 2.0)
+        .min(end - math.width)
+        .max(start);
     // Beside the formula where it fits with the gutter, at the formula's
     // place moved as far towards the start as needed.
     let beside =
-        numbers.is_empty() || centred.min(width - widest - gutter - math.width) >= Abs::zero();
+        numbers.is_empty() || (!rtl && centred.min(width - widest - gutter - math.width) >= start);
     if !beside {
         // Each number on a line of its own below the formula.
         let mut bottom = math.height;
@@ -642,8 +656,7 @@ pub(super) fn display_content(
     } else {
         centred.min(width - widest - gutter - math.width)
     }
-    .max(Abs::zero())
-    .max(lead.map_or(Abs::zero(), |l| l.width));
+    .max(start);
     let first = math.baselines.first().copied().unwrap_or(math.height);
     // Numbers that reach above or below the formula make room for it.
     let lead_at = lead.map(|l| (l.ascent, l.descent, first));
@@ -664,6 +677,13 @@ pub(super) fn display_content(
         .unwrap_or_default()
         .max(Abs::zero());
     let mut items = EcoVec::with_capacity(math.items.len());
+    // The lead first, as it is read first.
+    if let Some(lead) = lead {
+        let lx = if rtl { width - lead_width } else { Abs::zero() };
+        for (pos, item) in &lead.items {
+            items.push((Point::new(pos.x + lx, pos.y + first + above), item.clone()));
+        }
+    }
     for (pos, item) in &math.items {
         items.push((Point::new(pos.x + x, pos.y + above), item.clone()));
     }
@@ -674,11 +694,6 @@ pub(super) fn display_content(
                 Point::new(pos.x + nx, pos.y + baseline + above),
                 item.clone(),
             ));
-        }
-    }
-    if let Some(lead) = lead {
-        for (pos, item) in &lead.items {
-            items.push((Point::new(pos.x, pos.y + first + above), item.clone()));
         }
     }
     let last = math.baselines.last().copied().unwrap_or(math.height);
@@ -697,9 +712,10 @@ pub(super) struct DisplayContent {
     pub baselines: (Abs, Abs),
 }
 
-/// How far a display is wider than its block's content, or zero.
-pub(super) fn display_overflow(display: &Display, width: Abs) -> Abs {
-    (display.math.width - width).max(Abs::zero())
+/// How far a display, with the lead beside it `lead` wide, is wider than
+/// its block's content, or zero.
+pub(super) fn display_overflow(display: &Display, width: Abs, lead: Abs) -> Abs {
+    (display.math.width + lead - width).max(Abs::zero())
 }
 
 /// The id a face's glyph runs name it by: its index in the build's faces.

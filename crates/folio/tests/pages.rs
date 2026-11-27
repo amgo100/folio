@@ -1088,6 +1088,43 @@ fn an_item_without_text_sets_its_number_beside_its_display() {
 }
 
 #[test]
+fn a_numbered_display_beside_a_marker_keeps_clear_of_both() {
+    // The item's number at the start, the equation's at the end, and the
+    // formula between them, however long it is.
+    for terms in [1, 12, 24] {
+        let formula = (0..terms)
+            .map(|i| format!("a_{i}"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let world = world(
+            "math { numbering: \"(1)\"; }\n",
+            &format!("+ first item\n+ $ {formula} $\n"),
+        );
+        let runs = page_runs(&pages(&world).pages[0]);
+        let marker = runs
+            .iter()
+            .find(|(_, t)| t == "2.\u{a0}")
+            .expect("the item's number")
+            .0;
+        let number = runs
+            .iter()
+            .find(|(_, t)| t == "(1)")
+            .expect("the equation's number")
+            .0;
+        let first = runs.iter().find(|(_, t)| t == "𝑎").expect("the formula").0;
+        assert!(first.x > marker.x + Abs::pt(10.0), "{terms}: {runs:?}");
+        // Beside the formula, its number is to the right of all of it; or
+        // it is below it.
+        let last = runs
+            .iter()
+            .filter(|(p, t)| p.y == first.y && t.as_str() != "(1)")
+            .map(|(p, _)| p.x)
+            .fold(Abs::zero(), Abs::max);
+        assert!(number.y > first.y || number.x > last, "{terms}: {runs:?}");
+    }
+}
+
+#[test]
 fn a_marker_with_nothing_to_start_is_reported() {
     let world = world("", "+ first\n+ #figure(class: \"answer\")[]\n+ third\n");
     let diags = diagnostics(&world);

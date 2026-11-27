@@ -1219,9 +1219,11 @@ impl Builder<'_> {
         let paragraph = self.text.maths.get(index)?.lead?;
         let info = self.paragraph_info(paragraph)?;
         let line = info.layout.lines.first()?.clone();
-        // Drawn from the start of its first line, wherever its slot is.
+        // Drawn from the start of its first line, with its indent, as a
+        // text item's marker is, wherever its slot is and however it is
+        // aligned. Its width is the line's, with the indent.
         let mut at = (*info).clone();
-        at.slot.offset = -line.x - info.indent;
+        at.slot.offset = -line.x;
         let mut items = Vec::new();
         set_line(&at, 0, Abs::zero(), &mut items);
         Some(Arc::new(Lead {
@@ -1229,6 +1231,7 @@ impl Builder<'_> {
             ascent: line.ascent,
             descent: line.descent,
             items: items.into_iter().collect(),
+            rtl: info.shaped.level % 2 == 1,
         }))
     }
 

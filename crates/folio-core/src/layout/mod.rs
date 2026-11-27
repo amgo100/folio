@@ -212,7 +212,12 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         let Some(display) = maths.display(i) else {
             continue;
         };
-        let overflow = math::display_overflow(display, content);
+        // The markers set beside it take the start of its first line.
+        let lead = text.maths[i]
+            .lead
+            .and_then(|p| lines.paragraphs.get(p)?.lines.first().map(|l| l.width))
+            .unwrap_or_default();
+        let overflow = math::display_overflow(display, content, lead);
         if overflow.to_pt() > 0.1 {
             diag::report(
                 db,
