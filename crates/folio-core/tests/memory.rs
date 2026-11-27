@@ -143,7 +143,7 @@ const SCRIPTS: &[&str] = &[
      #while i < 40 { a = f(..a, ..a); i += 1 }\n",
     // A formula whose nodes share one long text.
     "#let s = \"x\" * 1000000\n#let f = $#s$\n#let i = 0\n\
-     #while i < 16 { f = $#f #f$; i += 1 }\n#repr(f).len()\n",
+     #while i < 16 { f = $(#f) (#f)$; i += 1 }\n#repr(f).len()\n",
     // Text runs that placing content in a formula copies.
     "#let s = \"x\" * 1000000\n#let c = [#s]\n#let i = 0\n\
      #while i < 12 { c = [#c #c]; i += 1 }\n$#c$\n",
