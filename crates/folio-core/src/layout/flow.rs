@@ -1,7 +1,8 @@
 //! The flow of a build (SPEC §7.1): its blocks and lines flattened into
 //! what the page builder breaks.
 //!
-//! The flow is a sequence of *leaves* (paragraphs, and empty blocks), with
+//! The flow is a sequence of *leaves* (paragraphs, sized content such as
+//! displays and the ruled lines of SPEC §6.3, and empty blocks), with
 //! a *boundary* before each and one after the last. A boundary says what
 //! lies between two leaves: where blocks end and start, their padding,
 //! borders and spaces, and half the leading of the paragraphs on either
@@ -41,7 +42,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::EcoVec;
 use folio_component::{
-    Abs, Color, Em, FragmentItem, Location, Paint, Point, Size, SourceRef, Value,
+    Abs, Color, Em, FragmentItem, Location, Paint, Point, Size, SourceRef, Stroke, Value,
 };
 
 use crate::span_map::source_ref;
@@ -49,7 +50,7 @@ use folio_syntax::Span;
 use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
-use super::master::{BlockBox, BreakBefore, length};
+use super::master::{BlockBox, BreakBefore, Rules, length};
 use super::math::{Display, Maths, display_content, laid_image};
 use super::page::{SizeBlock, SizeObject};
 use super::paragraph::{
@@ -243,6 +244,9 @@ pub(super) struct BlockObject {
     pub baselines: Option<(Abs, Abs)>,
     /// For a display, what lays it out again in a region of another width.
     pub display: Option<DisplayAt>,
+    /// For a ruled line of a block (SPEC §6.3), the rule drawn at its foot
+    /// across the content of its block.
+    pub rule: Option<Stroke>,
 }
 
 /// A display as a block object: the display, its font size, and the width
@@ -452,6 +456,13 @@ pub(super) enum Constraint {
     KeepTogether(Span),
     /// It breaks a block with `breakable: false`.
     Unbreakable(Span),
+    /// It falls between the ruled lines of a block without
+    /// `rule-breakable: true` (SPEC §6.3).
+    UnbreakableRules(Span),
+    /// It leaves fewer than two of a block's ruled lines on the next page.
+    RulesWidow(Span),
+    /// It leaves fewer than two of a block's ruled lines on the page.
+    RulesOrphan(Span),
 }
 
 /// What lies before a leaf, or after the last, and what a page break there
@@ -675,6 +686,7 @@ impl Flow {
             items: Vec::new(),
             origins: Vec::new(),
             in_note: false,
+            fills: Vec::new(),
         };
         builder.flow(&text.root)
     }
@@ -682,6 +694,101 @@ impl Flow {
     /// The boundary before leaf `i`, or after the last for `i == len`.
     pub(super) fn boundary(&self, i: usize) -> &Boundary {
         self.items.get(i).map_or(&self.end, |item| &item.before)
+    }
+
+    /// The boundary before leaf `i`, or after the last, to change.
+    fn boundary_mut(&mut self, i: usize) -> &mut Boundary {
+        match self.items.get_mut(i) {
+            Some(item) => &mut item.before,
+            None => &mut self.end,
+        }
+    }
+
+    /// Grows a block with a `min-height` whose content is shorter (SPEC
+    /// §6.3): solid space at the foot of its content, above its padding and
+    /// border, in the boundary after its last leaf. Its content is measured
+    /// with its paragraphs broken as the flow holds them, at the body's
+    /// width, so a region of another width keeps the space found there.
+    fn fill(&mut self, fill: &Fill) {
+        let measured = self.content_height(fill);
+        if measured >= fill.min {
+            return;
+        }
+        let Some(at) = self.foot(fill) else {
+            return;
+        };
+        let parts = &mut self.boundary_mut(fill.end).parts;
+        parts.insert(at, Part::Solid(fill.min - measured));
+        // The space can settle a space after an inner block that otherwise
+        // collapsed through the foot, which the content then holds.
+        let again = self.content_height(fill);
+        if again > fill.min
+            && let Some(Part::Solid(h)) = self.boundary_mut(fill.end).parts.make_mut().get_mut(at)
+        {
+            *h = (*h - (again - fill.min)).max(Abs::zero());
+        }
+    }
+
+    /// The box of the block of `fill`.
+    fn fill_box(&self, fill: &Fill) -> &BlockBox {
+        &self.items[fill.first].stack[fill.depth].0
+    }
+
+    /// How tall the content of the block of `fill` is: from the top of its
+    /// content box, below its padding and border, to the bottom.
+    fn content_height(&self, fill: &Fill) -> Abs {
+        let inset = self.fill_box(fill).inset();
+        // The block starts in the boundary before its first leaf, where the
+        // blocks that start open outermost first.
+        let first = &self.items[fill.first];
+        let skip = fill.depth + first.before.opens() - first.stack.len();
+        let mut opens = 0;
+        let mut top = None;
+        let total = first.before.walk(Walk::Through, |part, y| {
+            if let Part::Open(..) = part {
+                if opens == skip {
+                    top = Some(y);
+                }
+                opens += 1;
+            }
+        });
+        let mut height = total - top.unwrap_or(total) - inset.top;
+        for i in fill.first..fill.end {
+            if i > fill.first {
+                height += self.items[i].before.gap();
+            }
+            height += leaf_height(&self.items[i].leaf);
+        }
+        // It ends in the boundary after its last leaf, where the blocks
+        // that end close innermost first.
+        let last = &self.items[fill.end - 1];
+        let skip = last.stack.len() - 1 - fill.depth;
+        let mut closes = 0;
+        let mut bottom = None;
+        self.boundary(fill.end).walk(Walk::Through, |part, y| {
+            if let Part::Close = part {
+                if closes == skip {
+                    bottom = Some(y);
+                }
+                closes += 1;
+            }
+        });
+        height + bottom.map_or(Abs::zero(), |y| y - inset.bottom)
+    }
+
+    /// Where the padding and border at the foot of the block of `fill`
+    /// are in the parts of the boundary after its last leaf.
+    fn foot(&self, fill: &Fill) -> Option<usize> {
+        let last = &self.items[fill.end - 1];
+        let skip = last.stack.len() - 1 - fill.depth;
+        let parts = &self.boundary(fill.end).parts;
+        let close = parts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matches!(p, Part::Close))
+            .nth(skip)?
+            .0;
+        close.checked_sub(1)
     }
 }
 
@@ -843,6 +950,29 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// How tall a leaf is in the flow as it was built: a paragraph from its
+/// first line's ascent to its last line's descent, with the leading
+/// between them.
+fn leaf_height(leaf: &Leaf) -> Abs {
+    match leaf {
+        Leaf::Paragraph(paragraph) => {
+            let lines = &paragraph.layout.lines;
+            let mut height = Abs::zero();
+            for (i, line) in lines.iter().enumerate() {
+                height += line.ascent + line.descent;
+                if i > 0 {
+                    let above = &lines[i - 1];
+                    let lead = line.baseline - above.baseline - above.descent - line.ascent;
+                    height += lead.max(Abs::zero());
+                }
+            }
+            height
+        }
+        Leaf::Empty => Abs::zero(),
+        Leaf::Box(object) => object.size.height,
+    }
+}
+
 /// What the boundary being built has seen since the last leaf.
 enum Event {
     Close(Arc<BlockBox>),
@@ -890,6 +1020,21 @@ struct Builder<'a> {
     /// Whether it builds a footnote's note, whose own footnotes are not
     /// placed (the text stage reports them).
     in_note: bool,
+    /// The blocks with a `min-height`, to grow once the flow is built.
+    fills: Vec<Fill>,
+}
+
+/// A block with a `min-height` (SPEC §6.3): the leaves it holds, and how
+/// deep it is in their stacks.
+struct Fill {
+    /// Its first leaf.
+    first: usize,
+    /// The leaf after its last.
+    end: usize,
+    /// Its index in the stacks of its leaves.
+    depth: usize,
+    /// The height its content box has at least.
+    min: Abs,
 }
 
 impl Builder<'_> {
@@ -908,11 +1053,17 @@ impl Builder<'_> {
         );
         self.block(root, root_box);
         let end = self.boundary(None);
-        Flow {
+        let mut flow = Flow {
             items: self.items,
             end,
             origins: self.origins,
+        };
+        // Inner blocks first, so that an outer block measures the inner
+        // ones grown.
+        for fill in &self.fills {
+            flow.fill(fill);
         }
+        flow
     }
 
     /// The note of a footnote, whose block is `block`: a flow of its own.
@@ -939,6 +1090,7 @@ impl Builder<'_> {
             items: Vec::new(),
             origins: Vec::new(),
             in_note: true,
+            fills: Vec::new(),
         };
         let mark = continued.and_then(|i| builder.paragraph_info(i));
         let mut flow = builder.flow(block);
@@ -974,6 +1126,9 @@ impl Builder<'_> {
                 }
             }
         }
+        if let Some(rules) = &boxed.rules {
+            self.rules(block, &boxed, rules);
+        }
         if self.items.len() == before {
             let size = self.sizes.block.and_then(|f| f(block));
             let leaf = match size {
@@ -983,13 +1138,33 @@ impl Builder<'_> {
                     content: None,
                     baselines: None,
                     display: None,
+                    rule: None,
                 })),
                 None => match self.display(block, &boxed) {
                     Some(object) => Leaf::Box(Arc::new(object)),
+                    // A block with nothing to set and a `min-height` is a
+                    // box of that height, which a page break does not
+                    // divide (SPEC §6.3).
+                    None if boxed.min_height > Abs::zero() => Leaf::Box(Arc::new(BlockObject {
+                        size: Size::new(boxed.content().1, boxed.min_height),
+                        location: block.location,
+                        content: Some(EcoVec::new()),
+                        baselines: None,
+                        display: None,
+                        rule: None,
+                    })),
                     None => Leaf::Empty,
                 },
             };
             self.leaf(leaf, Origin::Empty);
+        }
+        if boxed.min_height > Abs::zero() {
+            self.fills.push(Fill {
+                first: before,
+                end: self.items.len(),
+                depth: self.stack.len() - 1,
+                min: boxed.min_height,
+            });
         }
         self.stack.pop();
         self.pending.push(Event::Close(boxed));
@@ -1016,7 +1191,50 @@ impl Builder<'_> {
                 size,
                 width,
             }),
+            rule: None,
         })
+    }
+
+    /// The ruled lines of a block (SPEC §6.3), after its content: a leaf
+    /// per line, as tall as the spacing and as wide as the block's content,
+    /// with its rule at its foot. A break between two of them costs
+    /// [`UNBREAKABLE`] without `rule-breakable: true`, so that they stay on
+    /// one page unless they fit on none; with it, a break that leaves fewer
+    /// than two of them on either side costs [`WIDOW`], as a paragraph's
+    /// lines do.
+    fn rules(&mut self, block: &TextBlock, boxed: &BlockBox, rules: &Rules) {
+        let object = Arc::new(BlockObject {
+            size: Size::new(boxed.content().1, rules.spacing),
+            location: block.location,
+            // Blank lines draw nothing.
+            content: rules.stroke.is_none().then(EcoVec::new),
+            baselines: None,
+            display: None,
+            rule: rules.stroke.clone(),
+        });
+        let count = rules.count;
+        for line in 0..count {
+            self.leaf(Leaf::Box(object.clone()), Origin::Empty);
+            if line == 0 {
+                continue;
+            }
+            let before = &mut self.items.last_mut().expect("a leaf was added").before;
+            if !rules.breakable {
+                before.penalty += UNBREAKABLE;
+                before
+                    .constraints
+                    .push(Constraint::UnbreakableRules(boxed.span));
+                continue;
+            }
+            if line < 2 {
+                before.penalty += WIDOW;
+                before.constraints.push(Constraint::RulesOrphan(boxed.span));
+            }
+            if count - line < 2 {
+                before.penalty += WIDOW;
+                before.constraints.push(Constraint::RulesWidow(boxed.span));
+            }
+        }
     }
 
     fn paragraph(&mut self, index: usize) {

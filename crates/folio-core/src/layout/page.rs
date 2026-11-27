@@ -810,6 +810,27 @@ fn report(db: &dyn Db, out: &PageOut) {
                 "a page break falls inside this block despite `breakable: false`",
                 "the block does not fit on one page",
             ),
+            Constraint::UnbreakableRules(span) => (
+                span,
+                codes::BROKEN_UNBREAKABLE,
+                "a page break falls between the ruled lines of this block, which do not fit \
+                 on one page",
+                "set fewer `rule-lines`, or let them break with `rule-breakable: true`",
+            ),
+            Constraint::RulesWidow(span) => (
+                span,
+                codes::WIDOW,
+                "a page break leaves fewer than two of this block's ruled lines at the top of \
+                 a page",
+                "no better break was found; set more or fewer `rule-lines`",
+            ),
+            Constraint::RulesOrphan(span) => (
+                span,
+                codes::ORPHAN,
+                "a page break leaves fewer than two of this block's ruled lines at the foot of \
+                 a page",
+                "no better break was found; set more or fewer `rule-lines`",
+            ),
         };
         diag::report(
             db,
@@ -1463,6 +1484,22 @@ fn lay(
             let x = stack
                 .last()
                 .map_or(Abs::zero(), |(block, _)| block.content().0);
+            // A ruled line draws its rule at its foot, across its block's
+            // content (SPEC §6.3).
+            if let (Some(stroke), Some((block, _))) = (&object.rule, stack.last()) {
+                let width = (block.content().1 + asm.widen).max(Abs::zero());
+                let at = y + object.size.height - stroke.thickness / 2.0;
+                let mut path = Path::new();
+                path.move_to(Point::new(Abs::zero(), Abs::zero()));
+                path.line_to(Point::new(width, Abs::zero()));
+                asm.add(
+                    Point::new(x, at),
+                    FragmentItem::Shape {
+                        shape: Shape::stroked(path, stroke.clone()),
+                        source: source_ref(block.span),
+                    },
+                );
+            }
             match &object.content {
                 // A display draws its glyphs and rules.
                 Some(items) => {
@@ -1470,6 +1507,8 @@ fn lay(
                         asm.add(Point::new(x + pos.x, y + pos.y), item.clone());
                     }
                 }
+                // A ruled line draws its rule alone.
+                None if object.rule.is_some() => {}
                 None => asm.add(
                     Point::new(x, y),
                     FragmentItem::Object(ObjectBox {
@@ -1822,6 +1861,8 @@ mod tests {
             keep_together: false,
             breakable: true,
             break_before: crate::layout::BreakBefore::Auto,
+            min_height: Abs::zero(),
+            rules: None,
         });
         // A paragraph ends (space after 6pt), a section with padding 2pt
         // starts (space before 10pt), then its heading (space before 4pt).

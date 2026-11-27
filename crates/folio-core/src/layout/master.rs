@@ -140,6 +140,51 @@ pub struct BlockBox {
     pub breakable: bool,
     /// Whether it starts a new page, and on which side.
     pub break_before: BreakBefore,
+    /// The height its content box has at least (`min-height`): a block
+    /// whose content is shorter grows at its foot (SPEC §6.3).
+    pub min_height: Abs,
+    /// The ruled lines set after its content, as answer space has them
+    /// (SPEC §6.3), if any.
+    pub rules: Option<Rules>,
+}
+
+/// Ruled lines of a block (SPEC §6.3): `rule-lines`, `rule-spacing`,
+/// `rule-stroke` and `rule-breakable`.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Rules {
+    /// How many lines there are: at least one.
+    pub count: usize,
+    /// How tall each line is: the distance between two rules, at least a
+    /// point.
+    pub spacing: Abs,
+    /// The rule at the foot of each line; `None` for blank lines
+    /// (`rule-stroke: none`).
+    pub stroke: Option<Stroke>,
+    /// Whether a page break may fall between two lines; otherwise they
+    /// stay on one page unless they cannot fit on any.
+    pub breakable: bool,
+}
+
+impl Rules {
+    /// The ruled lines of a block's style, or `None` without `rule-lines`
+    /// or with fewer than one.
+    fn of(style: &ComputedStyle, props: &Properties) -> Option<Self> {
+        let value = |name: &str| style.value(props, props.builtin(name));
+        let count = match value("rule-lines") {
+            Some(Value::Int(n)) => usize::try_from(*n).ok().filter(|&n| n > 0)?,
+            _ => return None,
+        };
+        let stroke = match value("rule-stroke") {
+            Some(Value::Auto) | None => Some(Stroke::solid(Color::BLACK, Abs::pt(0.5))),
+            Some(v) => stroke(v),
+        };
+        Some(Self {
+            count,
+            spacing: length(style, props, "rule-spacing").max(Abs::pt(1.0)),
+            stroke,
+            breakable: matches!(value("rule-breakable"), Some(Value::Bool(true))),
+        })
+    }
 }
 
 /// Whether a block starts a new page (`break-before`).
@@ -198,6 +243,8 @@ impl BlockBox {
                 },
                 _ => BreakBefore::Auto,
             },
+            min_height: length(style, props, "min-height").max(Abs::zero()),
+            rules: Rules::of(style, props),
         }
     }
 
