@@ -169,7 +169,7 @@ impl Value {
                     if folio_syntax::is_ident(key) {
                         out.push_str(key);
                     } else {
-                        write!(out, "{key:?}").unwrap();
+                        write_str_repr(out, key, limit)?;
                     }
                     out.push_str(": ");
                     value.write_repr(out, limit)?;
@@ -196,6 +196,8 @@ impl Value {
                 // first: its nodes can share one long text.
                 let mut budget = limit.saturating_sub(out.len()) as u64;
                 for line in formula.lines() {
+                    let label = line.label.as_ref().map_or(0, |label| label.name.len());
+                    take(&mut budget, 16 + label as u64)?;
                     repr_budget(&line.row, &mut budget)?;
                 }
                 write!(out, "formula({})", formula.repr()).unwrap()
@@ -262,7 +264,12 @@ pub(crate) const NODE: u64 = 128;
 /// several times longer.
 pub(crate) fn write_str_repr(out: &mut EcoString, s: &str, limit: usize) -> Result<(), TooLong> {
     let escaped = s.chars().try_fold(out.len().saturating_add(2), |len, c| {
-        let len = len.saturating_add(c.escape_debug().map(char::len_utf8).sum());
+        // A string's representation leaves `'` as it is.
+        let escaped = match c {
+            '\'' => 1,
+            c => c.escape_debug().map(char::len_utf8).sum(),
+        };
+        let len = len.saturating_add(escaped);
         (len <= limit).then_some(len)
     });
     if escaped.is_none() {
@@ -276,9 +283,11 @@ pub(crate) fn write_str_repr(out: &mut EcoString, s: &str, limit: usize) -> Resu
 /// writes, or fails once it is spent. Each node is visited once for each
 /// time it occurs, which a formula's node limit bounds.
 fn repr_budget(row: &folio_math::Row, budget: &mut u64) -> Result<(), TooLong> {
-    use folio_math::Node;
-    /// More than any node writes besides its text and its rows.
+    use folio_math::{Node, Row};
+    /// More than any node writes besides its text and its rows, and more
+    /// than a row writes besides its nodes.
     const OWN: u64 = 64;
+    take(budget, OWN)?;
     for node in row.nodes() {
         let text = match node {
             Node::Ident(atom) | Node::Number(atom) | Node::Symbol(atom) | Node::Text(atom) => {
@@ -286,13 +295,22 @@ fn repr_budget(row: &folio_math::Row, budget: &mut u64) -> Result<(), TooLong> {
                 10 * atom.text.len() as u64
             }
             Node::Operator(op) => op.name.len() as u64,
+            // A quantity's digits and unit can be long; it holds no rows,
+            // so writing it alone costs what it takes from the budget.
+            Node::Quantity(_) => Row::new([node.clone()]).repr().len() as u64,
             _ => 0,
         };
-        *budget = budget.checked_sub(OWN + text).ok_or(TooLong)?;
+        take(budget, OWN + text)?;
         for inner in node.rows() {
             repr_budget(inner, budget)?;
         }
     }
+    Ok(())
+}
+
+/// Takes `bytes` from `budget`, or fails when it has fewer.
+fn take(budget: &mut u64, bytes: u64) -> Result<(), TooLong> {
+    *budget = budget.checked_sub(bytes).ok_or(TooLong)?;
     Ok(())
 }
 

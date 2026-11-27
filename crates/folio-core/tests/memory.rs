@@ -144,6 +144,9 @@ const SCRIPTS: &[&str] = &[
     // A formula whose nodes share one long text.
     "#let s = \"x\" * 1000000\n#let f = $#s$\n#let i = 0\n\
      #while i < 16 { f = $(#f) (#f)$; i += 1 }\n#repr(f).len()\n",
+    // A formula whose quantities write long digits.
+    "#let d = \"1\" * 1000\n#let f = $#num(d, pm: d)$\n#let i = 0\n\
+     #while i < 16 { f = $(#f) (#f)$; i += 1 }\n#repr(f).len()\n",
     // Text runs that placing content in a formula copies.
     "#let s = \"x\" * 1000000\n#let c = [#s]\n#let i = 0\n\
      #while i < 12 { c = [#c #c]; i += 1 }\n$#c$\n",
@@ -153,6 +156,7 @@ const SCRIPTS: &[&str] = &[
     "#let a = range(1000)\n#let b = (a, 1000000).product()\n",
     // Escaping, which makes a string several times longer.
     "#let s = \"\\u{1}\" * 10000000\n#let r = repr(s)\n",
+    "#let d = ((\"\\u{1}\" * 10000000): 1)\n#let r = repr(d)\n",
     // Calls, which the memo tables keep.
     "#let f(x) = x\n#let i = 0\n#while i < 5000000 { let _ = f(i); i += 1 }\n",
     // Strings.

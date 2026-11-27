@@ -29,7 +29,7 @@ use super::MAX_NESTING;
 use super::content::{Content, Node};
 use super::error::{EvalError, EvalResult, Stop, bail};
 use super::library::{MathFunc, MathItem, math_item};
-use super::ops::a_type;
+use super::ops::{a_type, short_repr};
 use super::value::{Arg, Args, Value};
 use super::vm::{Vm, nesting_exceeded};
 
@@ -817,7 +817,7 @@ impl Vm<'_> {
                 eco_format!(
                     "expected an opening delimiter or `none`, found {}",
                     match &value {
-                        Value::Str(text) => eco_format!("{text:?}"),
+                        Value::Str(_) => short_repr(&value),
                         other => a_type(other.type_name()).into(),
                     }
                 ),

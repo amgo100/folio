@@ -367,7 +367,7 @@ pub(crate) fn compare(lhs: &V, rhs: &V) -> StrResult<Ordering> {
 
 /// A value's representation for an error message, or the name of its type
 /// when the representation is long.
-fn short_repr(value: &V) -> EcoString {
+pub(crate) fn short_repr(value: &V) -> EcoString {
     match value.repr_within(80) {
         Ok(repr) => repr,
         Err(_) => a_type(value.type_name()).into(),
