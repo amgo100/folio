@@ -27,6 +27,7 @@ from the scripts in `scripts/`.
 | On a schedule (nightly or weekly) | `scripts/fuzz.sh [seconds]` | The fuzz smoke job: each target for 60 s by default. Needs nightly Rust and `cargo-fuzz`. |
 | Nightly, on the reference machine | `scripts/bench.sh --wall` | Wall-clock times of the M0 exit check (gated: 200 ms), the M1 exit check through `folio watch` (gated: 80 ms) and of the reference document against the targets of SPEC §14.1 (reported). |
 | After changes to PDF output | `python tests/pdf/corpus.py` | veraPDF's PDF/UA-1 profile and text extraction (`tests/pdf/README.md`). |
+| At each milestone close, and after moving a crate in `third_party/` to a new release | The aarch64 check (below) | The corpus gives the digests of `digests.txt` on aarch64 as on x86-64 (SPEC §2.4). |
 
 A schedule is up to the machine that runs it, for example a `cron` entry
 that runs `scripts/fuzz.sh 600` and `scripts/bench.sh --wall` and mails
@@ -65,6 +66,47 @@ anything more. Blessing rewrites an image only when a pixel changed. On a
 failure the test writes the image it got to `target/golden/<name>.png` and
 says how many pixels differ. The same test also sends every page's
 display list through the wire format and back.
+
+## Determinism on another architecture
+
+The determinism test compares the corpus outputs with digests recorded on
+another machine, so it catches output that depends on the platform only
+when it runs on one that differs. SVG figures are where that happened:
+upstream crates called the platform's maths library, and an arrowhead in
+`tests/corpus/figures` turned by a different last bit on aarch64 (#300).
+They are now patched to call `libm` (`third_party/README.md`), and the
+corpus gives the same digests on x86-64 and aarch64.
+
+To check it on an aarch64 machine (Linux, or macOS on Apple Silicon), run
+the determinism test there:
+
+```bash
+cargo test -p folio --test determinism
+```
+
+On x86-64 Linux, the corpus can be built for aarch64 and run under QEMU's
+user-mode emulation instead. The test itself starts child processes, which
+emulation runs only when binfmt_misc is set up for aarch64, so build the
+corpus with the command line and compare the digests:
+
+```bash
+apt-get install qemu-user gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+rustup target add aarch64-unknown-linux-gnu
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    cargo build --release -p folio-cli --target aarch64-unknown-linux-gnu
+for dir in tests/corpus/*/; do
+    out=$(mktemp -d)
+    cp -R "$dir" "$out/project"
+    QEMU_LD_PREFIX=/usr/aarch64-linux-gnu qemu-aarch64 \
+        target/aarch64-unknown-linux-gnu/release/folio build --root "$out/project" >/dev/null
+    sha256sum "$out"/project/out/*.pdf
+done
+```
+
+The command line names a project's outputs after its entry file
+(`main.pdf`, `main-exam.pdf`), the digests file after the project
+(`figures.pdf`, `exam-exam.pdf`); each digest must appear in
+`crates/folio/tests/determinism/digests.txt`.
 
 ## Adding a corpus document
 

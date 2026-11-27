@@ -1,0 +1,103 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
++++ b/Cargo.toml	2026-11-27 06:27:20.934726741 +0000
+@@ -90,6 +90,11 @@
+ name = "integration"
+ path = "tests/integration/main.rs"
+ 
++# Folio: libm, not optional, for the float functions whose std versions call
++# the platform's maths library (Folio's SPEC §2.4; see FOLIO.md).
++[dependencies.libm]
++version = "0.2.16"
++
+ [dependencies.arrayref]
+ version = "0.3.9"
+ 
+diff -ruN a/FOLIO.md b/FOLIO.md
+--- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
++++ b/FOLIO.md	2026-11-27 06:27:20.934382883 +0000
+@@ -0,0 +1,27 @@
++# tiny-skia 0.12.0, patched for Folio
++
++This is the crates.io release of `tiny-skia` 0.12.0
++(https://crates.io/crates/tiny-skia/0.12.0), unpacked as published, with Folio's
++patch applied. Folio uses it through `[patch.crates-io]` in its root
++`Cargo.toml`. Its licence is unchanged: BSD-3-Clause (LICENSE).
++
++Folio's changes make its floating-point code call the `libm` crate where it
++called std's transcendental functions, whose results come from the
++platform's maths library, so that SVG figures give the same PDF bytes on
++every platform (Folio's SPEC §2.4, decision D-300-1). Each changed place
++carries a comment that starts with `Folio:`.
++
++- `src/path64/cubic64.rs`: the three-root case of the cubic solver with
++  `libm::acos` and `cos`.
++- `src/pipeline/highp.rs`: the `color-burn` and `color-dodge` blend modes
++  divide exactly instead of calling `recip_fast`, whose SSE (`rcpps`) and
++  NEON (`vrecpe`) approximations give different bits (and `rcpps` differs
++  between x86 vendors).
++- `Cargo.toml`: depends on `libm`.
++
++`f32x8::powf` in `highp.rs` (the sRGB stages) is tiny-skia's own
++polynomial approximation in IEEE operations, so it stays.
++
++The whole change is `third_party/patches/tiny-skia.patch` in Folio's repository;
++`scripts/patch-third-party.sh` rebuilds this directory from the release and
++the patch, and `third_party/README.md` says how to move to a new release.
+diff -ruN a/src/path64/cubic64.rs b/src/path64/cubic64.rs
+--- a/src/path64/cubic64.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/path64/cubic64.rs	2026-11-27 06:27:20.935633895 +0000
+@@ -322,20 +322,21 @@
+         // we have 3 real roots
+ 
+         // the divide/root can, due to finite precisions, be slightly outside of -1...1
+-        let theta = (r / q3.sqrt()).bound(-1.0, 1.0).acos();
++        // Folio: libm instead of the platform maths library (SPEC §2.4).
++        let theta = libm::acos((r / q3.sqrt()).bound(-1.0, 1.0));
+         let neg2_root_q = -2.0 * q.sqrt();
+ 
+-        let mut rr = neg2_root_q * (theta / 3.0).cos() - adiv3;
++        let mut rr = neg2_root_q * libm::cos(theta / 3.0) - adiv3;
+         s[offset] = rr;
+         offset += 1;
+ 
+-        rr = neg2_root_q * ((theta + 2.0 * PI) / 3.0).cos() - adiv3;
++        rr = neg2_root_q * libm::cos((theta + 2.0 * PI) / 3.0) - adiv3;
+         if !s[0].almost_dequal_ulps(rr) {
+             s[offset] = rr;
+             offset += 1;
+         }
+ 
+-        rr = neg2_root_q * ((theta - 2.0 * PI) / 3.0).cos() - adiv3;
++        rr = neg2_root_q * libm::cos((theta - 2.0 * PI) / 3.0) - adiv3;
+         if !s[0].almost_dequal_ulps(rr) && (offset == 1 || !s[1].almost_dequal_ulps(rr)) {
+             s[offset] = rr;
+             offset += 1;
+diff -ruN a/src/pipeline/highp.rs b/src/pipeline/highp.rs
+--- a/src/pipeline/highp.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/pipeline/highp.rs	2026-11-27 06:27:20.935868623 +0000
+@@ -451,12 +451,14 @@
+ blend_fn2!(difference,  |s: f32x8, d, sa, da: f32x8| s + d - two((s * da).min(d * sa)));
+ blend_fn2!(exclusion,   |s: f32x8, d,  _,  _| s + d - two(s * d));
+ 
++// Folio: an exact division instead of `recip_fast`, whose SSE and NEON
++// approximations differ (SPEC §2.4), in `color_burn` and `color_dodge`.
+ blend_fn2!(color_burn, |s: f32x8, d: f32x8, sa: f32x8, da: f32x8|
+     d.cmp_eq(da).blend(
+         d + s * inv(da),
+         s.cmp_eq(f32x8::default()).blend(
+             d * inv(sa),
+-            sa * (da - da.min((da - d) * sa * s.recip_fast())) + s * inv(da) + d * inv(sa)
++            sa * (da - da.min((da - d) * sa * (f32x8::splat(1.0) / s))) + s * inv(da) + d * inv(sa)
+         )
+     )
+ );
+@@ -466,7 +468,7 @@
+         s * inv(da),
+         s.cmp_eq(sa).blend(
+             s + d * inv(sa),
+-            sa * da.min((d * sa) * (sa - s).recip_fast()) + s * inv(da) + d * inv(sa)
++            sa * da.min((d * sa) * (f32x8::splat(1.0) / (sa - s))) + s * inv(da) + d * inv(sa)
+         )
+     )
+ );

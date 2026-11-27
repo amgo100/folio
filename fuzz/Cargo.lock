@@ -1132,11 +1132,10 @@ dependencies = [
 [[package]]
 name = "kurbo"
 version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b60dfc32f652b926df6192e55525b16d186c69d47876c3ead4da5cc9f8450e2"
 dependencies = [
  "arrayvec",
  "euclid",
+ "libm",
  "polycool",
  "smallvec",
 ]
@@ -1565,11 +1564,10 @@ dependencies = [
 [[package]]
 name = "resvg"
 version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9be183ad6a216aa96f33e4c8033b0988b8b3ea6fd2359d19af5bac4643fd8e81"
 dependencies = [
  "gif",
  "image-webp",
+ "libm",
  "log",
  "pico-args",
  "rgb",
@@ -1936,10 +1934,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "svgtypes"
 version = "0.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f12b12995e3638c70618c1facb1ce65302f6a6f706b675f07c58a5d7391120e"
 dependencies = [
  "kurbo",
+ "libm",
  "siphasher",
 ]
 
@@ -2027,13 +2024,12 @@ dependencies = [
 [[package]]
 name = "tiny-skia"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47ffee5eaaf5527f630fb0e356b90ebdec84d5d18d937c5e440350f88c5a91ea"
 dependencies = [
  "arrayref",
  "arrayvec",
  "bytemuck",
  "cfg-if",
+ "libm",
  "log",
  "png",
  "tiny-skia-path",
@@ -2042,11 +2038,10 @@ dependencies = [
 [[package]]
 name = "tiny-skia-path"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edca365c3faccca67d06593c5980fa6c57687de727a03131735bb85f01fdeeb9"
 dependencies = [
  "arrayref",
  "bytemuck",
+ "libm",
  "strict-num",
 ]
 
@@ -2263,8 +2258,6 @@ checksum = "e9df2af067a7953e9c3831320f35c1cc0600c30d44d9f7a12b01db1cd88d6b47"
 [[package]]
 name = "usvg"
 version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de"
 dependencies = [
  "base64",
  "data-url",
@@ -2272,6 +2265,7 @@ dependencies = [
  "fontdb 0.23.0",
  "imagesize",
  "kurbo",
+ "libm",
  "log",
  "pico-args",
  "roxmltree 0.21.2",
