@@ -43,13 +43,15 @@ warning sink, so that Folio can refuse the figure:
   to `MAX_WORK` (10,000,000), the bytes of the images decoded up to
   `hayro_syntax::MAX_IMAGE_BYTES` (an image object counts once, however
   often it is drawn; one refused takes nothing; every decoding also
-  spends a unit of work a kilobyte), and the form XObjects being drawn.
+  spends a unit of work a kilobyte).
 - `src/interpret/mod.rs`: three new warnings, `FormCycle`, `TooComplex`
   and `ImageTooLarge`; `interpret` spends a unit of work for each
   operator and stops when the work is used up.
-- `src/context.rs`: a nested context and a form XObject spend work.
-- `src/x_object.rs`: a form XObject that is already being drawn, one that
-  draws itself, is not drawn again (`FormCycle`); before an image is
+- `src/context.rs`: a nested context and a form XObject spend work; each
+  context keeps the form XObjects it is drawing (`forms`).
+- `src/x_object.rs`: a form XObject that its context is already drawing,
+  one that draws itself, is not drawn again (`FormCycle`; a pattern or
+  soft mask starts a context of its own, whose depth hayro limits); before an image is
   decoded, its size at four bytes a pixel or more (its components and bits
   per component) is taken from what is left of `MAX_IMAGE_BYTES`, and an
   image that does not fit is not drawn (`ImageTooLarge`, also sent when

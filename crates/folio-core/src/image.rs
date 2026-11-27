@@ -291,7 +291,7 @@ fn pdf_page_fits(page: &hayro_syntax::page::Page<'_>) -> Result<(), String> {
     // A panic in the reader, on a file it does not expect, is the file's
     // fault: it is reported as the file not read, as the writers would not
     // read it either.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let svg = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hayro_svg::convert(
             page,
             &hayro_svg::RenderCache::new(),
@@ -318,6 +318,10 @@ fn pdf_page_fits(page: &hayro_syntax::page::Page<'_>) -> Result<(), String> {
             _ => {}
         }
     }
+    // The writers parse the page converted as an SVG drawing: one they
+    // could not parse is reported here too.
+    usvg::Tree::from_data(svg.as_bytes(), &svg_options())
+        .map_err(|e| format!("its page converts to a drawing that cannot be read: {e}"))?;
     Ok(())
 }
 

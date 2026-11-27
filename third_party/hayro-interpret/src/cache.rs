@@ -15,11 +15,11 @@ pub(crate) struct Cache(Arc<Mutex<CacheMap>>, pub(crate) Arc<Budget>);
 
 // Folio: what one interpretation of a page (with every form, pattern, soft
 // mask and glyph it draws) may do, so that a hostile file ends in bounded
-// time and memory: a form XObject that draws itself is not drawn again, the
-// work is counted (an operator is one unit, a nested interpretation
-// `NESTED_COST`) and stops at `MAX_WORK`, and the images decoded together
-// may take at most `hayro_syntax::MAX_IMAGE_BYTES`. Each limit reached
-// sends a warning to the settings' warning sink.
+// time: the work is counted (an operator is one unit, a nested
+// interpretation `NESTED_COST`) and stops at `MAX_WORK`, and the images
+// decoded together may take at most `hayro_syntax::MAX_IMAGE_BYTES`. Each
+// limit reached sends a warning to the settings' warning sink. (A form
+// XObject that draws itself is not drawn again: see `Context::forms`.)
 /// The most work one interpretation does (Folio).
 pub(crate) const MAX_WORK: u64 = 10_000_000;
 /// The work a nested interpretation costs (Folio).
@@ -39,7 +39,6 @@ pub(crate) struct Budget {
     work: AtomicU64,
     images: Mutex<Images>,
     exhausted: AtomicBool,
-    forms: Mutex<Vec<(i32, i32)>>,
 }
 
 impl Budget {
@@ -85,24 +84,6 @@ impl Budget {
         images.bytes = total;
         images.objects.extend(id);
         true
-    }
-
-    /// Marks a form XObject as being drawn; `false` when it already is,
-    /// that is, when it draws itself.
-    pub(crate) fn enter_form(&self, id: (i32, i32), sink: &crate::WarningSinkFn) -> bool {
-        let mut forms = self.forms.lock().unwrap();
-        if forms.contains(&id) {
-            drop(forms);
-            sink(crate::InterpreterWarning::FormCycle);
-            return false;
-        }
-        forms.push(id);
-        true
-    }
-
-    /// Marks the form XObject drawn last as done.
-    pub(crate) fn leave_form(&self) {
-        self.forms.lock().unwrap().pop();
     }
 }
 

@@ -59,6 +59,8 @@ pub struct Context<'a> {
     pub(crate) xref: &'a XRef,
     pub(crate) ocg_state: OcgState,
     nesting_depth: u32,
+    // Folio: the form XObjects this context is drawing, innermost last.
+    pub(crate) forms: Vec<(i32, i32)>,
 }
 
 impl<'a> Context<'a> {
@@ -112,6 +114,7 @@ impl<'a> Context<'a> {
             interpreter_cache: cache.clone(),
             ocg_state,
             nesting_depth,
+            forms: Vec::new(),
         }
     }
 

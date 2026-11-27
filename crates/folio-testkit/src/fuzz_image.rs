@@ -86,7 +86,7 @@ pub fn seeds() -> Vec<(String, Vec<u8>)> {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if name.ends_with(".py") || name.ends_with(".md") {
+            if name.starts_with('.') || name.ends_with(".py") || name.ends_with(".md") {
                 continue;
             }
             if let Ok(bytes) = fs::read(&path) {

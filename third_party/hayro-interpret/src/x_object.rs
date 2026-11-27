@@ -115,20 +115,35 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     }
 
     // Folio: a form XObject that draws itself, through its own resources or
-    // a form it draws, is not drawn again.
-    let budget = context.interpreter_cache.object_cache.1.clone();
-    let id = x_object.dict.obj_id();
-    if let Some(id) = id
-        && !budget.enter_form(
-            (id.obj_number, id.gen_number),
-            &context.settings.warning_sink,
-        )
-    {
-        context.end_nested_interpretation();
-        return;
+    // a form it draws, is not drawn again. The forms being drawn are those of
+    // this context: a pattern or soft mask, interpreted in a context of its
+    // own, starts afresh, and its depth is limited as it was.
+    let id = x_object
+        .dict
+        .obj_id()
+        .map(|id| (id.obj_number, id.gen_number));
+    if let Some(id) = id {
+        if context.forms.contains(&id) {
+            (context.settings.warning_sink)(InterpreterWarning::FormCycle);
+            context.end_nested_interpretation();
+            return;
+        }
+        context.forms.push(id);
     }
-    let _form = FormGuard(id.map(|_| budget));
+    draw_form_xobject_inner(resources, x_object, context, device);
+    if id.is_some() {
+        context.forms.pop();
+    }
+}
 
+// Folio: the drawing of a form XObject, as it was, once `draw_form_xobject`
+// has checked that the form is not drawing itself.
+fn draw_form_xobject_inner<'a, 'b>(
+    resources: &Resources<'a>,
+    x_object: &'b FormXObject<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
     let has_oc = xobject_oc(&x_object.dict, context);
     if !context.ocg_state.is_visible() {
         if has_oc {
@@ -192,18 +207,6 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     }
 
     context.end_nested_interpretation();
-}
-
-// Folio: leaves the form XObject marked by `Budget::enter_form` when its
-// drawing ends, on every return.
-struct FormGuard(Option<std::sync::Arc<crate::cache::Budget>>);
-
-impl Drop for FormGuard {
-    fn drop(&mut self) {
-        if let Some(budget) = &self.0 {
-            budget.leave_form();
-        }
-    }
 }
 
 pub(crate) fn draw_image_xobject<'a, 'b>(
