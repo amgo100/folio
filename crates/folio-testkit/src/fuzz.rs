@@ -19,6 +19,7 @@
 //! | `lockfile` | a `folio.lock` | reading it finishes without a panic; a valid one compiles |
 //! | `wire` | a display list message | decoding finishes without a panic; what decodes encodes and decodes to the same |
 //! | `tex` | the body of a LaTeX equation | reading it into the math tree finishes without a panic, and its errors point into the equation |
+//! | `image` | a byte saying how the figure is placed, then an image file | reading it, writing it to PDF and rendering its page finish without a panic, within libFuzzer's time and memory limits (`crate::fuzz_image`) |
 //! | `differential` | a corpus project and a sequence of edits to its content and stylesheets | after each edit, every build of a world edited in place has the outputs, diagnostics and span maps of a world built afresh from the same texts |
 //!
 //! A target panics when a check fails; libFuzzer records the input.
@@ -33,6 +34,8 @@ use folio::{BuildMode, Fragment, FragmentItem, Limits, Name, Target, World, span
 use folio_syntax::{NodeIds, Source, SyntaxNode, parse, parse_stylesheet};
 
 use crate::corpus;
+
+pub use crate::fuzz_image::image;
 
 /// The body of a fuzz target.
 pub type Body = fn(&[u8]);
@@ -51,6 +54,7 @@ pub const TARGETS: &[(&str, Body)] = &[
     ("lockfile", lockfile),
     ("wire", wire),
     ("tex", tex),
+    ("image", image),
 ];
 
 /// The regression inputs of a target: `fuzz/regressions/<target>/`.
@@ -1410,5 +1414,10 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
         }
     }
     out.extend(wire_seeds());
+    out.extend(
+        crate::fuzz_image::seeds()
+            .into_iter()
+            .map(|(name, bytes)| ("image", name, bytes)),
+    );
     out
 }
