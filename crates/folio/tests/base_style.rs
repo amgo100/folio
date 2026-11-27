@@ -264,3 +264,82 @@ fn notes_take_the_documents_style_and_markers_their_anchors() {
     // body's and the figure's size.
     assert_eq!(markers, [12.32, 10.78, 7.7, 7.7]);
 }
+
+#[test]
+fn notes_keep_the_language_and_font_of_their_anchors() {
+    // A note anchored in a Polish passage of an English document is
+    // Polish, in the passage's font, but sized like every other note
+    // (SPEC §7.8, D-327-4 = B).
+    let world = world(
+        Some("styles/main.fsty"),
+        ".pl { lang: \"pl\"; font: \"Source Serif 4\"; }\n",
+    );
+    let mut world = world;
+    world
+        .set_source(
+            "main.fol",
+            "English text.#footnote[An \"English\" note.]\n\n\
+             #emph(class: \"pl\")[Polski tekst.#footnote[Zob. \"cytat\" i przypis.]]\n",
+        )
+        .unwrap();
+    let styled = styled(&world);
+    let notes: Vec<_> = all(&styled, "footnote")
+        .into_iter()
+        .map(|n| n.note_style().expect("a note part"))
+        .collect();
+    assert_eq!(
+        get(&styled, notes[0], "lang"),
+        get(&styled, &styled.root, "lang")
+    );
+    assert_eq!(get(&styled, notes[1], "lang"), Value::Str("pl".into()));
+    assert_eq!(
+        get(&styled, notes[1], "font"),
+        get(&styled, first(&styled, "emph"), "font")
+    );
+    assert_ne!(
+        get(&styled, notes[0], "font"),
+        get(&styled, notes[1], "font")
+    );
+    // Size and style still come from the document.
+    assert_eq!(
+        get(&styled, notes[0], "font-size"),
+        get(&styled, notes[1], "font-size")
+    );
+    assert_eq!(get(&styled, notes[1], "font-style"), kw("normal"));
+
+    let text = folio::text(&world, Target::Pdf, None).unwrap().unwrap();
+    let texts: Vec<String> = text
+        .paragraphs
+        .iter()
+        .map(|p| p.shaped.text().replace('\u{a0}', "~"))
+        .collect();
+    assert!(
+        texts.iter().any(|t| t == "1~An “English” note."),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "2~Zob. „cytat” i przypis."),
+        "{texts:?}"
+    );
+    // A note's continuation is marked in its own language.
+    let marks: Vec<&str> = text
+        .continued
+        .iter()
+        .map(|m| text.paragraphs[m.expect("a mark")].shaped.text())
+        .collect();
+    assert_eq!(marks, ["(cont.)", "(cd.)"]);
+    // Polish hyphenation and line-end rules: the note's segments are
+    // Polish.
+    let note = text
+        .paragraphs
+        .iter()
+        .find(|p| p.shaped.text().contains("cytat"))
+        .unwrap();
+    assert!(
+        note.shaped
+            .paragraph
+            .segments
+            .iter()
+            .all(|s| s.lang.as_ref().map(|l| l.as_str()) == Some("pl"))
+    );
+}

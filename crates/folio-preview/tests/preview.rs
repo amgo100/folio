@@ -376,10 +376,34 @@ fn the_viewer_draws_pages_inside_an_iframe() {
     let dir = project("exam");
     let (preview, events) = start(dir.path(), |o| o.watch(false));
     updated(&events, |u| u.pages > 0);
+    node("iframe.cjs", &preview.url());
+}
+
+#[test]
+fn the_viewer_draws_images() {
+    // Every image of the acceptance exam (SVG, PNG) and of the figures
+    // corpus (every format, PDF among them) is drawn on its page in
+    // Chromium (`tests/images.cjs`). Needs Node.js with Playwright, as
+    // above; `figures_are_served_as_svg` checks the server's part.
+    if !playwright() {
+        eprintln!("skipped: Node.js with Playwright is not installed");
+        return;
+    }
+    for name in ["acceptance", "figures"] {
+        let dir = project(name);
+        let (preview, events) = start(dir.path(), |o| o.watch(false));
+        updated(&events, |u| u.pages > 0);
+        node("images.cjs", &preview.url());
+    }
+}
+
+/// Runs a script of this crate's `tests` directory with Node.js and fails
+/// with its output unless it succeeds.
+fn node(script: &str, url: &str) {
     let mut child = std::process::Command::new("node")
         .current_dir(tests_dir())
-        .arg("iframe.cjs")
-        .arg(preview.url())
+        .arg(script)
+        .arg(url)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -397,13 +421,163 @@ fn the_viewer_draws_pages_inside_an_iframe() {
     let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
-        "{}{}",
+        "{script}: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }
 
-/// This crate's `tests` directory, which holds `iframe.cjs`.
+#[test]
+fn the_viewer_hashes_images_as_the_server_does() {
+    // The viewer names figures to `/figure/` by `Image::content_hash`,
+    // which `contentHash` in `viewer.js` computes again. Needs Node.js only.
+    let has_node = std::process::Command::new("node")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !has_node {
+        eprintln!("skipped: Node.js is not installed");
+        return;
+    }
+    let script = include_str!("../src/viewer/viewer.js");
+    let start = script.find("function contentHash(").expect("contentHash");
+    let end = start + script[start..].find("\n}\n").expect("its end") + 3;
+    let mut inputs: Vec<Vec<u8>> = [0, 1, 7, 8, 9, 15, 16, 17, 1000]
+        .iter()
+        .map(|&n| (0..n).map(|i: usize| (i * 151 + 7) as u8).collect())
+        .collect();
+    inputs.push(vec![0xff; 64]);
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+    for file in ["acceptance/assets/sledge.svg", "figures/assets/field.pdf"] {
+        inputs.push(std::fs::read(corpus.join(file)).unwrap());
+    }
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let program = format!(
+        "{}\nfor (const line of require('fs').readFileSync(0, 'utf8').split('\\n')) {{\n\
+         if (line === '') continue;\n\
+         console.log(contentHash(Uint8Array.from(Buffer.from(line.slice(1), 'hex'))));\n}}",
+        &script[start..end]
+    );
+    let mut child = std::process::Command::new("node")
+        .args(["-e", &program])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin: String = inputs.iter().map(|i| format!("x{}\n", hex(i))).collect();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let got: Vec<String> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let want: Vec<String> = inputs
+        .iter()
+        .map(|bytes| {
+            let image = folio_component::Image::new(
+                bytes.as_slice().into(),
+                folio_component::ImageFormat::Png,
+            );
+            format!("{:016x}", image.content_hash())
+        })
+        .collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn figures_are_served_as_svg() {
+    use folio_component::ImageFormat;
+    let dir = project("figures");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    let received = receive_from(&mut ws, first.revision);
+    let mut images = Vec::new();
+    for (_, message) in &received.frames {
+        if let wire::Message::List(list) = message {
+            for item in &list.items {
+                if let folio_render::Command::Image(image) = &item.command {
+                    images.push(image.image.clone());
+                }
+            }
+        }
+    }
+    let format = |f: ImageFormat| images.iter().filter(|i| i.format() == f).count();
+    assert!(
+        format(ImageFormat::Svg) > 0 && format(ImageFormat::Pdf) > 0,
+        "{images:?}"
+    );
+
+    let token = preview.token().to_owned();
+    let path = |image: &folio_component::Image| {
+        format!("/figure/{:016x}.svg?token={token}", image.content_hash())
+    };
+    for image in &images {
+        let (head, body) = request(&preview, &path(image), &[]);
+        if matches!(image.format(), ImageFormat::Svg | ImageFormat::Pdf) {
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+            assert_eq!(header(&head, "Content-Type"), Some("image/svg+xml"));
+            let policy = header(&head, "Content-Security-Policy").expect("a policy");
+            assert!(policy.contains("default-src 'none'"), "{policy}");
+            let svg = String::from_utf8(body).unwrap();
+            // Stretched to any box that holds the figure, as in the PDF.
+            assert!(
+                svg.starts_with("<svg preserveAspectRatio=\"none\" "),
+                "{svg:.100}"
+            );
+            // The figure itself, embedded: a PDF figure as the SVG it
+            // converts to.
+            assert!(
+                svg.contains("href=\"data:image/svg+xml;base64,"),
+                "{svg:.300}"
+            );
+        } else {
+            // Raster images are drawn from the list's own bytes.
+            assert_eq!(get(&preview, &path(image), &[]).0, "HTTP/1.1 404 Not Found");
+        }
+    }
+    let svg = images
+        .iter()
+        .find(|i| i.format() == ImageFormat::Svg)
+        .unwrap();
+    let without_token = format!("/figure/{:016x}.svg", svg.content_hash());
+    assert_eq!(
+        get(&preview, &without_token, &[]).0,
+        "HTTP/1.1 403 Forbidden"
+    );
+    // The hash only as 16 lowercase digits: in capitals, or with a sign
+    // for its first digit, it names nothing.
+    let lower = format!("{:016x}", svg.content_hash());
+    let mut bad = vec![
+        "/figure/0123.svg".to_owned(),
+        "/figure/zzzzzzzzzzzzzzzz.svg".to_owned(),
+        "/figure/0000000000000000.svg".to_owned(),
+    ];
+    if lower.bytes().any(|b| b.is_ascii_alphabetic()) {
+        bad.push(format!("/figure/{}.svg", lower.to_uppercase()));
+    }
+    if let Some(rest) = lower.strip_prefix('0') {
+        bad.push(format!("/figure/+{rest}.svg"));
+    }
+    for bad in &bad {
+        let target = format!("{bad}?token={token}");
+        assert_eq!(
+            get(&preview, &target, &[]).0,
+            "HTTP/1.1 404 Not Found",
+            "{bad}"
+        );
+    }
+}
+
+/// This crate's `tests` directory, which holds the scripts `node` runs.
 fn tests_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests")
 }

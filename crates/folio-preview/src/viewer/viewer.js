@@ -1,7 +1,9 @@
 // The viewer of `folio watch` (SPEC §12.2): it receives the display lists
 // of the pages over the websocket, in `folio-render`'s wire format, and
 // draws them on canvases with Canvas 2D, from glyphs that the server
-// rasterises at the current zoom (SPEC §12.4). A click asks the server for
+// rasterises at the current zoom (SPEC §12.4), and images: raster ones
+// decoded from the bytes in the list, SVG and PDF figures as the SVG the
+// server makes of them (`/figure/`). A click asks the server for
 // the source it shows; the server tells it where an editor's cursor is
 // (`reveal`) and where the diagnostics point (`overlays`). The protocol is
 // documented in `folio-preview`'s crate documentation.
@@ -176,7 +178,193 @@ function command(tag, r) {
     }
     case 2: return { kind: "frame", rect: r.rect() };
     case 3: return { kind: "box" }; // Draws nothing.
+    case 4: { // Image
+      const rect = r.rect();
+      const format = r.u8();
+      const n = r.count(1);
+      const bytes = r.bytes.subarray(r.pos, r.pos + n);
+      r.pos += n;
+      // The key is hashed when the image is first drawn.
+      return { kind: "image", rect, format, bytes, key: null };
+    }
     default: return { kind: "unknown" }; // A command of a later version.
+  }
+}
+
+// The content hash of an image file's bytes, as 16 hexadecimal digits: the
+// hash `folio_component::Image::content_hash` takes, in 64-bit arithmetic
+// on pairs of 32-bit halves, so that the viewer names a figure to the
+// server as the server does. `preview.rs` checks it against the server's.
+function contentHash(bytes) {
+  let h = 0x243f6a88, l = 0x85a308d3;
+  // (h, l) = (h, l) * (bh, bl) mod 2^64.
+  const mul = (bh, bl) => {
+    const a0 = l & 0xffff, a1 = l >>> 16, b0 = bl & 0xffff, b1 = bl >>> 16;
+    const p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0;
+    const mid = (p00 >>> 16) + (p01 & 0xffff) + (p10 & 0xffff);
+    const hi = (a1 * b1 + (p01 >>> 16) + (p10 >>> 16) + Math.floor(mid / 0x10000)
+      + Math.imul(h, bl) + Math.imul(l, bh)) >>> 0;
+    l = (((mid & 0xffff) << 16) | (p00 & 0xffff)) >>> 0;
+    h = hi;
+  };
+  // state = (state.rotate_left(5) ^ word) * K.
+  const mix = (wh, wl) => {
+    const rh = ((h << 5) | (l >>> 27)) >>> 0;
+    const rl = ((l << 5) | (h >>> 27)) >>> 0;
+    h = (rh ^ wh) >>> 0;
+    l = (rl ^ wl) >>> 0;
+    mul(0x517cc1b7, 0x27220a95);
+  };
+  mix(Math.floor(bytes.length / 0x100000000), bytes.length >>> 0);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const whole = bytes.length - (bytes.length % 8);
+  for (let i = 0; i < whole; i += 8) mix(view.getUint32(i + 4, true), view.getUint32(i, true));
+  if (whole < bytes.length) {
+    const word = new Uint8Array(8);
+    word.set(bytes.subarray(whole));
+    const w = new DataView(word.buffer);
+    mix(w.getUint32(4, true), w.getUint32(0, true));
+  }
+  // The final avalanche: h ^= h >> 33, h *= C, h ^= h >> 33.
+  l = (l ^ (h >>> 1)) >>> 0;
+  mul(0xff51afd7, 0xed558ccd);
+  l = (l ^ (h >>> 1)) >>> 0;
+  return h.toString(16).padStart(8, "0") + l.toString(16).padStart(8, "0");
+}
+
+// ---------------------------------------------------------------------
+// Images.
+
+// The media types of the raster formats of the wire format's format byte;
+// 4 (SVG) and 5 (PDF) are figures the server converts.
+const RASTER_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+// Content hash → { source } once settled, `source` an ImageBitmap or an
+// <img> to draw, or null when the image cannot be shown; { pending } while
+// it is decoded or fetched, or waits to be fetched again, `pending` an
+// object that names the request.
+let imageCache = new Map();
+// Content hash → how many times fetching a figure has failed.
+const imageFailures = new Map();
+// How many times a figure is fetched again after a failure that may pass.
+const IMAGE_RETRIES = 3;
+
+// A JPEG without its Exif segments (APP1 that starts with "Exif\0"): the
+// browser would turn the image by the orientation they give, which PDF
+// output and `folio-render` do not, as Folio sizes an image by its pixels
+// as stored.
+function withoutExif(bytes) {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return bytes;
+  const keep = [bytes.subarray(0, 2)];
+  let at = 2;
+  let dropped = false;
+  // Segments up to the start of the scan, each a marker and a length.
+  while (at + 4 <= bytes.length && bytes[at] === 0xff) {
+    const marker = bytes[at + 1];
+    if (marker === 0xda || marker === 0xd9) break;
+    const end = at + 2 + ((bytes[at + 2] << 8) | bytes[at + 3]);
+    if (end > bytes.length) break;
+    const exif = marker === 0xe1 && end - at >= 10 && bytes[at + 4] === 0x45
+      && bytes[at + 5] === 0x78 && bytes[at + 6] === 0x69 && bytes[at + 7] === 0x66
+      && bytes[at + 8] === 0;
+    if (exif) dropped = true;
+    else keep.push(bytes.subarray(at, end));
+    at = end;
+  }
+  if (!dropped) return bytes;
+  keep.push(bytes.subarray(at));
+  return new Blob(keep);
+}
+
+// The image of a list item to draw, or undefined while it is not ready
+// (the page is drawn again when it is); null when it cannot be shown.
+// An item's bytes are hashed when it is first drawn, so pages that are
+// not shown cost nothing.
+function imageOf(item) {
+  if (item.key === null) item.key = contentHash(item.bytes);
+  const key = item.key;
+  const cached = imageCache.get(key);
+  if (cached) return cached.pending ? undefined : cached.source;
+  const request = {};
+  imageCache.set(key, { pending: request });
+  // Whether this request is still the one the cache waits for.
+  const current = () => {
+    const entry = imageCache.get(key);
+    return entry !== undefined && entry.pending === request;
+  };
+  const settle = (source) => {
+    if (!current()) {
+      if (source && source.close) source.close();
+      return;
+    }
+    imageCache.set(key, { source });
+    repaintImages();
+  };
+  if (item.format < RASTER_TYPES.length) {
+    const type = RASTER_TYPES[item.format];
+    const bytes = item.format === 0 ? withoutExif(item.bytes) : item.bytes;
+    createImageBitmap(new Blob([bytes], { type })).then(
+      (bitmap) => settle(bitmap),
+      () => settle(null), // Bytes that do not decode never will.
+    );
+  } else if (item.format === 4 || item.format === 5) {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => {
+      if (current()) imageFailures.delete(key);
+      settle(img);
+    };
+    img.onerror = () => {
+      if (!current()) return;
+      // A failure that may pass (the network, the server): fetched again
+      // after a while, a few times, waiting longer each time; after that,
+      // with the next revision.
+      const failures = (imageFailures.get(key) || 0) + 1;
+      imageFailures.set(key, failures);
+      if (failures > IMAGE_RETRIES) return settle(null);
+      setTimeout(() => {
+        if (!current()) return;
+        imageCache.delete(key);
+        repaintImages();
+      }, RETRY_AFTER * 2 ** (failures - 1));
+    };
+    img.src = `/figure/${key}.svg?token=${encodeURIComponent(token)}`;
+  } else {
+    imageCache.set(key, { source: null }); // A format of a later version.
+  }
+  return undefined;
+}
+
+// Figures that could not be fetched are asked for again with each
+// revision.
+function retryFailedImages() {
+  for (const key of imageFailures.keys()) {
+    const entry = imageCache.get(key);
+    if (entry && !entry.pending && entry.source === null) imageCache.delete(key);
+    imageFailures.delete(key);
+  }
+}
+
+// Draws again the pages with images, once one is ready or asked for again.
+function repaintImages() {
+  for (const page of pages) if (page && page.images) page.drawn = 0;
+  redrawVisible();
+}
+
+// Drops the images that no page's list holds as far as the viewer knows:
+// lists not drawn yet have not hashed their images, so an image only they
+// hold is decoded again when they are drawn.
+function pruneImages() {
+  const used = new Set();
+  for (const page of pages) {
+    if (!page || !page.list) continue;
+    for (const item of page.list.items) if (item.kind === "image" && item.key) used.add(item.key);
+  }
+  for (const [key, entry] of imageCache) {
+    if (used.has(key)) continue;
+    if (entry.source && entry.source.close) entry.source.close();
+    imageCache.delete(key);
+    imageFailures.delete(key);
   }
 }
 
@@ -365,8 +553,26 @@ function draw(page) {
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, width, height);
   let complete = true;
+  let waiting = false;
+  page.images = false;
   for (const item of list.items) {
-    if (item.kind === "glyphs") {
+    if (item.kind === "image") {
+      page.images = true;
+      const source = imageOf(item);
+      if (source === undefined) waiting = true;
+      else if (source && item.rect.width > 0 && item.rect.height > 0) {
+        const { x, y, width: w, height: h } = item.rect;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        try {
+          ctx.drawImage(source, x * scale, y * scale, w * scale, h * scale);
+        } catch (e) {
+          // An image the browser cannot draw (an SVG without a size) is
+          // left out, and the rest of the page is drawn.
+        }
+      }
+    } else if (item.kind === "glyphs") {
       complete = drawGlyphs(ctx, item, scale) && complete;
     } else if (item.kind === "path") {
       drawPath(ctx, item, scale);
@@ -381,6 +587,7 @@ function draw(page) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
   }
+  complete = complete && !waiting;
   page.drawn = complete ? zoom * dpr : 0;
   return complete;
 }
@@ -491,7 +698,7 @@ function pageElement(i) {
   el.addEventListener("click", (event) => click(i, event));
   pagesEl.appendChild(el);
   observer.observe(el);
-  page = { list: null, el, canvas, img: null, size: null, marks: [], drawn: 0 };
+  page = { list: null, el, canvas, img: null, size: null, marks: [], drawn: 0, images: false };
   pages[i] = page;
   return page;
 }
@@ -740,6 +947,7 @@ function apply({ update, frames }) {
     }
     // A span map changes nothing that is drawn.
   }
+  retryFailedImages();
   if (fitting || !zoom) zoom = fitZoom();
   for (const page of pages) if (page) layoutPage(page);
   diagnostics = update.diagnostics || [];
@@ -750,6 +958,8 @@ function apply({ update, frames }) {
   const what = update.variant ? `${update.variant} (${update.target})` : update.target;
   statusLine.textContent = `${what}: ${update.pages} page${update.pages === 1 ? "" : "s"}, revision ${update.revision}`;
   redrawVisible();
+  // After drawing, so that the visible pages have hashed their images.
+  pruneImages();
   sendVisible();
 }
 

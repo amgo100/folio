@@ -54,11 +54,13 @@ emph { font-style: italic; }
 // font, sets the characters Source Code Pro lacks.
 raw { font: "Source Code Pro", "New Computer Modern"; font-size: 0.9em; }
 
-// Footnotes (SPEC §7.8, decisions D-46-1, D-46-2, D-327-1 and D-327-3):
+// Footnotes (SPEC §7.8, decisions D-46-1, D-46-2, D-327-1, D-327-3 and
+// D-327-4):
 // numbered through the document, with small raised numbers at the anchor
 // and before the note, upright and of normal weight wherever the anchor
 // is. The marker at the anchor is 0.7 of the anchor's size; the note
-// inherits from the document, so the marker before it is 0.7 and its
+// inherits from the document (but for the language and font of the text
+// around its anchor), so the marker before it is 0.7 and its
 // blocks 0.8 of the body's size (1.143 times the marker's), on their
 // baselines, wherever the anchor is.
 footnote {

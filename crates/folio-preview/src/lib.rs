@@ -63,6 +63,7 @@
 //! | `/page/<n>.png` | Page `n` (from 0) of the current revision, rendered by `folio-render` at 96 dpi |
 //! | `/font/<n>` | The bytes of the font file that glyph runs name as font `n`, with the font's index in it in the `X-Font-Index` header |
 //! | `/glyphs/<n>?size=<px>&g=<id>.<sub>,..` | Glyphs of font `n` rasterised at `px` pixels to the em (at most 2048), for a client that draws display lists itself (SPEC §12.4); see below |
+//! | `/figure/<hash>.svg` | An SVG or PDF figure of the current revision as SVG, found by its content hash; see below |
 //!
 //! On the websocket, the server sends, for every revision the client has
 //! not seen, or the rest of one whose first pages it was sent:
@@ -137,6 +138,21 @@
 //! row by row; all little-endian. A glyph with no outline has a width and
 //! height of zero. An answer holds at most 32 MiB of coverage: the glyphs
 //! past it are left out, and the count says how many it holds.
+//!
+//! Images arrive in the display lists with their files' bytes. A client
+//! decodes JPEG, PNG, WebP and GIF itself (a JPEG as stored, without
+//! turning it by its Exif orientation, which PDF output ignores), and asks for SVG and PDF
+//! figures as SVG through `/figure/<hash>.svg`: `<hash>` is the content
+//! hash of the file's bytes (`Image::content_hash` of `folio-component`)
+//! as 16 lowercase hexadecimal digits. The answer is the SVG that
+//! `folio-render` writes of the figure alone, at the size of the first box
+//! that holds it and with `preserveAspectRatio="none"` on its root, so that
+//! it stretches to any box as the figure does, with the figure embedded as
+//! a `data:` URI (a PDF figure as the SVG it converts to), under a policy
+//! that allows nothing else. A hash no SVG or PDF figure of the current
+//! revision has is `404`. The viewer hashes an image when it first draws
+//! it and keeps decoded images by their hash while the pages it has drawn
+//! show them, so a page sent again does not decode them again.
 
 #![forbid(unsafe_code)]
 
