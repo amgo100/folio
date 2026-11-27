@@ -1,0 +1,2 @@
+#let g(n) = if n == 0 { $x$ } else { let a = g(n - 1); $(#a) / (#a)$ }
+$#g(40)$

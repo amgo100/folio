@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ecow::EcoVec;
 use folio::diag::{self, Files, Resolved, TextFiles};
 use folio::{
-    Cancelled, Compiled, Diagnostic, FontCache, LayoutDiagnostics, Manifest, Name, ProjectPath,
-    Target, World, check_builds, compile_builds,
+    Cancelled, Compiled, Diagnostic, FileKind, FileRead, FontCache, LayoutDiagnostics, Manifest,
+    Name, ProjectPath, Target, World, check_builds, compile_builds,
 };
 use folio_syntax::DiagSpan;
 use serde::Serialize;
@@ -53,9 +53,13 @@ type Outcome = Result<(EcoVec<Diagnostic>, Done), Cancelled>;
 enum Done {
     /// It was compiled.
     Compiled(Compiled),
-    /// It was checked: whether it has errors, and whether compiling it
-    /// would give a file to write.
-    Checked { errors: bool, writes: bool },
+    /// It was checked: whether it has errors, whether compiling it would
+    /// give a file to write, and the files it read.
+    Checked {
+        errors: bool,
+        writes: bool,
+        files: EcoVec<FileRead>,
+    },
 }
 
 /// Builds or checks, reporting what it finds to `report`.
@@ -140,7 +144,11 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
                             let writes = c.writes;
                             (
                                 layout.filter(c.diagnostics),
-                                Done::Checked { errors, writes },
+                                Done::Checked {
+                                    errors,
+                                    writes,
+                                    files: c.files,
+                                },
                             )
                         });
                         (o.variant, o.target, result)
@@ -178,6 +186,16 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
     }
     report.diagnostics(&world, &diagnostics);
 
+    // No output replaces a file that any build of the run reads.
+    let read: Vec<FileRead> = written
+        .iter()
+        .flat_map(|(.., done)| match done {
+            Some(Done::Compiled(compiled)) => compiled.files.iter(),
+            Some(Done::Checked { files, .. }) => files.iter(),
+            None => [].iter(),
+        })
+        .cloned()
+        .collect();
     let mut failed = diagnostics.iter().any(Diagnostic::is_error);
     for (variant, target, path, compiled) in written {
         let build = |path: Option<&str>, status| Build::new(&variant, target, path, status);
@@ -188,9 +206,9 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
                 continue;
             }
             // A check writes nothing, but finds what would stop the write.
-            Some(Done::Checked { errors, writes }) => {
+            Some(Done::Checked { errors, writes, .. }) => {
                 let path = path.as_deref().filter(|_| writes);
-                let status = match check_write(&root, path, errors) {
+                let status = match check_write(&root, path, errors, &read) {
                     Ok(()) => Status::Checked,
                     Err(message) => {
                         report.diagnostics(&world, &[error(message)]);
@@ -203,7 +221,7 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
             }
             Some(Done::Compiled(compiled)) => compiled,
         };
-        match write(&root, path.as_deref(), &compiled) {
+        match write(&root, path.as_deref(), &compiled, &read) {
             Ok(Written::File(path)) => report.build(build(Some(&path), Status::Written)),
             Ok(Written::Nothing) => report.build(build(path.as_deref(), Status::None)),
             Ok(Written::Skipped(path)) => report.build(build(Some(&path), Status::Skipped)),
@@ -304,11 +322,16 @@ pub(super) enum Written {
 /// the bytes go to a temporary file of a name no other build uses, which is
 /// then renamed over the output. Symbolic links to directories are followed
 /// only inside the project (SPEC §12.1), and an output whose directory lies
-/// outside it is refused; a link at the output itself is replaced.
+/// outside it is refused; a link at the output itself is replaced. An
+/// output that is one of the files `read` lists is refused, so it never
+/// replaces a source, a data file or an image: `read` holds what the
+/// builds written together read ([`Compiled::files`]), this one's among
+/// them.
 pub(super) fn write(
     root: &Path,
     path: Option<&str>,
     compiled: &Compiled,
+    read: &[FileRead],
 ) -> Result<Written, String> {
     let (Some(path), Some(bytes)) = (path, &compiled.output) else {
         return Ok(Written::Nothing);
@@ -318,12 +341,14 @@ pub(super) fn write(
             "the output path `{path}` is not a path in the project"
         ));
     };
+    let message = |e: io::Error| format!("cannot write `{path}`: {e}");
+    refuse_read(root, &path, read).map_err(message)?;
     let path = path.as_str().to_owned();
     if compiled.has_errors() {
         return Ok(Written::Skipped(path));
     }
-    let message = |e: io::Error| format!("cannot write `{path}`: {e}");
     let (root, file) = resolve(root, &path, true).map_err(message)?;
+    // Directories created on the way hold no file a build read.
     replace(&root, &file, bytes, None).map_err(message)?;
     Ok(Written::File(path))
 }
@@ -332,11 +357,17 @@ pub(super) fn write(
 /// in the project, for `folio check`, without writing or creating
 /// anything: a path that is not in the project, and for a build without
 /// errors (`errors`), a directory on the way that a link places outside
-/// the project or that is not a directory. What only writing finds, such
-/// as a directory where the file would go or one that cannot be written
-/// to, is not checked. `path` is `None` when the build would write no
-/// file.
-fn check_write(root: &Path, path: Option<&str>, errors: bool) -> Result<(), String> {
+/// the project or that is not a directory. A file the builds checked
+/// together read (`files`) is refused as [`write`] refuses it, whether the
+/// build has errors or not. What only writing finds, such as a directory
+/// where the file would go or one that cannot be written to, is not
+/// checked. `path` is `None` when the build would write no file.
+fn check_write(
+    root: &Path,
+    path: Option<&str>,
+    errors: bool,
+    files: &[FileRead],
+) -> Result<(), String> {
     let Some(path) = path else {
         return Ok(());
     };
@@ -345,12 +376,85 @@ fn check_write(root: &Path, path: Option<&str>, errors: bool) -> Result<(), Stri
             "the output path `{path}` is not a path in the project"
         ));
     };
+    let message = |e: io::Error| format!("cannot write `{path}`: {e}");
+    refuse_read(root, &path, files).map_err(message)?;
     if errors {
         return Ok(());
     }
     resolve(root, path.as_str(), false)
         .map(|_| ())
-        .map_err(|e| format!("cannot write `{path}`: {e}"))
+        .map_err(message)
+}
+
+/// Refuses an output at the project path `path` in the project at `root`
+/// when it is a file a build read, or tried to read (`files`): by its path
+/// ([`read_by_build`]) or on disk ([`read_on_disk`]), as far as the
+/// directories on the way exist.
+fn refuse_read(root: &Path, path: &ProjectPath, files: &[FileRead]) -> io::Result<()> {
+    read_by_build(path, files)?;
+    match resolve(root, path.as_str(), false) {
+        Ok((root, file)) => read_on_disk(&root, &file, files),
+        // What stops the write is reported where it is written.
+        Err(_) => Ok(()),
+    }
+}
+
+/// Refuses an output at the project path `path` when a build read, or
+/// tried to read, a file of that path (`files`): writing it would replace
+/// one of the project's inputs. Paths are compared without regard to ASCII
+/// case, as file systems that ignore case would replace the file all the
+/// same.
+fn read_by_build(path: &ProjectPath, files: &[FileRead]) -> io::Result<()> {
+    match files
+        .iter()
+        .find(|f| f.path.as_str().eq_ignore_ascii_case(path.as_str()))
+    {
+        Some(read) => Err(read_error(read)),
+        None => Ok(()),
+    }
+}
+
+/// Refuses an output at `file`, on disk in the project at `root` (both as
+/// [`resolve`] gives them), when it is a file a build read (`files`),
+/// reached another way: through a symbolic link to a directory, or as the
+/// target of a symbolic link that the build read. The file names are
+/// compared without regard to ASCII case, as by [`read_by_build`].
+fn read_on_disk(root: &Path, file: &Path, files: &[FileRead]) -> io::Result<()> {
+    let (Some(out_dir), Some(out_name)) = (file.parent(), file.file_name()) else {
+        return Ok(());
+    };
+    let is_output = |path: &Path| {
+        path.parent() == Some(out_dir)
+            && path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(out_name))
+    };
+    for read in files {
+        let path = root.join(read.path.as_str());
+        // The file the build reads, through any link.
+        let target = path.canonicalize().ok();
+        // The path it reads, with only its directory resolved: the link
+        // itself, or a file that is missing.
+        let named = path
+            .parent()
+            .zip(path.file_name())
+            .and_then(|(dir, name)| Some(dir.canonicalize().ok()?.join(name)));
+        if target.iter().chain(&named).any(|p| is_output(p)) {
+            return Err(read_error(read));
+        }
+    }
+    Ok(())
+}
+
+/// The error for an output that would replace a file the build read.
+fn read_error(read: &FileRead) -> io::Error {
+    let what = match read.kind {
+        FileKind::Content => "a content file",
+        FileKind::Stylesheet => "a stylesheet",
+        FileKind::Data => "a data file",
+        FileKind::Image => "an image",
+    };
+    io::Error::other(format!("a build reads `{}` as {what}", read.path.as_str()))
 }
 
 /// The count in the names of temporary files, which tells apart the writes
@@ -689,7 +793,7 @@ mod tests {
             ..Compiled::default()
         };
         assert_eq!(
-            write(dir.path(), Some("out/main-exam.pdf"), &ok),
+            write(dir.path(), Some("out/main-exam.pdf"), &ok, &[]),
             Ok(Written::File("out/main-exam.pdf".into()))
         );
         assert_eq!(
@@ -703,15 +807,119 @@ mod tests {
             ..ok.clone()
         };
         assert_eq!(
-            write(dir.path(), Some("out/x.pdf"), &broken),
+            write(dir.path(), Some("out/x.pdf"), &broken, &[]),
             Ok(Written::Skipped("out/x.pdf".into()))
         );
         assert!(!dir.path().join("out/x.pdf").exists());
-        assert_eq!(write(dir.path(), None, &ok), Ok(Written::Nothing));
+        assert_eq!(write(dir.path(), None, &ok, &[]), Ok(Written::Nothing));
         assert_eq!(
-            write(dir.path(), Some("x.docx"), &Compiled::default()),
+            write(dir.path(), Some("x.docx"), &Compiled::default(), &[]),
             Ok(Written::Nothing)
         );
+    }
+
+    #[test]
+    fn never_replaces_a_file_the_build_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("data")).unwrap();
+        fs::write(root.join("data/marks.csv"), "keep").unwrap();
+        let read = |path: &str, kind| FileRead {
+            path: ProjectPath::new(path).unwrap(),
+            kind,
+        };
+        let ok = Compiled {
+            output: Some(b"%PDF-".to_vec().into()),
+            files: [
+                read("main.fol", FileKind::Content),
+                read("data/marks.csv", FileKind::Data),
+                read("missing.png", FileKind::Image),
+            ]
+            .into_iter()
+            .collect(),
+            ..Compiled::default()
+        };
+        for (path, message) in [
+            (
+                "data/marks.csv",
+                "cannot write `data/marks.csv`: a build reads `data/marks.csv` as a data file",
+            ),
+            (
+                "Data/Marks.CSV",
+                "cannot write `Data/Marks.CSV`: a build reads `data/marks.csv` as a data file",
+            ),
+            // A file named but missing is not replaced either.
+            (
+                "missing.png",
+                "cannot write `missing.png`: a build reads `missing.png` as an image",
+            ),
+        ] {
+            assert_eq!(
+                write(root, Some(path), &ok, &ok.files).unwrap_err(),
+                message
+            );
+            assert_eq!(
+                check_write(root, Some(path), false, &ok.files).unwrap_err(),
+                message
+            );
+        }
+        // A build with errors would write nothing, but is still told.
+        assert!(check_write(root, Some("data/marks.csv"), true, &ok.files).is_err());
+        assert_eq!(fs::read(root.join("data/marks.csv")).unwrap(), b"keep");
+        assert!(!root.join("missing.png").exists());
+        assert!(check_write(root, Some("out/main.pdf"), false, &ok.files).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn never_replaces_a_file_the_build_read_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("data")).unwrap();
+        fs::write(root.join("data/marks.csv"), "keep").unwrap();
+        std::os::unix::fs::symlink(root.join("data"), root.join("out")).unwrap();
+        let ok = Compiled {
+            output: Some(b"%PDF-".to_vec().into()),
+            files: [FileRead {
+                path: ProjectPath::new("data/marks.csv").unwrap(),
+                kind: FileKind::Data,
+            }]
+            .into_iter()
+            .collect(),
+            ..Compiled::default()
+        };
+        let message = "cannot write `out/marks.csv`: a build reads `data/marks.csv` as a data file";
+        assert_eq!(
+            write(root, Some("out/marks.csv"), &ok, &ok.files).unwrap_err(),
+            message
+        );
+        assert_eq!(
+            check_write(root, Some("out/marks.csv"), false, &ok.files).unwrap_err(),
+            message
+        );
+        // A build with errors is told too.
+        assert_eq!(
+            check_write(root, Some("out/marks.csv"), true, &ok.files).unwrap_err(),
+            message
+        );
+        assert_eq!(fs::read(root.join("data/marks.csv")).unwrap(), b"keep");
+
+        // A file the build reads through a link to it.
+        std::os::unix::fs::symlink(root.join("data/marks.csv"), root.join("alias.csv")).unwrap();
+        let through = Compiled {
+            files: [FileRead {
+                path: ProjectPath::new("alias.csv").unwrap(),
+                kind: FileKind::Data,
+            }]
+            .into_iter()
+            .collect(),
+            ..ok.clone()
+        };
+        assert_eq!(
+            write(root, Some("data/marks.csv"), &through, &through.files).unwrap_err(),
+            "cannot write `data/marks.csv`: a build reads `alias.csv` as a data file"
+        );
+        assert_eq!(fs::read(root.join("data/marks.csv")).unwrap(), b"keep");
     }
 
     // Windows may refuse a rename over a file that another rename is
@@ -731,7 +939,7 @@ mod tests {
                     };
                     for _ in 0..20 {
                         assert_eq!(
-                            write(root, Some("out/main.pdf"), &compiled),
+                            write(root, Some("out/main.pdf"), &compiled, &[]),
                             Ok(Written::File("out/main.pdf".into()))
                         );
                     }
@@ -756,7 +964,7 @@ mod tests {
             output: Some(b"%PDF-".to_vec().into()),
             ..Compiled::default()
         };
-        let message = |path: &str| write(root, Some(path), &ok).unwrap_err();
+        let message = |path: &str| write(root, Some(path), &ok, &[]).unwrap_err();
 
         // A directory that links out of the project.
         symlink(outside.path(), root.join("out")).unwrap();
@@ -790,7 +998,10 @@ mod tests {
         )
         .unwrap();
         for path in ["out/main.pdf", "out/alias.pdf", "out/dangling.pdf"] {
-            assert_eq!(write(root, Some(path), &ok), Ok(Written::File(path.into())));
+            assert_eq!(
+                write(root, Some(path), &ok, &[]),
+                Ok(Written::File(path.into()))
+            );
             let meta = fs::symlink_metadata(root.join(path)).unwrap();
             assert!(meta.is_file(), "{path}");
             assert_eq!(fs::read(root.join(path)).unwrap(), b"%PDF-");
@@ -810,7 +1021,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(write(root, Some("out/x.pdf"), &ok).is_ok());
+        assert!(write(root, Some("out/x.pdf"), &ok, &[]).is_ok());
         assert!(TEMPORARY.load(Ordering::Relaxed) > next + 1024);
         assert_eq!(fs::read(outside.path().join("victim")).unwrap(), b"keep");
 
@@ -818,7 +1029,7 @@ mod tests {
         fs::create_dir(root.join("build")).unwrap();
         symlink(root.join("build"), root.join("pdfs")).unwrap();
         assert_eq!(
-            write(root, Some("pdfs/main.pdf"), &ok),
+            write(root, Some("pdfs/main.pdf"), &ok, &[]),
             Ok(Written::File("pdfs/main.pdf".into()))
         );
         assert_eq!(fs::read(root.join("build/main.pdf")).unwrap(), b"%PDF-");

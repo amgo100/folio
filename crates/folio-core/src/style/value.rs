@@ -23,6 +23,7 @@ use folio_component::{Abs, Name, PropertyType, Ratio, Scalar, Value};
 use folio_syntax::ast::{self, AstNode};
 use folio_syntax::{Span, SyntaxNode};
 
+use super::rules::Origin;
 use crate::db::{Db, Project};
 use crate::diag;
 use crate::eval::{self, Arg, Args, EvalError, Func, ops};
@@ -234,6 +235,9 @@ pub(super) struct TokenDef {
     pub(super) node: SyntaxNode,
     /// The stylesheet it is in.
     pub(super) file: ProjectPath,
+    /// The origin of the stylesheet or block it is in: a definition from a
+    /// higher origin wins over one from a lower origin (SPEC §5.1).
+    pub(super) origin: Origin,
 }
 
 /// The tokens of a build, evaluated when first used.
@@ -245,9 +249,14 @@ pub(super) struct Tokens {
 }
 
 impl Tokens {
-    /// The tokens defined by `defs`, in cascade order: a later definition
-    /// of a name replaces an earlier one.
+    /// The tokens defined by `defs`, in source order. Of the definitions
+    /// of a name, the one from the highest origin wins, and among those
+    /// the last (SPEC §5.1).
     pub(super) fn new(defs: impl IntoIterator<Item = (EcoString, TokenDef)>) -> Self {
+        let mut defs: Vec<_> = defs.into_iter().collect();
+        // A stable sort keeps source order within an origin, so a later
+        // definition replaces an earlier one as the map is built.
+        defs.sort_by_key(|(_, def)| def.origin);
         Self {
             defs: defs.into_iter().collect(),
             values: RefCell::default(),

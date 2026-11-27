@@ -17,7 +17,7 @@ use ecow::{EcoString, EcoVec};
 use folio_component::{ElementKind, Location, Name, QualifiedName};
 use folio_syntax::{Span, SyntaxNode};
 
-use super::value::{Dict, Equality, LazyHash, Value, compare_once};
+use super::value::{Dict, Equality, LazyHash, TooLong, Value, compare_once, write_str_repr};
 use crate::locate::{Frame, Origin};
 
 /// A sequence of content nodes.
@@ -196,13 +196,24 @@ impl Content {
     /// A compact description of the tree, for snapshot tests and debugging:
     /// `[heading(level: 2, body: [Forces]) <sec>, parbreak, "A ball"]`.
     pub fn repr(&self) -> EcoString {
-        let mut out = EcoString::from("[");
+        let mut out = EcoString::new();
+        let _ = self.write_repr(&mut out, usize::MAX);
+        out
+    }
+
+    /// Writes [`Content::repr`] to `out`, or fails as soon as `out` is
+    /// longer than `limit` bytes ([`Value::repr_within`]).
+    pub(crate) fn write_repr(&self, out: &mut EcoString, limit: usize) -> Result<(), TooLong> {
+        out.push('[');
         for (i, node) in self.nodes.iter().enumerate() {
+            if out.len() > limit {
+                return Err(TooLong);
+            }
             if i > 0 {
                 out.push_str(", ");
             }
             match node {
-                Node::Text { text, .. } => write!(out, "{text:?}").unwrap(),
+                Node::Text { text, .. } => write_str_repr(out, text, limit)?,
                 Node::Space(_) => out.push_str("space"),
                 Node::Linebreak(_) => out.push_str("linebreak"),
                 Node::Parbreak(_) => out.push_str("parbreak"),
@@ -214,7 +225,8 @@ impl Content {
                         if j > 0 {
                             out.push_str(", ");
                         }
-                        write!(out, "{key}: {}", value.repr()).unwrap();
+                        write!(out, "{key}: ").unwrap();
+                        value.write_repr(out, limit)?;
                     }
                     out.push(')');
                     if let Some(label) = &element.label {
@@ -222,13 +234,18 @@ impl Content {
                     }
                 }
                 Node::Slot(slot) => {
-                    write!(out, "slot {}({})", slot.name, slot.body.repr()).unwrap()
+                    write!(out, "slot {}(", slot.name).unwrap();
+                    slot.body.write_repr(out, limit)?;
+                    out.push(')');
                 }
                 Node::Rule(_) => out.push_str("rule"),
             }
         }
         out.push(']');
-        out
+        if out.len() > limit {
+            return Err(TooLong);
+        }
+        Ok(())
     }
 }
 
