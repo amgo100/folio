@@ -23,7 +23,7 @@ pub(crate) struct Cache(Arc<Mutex<CacheMap>>, pub(crate) Arc<Budget>);
 /// The most work one interpretation does (Folio).
 pub(crate) const MAX_WORK: u64 = 10_000_000;
 /// The work a nested interpretation costs (Folio).
-pub(crate) const NESTED_COST: u64 = 100;
+pub(crate) const NESTED_COST: u64 = 50;
 
 /// The images an interpretation has decoded: their bytes together, and
 /// the objects among them, which count once however often they are drawn
@@ -67,9 +67,11 @@ impl Budget {
         bytes: u64,
         sink: &crate::WarningSinkFn,
     ) -> bool {
-        // Every decoding is work, in proportion to its size (a unit a
-        // kilobyte), so that one image drawn over and over ends too.
-        if !self.spend(bytes / 1024, sink) {
+        // Every decoding is work, as a nested interpretation is, and in
+        // proportion to its size (a unit a kilobyte), so that an image drawn
+        // over and over ends too, however small: each drawing is a copy in
+        // what a device such as `hayro-svg` writes.
+        if !self.spend(NESTED_COST + bytes / 1024, sink) {
             return false;
         }
         let mut images = self.images.lock().unwrap();

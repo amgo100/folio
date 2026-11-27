@@ -39,7 +39,8 @@ warning sink, so that Folio can refuse the figure:
 
 - `src/cache.rs`: the object cache, which every nested context of one
   interpretation shares, carries a `Budget`: the work done (an operator
-  is one unit, a form XObject, pattern, soft mask or Type 3 glyph 100) up
+  is one unit, a form XObject, pattern, soft mask, Type 3 glyph or image
+  drawing 50) up
   to `MAX_WORK` (10,000,000), the bytes of the images decoded up to
   `hayro_syntax::MAX_IMAGE_BYTES` (an image counts once, however often it
   is drawn: an image object by its id, an inline image by its dictionary

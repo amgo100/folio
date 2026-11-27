@@ -14,9 +14,11 @@ const FORM_CYCLE_ONCE: &[u8] =
     include_bytes!("../../folio-core/tests/untrusted/form-cycle-once.pdf");
 
 /// How long one check or build of a hostile figure may take. The cases
-/// take well under a second in a debug build; before #333 they ran for
-/// minutes or aborted.
-const BOUND: Duration = Duration::from_secs(20);
+/// take under a second in a debug build, but for the forms that draw each
+/// other, which use up the reader's work limit in about ten; before #333
+/// they ran for minutes or aborted. The bound leaves room for a loaded
+/// machine.
+const BOUND: Duration = Duration::from_secs(60);
 
 fn world(bytes: Vec<u8>, name: &str) -> World {
     let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
