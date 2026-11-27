@@ -55,23 +55,20 @@ pub(crate) fn token_error(op: &str, lhs: &V, rhs: &V) -> Option<EcoString> {
     Some(with_token_advice(message, [lhs, rhs]))
 }
 
-/// Whether a value is a token reference or holds one in an array or a
-/// dictionary (SPEC §5.4).
+/// Whether a value is a token reference or holds one as a direct item of an
+/// array or a dictionary (SPEC §5.4). It looks one level deep only: values
+/// can share parts, and a walk of all of them could take exponential time.
 pub(crate) fn holds_token(value: &V) -> bool {
-    match value {
-        V::Token(_) => true,
-        V::Array(items) => items.iter().any(holds_token),
-        V::Dict(dict) => dict.iter().any(|(_, v)| holds_token(v)),
-        _ => false,
-    }
+    first_token(value).is_some()
 }
 
-/// The first token reference a value is or holds.
+/// The first token reference a value is or holds as a direct item.
 fn first_token(value: &V) -> Option<&V> {
+    let token = |v: &&V| matches!(v, V::Token(_));
     match value {
         V::Token(_) => Some(value),
-        V::Array(items) => items.iter().find_map(first_token),
-        V::Dict(dict) => dict.iter().find_map(|(_, v)| first_token(v)),
+        V::Array(items) => items.iter().find(token),
+        V::Dict(dict) => dict.iter().map(|(_, v)| v).find(token),
         _ => None,
     }
 }
@@ -449,7 +446,8 @@ pub(crate) fn contains(item: &V, collection: &V) -> StrResult<bool> {
 /// `none` disappears, strings and content concatenate, arrays concatenate,
 /// dictionaries merge.
 pub(crate) fn join(lhs: V, rhs: V) -> StrResult<V> {
-    if holds_token(&lhs) || holds_token(&rhs) {
+    // Only the operands themselves: a loop joins onto one growing value.
+    if matches!(lhs, V::Token(_)) || matches!(rhs, V::Token(_)) {
         let message = eco_format!(
             "cannot join {} with {}",
             a_type(lhs.type_name()),

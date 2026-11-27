@@ -698,11 +698,13 @@ impl<'a> Walker<'a> {
     }
 }
 
-/// Whether a value is a token reference or a list that holds one.
+/// Whether a value is a token reference or a list with one as an item. It
+/// looks one level deep only: values can share parts, and a walk of all of
+/// them could take exponential time.
 fn holds_token(value: &Value) -> bool {
     match value {
         Value::Token(_) => true,
-        Value::Array(items) => items.iter().any(holds_token),
+        Value::Array(items) => items.iter().any(|v| matches!(v, Value::Token(_))),
         _ => false,
     }
 }
@@ -712,9 +714,12 @@ fn holds_token(value: &Value) -> bool {
 fn resolve_tokens(values: &Values<'_>, value: &Value, span: Span) -> Option<Declared> {
     match value {
         Value::Token(name) => values.token(name, span),
-        Value::Array(items) if holds_token(value) => items
+        Value::Array(items) => items
             .iter()
-            .map(|item| resolve_tokens(values, item, span))
+            .map(|item| match item {
+                Value::Token(name) => values.token(name, span),
+                _ => Some(Declared::Value(item.clone())),
+            })
             .collect::<Option<EcoVec<_>>>()
             .map(Declared::List),
         _ => Some(Declared::Value(value.clone())),
