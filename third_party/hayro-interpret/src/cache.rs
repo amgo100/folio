@@ -31,7 +31,7 @@ pub(crate) const NESTED_COST: u64 = 100;
 #[derive(Default)]
 pub(crate) struct Images {
     bytes: u64,
-    objects: std::collections::HashSet<(i32, i32)>,
+    objects: std::collections::HashSet<u128>,
 }
 
 #[derive(Default)]
@@ -57,12 +57,13 @@ impl Budget {
 
     /// Takes `bytes` of decoded image data from what the interpretation may
     /// decode; `false`, taking nothing, when that is more than is left. An
-    /// image object (`id`) is taken once: it is decoded again where it is
-    /// drawn again, but one decoding is in memory at a time. Each decoding
-    /// also spends work.
+    /// image (`key`) is taken once, however often it is decoded. Each
+    /// decoding also spends work. (Each drawing of an image can keep a copy
+    /// of it, as `hayro-svg` writes one per drawing; Folio limits those
+    /// copies in the drawing it converts to.)
     pub(crate) fn take_image_bytes(
         &self,
-        id: Option<(i32, i32)>,
+        key: u128,
         bytes: u64,
         sink: &crate::WarningSinkFn,
     ) -> bool {
@@ -72,7 +73,7 @@ impl Budget {
             return false;
         }
         let mut images = self.images.lock().unwrap();
-        if id.is_some_and(|id| images.objects.contains(&id)) {
+        if images.objects.contains(&key) {
             return true;
         }
         let total = images.bytes.saturating_add(bytes);
@@ -82,7 +83,7 @@ impl Budget {
             return false;
         }
         images.bytes = total;
-        images.objects.extend(id);
+        images.objects.insert(key);
         true
     }
 }

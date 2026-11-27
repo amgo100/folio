@@ -448,7 +448,8 @@ fn decode_context<'a>(
     // Folio: an image is decoded only if it fits, with the other images
     // decoded before it, in `hayro_syntax::MAX_IMAGE_BYTES`, at four bytes a
     // pixel or more (RGBA as it is drawn, or more components and bits). An
-    // image object counts once, however often it is drawn.
+    // image counts once, however often it is drawn: an image object by its
+    // id, an inline image by its dictionary and data.
     let bytes_per_pixel = (u64::from(decode_params.num_components.unwrap_or(4))
         * u64::from(dict_bpc.unwrap_or(8)))
     .div_ceil(8)
@@ -456,12 +457,12 @@ fn decode_context<'a>(
     let bytes = u64::from(obj.width)
         .saturating_mul(u64::from(obj.height))
         .saturating_mul(bytes_per_pixel);
-    let id = obj
-        .stream
-        .dict()
-        .obj_id()
-        .map(|id| (id.obj_number, id.gen_number));
-    if !obj.cache.1.take_image_bytes(id, bytes, &obj.warning_sink) {
+    let dict = obj.stream.dict();
+    let key = match dict.obj_id() {
+        Some(id) => crate::util::hash128(&(id.obj_number, id.gen_number)),
+        None => crate::util::hash128(&(dict.data(), obj.stream.raw_data().as_ref())),
+    };
+    if !obj.cache.1.take_image_bytes(key, bytes, &obj.warning_sink) {
         return None;
     }
 
@@ -479,6 +480,24 @@ fn decode_context<'a>(
             })
         })
         .ok()?;
+
+    // Folio: an image whose data (JPEG 2000, JBIG2) or decode parameters
+    // (CCITT) gave it more pixels than its dictionary says takes the rest
+    // from the budget too, so that many such images cannot pass together.
+    if let Some(data) = &decoded.image_data {
+        let actual = u64::from(data.width)
+            .saturating_mul(u64::from(data.height))
+            .saturating_mul(4);
+        if actual > bytes
+            && !obj.cache.1.take_image_bytes(
+                crate::util::hash128(&(key, "decoded")),
+                actual - bytes,
+                &obj.warning_sink,
+            )
+        {
+            return None;
+        }
+    }
 
     let (mut scale_x, mut scale_y) = (1.0, 1.0);
 

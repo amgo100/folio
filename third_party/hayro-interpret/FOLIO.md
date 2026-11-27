@@ -41,9 +41,10 @@ warning sink, so that Folio can refuse the figure:
   interpretation shares, carries a `Budget`: the work done (an operator
   is one unit, a form XObject, pattern, soft mask or Type 3 glyph 100) up
   to `MAX_WORK` (10,000,000), the bytes of the images decoded up to
-  `hayro_syntax::MAX_IMAGE_BYTES` (an image object counts once, however
-  often it is drawn; one refused takes nothing; every decoding also
-  spends a unit of work a kilobyte).
+  `hayro_syntax::MAX_IMAGE_BYTES` (an image counts once, however often it
+  is drawn: an image object by its id, an inline image by its dictionary
+  and data; one refused takes nothing; every decoding also spends a unit
+  of work a kilobyte).
 - `src/interpret/mod.rs`: three new warnings, `FormCycle`, `TooComplex`
   and `ImageTooLarge`; `interpret` spends a unit of work for each
   operator and stops when the work is used up.
@@ -55,7 +56,8 @@ warning sink, so that Folio can refuse the figure:
   decoded, its size at four bytes a pixel or more (its components and bits
   per component) is taken from what is left of `MAX_IMAGE_BYTES`, and an
   image that does not fit is not drawn (`ImageTooLarge`, also sent when
-  `hayro-syntax` refuses an image by its own header).
+  `hayro-syntax` refuses an image by its own header); an image whose data
+  gives it more pixels than its dictionary takes the rest after decoding.
 
 The whole change is `third_party/patches/hayro-interpret.patch` in Folio's repository;
 `scripts/patch-third-party.sh` rebuilds this directory from the release and

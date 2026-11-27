@@ -107,13 +107,30 @@ pub fn read_image(bytes: Arc<[u8]>) -> Result<LoadedImage, EcoString> {
             let Some(page) = pdf.pages().first() else {
                 return Err(broken(&"it has no pages"));
             };
-            pdf_page_fits(page).map_err(|e| broken(&e))?;
             let (width, height) = page.render_dimensions();
-            (f64::from(width), f64::from(height))
+            let (width, height) = (f64::from(width), f64::from(height));
+            // The size is checked first, as reading the page takes longer.
+            natural_size_fits(format, width, height)?;
+            pdf_page_fits(page).map_err(|e| broken(&e))?;
+            (width, height)
         }
     };
+    natural_size_fits(format, width, height)?;
+    Ok(LoadedImage {
+        image: Image::new(bytes, format),
+        size: Size::new(Abs::pt(width), Abs::pt(height)),
+        text,
+    })
+}
+
+/// Checks an image's natural size, in points: positive, finite and at most
+/// [`MAX_SIDE`] on each side.
+fn natural_size_fits(format: ImageFormat, width: f64, height: f64) -> Result<(), EcoString> {
     if !(width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite()) {
-        return Err(broken(&"it has no size"));
+        return Err(eco_format!(
+            "this {} file cannot be read: it has no size",
+            format.name()
+        ));
     }
     if width > MAX_SIDE || height > MAX_SIDE {
         return Err(eco_format!(
@@ -121,11 +138,7 @@ pub fn read_image(bytes: Arc<[u8]>) -> Result<LoadedImage, EcoString> {
             format.name()
         ));
     }
-    Ok(LoadedImage {
-        image: Image::new(bytes, format),
-        size: Size::new(Abs::pt(width), Abs::pt(height)),
-        text,
-    })
+    Ok(())
 }
 
 /// How every stage parses SVG: without fonts, so that output does not
@@ -318,11 +331,13 @@ fn pdf_page_fits(page: &hayro_syntax::page::Page<'_>) -> Result<(), String> {
             _ => {}
         }
     }
-    // The writers parse the page converted as an SVG drawing: one they
-    // could not parse is reported here too.
-    usvg::Tree::from_data(svg.as_bytes(), &svg_options())
+    // The writers parse the page converted as an SVG drawing, which holds a
+    // copy of an image for each time it is drawn: the drawing is checked as
+    // an SVG file is, so that one the writers could not parse, or whose
+    // copies take too much to draw, is reported here too.
+    let tree = usvg::Tree::from_data(svg.as_bytes(), &svg_options())
         .map_err(|e| format!("its page converts to a drawing that cannot be read: {e}"))?;
-    Ok(())
+    svg_rasters_fit(&tree)
 }
 
 /// Whether an SVG drawing has a `text` element, which is not drawn.
