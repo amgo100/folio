@@ -223,7 +223,11 @@ fn prefixed_unit_names() {
     );
     // A literal that cannot be read says why, in text as in an equation.
     assert_eq!(
-        errors("#qty(1e10000, \"m\") $qty(1e10000, \"m\")$"),
+        errors(
+            "#let len(..a) = qty(..a, \"m\")\n\
+             #qty(1e10000, \"m\") $qty(1e10000, \"m\")$ $len(#1e10000)$ \
+             #qty(2.0, \"m\", pm: -0.10, pm@markscheme: 0.2)"
+        ),
         [
             error(
                 "a power of ten can be at most 9999 in either direction",
@@ -233,6 +237,11 @@ fn prefixed_unit_names() {
                 "a power of ten can be at most 9999 in either direction",
                 "1e10000"
             ),
+            error(
+                "a power of ten can be at most 9999 in either direction",
+                "1e10000"
+            ),
+            error("an uncertainty cannot be negative", "pm: -0.10"),
         ]
     );
 }

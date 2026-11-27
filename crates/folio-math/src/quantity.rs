@@ -761,6 +761,16 @@ fn expand(symbol: &str) -> Option<EcoString> {
             return Some(out);
         }
     }
+    // The Greek small letter mu (U+03BC), which many keyboards type, is
+    // the micro sign (U+00B5) before any symbol, so that a document has one
+    // micro: `μF` is `µF`.
+    if let Some(rest) = symbol.strip_prefix('\u{3bc}')
+        && !rest.is_empty()
+    {
+        let mut out = EcoString::from("µ");
+        out.push_str(&expand(rest)?);
+        return Some(out);
+    }
     if let Some(rest) = symbol.strip_prefix("micro")
         && !rest.is_empty()
         // A name that takes no prefix takes no `micro` either
@@ -966,6 +976,7 @@ mod tests {
         assert_eq!(unit("microohm"), "µΩ");
         assert_eq!(unit("µohm"), "µΩ");
         assert_eq!(unit("\u{3bc}ohm"), "µΩ");
+        assert_eq!(unit("\u{3bc}F \u{3bc}m"), "µF µm");
         assert_eq!(unit("daohm"), "daΩ");
         assert_eq!(unit("kohm m"), "kΩ m");
         assert_eq!(unit("V kohm^-1"), "V kΩ^-1");

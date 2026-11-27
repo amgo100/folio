@@ -162,7 +162,7 @@ fn quantity_func(vm: &mut Vm<'_>, args: &mut Args, value: bool, unit: bool) -> E
             args.items()
                 .iter()
                 .rev()
-                .find(|arg| arg.name.as_deref() == Some(name))
+                .find(|arg| arg.name.as_deref() == Some(name) && arg.scope.is_none())
                 .map_or(span, |arg| arg.span)
         };
         let pm_at = at(args, "pm");
