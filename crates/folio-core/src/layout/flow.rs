@@ -949,10 +949,7 @@ impl Builder<'_> {
             _ => None,
         });
         let mark = match (mark, first) {
-            (Some(mark), Some(slot)) if mark.slot != slot => Some(Arc::new(ParagraphInfo {
-                slot,
-                ..(*mark).clone()
-            })),
+            (Some(mark), Some(slot)) if mark.slot != slot => Some(self.reslot(&mark, slot)),
             (mark, _) => mark,
         };
         Arc::new(Note {
@@ -1026,6 +1023,31 @@ impl Builder<'_> {
         if let Some(info) = self.paragraph_info(index) {
             self.leaf(Leaf::Paragraph(info), Origin::Paragraph(index));
         }
+    }
+
+    /// A paragraph broken again into lines in another slot.
+    fn reslot(&self, info: &ParagraphInfo, slot: LineSlot) -> Arc<ParagraphInfo> {
+        let input = ParagraphInput {
+            shaped: &info.shaped,
+            style: info.style,
+            segments: info.metrics.clone(),
+            objects: object_metrics(&info.objects),
+        };
+        let layout = self.cache.layout(
+            &input,
+            &[LineSlot {
+                offset: Abs::zero(),
+                width: slot.width,
+            }],
+            None,
+        );
+        let segments = paints(self.cache, &info.shaped, &layout, &info.segments);
+        Arc::new(ParagraphInfo {
+            layout,
+            slot,
+            segments,
+            ..info.clone()
+        })
     }
 
     /// Paragraph `index` of the text broken into lines, or `None` when it

@@ -242,7 +242,7 @@ impl<'a> NoteSet<'a> {
                 out.ok &= carried;
                 continue;
             }
-            let gap = last.map_or(Abs::zero(), |prev| self.gap(prev, i));
+            let gap = last.map_or(Abs::zero(), |prev| self.gap(prev, out.leaves[prev], i));
             let n = run.heights.len();
             let fits = |h: Abs| (used + gap + h).to_pt() <= avail.to_pt() + EPSILON;
             if n == 0 {
@@ -287,15 +287,18 @@ impl<'a> NoteSet<'a> {
         out
     }
 
-    /// The space between note `prev` and note `next` of the set, both on
-    /// the page, `prev` whole: the gap computed against the note before
-    /// `next` when that is `prev`, else the two notes' boundaries joined.
-    pub(super) fn gap(&self, prev: usize, next: usize) -> Abs {
-        if prev + 1 == next {
+    /// The space between note `prev`, of which the page places `placed`
+    /// leaves, and note `next`, both on the page: the gap computed against
+    /// the note before `next` when that is `prev` and whole, else the
+    /// boundary after `prev`'s last leaf placed joined with `next`'s first.
+    pub(super) fn gap(&self, prev: usize, placed: usize, next: usize) -> Abs {
+        let before = &self.runs[prev];
+        let whole = placed == before.heights.len();
+        if prev + 1 == next && whole {
             return self.runs[next].gap;
         }
         match self.runs[next].run.leaves.first() {
-            Some(first) => between(&self.runs[prev].note.flow.end, &first.before),
+            Some(first) => between(before.run.boundary(placed), &first.before),
             None => Abs::zero(),
         }
     }

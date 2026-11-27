@@ -338,6 +338,15 @@ impl Resolution {
     /// the one before, so before any page is known they keep their
     /// numbers in document order.
     fn number_footnotes(&mut self, numbers: &PageNumbers) {
+        // The references to each footnote, found once.
+        let mut refs: HashMap<Location, Vec<usize>> = HashMap::new();
+        for (i, r) in self.references.iter().enumerate() {
+            if r.page.is_none()
+                && let Some(target) = r.target
+            {
+                refs.entry(target.location).or_default().push(i);
+            }
+        }
         let mut previous: Option<(Option<u32>, u64)> = None;
         for i in 0..self.footnotes.len() {
             let footnote = &self.footnotes[i];
@@ -361,12 +370,15 @@ impl Resolution {
                 let (old, new) = (shown(&entry.values), shown(&[value]));
                 entry.values = EcoVec::from([value]);
                 entry.number = number.clone();
-                if old != new {
-                    for r in self.references.make_mut() {
-                        if r.page.is_none()
-                            && r.target == Some(target)
-                            && let Some(prefix) = r.text.strip_suffix(old.as_str())
-                        {
+                // A footnote has no reference word, so its references
+                // end with the number.
+                if old != new
+                    && let Some(indices) = refs.get(&footnote.location)
+                {
+                    let references = self.references.make_mut();
+                    for &r in indices {
+                        let r = &mut references[r];
+                        if let Some(prefix) = r.text.strip_suffix(old.as_str()) {
                             r.text = eco_format!("{prefix}{new}");
                         }
                     }

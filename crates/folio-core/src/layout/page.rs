@@ -1274,7 +1274,7 @@ fn assemble(run: &Run<'_>, notes: &NoteSet<'_>, found: &Break, first: bool) -> F
             continue;
         }
         if let Some(prev) = last {
-            y += notes.gap(prev, i);
+            y += notes.gap(prev, placed.leaves[prev], i);
         }
         last = Some(i);
         let mut asm = new_asm();

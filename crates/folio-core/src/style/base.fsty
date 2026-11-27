@@ -48,8 +48,8 @@ footnote {
   numbering: "1"; font-size: 0.7em; baseline-shift: 0.35em; font-weight: normal;
   font-style: normal; space-before: 0.4em;
 }
-footnote > paragraph, footnote > list, footnote > enum, footnote > terms, footnote > heading,
-footnote > math, footnote > raw, footnote > figure {
+footnote > paragraph, footnote > section, footnote > list, footnote > enum, footnote > terms,
+footnote > figure {
   font-size: 1.143em; baseline-shift: 0pt;
 }
 footnote paragraph { leading: 0.65em; space-before: 0pt; space-after: 0pt; }

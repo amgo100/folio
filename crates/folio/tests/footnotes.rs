@@ -595,3 +595,22 @@ fn a_footnote_inside_a_footnote_has_no_structure() {
     let bytes = String::from_utf8_lossy(&pdf);
     assert_eq!(bytes.matches("/S/Note").count(), 1);
 }
+
+#[test]
+fn a_note_with_a_heading_is_set_at_the_note_size() {
+    let size_of = |source: &str, needle: &str| {
+        let world = world("", source);
+        let pages = pages(&world);
+        fn find(f: &Fragment, needle: &str) -> Option<f64> {
+            f.items.iter().find_map(|(_, item)| match item {
+                FragmentItem::Group(g) => find(g, needle),
+                FragmentItem::Text(run) if run.text.contains(needle) => Some(run.size.to_pt()),
+                _ => None,
+            })
+        }
+        find(&pages.pages[0].fragment, needle).expect("the text is drawn")
+    };
+    let plain = size_of("Text.#footnote[Some text.] Done.\n", "Some text");
+    let sectioned = size_of("Text.#footnote[= Aside\n\nSome text.] Done.\n", "Some text");
+    assert!((plain - sectioned).abs() < 1e-6, "{plain} vs {sectioned}");
+}
