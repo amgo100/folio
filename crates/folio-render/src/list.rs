@@ -53,7 +53,9 @@ pub struct Span {
     pub source: SourceRef,
     /// Which instance of the element made from `source`: a key only
     /// the core interprets, `0` for a detached item. A shape names its own
-    /// node with the instance of the box that holds it.
+    /// node with the instance of the box that holds it, which is a location
+    /// only where the box is its node's: a rule of a formula names the
+    /// formula's sub-node and the instance it is drawn for.
     pub instance: u64,
 }
 

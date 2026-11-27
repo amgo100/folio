@@ -373,14 +373,13 @@ Section
     assert_eq!(headings, [(1, "Forces".into(), 0)]);
 }
 
-/// The blocks that the iterations of a loop make share a source and
-/// differ in instance: a block at the top of a page that is another
-/// instance than the block before it is a block of its own, with its own
-/// structure element and bookmark, not a continuation (#251).
 /// A component's container made in a loop (#257): the core gives the
 /// component the location of the instance it lays out, and its boxes name
 /// it (`Fragment::with_location`), so the box of the next instance at the
-/// top of a page is not taken for the last one continuing.
+/// top of a page is not taken for the last one continuing. No container
+/// runs here, since none is registered yet: the boxes are those a
+/// container returns, which no longer can name a source without an
+/// instance.
 #[test]
 fn loop_made_component_boxes_at_the_top_of_a_page_are_new() {
     let at = |tag: Tag, instance: u64| Tag { instance, ..tag };
@@ -417,6 +416,10 @@ Div
     );
 }
 
+/// The blocks that the iterations of a loop make share a source and
+/// differ in instance: a block at the top of a page that is another
+/// instance than the block before it is a block of its own, with its own
+/// structure element and bookmark, not a continuation (#251).
 #[test]
 fn loop_made_blocks_at_the_top_of_a_page_are_new() {
     let at = |tag: Tag, instance: u64| Tag { instance, ..tag };

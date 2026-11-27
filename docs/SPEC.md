@@ -251,6 +251,11 @@ trait LayoutContainer {
               resume: Option<&ContainerState>, cx: &mut LayoutCx) -> ContainerResult;
 }
 
+struct ChildFlow {
+    location: Location,       // the element instance the container lays out (§2.3)
+    /* the child blocks, which the container lays out through `LayoutCx` */
+}
+
 enum ContainerResult {
     Done(Fragment),
     Break { fragment: Fragment, resume: ContainerState },  // continue in the next region

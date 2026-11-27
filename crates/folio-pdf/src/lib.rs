@@ -1013,7 +1013,7 @@ impl<'a> Links<'a> {
 
 /// Where each named destination of a document is: the top left corner of
 /// the first group or object of its element instance that the pages draw,
-/// or else of the first glyph run of its source.
+/// or else of the first glyph that names the instance.
 fn places(document: &Document<'_>) -> HashMap<EcoString, XyzDestination> {
     let destinations = &document.navigation.destinations;
     let mut places = HashMap::new();

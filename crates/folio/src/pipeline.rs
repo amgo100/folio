@@ -24,7 +24,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{FontId, QualifiedName, SourceRef, Target};
+use folio_component::{FontId, Location, QualifiedName, SourceRef, Target};
 use folio_core::db::{Build, Bytes, Db, build_files, build_output, source_file};
 use folio_core::diag::{self, Diagnostic};
 use folio_core::eval::Value;
@@ -35,7 +35,7 @@ use folio_core::pipeline::resolution;
 use folio_core::pipeline::step_styled;
 use folio_core::project::ProjectPath;
 use folio_core::resolve::Resolution;
-use folio_core::span_map::span;
+use folio_core::span_map::{source_ref, span};
 use folio_core::text::{Text, TextBlock, TextFlow, text};
 use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Tag};
 use folio_syntax::{DiagSpan, LinkedNode, Span, SubRange};
@@ -324,6 +324,16 @@ pub(crate) fn structure(
     structure_of(block, text, alt, false)
 }
 
+/// The location a structure node of the element at `span`, instance
+/// `location`, names: the node of its span, so that an element without a
+/// location still names its own node rather than none.
+fn located(span: Span, location: Location) -> Location {
+    Location {
+        source: source_ref(span),
+        instance: location.instance,
+    }
+}
+
 /// The structure of a block, as [`structure`] gives it; `in_note` for the
 /// blocks of a footnote, whose own footnotes are not placed, so they have
 /// no node (SPEC §7.8).
@@ -334,7 +344,8 @@ fn structure_of(
     in_note: bool,
 ) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
-    let mut tag = Tag::new(role, block.location);
+    // The node of its span, as its boxes name it, with its instance.
+    let mut tag = Tag::new(role, located(block.span, block.location));
     match role {
         Role::Heading => tag.text = block_text(block, text),
         Role::Formula => tag.text = formula_alt(text, block.span, alt),
@@ -357,7 +368,7 @@ fn structure_of(
                     } else {
                         return None;
                     };
-                    let mut child = Tag::new(role, object.location);
+                    let mut child = Tag::new(role, located(object.span, object.location));
                     child.text = description;
                     Some((object.at, child))
                 });
