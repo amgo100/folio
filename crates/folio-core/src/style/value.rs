@@ -656,12 +656,14 @@ impl<'a> Values<'a> {
                     name: None,
                     scope: None,
                     value: self.operand(expr)?,
+                    spelling: None,
                 }),
                 ast::Arg::Named(named) => items.push(Arg {
                     span: named.span(),
                     name: Some(named.name().get().clone()),
                     scope: None,
                     value: self.operand(named.expr())?,
+                    spelling: None,
                 }),
                 ast::Arg::Spread(spread) => {
                     return bail(spread.span(), "a stylesheet value cannot spread");

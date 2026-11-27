@@ -488,6 +488,7 @@ impl Vm<'_> {
                 name,
                 scope: None,
                 value,
+                spelling: None,
             });
         }
         Ok(Args::new(args.span(), items.into_iter().collect()))
