@@ -162,9 +162,7 @@ impl Locator {
     /// origin: as it is for the root origin, and mixed with the origin's
     /// key under [`Self::KEYED`] for any other. Elements without a span
     /// are counted from `1`, so that none of them is
-    /// [`Location::DETACHED`]; no instance is
-    /// [`Location::UNKNOWN_INSTANCE`], whose bits below [`Self::KEYED`]
-    /// are all set.
+    /// [`Location::DETACHED`].
     pub(crate) fn locate(&mut self, span: Span, made: Made, origin: Origin) -> Location {
         let first = u64::from(span.is_detached());
         let count = self
@@ -313,7 +311,6 @@ mod tests {
         assert_eq!(root.instance, 0);
         for location in [a, b] {
             assert_ne!(location.instance & Locator::KEYED, 0);
-            assert_ne!(location.instance, Location::UNKNOWN_INSTANCE);
         }
         // A second instance of one origin is told apart by its number.
         let again = one.locate(span, Made::Evaluated, x);

@@ -62,10 +62,19 @@ fn run_with(text: &str, source: u64, shows: impl Fn(Range<u32>) -> Range<u32>) -
     })
 }
 
-/// A box of node `source` holding `items`, stacked downwards.
+/// The first instance of node `source`.
+fn at(source: u64) -> Location {
+    Location {
+        source: SourceRef(source),
+        instance: 0,
+    }
+}
+
+/// A box of the first instance of node `source` holding `items`, stacked
+/// downwards.
 fn boxed(source: u64, items: Vec<FragmentItem>) -> FragmentItem {
     let mut fragment =
-        Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(100.0))).with_source(SourceRef(source));
+        Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(100.0))).with_location(at(source));
     for (i, item) in items.into_iter().enumerate() {
         fragment.push(
             Point::new(Abs::zero(), Abs::pt(12.0 * i as f64 + 10.0)),
@@ -90,8 +99,7 @@ fn located(source: u64, instance: u64, items: Vec<FragmentItem>) -> FragmentItem
 /// A page whose body region, a box of the root as the page builder dresses
 /// it, holds `items`.
 fn page(items: Vec<FragmentItem>) -> Fragment {
-    let mut page =
-        Fragment::new(Size::new(Abs::pt(400.0), Abs::pt(600.0))).with_source(SourceRef(1));
+    let mut page = Fragment::new(Size::new(Abs::pt(400.0), Abs::pt(600.0))).with_location(at(1));
     let FragmentItem::Group(body) = boxed(1, items) else {
         unreachable!()
     };
@@ -105,14 +113,14 @@ fn page(items: Vec<FragmentItem>) -> Fragment {
 fn tag(role: Role, source: u64, children: Vec<Tag>) -> Tag {
     Tag {
         children,
-        ..Tag::new(role, SourceRef(source))
+        ..Tag::new(role, at(source))
     }
 }
 
 fn heading(source: u64, text: &str) -> Tag {
     Tag {
         text: Some(text.into()),
-        ..Tag::new(Role::Heading, SourceRef(source))
+        ..Tag::new(Role::Heading, at(source))
     }
 }
 
@@ -369,6 +377,46 @@ Section
 /// differ in instance: a block at the top of a page that is another
 /// instance than the block before it is a block of its own, with its own
 /// structure element and bookmark, not a continuation (#251).
+/// A component's container made in a loop (#257): the core gives the
+/// component the location of the instance it lays out, and its boxes name
+/// it (`Fragment::with_location`), so the box of the next instance at the
+/// top of a page is not taken for the last one continuing.
+#[test]
+fn loop_made_component_boxes_at_the_top_of_a_page_are_new() {
+    let at = |tag: Tag, instance: u64| Tag { instance, ..tag };
+    let container = |instance: u64| {
+        at(
+            tag(
+                Role::Group,
+                5,
+                vec![at(tag(Role::Paragraph, 6, vec![]), instance)],
+            ),
+            instance,
+        )
+    };
+    let structure = tag(Role::Document, 1, vec![container(1), container(2)]);
+    // What a component returns for each instance: a box with the
+    // instance's location, holding the paragraphs the core laid out.
+    let column = |instance: u64, text: &str| {
+        located(5, instance, vec![located(6, instance, vec![run(text, 16)])])
+    };
+    let first = page(vec![boxed(1, vec![column(1, "Ends the page.")])]);
+    let second = page(vec![boxed(1, vec![column(2, "Starts the next.")])]);
+    let pages = [first, second];
+    let (tree, _) = tagged(&document(&pages, &structure));
+    assert_eq!(
+        tree,
+        "\
+Div
+  P
+    ·
+Div
+  P
+    ·
+"
+    );
+}
+
 #[test]
 fn loop_made_blocks_at_the_top_of_a_page_are_new() {
     let at = |tag: Tag, instance: u64| Tag { instance, ..tag };
@@ -787,7 +835,7 @@ fn navigation(links: Vec<Option<&str>>) -> Navigation {
             name: "sec:forces".into(),
             location: Location {
                 source: SourceRef(2),
-                instance: Location::UNKNOWN_INSTANCE,
+                instance: 0,
             },
         }],
         links: links
@@ -1218,7 +1266,7 @@ fn links_in_footnotes_keep_their_destinations() {
     )])];
     let at = Location {
         source: SourceRef(2),
-        instance: Location::UNKNOWN_INSTANCE,
+        instance: 0,
     };
     let navigation = Navigation {
         destinations: ["a", "b", "c"]
@@ -1353,7 +1401,7 @@ fn a_note_after_a_formula_on_its_anchors_line_is_found_and_written_last() {
 fn two_links(texts: [&str; 2]) -> Navigation {
     let at = Location {
         source: SourceRef(2),
-        instance: Location::UNKNOWN_INSTANCE,
+        instance: 0,
     };
     Navigation {
         destinations: ["a", "b"]
@@ -1385,8 +1433,7 @@ fn a_shared_box_drawn_twice_gives_each_drawing_its_own_link() {
     let FragmentItem::Group(shared) = boxed(2, vec![run("see", 30)]) else {
         unreachable!()
     };
-    let mut body =
-        Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(100.0))).with_source(SourceRef(1));
+    let mut body = Fragment::new(Size::new(Abs::pt(300.0), Abs::pt(100.0))).with_location(at(1));
     body.push(
         Point::new(Abs::zero(), Abs::pt(10.0)),
         FragmentItem::Group(shared.clone()),

@@ -35,7 +35,7 @@ use folio_core::pipeline::resolution;
 use folio_core::pipeline::step_styled;
 use folio_core::project::ProjectPath;
 use folio_core::resolve::Resolution;
-use folio_core::span_map::{source_ref, span};
+use folio_core::span_map::span;
 use folio_core::text::{Text, TextBlock, TextFlow, text};
 use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Tag};
 use folio_syntax::{DiagSpan, LinkedNode, Span, SubRange};
@@ -334,8 +334,7 @@ fn structure_of(
     in_note: bool,
 ) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
-    let mut tag = Tag::new(role, source_ref(block.span));
-    tag.instance = block.location.instance;
+    let mut tag = Tag::new(role, block.location);
     match role {
         Role::Heading => tag.text = block_text(block, text),
         Role::Formula => tag.text = formula_alt(text, block.span, alt),
@@ -358,8 +357,7 @@ fn structure_of(
                     } else {
                         return None;
                     };
-                    let mut child = Tag::new(role, source_ref(object.span));
-                    child.instance = object.location.instance;
+                    let mut child = Tag::new(role, object.location);
                     child.text = description;
                     Some((object.at, child))
                 });
