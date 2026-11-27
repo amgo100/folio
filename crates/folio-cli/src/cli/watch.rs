@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use clap::Args;
 use folio::diag::TextFiles;
-use folio::{Date, Diagnostic, Manifest, World};
+use folio::{Date, Diagnostic, FileRead, Manifest, World};
 use folio_preview::{Event, Options, Outputs, Preview};
 use semver::Version;
 
@@ -221,11 +221,18 @@ fn updated(event: &Event, shown: &Mutex<Option<Shown>>, color: bool) {
 /// Writes the outputs of a quiet revision, as `folio build` does: only
 /// those of builds without errors.
 fn write_outputs(root: &Path, outputs: &Outputs, color: bool) {
+    // No output replaces a file that any of the builds reads.
+    let read: Vec<FileRead> = outputs
+        .outputs
+        .iter()
+        .filter_map(|(output, _)| output.result.as_ref().ok())
+        .flat_map(|compiled| compiled.files.iter().cloned())
+        .collect();
     for (output, path) in &outputs.outputs {
         let Ok(compiled) = &output.result else {
             continue;
         };
-        match write(root, path.as_deref(), compiled) {
+        match write(root, path.as_deref(), compiled, &read) {
             Ok(Written::File(path)) => eprintln!("wrote {path}"),
             Ok(Written::Nothing | Written::Skipped(_)) => {}
             Err(message) => print(&*outputs.files, &[error(message)], color),
