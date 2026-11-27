@@ -27,10 +27,10 @@ use crate::project::ProjectPath;
 /// How much stack must be left before an expression is evaluated: enough
 /// for the frames between two expressions, a call through its query
 /// included, in a debug build.
-const STACK_RED_ZONE: usize = 256 * 1024;
+pub(super) const STACK_RED_ZONE: usize = 256 * 1024;
 
 /// The size of a new stack segment.
-const STACK_SEGMENT: usize = 4 * 1024 * 1024;
+pub(super) const STACK_SEGMENT: usize = 4 * 1024 * 1024;
 
 /// A function of the standard library. It takes its arguments from `args`;
 /// the caller reports the ones it leaves.
@@ -92,6 +92,9 @@ pub(crate) struct Vm<'a> {
     /// bound. Reading one fails without another error, since the failure
     /// was reported where it happened.
     poisoned: BTreeSet<EcoString>,
+    /// How many rows of an equation enclose the math expression being
+    /// evaluated, which may be at most [`MAX_NESTING`].
+    pub(super) math_depth: u32,
 }
 
 /// What an error marker shows (SPEC §12.2).
@@ -170,6 +173,7 @@ impl<'a> Vm<'a> {
             recover: false,
             recovered: IndexSet::new(),
             poisoned: BTreeSet::new(),
+            math_depth: 0,
         }
     }
 
@@ -645,10 +649,13 @@ impl<'a> Vm<'a> {
 
     /// Runs `f`, which recurses into a nested expression, on a new stack
     /// segment if the stack is running low. Calls nest at most
-    /// [`Limits::depth`] deep and expressions at most as deep as the parser
-    /// allows, but deep expressions in deep calls would exhaust a thread's
-    /// stack.
-    fn nest<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+    /// [`Limits::depth`] deep, but the parser does not bound how deeply
+    /// expressions nest: a chain of a left-associative operator, such as
+    /// `1+1+…` in code or `1/1/…` in math, wraps without nesting the
+    /// parser's own calls, so it nests as deeply as it is long. Every
+    /// recursion into an expression therefore goes through here, and math
+    /// also stops at [`MAX_NESTING`].
+    pub(super) fn nest<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         stacker::maybe_grow(STACK_RED_ZONE, STACK_SEGMENT, || f(self))
     }
 

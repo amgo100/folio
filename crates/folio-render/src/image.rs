@@ -43,7 +43,11 @@ pub(crate) fn decode(image: &Image) -> Option<Decoded> {
 
 /// The most pixels an image is decoded with, as the core reads images
 /// (`folio_core::image::MAX_PIXELS`): a larger one is not drawn, as
-/// decoding it could take more memory than the machine has.
+/// decoding it could take more memory than the machine has. Every pixel is
+/// decoded to RGBA, four bytes. The rasters in SVG and PDF figures are
+/// limited by the core, which refuses a figure whose rasters take more
+/// than `folio_core::image::MAX_IMAGE_BYTES`, and by the PDF reader, which
+/// decodes no more than that for one page.
 const MAX_PIXELS: u64 = 8_192 * 8_192;
 
 /// Whether an image of a size may be decoded.
@@ -313,7 +317,8 @@ fn svg_options() -> usvg::Options<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64, gif_rgba};
+    use super::{base64, decode, gif_rgba};
+    use folio_component::{Image, ImageFormat};
 
     /// A GIF whose screen is 65535 × 65535 is not decoded, rather than
     /// sizing an allocation of 17 GB.
@@ -323,6 +328,16 @@ mod tests {
         gif.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00]);
         gif.extend_from_slice(b",\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0;");
         assert!(gif_rgba(&gif).is_none());
+    }
+
+    /// A PDF figure whose form XObject draws itself, twice, is drawn
+    /// without it, in bounded time (#333): the PDF reader does not draw a
+    /// form inside itself.
+    #[test]
+    fn a_form_that_draws_itself_ends() {
+        let bytes = include_bytes!("../../folio-core/tests/untrusted/form-cycle.pdf");
+        let image = Image::new(bytes.as_slice().into(), ImageFormat::Pdf);
+        assert!(decode(&image).is_some());
     }
 
     #[test]

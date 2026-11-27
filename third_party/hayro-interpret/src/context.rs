@@ -59,6 +59,8 @@ pub struct Context<'a> {
     pub(crate) xref: &'a XRef,
     pub(crate) ocg_state: OcgState,
     nesting_depth: u32,
+    // Folio: the form XObjects this context is drawing, innermost last.
+    pub(crate) forms: Vec<(i32, i32)>,
 }
 
 impl<'a> Context<'a> {
@@ -84,6 +86,14 @@ impl<'a> Context<'a> {
         state: State<'a>,
         nesting_depth: u32,
     ) -> Self {
+        // Folio: a nested context (a pattern, soft mask or glyph) costs
+        // work; once it is used up, `interpret` draws nothing in it.
+        if nesting_depth > 0 {
+            cache
+                .object_cache
+                .1
+                .spend(crate::cache::NESTED_COST, &settings.warning_sink);
+        }
         let ocg_state = {
             let root_ref = xref.root_id();
             xref.get::<Dict<'_>>(root_ref)
@@ -104,6 +114,7 @@ impl<'a> Context<'a> {
             interpreter_cache: cache.clone(),
             ocg_state,
             nesting_depth,
+            forms: Vec::new(),
         }
     }
 
@@ -291,6 +302,16 @@ impl<'a> Context<'a> {
         if self.nesting_depth >= MAX_NESTED_INTERPRETATION_DEPTH {
             warn!("interpreter nesting depth exceeded");
 
+            return false;
+        }
+
+        // Folio: a form XObject costs work too.
+        if !self
+            .interpreter_cache
+            .object_cache
+            .1
+            .spend(crate::cache::NESTED_COST, &self.settings.warning_sink)
+        {
             return false;
         }
 

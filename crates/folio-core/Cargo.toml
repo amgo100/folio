@@ -16,6 +16,7 @@ folio-math.workspace = true
 ecow.workspace = true
 gif.workspace = true
 hayro-syntax.workspace = true
+hayro-svg.workspace = true
 image-webp.workspace = true
 imagesize.workspace = true
 indexmap.workspace = true

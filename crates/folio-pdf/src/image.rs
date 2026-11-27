@@ -140,3 +140,19 @@ fn svg_options() -> usvg::Options<'static> {
         ..usvg::Options::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A PDF figure whose form XObject draws itself, twice, is converted
+    /// without it, in bounded time (#333): the PDF reader does not draw a
+    /// form inside itself.
+    #[test]
+    fn a_form_that_draws_itself_ends() {
+        let bytes = include_bytes!("../../folio-core/tests/untrusted/form-cycle.pdf");
+        let image = Image::new(bytes.as_slice().into(), ImageFormat::Pdf);
+        let (drawable, _) = prepare(&image, false).unwrap();
+        assert!(matches!(drawable, Drawable::Svg(_)));
+    }
+}

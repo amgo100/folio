@@ -15,8 +15,13 @@
 //!   of that element's instances and takes their values before its own
 //!   (`[2, 1]` for the first figure after the second chapter), and
 //!   `counter-reset` restarts the counters it names at each element it
-//!   applies to. The items of an `enum` are counted within it, from 1 or
-//!   from the `number` an item gives.
+//!   applies to. A counter `scoped` to elements opens a new level inside
+//!   each of their instances and gets its value back on leaving it, so
+//!   `exam.part` scoped to `exam.question` and `exam.part` numbers parts
+//!   *(a)*, *(i)*, *(ii)*, *(b)*. The items of an `enum` are counted within
+//!   it in the same way, from 1 or from the `number` an item gives.
+//!   `counter-reset` names a component's counter qualified or not; an
+//!   unqualified name resolves through the lockfile's bindings.
 //! - **Numbers**: the values formatted by the element's `numbering` pattern
 //!   ([`Pattern`]), or none where it is `none`. A display equation is
 //!   numbered once, or, when lines of it have labels, on each labelled
@@ -64,7 +69,8 @@ use std::hash::{Hash, Hasher};
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{
-    CounterDecl, ElementKind, Location, Name, QualifiedName, Value as StyleValue, Within,
+    CounterDecl, ElementKind, Location, Name, QualifiedName, Registered, Value as StyleValue,
+    Within,
 };
 use folio_syntax::Span;
 use folio_text::Lang;
@@ -72,6 +78,7 @@ use folio_text::Lang;
 pub use self::numbering::Pattern;
 pub use self::page_refs::PageNumbers;
 
+use crate::component::Reason;
 use crate::db::{Build, Db, component_host};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Element, Value};
@@ -430,10 +437,12 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
         ids: Ids::new(props),
         default_lang,
         within: within_decls(db, build),
+        scopes: scope_decls(db, build),
         counters: HashMap::new(),
         lists: Vec::new(),
         seen: HashSet::new(),
         schemas: HashMap::new(),
+        counter_keys: HashMap::new(),
         reported: HashSet::new(),
         out: Resolution::default(),
         refs: Vec::new(),
@@ -543,12 +552,21 @@ struct Counter {
     prefix: EcoVec<u64>,
     /// Its own values: one, or one per level for headings.
     values: Vec<u64>,
+    /// How many times it was restarted `within` an element, so that a
+    /// scope that closes after a restart inside it keeps the restart.
+    restarts: u64,
 }
 
 /// A counter declared `within` an element, and its name.
 struct WithinDecl {
     counter: EcoString,
     within: Within,
+}
+
+/// A counter scoped to an element, and its name.
+struct ScopeDecl {
+    counter: EcoString,
+    scope: QualifiedName,
 }
 
 /// A reference waiting for every label of the tree.
@@ -570,6 +588,8 @@ struct Walk<'a> {
     default_lang: Lang,
     /// The counters declared `within` an element.
     within: Vec<WithinDecl>,
+    /// The counters scoped to elements.
+    scopes: Vec<ScopeDecl>,
     /// The counters, by name. Never iterated.
     counters: HashMap<EcoString, Counter>,
     /// The item counters of the enums being walked, innermost last, with
@@ -579,6 +599,8 @@ struct Walk<'a> {
     seen: HashSet<EcoString>,
     /// What the walk knows of each element's schema.
     schemas: HashMap<QualifiedName, Counted>,
+    /// The counter each name in `counter-reset` resolved to, or why not.
+    counter_keys: HashMap<EcoString, Result<EcoString, EcoString>>,
     /// What has been reported, so that each is reported once per build.
     reported: HashSet<EcoString>,
     out: Resolution,
@@ -603,12 +625,53 @@ fn within_decls(db: &dyn Db, build: Build<'_>) -> Vec<WithinDecl> {
         for element in &component.declarations.elements {
             if let Some(CounterDecl {
                 within: Some(within),
+                ..
             }) = &element.counter
             {
                 let name = QualifiedName::qualified(namespace.clone(), element.name.clone());
                 out.push(WithinDecl {
                     counter: name.to_string().into(),
-                    within: within.clone(),
+                    within: Within {
+                        element: own(component, &within.element),
+                        fields: within.fields.clone(),
+                    },
+                });
+            }
+        }
+    }
+    out
+}
+
+/// An element name in a component's counter declaration as the document
+/// tree names the element: an unqualified name of one of the component's
+/// own elements qualified with its namespace, and any other name, a
+/// built-in element's or another component's qualified one, as written.
+fn own(component: &Registered, name: &QualifiedName) -> QualifiedName {
+    if name.namespace.is_none() && component.element(name.name.as_str()).is_some() {
+        return QualifiedName::qualified(component.manifest.namespace(), name.name.clone());
+    }
+    name.clone()
+}
+
+/// The counters that components' elements declare scoped to elements. No
+/// built-in element's counter is: an `enum`'s items are counted within it
+/// by the walk itself.
+fn scope_decls(db: &dyn Db, build: Build<'_>) -> Vec<ScopeDecl> {
+    let Some(host) = component_host(db, build.project(db)).as_ref() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for component in host.components() {
+        let namespace = component.manifest.namespace();
+        for element in &component.declarations.elements {
+            let Some(counter) = &element.counter else {
+                continue;
+            };
+            let name = QualifiedName::qualified(namespace.clone(), element.name.clone());
+            for scope in &counter.scope {
+                out.push(ScopeDecl {
+                    counter: name.to_string().into(),
+                    scope: own(component, scope),
                 });
             }
         }
@@ -619,6 +682,7 @@ fn within_decls(db: &dyn Db, build: Build<'_>) -> Vec<WithinDecl> {
 impl Walk<'_> {
     fn element(&mut self, element: &Element, node: &StyledNode) {
         self.visit(element, node);
+        let scoped = self.open_scopes(element);
         let list = is_builtin(&element.name, "enum");
         if list {
             let pattern = self.pattern(&node.style);
@@ -639,6 +703,57 @@ impl Walk<'_> {
         }
         if list {
             self.lists.pop();
+        }
+        self.close_scopes(scoped);
+    }
+
+    /// Opens a new level of each counter scoped to an element, after the
+    /// element itself has stepped them, and returns what to restore when
+    /// its subtree ends: each counter's state before, or `None` where it
+    /// had none.
+    fn open_scopes(&mut self, element: &Element) -> Vec<(EcoString, Option<Counter>)> {
+        let mut saved: Vec<(EcoString, Option<Counter>)> = Vec::new();
+        for decl in &self.scopes {
+            if decl.scope != element.name || saved.iter().any(|(name, _)| *name == decl.counter) {
+                continue;
+            }
+            let before = self.counters.get(&decl.counter).cloned();
+            // The new level keeps the values of the instance the counter
+            // was restarted `within`.
+            let (prefix, restarts) = before
+                .as_ref()
+                .map_or_else(Default::default, |c| (c.prefix.clone(), c.restarts));
+            self.counters.insert(
+                decl.counter.clone(),
+                Counter {
+                    prefix,
+                    values: Vec::new(),
+                    restarts,
+                },
+            );
+            saved.push((decl.counter.clone(), before));
+        }
+        saved
+    }
+
+    /// Restores the counters an element's subtree opened levels of. A
+    /// counter restarted `within` an element inside the subtree keeps the
+    /// restart: restarts go in document order, through scopes.
+    fn close_scopes(&mut self, saved: Vec<(EcoString, Option<Counter>)>) {
+        for (name, before) in saved {
+            let restarted = self
+                .counters
+                .get(&name)
+                .filter(|now| now.restarts != before.as_ref().map_or(0, |c| c.restarts))
+                .map(|now| Counter {
+                    prefix: now.prefix.clone(),
+                    values: Vec::new(),
+                    restarts: now.restarts,
+                });
+            match restarted.or(before) {
+                Some(counter) => self.counters.insert(name, counter),
+                None => self.counters.remove(&name),
+            };
         }
     }
 
@@ -848,24 +963,30 @@ impl Walk<'_> {
             Some(value) => counter_name(value).into_iter().collect(),
         };
         for name in names {
-            if !self.is_counter(&name) {
-                self.report_once(
-                    eco_format!("counter-reset:{name}"),
-                    Diagnostic::warning(
-                        element.span,
-                        eco_format!(
-                            "there is no counter `{name}`, so `counter-reset` does not restart it"
+            let key = match self.counter_keys.get(&name).cloned() {
+                Some(key) => key,
+                None => {
+                    let key = self.counter_key(&name);
+                    self.counter_keys.insert(name.clone(), key.clone());
+                    key
+                }
+            };
+            let key = match key {
+                Ok(key) => key,
+                Err(message) => {
+                    self.report_once(
+                        eco_format!("counter-reset:{name}"),
+                        Diagnostic::warning(element.span, message).with_hint(
+                            "counters are named after the elements they number, such as `figure` \
+                             or a component's `question`, and display equations are counted by \
+                             `equation`",
                         ),
-                    )
-                    .with_hint(
-                        "counters are named after the elements they number, such as `figure`, \
-                         and display equations are counted by `equation`",
-                    ),
-                );
-                continue;
-            }
+                    );
+                    continue;
+                }
+            };
             // A counter restarted `within` an element keeps its values.
-            self.counters.entry(name).or_default().values.clear();
+            self.counters.entry(key).or_default().values.clear();
         }
     }
 
@@ -884,27 +1005,53 @@ impl Walk<'_> {
             .unwrap_or_default();
         for decl in &self.within {
             if decl.within.element == element.name && fields_match(&decl.within, element) {
+                let restarts = self.counters.get(&decl.counter).map_or(0, |c| c.restarts);
                 self.counters.insert(
                     decl.counter.clone(),
                     Counter {
                         prefix: values.clone(),
                         values: Vec::new(),
+                        restarts: restarts + 1,
                     },
                 );
             }
         }
     }
 
-    /// Whether a name is a counter: a built-in one, or that of an element a
-    /// component declares with one.
-    fn is_counter(&mut self, name: &str) -> bool {
-        if ["heading", "figure", "footnote", "sidenote", "equation"].contains(&name) {
-            return true;
+    /// The counter a name in `counter-reset` names: a built-in one, or that
+    /// of an element a component declares with one, named qualified or not.
+    /// An unqualified name resolves as element names do, through the
+    /// lockfile's bindings (SPEC §3.6). Fails with the warning's message.
+    fn counter_key(&mut self, name: &str) -> Result<EcoString, EcoString> {
+        if BUILTIN_COUNTERS.contains(&name) {
+            return Ok(name.into());
         }
-        let Some(qualified) = QualifiedName::new(name) else {
-            return false;
+        let no_counter =
+            || eco_format!("there is no counter `{name}`, so `counter-reset` does not restart it");
+        let Some(written) = QualifiedName::new(name) else {
+            return Err(no_counter());
         };
-        qualified.namespace.is_some() && self.counted(&qualified).counter.is_some()
+        let Some(host) = component_host(self.db, self.build.project(self.db)).as_ref() else {
+            return Err(no_counter());
+        };
+        let qualified = match host.element(&written) {
+            Ok(resolved) => QualifiedName::qualified(
+                resolved.component.manifest.namespace(),
+                resolved.item.name.clone(),
+            ),
+            Err(error) => {
+                return Err(match error.reason {
+                    Reason::Ambiguous(_) | Reason::StaleBinding(_) => {
+                        eco_format!("{error}, so `counter-reset` does not restart it")
+                    }
+                    _ => no_counter(),
+                });
+            }
+        };
+        if self.counted(&qualified).counter.is_none() {
+            return Err(no_counter());
+        }
+        Ok(qualified.to_string().into())
     }
 
     /// Sets the marker of an element: its number before its content, a
@@ -1126,6 +1273,9 @@ fn shown(pattern: Option<&Pattern>, values: &[u64]) -> EcoString {
         None => Pattern::parse("1.1").format(values),
     }
 }
+
+/// The names of the built-in counters that `counter-reset` can name.
+const BUILTIN_COUNTERS: &[&str] = &["heading", "figure", "footnote", "sidenote", "equation"];
 
 /// A word with its first letter in upper case, to start a sentence.
 fn capitalise(word: &str) -> EcoString {

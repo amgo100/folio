@@ -114,6 +114,36 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         return;
     }
 
+    // Folio: a form XObject that draws itself, through its own resources or
+    // a form it draws, is not drawn again. The forms being drawn are those of
+    // this context: a pattern or soft mask, interpreted in a context of its
+    // own, starts afresh, and its depth is limited as it was.
+    let id = x_object
+        .dict
+        .obj_id()
+        .map(|id| (id.obj_number, id.gen_number));
+    if let Some(id) = id {
+        if context.forms.contains(&id) {
+            (context.settings.warning_sink)(InterpreterWarning::FormCycle);
+            context.end_nested_interpretation();
+            return;
+        }
+        context.forms.push(id);
+    }
+    draw_form_xobject_inner(resources, x_object, context, device);
+    if id.is_some() {
+        context.forms.pop();
+    }
+}
+
+// Folio: the drawing of a form XObject, as it was, once `draw_form_xobject`
+// has checked that the form is not drawing itself.
+fn draw_form_xobject_inner<'a, 'b>(
+    resources: &Resources<'a>,
+    x_object: &'b FormXObject<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
     let has_oc = xobject_oc(&x_object.dict, context);
     if !context.ocg_state.is_visible() {
         if has_oc {
@@ -415,11 +445,59 @@ fn decode_context<'a>(
         height: obj.height,
     };
 
+    // Folio: an image is decoded only if it fits, with the other images
+    // decoded before it, in `hayro_syntax::MAX_IMAGE_BYTES`, at four bytes a
+    // pixel or more (RGBA as it is drawn, or more components and bits). An
+    // image counts once, however often it is drawn: an image object by its
+    // id, an inline image by its dictionary and data.
+    let bytes_per_pixel = (u64::from(decode_params.num_components.unwrap_or(4))
+        * u64::from(dict_bpc.unwrap_or(8)))
+    .div_ceil(8)
+    .max(4);
+    let bytes = u64::from(obj.width)
+        .saturating_mul(u64::from(obj.height))
+        .saturating_mul(bytes_per_pixel);
+    let dict = obj.stream.dict();
+    let key = match dict.obj_id() {
+        Some(id) => crate::util::hash128(&(id.obj_number, id.gen_number)),
+        None => crate::util::hash128(&(dict.data(), obj.stream.raw_data().as_ref())),
+    };
+    if !obj.cache.1.take_image_bytes(key, bytes, &obj.warning_sink) {
+        return None;
+    }
+
     let decoded = obj
         .stream
         .decoded_image(&decode_params)
-        .map_err(|_| (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure))
+        // Folio: an image that its own header or decode parameters say is too
+        // large is reported as such.
+        .map_err(|e| {
+            (obj.warning_sink)(match e {
+                hayro_syntax::object::stream::DecodeFailure::ImageTooLarge => {
+                    InterpreterWarning::ImageTooLarge
+                }
+                _ => InterpreterWarning::ImageDecodeFailure,
+            })
+        })
         .ok()?;
+
+    // Folio: an image whose data (JPEG 2000, JBIG2) or decode parameters
+    // (CCITT) gave it more pixels than its dictionary says takes the rest
+    // from the budget too, so that many such images cannot pass together.
+    if let Some(data) = &decoded.image_data {
+        let actual = u64::from(data.width)
+            .saturating_mul(u64::from(data.height))
+            .saturating_mul(4);
+        if actual > bytes
+            && !obj.cache.1.take_image_bytes(
+                crate::util::hash128(&(key, "decoded")),
+                actual - bytes,
+                &obj.warning_sink,
+            )
+        {
+            return None;
+        }
+    }
 
     let (mut scale_x, mut scale_y) = (1.0, 1.0);
 
