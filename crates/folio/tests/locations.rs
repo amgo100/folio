@@ -504,3 +504,72 @@ fn where_content_was_made_does_not_change_equality() {
     };
     assert_eq!(text.trim(), "true true false");
 }
+
+/// Checks that the exam's headings pair with the mark scheme's headings of
+/// the same text, and that neither variant reports `variant-loop-differs`.
+fn pairs_by_text(world: &World) {
+    assert!(loop_errors(world, "exam").is_empty());
+    assert!(loop_errors(world, "markscheme").is_empty());
+    let exam = headings(world, "exam");
+    let markscheme = headings(world, "markscheme");
+    assert!(!exam.is_empty());
+    for (text, location) in &exam {
+        let paired = markscheme.iter().find(|(t, _)| t == text).unwrap();
+        assert_eq!(*location, paired.1, "{text}");
+    }
+}
+
+#[test]
+fn content_kept_in_a_variable_pairs_by_iteration() {
+    // An element takes the iteration it is made in, wherever the loop
+    // puts it (#360 review): pushed into an array, or returned from a
+    // function inside the loop.
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#let qs = ()\n\
+         #for q in bank {{ if variant == \"markscheme\" or not q.hidden {{ \
+         qs.push([= #q.t\n\n]) }} }}\n#qs.join()\n"
+    )));
+    pairs_by_text(&grouped(&format!(
+        "{BANK}#let last(bank) = {{ let out = none; for q in bank {{ \
+         if variant == \"markscheme\" or not q.hidden {{ out = [= #q.t\n\n] }} }}; \
+         out }}\n#let second(bank) = {{ for (i, q) in bank.enumerate() {{ \
+         if i == 1 {{ return [= #q.t\n\n] }} }} }}\n#second(bank)\n#last(bank)\n"
+    )));
+}
+
+#[test]
+fn a_fold_keeps_what_earlier_steps_made() {
+    // Anchoring a call reaches only what the call made, so an element of
+    // an early step keeps its location however many steps follow.
+    let headings = |world: &World| {
+        elements(&document(world))
+            .into_iter()
+            .filter(|(n, ..)| n == "heading")
+            .map(|(_, t, l)| (t, l))
+            .collect::<Vec<_>>()
+    };
+    let text = "#let bank = (\"q0\", \"q1\", \"q2\")\n\n\
+                #bank.fold([], (acc, t) => acc + [= #t\n\n])\n";
+    let mut world = world(text);
+    let three = headings(&world);
+    let at = text.find(")").unwrap();
+    world
+        .edit_source("main.fol", at..at, ", \"q3\", \"q4\"")
+        .unwrap();
+    let five = headings(&world);
+    assert_eq!(five.len(), 5);
+    assert_eq!(&five[..3], &three[..]);
+}
+
+#[test]
+fn content_of_an_item_does_not_tell_items_apart() {
+    // An item whose content differs by variant (an answer shown only in
+    // the mark scheme) is the same item: no error (#360 review).
+    let world = grouped(
+        "#let bank = ((t: \"Forces\", ans: if variant == \"markscheme\" { [Yes] } else { none }, \
+         hidden: false), (t: \"Energy\", ans: [No], hidden: true), \
+         (t: \"Waves\", ans: [Maybe], hidden: false))\n\
+         #for q in bank { if variant == \"markscheme\" or not q.hidden [= #q.t\n\n] }\n",
+    );
+    pairs_by_text(&world);
+}

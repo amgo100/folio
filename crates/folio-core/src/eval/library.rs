@@ -9,7 +9,7 @@ use ecow::{EcoString, eco_format};
 use folio_component::{Color, QualifiedName, Scalar};
 use folio_syntax::{Span, ast};
 
-use super::content::{Content, stamp};
+use super::content::Content;
 use super::error::{At, EvalError, EvalResult, StrResult, bail};
 use super::ops::{self, a_type};
 use super::value::{
@@ -1205,29 +1205,28 @@ fn array_method(
         }
         // Each call's result is an iteration of the call (SPEC §6.1), so
         // the instances it makes pair across variants by item.
+        // Each call is an iteration of the call (SPEC §6.1), so the
+        // instances it makes pair across variants by item.
         "map" => {
             let func: Func = args.expect("function")?;
             vm.alloc(ITEM * items.len() as u64, span)?;
             let mut out = Array::with_capacity(items.len());
+            let outer = vm.origin;
             for (i, item) in items.iter().enumerate() {
-                let mut value = call_with(vm, &func, std::slice::from_ref(item), span)?;
-                stamp(
-                    &mut value,
-                    Frame::Iteration {
-                        span,
-                        index: i as u64,
-                        item: item_key(item),
-                    },
-                );
-                out.push(value);
+                vm.origin = outer.within(Frame::Iteration {
+                    span,
+                    index: i as u64,
+                    item: item_key(item),
+                });
+                let value = call_with(vm, &func, std::slice::from_ref(item), span);
+                vm.origin = outer;
+                out.push(value?);
             }
             Value::Array(out)
         }
         "fold" => {
             let mut acc: Value = args.expect("initial value")?;
             let func: Func = args.expect("function")?;
-            // The accumulator holds what earlier calls made, so the calls
-            // are not stamped: their instances are told apart by number.
             for item in items.iter() {
                 acc = call_with(vm, &func, &[acc, item.clone()], span)?;
             }

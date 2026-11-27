@@ -65,15 +65,18 @@ pub(crate) enum Made {
 /// from different items, so they cannot share numbering
 /// ([`crate::variants`]).
 ///
-/// Evaluation stamps the [`Frame`] of an iteration or a call on the
-/// elements of the value it returns (`Content::stamp`), and the document
-/// model gives an element inside another's content the origin of the
-/// element around it as well ([`Origin::nested`]). Both parts are hashes,
-/// mixed by a fixed function so that they are the same on every platform
-/// and in every process; like the spans they are made from, they are
-/// compared, never written to output.
+/// Evaluation gives an element the origin of the iterations it is made in
+/// ([`Origin::within`]). A closure call is memoised apart from its call
+/// site, so what it makes is *open*: made relative to the call, and
+/// anchored at its call site when the call returns ([`Origin::anchor`]).
+/// The document model gives an element inside another's content the
+/// origin of the element around it as well ([`Origin::nested`]). Both
+/// parts are hashes, mixed by a fixed function so that they are the same
+/// on every platform and in every process; like the spans they are made
+/// from, they are compared, never written to output.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Origin {
+    /// The key, with [`Self::OPEN_BIT`] set for an open origin.
     key: u64,
     items: u64,
 }
@@ -82,35 +85,84 @@ impl Origin {
     /// The origin of content made outside any loop or call.
     pub const ROOT: Self = Self { key: 0, items: 0 };
 
-    /// The origin of an instance with this origin that `frame` returns:
-    /// the frame comes before the frames already recorded.
+    /// The origin of content made by a closure call, relative to the call,
+    /// before the call returns.
+    pub const OPEN: Self = Self {
+        key: Self::OPEN_BIT,
+        items: 0,
+    };
+
+    /// The bit of the key that marks an open origin.
+    const OPEN_BIT: u64 = 1 << 63;
+
+    /// The key without the open bit.
+    fn bare(self) -> u64 {
+        self.key & !Self::OPEN_BIT
+    }
+
+    /// Whether the origin is open: made by a closure call that has not
+    /// returned yet.
+    pub fn is_open(self) -> bool {
+        self.key & Self::OPEN_BIT != 0
+    }
+
+    /// An origin of `key` and `items`, open as `open` is.
+    fn make(key: u64, items: u64, open: bool) -> Self {
+        let key = (key & !Self::OPEN_BIT).max(1);
+        Self {
+            key: if open { key | Self::OPEN_BIT } else { key },
+            items,
+        }
+    }
+
+    /// The origin of what is made in `frame` at this origin: the frame
+    /// comes after the frames already recorded.
     #[must_use]
     pub fn within(self, frame: Frame) -> Self {
-        Self {
-            key: pair(frame.key(), self.key).max(1),
-            items: pair(frame.item(), self.items),
-        }
+        Self::make(
+            pair(self.bare(), frame.key()),
+            pair(self.items, frame.item()),
+            self.is_open(),
+        )
+    }
+
+    /// The origin of what a closure call made at this open origin, once
+    /// the call returns at `site` to code at the origin `at`.
+    #[must_use]
+    pub fn anchor(self, at: Self, site: Span) -> Self {
+        let call = at.within(Frame::Call { span: site });
+        Self::make(
+            pair(call.bare(), self.bare()),
+            pair(call.items, self.items),
+            at.is_open(),
+        )
     }
 
     /// The origin of an element whose own origin is `own`, inside the
     /// content of an element whose origin is `self`.
     #[must_use]
     pub fn nested(self, own: Self) -> Self {
-        if own == Self::ROOT {
+        if own.bare() == 0 && own.items == 0 {
             self
-        } else if self == Self::ROOT {
-            own
+        } else if self.bare() == 0 && self.items == 0 {
+            Self::make(own.bare(), own.items, false)
         } else {
-            Self {
-                key: pair(self.key, own.key).max(1),
-                items: pair(self.items, own.items),
-            }
+            Self::make(
+                pair(self.bare(), own.bare()),
+                pair(self.items, own.items),
+                false,
+            )
         }
     }
 
     /// The fingerprint of the items its iterations iterated over.
     pub fn items(self) -> u64 {
         self.items
+    }
+
+    /// The key a location is built from, `0` for the root.
+    pub(crate) fn key(self) -> u64 {
+        self.bare()
     }
 }
 
@@ -126,8 +178,8 @@ pub enum Frame {
         span: Span,
         /// Which iteration.
         index: u64,
-        /// A hash of the item it iterates over ([`item_key`]), or its index
-        /// for a loop over no items.
+        /// A fingerprint of the item it iterates over, or its index for a
+        /// loop over no items.
         item: u64,
     },
     /// A call of a closure, at its call site.
@@ -155,12 +207,50 @@ impl Frame {
     }
 }
 
-/// A hash of an item a loop iterates over, for [`Frame::Iteration`]. It
-/// is compared within one process, never written out.
-pub(crate) fn item_key(item: &impl std::hash::Hash) -> u64 {
-    use std::hash::{DefaultHasher, Hasher};
+/// A fingerprint of an item a loop iterates over, for
+/// [`Frame::Iteration`]: its data, without the content it holds, which a
+/// variant may make otherwise (an answer shown only in the mark scheme,
+/// `none` in the exam) while the item stays the same; content and `none`
+/// count alike. It walks at most a few hundred values of
+/// the item, so that a large item costs little, and is compared within one
+/// process, never written out.
+pub(crate) fn item_key(item: &crate::eval::Value) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    use crate::eval::Value;
+
+    fn walk(value: &Value, hasher: &mut DefaultHasher, budget: &mut u32) {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        match value {
+            // Content, or none where a variant gives none.
+            Value::Content(_) | Value::None => 0u8.hash(hasher),
+            Value::Array(items) => {
+                1u8.hash(hasher);
+                items.len().hash(hasher);
+                for item in items.iter() {
+                    walk(item, hasher, budget);
+                }
+            }
+            Value::Dict(dict) => {
+                2u8.hash(hasher);
+                dict.len().hash(hasher);
+                for (key, item) in dict.iter() {
+                    key.hash(hasher);
+                    walk(item, hasher, budget);
+                }
+            }
+            other => {
+                3u8.hash(hasher);
+                other.hash(hasher);
+            }
+        }
+    }
+
     let mut hasher = DefaultHasher::new();
-    item.hash(&mut hasher);
+    walk(item, &mut hasher, &mut 256);
     hasher.finish()
 }
 
@@ -214,14 +304,14 @@ impl Locator {
         let first = u64::from(span.is_detached());
         let count = self
             .made
-            .entry((span.into_raw().get(), made, origin.key))
+            .entry((span.into_raw().get(), made, origin.key()))
             .or_insert(first);
         let n = *count;
         *count = n.saturating_add(1).min(Self::COUNT);
-        let number = if origin.key == 0 {
+        let number = if origin.key() == 0 {
             n
         } else {
-            Self::KEYED | (mix(origin.key, n) & Self::COUNT)
+            Self::KEYED | (mix(origin.key(), n) & Self::COUNT)
         };
         Location {
             source: source_ref(span),

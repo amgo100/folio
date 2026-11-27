@@ -13,17 +13,30 @@
 use std::collections::{HashMap, HashSet};
 
 use ecow::EcoVec;
-use folio_component::{Location, Name};
+use folio_component::{ElementKind, Location, Name, QualifiedName};
 use folio_syntax::Span;
 
 use crate::db::{Db, Project};
 use crate::diag::Diagnostic;
+use crate::eval::Element;
 use crate::model::{document, visit_origins};
 
-/// Whether a shared counter counts the elements of a name: the counter
-/// named after them, or `equation` for display maths (SPEC §4.5).
-fn counts(counter: &Name, element: &Name) -> bool {
-    counter == element || (counter.as_str() == "equation" && element.as_str() == "math")
+/// Whether a shared counter counts an element: the counter named after
+/// it, or `equation` for display maths (SPEC §4.5). A counter named
+/// without a namespace counts the elements of that name in any, as an
+/// unqualified name may name a component's element (`question` for
+/// `exam.question`).
+fn counts(counter: &QualifiedName, element: &Element) -> bool {
+    let name = &element.name;
+    if counter.namespace.is_some() && counter.namespace != name.namespace {
+        return false;
+    }
+    counter.name == name.name
+        || (counter.namespace.is_none()
+            && name.namespace.is_none()
+            && counter.name.as_str() == "equation"
+            && name.name.as_str() == "math"
+            && element.kind == ElementKind::Block)
 }
 
 /// The instances of a variant's document that the shared counters count,
@@ -33,16 +46,15 @@ fn counted(
     db: &dyn Db,
     project: Project,
     variant: &Name,
-    shared: &[Name],
-) -> HashMap<Location, (Span, Name, u64)> {
+    shared: &[QualifiedName],
+) -> HashMap<Location, (Span, QualifiedName, u64)> {
     let mut out = HashMap::new();
     if let Some(doc) = document(db, project, Some(variant.clone())) {
         visit_origins(&doc.root, &mut |element, origin| {
-            let name = &element.name.name;
-            if element.name.namespace.is_none() && shared.iter().any(|c| counts(c, name)) {
+            if shared.iter().any(|c| counts(c, element)) {
                 out.insert(
                     element.location,
-                    (element.span, name.clone(), origin.items()),
+                    (element.span, element.name.clone(), origin.items()),
                 );
             }
         });
@@ -68,12 +80,7 @@ pub fn check_pairing(db: &dyn Db, project: Project, variant: Option<Name>) -> Ec
     let Some(group) = manifest.numbering_group(variant.as_str()) else {
         return out;
     };
-    let shared: Vec<Name> = group
-        .shared_counters
-        .iter()
-        .filter(|c| c.v.namespace.is_none())
-        .map(|c| c.v.name.clone())
-        .collect();
+    let shared: Vec<QualifiedName> = group.shared_counters.iter().map(|c| c.v.clone()).collect();
     if shared.is_empty() {
         return out;
     }
