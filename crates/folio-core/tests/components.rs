@@ -80,6 +80,7 @@ impl Component for TestComponent {
                 key: name(self.element),
                 text: "Question".into(),
             }]),
+            stylesheet: None,
         }
     }
 }
