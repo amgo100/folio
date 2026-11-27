@@ -1440,7 +1440,7 @@ These are not specified here; the table records what each needs from the core, s
 
 ### 14.1 Performance targets
 
-Reference machine: a four-core laptop processor from 2023 with 16 GB of memory, fonts cached. Reference document: 100 A4 pages with 30 figures, 400 display equations and 20 tables; reference deck: 40 slides with 150 steps.
+Reference machine: the project's `folio` cloud environment, a container with four cores of an Intel Xeon at 2.10 GHz and 16 GB of memory, fonts cached. The maintainer chose it at the M1 close (A-336-1) because a laptop's load is too unpredictable to measure against, and there is no other dedicated machine. Its figures vary: at the M1 close, two runs back to back on one container differed by up to 12% at the 95th percentile, and by a third for the typing session of 40 keystrokes. Each milestone's close records its figures in `tests/README.md`. Reference document: 100 A4 pages with 30 figures, 400 display equations and 20 tables; reference deck: 40 slides with 150 steps.
 
 | Scenario | Target (p95) | Hard limit |
 | --- | --- | --- |
