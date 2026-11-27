@@ -1072,7 +1072,13 @@ impl<'a> Vm<'a> {
 
     /// Applies an arithmetic operator, counting what a concatenation or
     /// repetition allocates before it happens.
-    fn apply(&mut self, op: ast::BinOp, lhs: Value, rhs: Value, span: Span) -> EvalResult<Value> {
+    pub(crate) fn apply(
+        &mut self,
+        op: ast::BinOp,
+        lhs: Value,
+        rhs: Value,
+        span: Span,
+    ) -> EvalResult<Value> {
         self.charge_op(op, &lhs, &rhs, span)?;
         Self::operate(op, lhs, rhs, span)
     }

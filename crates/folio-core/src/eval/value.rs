@@ -139,7 +139,7 @@ impl Value {
                 }
                 out.push_str("\")");
             }
-            Self::Str(s) => write!(out, "{s:?}").unwrap(),
+            Self::Str(s) => write_str_repr(out, s, limit)?,
             Self::Label(l) => write!(out, "<{l}>").unwrap(),
             Self::Date(d) => write!(out, "date({d})").unwrap(),
             Self::Content(c) => c.write_repr(out, limit)?,
@@ -192,13 +192,11 @@ impl Value {
             }
             Self::Module(m) => write!(out, "<module {}>", m.name()).unwrap(),
             Self::Math(formula) => {
-                // Every node of the formula writes at least one byte.
-                let size = formula
-                    .lines()
-                    .iter()
-                    .fold(0u64, |size, line| size.saturating_add(line.row.size()));
-                if size > (limit.saturating_sub(out.len())) as u64 {
-                    return Err(TooLong);
+                // A formula is written whole, so its length is bounded
+                // first: its nodes can share one long text.
+                let mut budget = limit.saturating_sub(out.len()) as u64;
+                for line in formula.lines() {
+                    repr_budget(&line.row, &mut budget)?;
                 }
                 write!(out, "formula({})", formula.repr()).unwrap()
             }
@@ -258,6 +256,45 @@ pub(crate) const ITEM: u64 = 64;
 /// counts against the memory limit ([`Value::shallow_size`]): at least what
 /// each takes.
 pub(crate) const NODE: u64 = 128;
+
+/// Writes a string as code writes it, or fails without writing it when it
+/// would make `out` longer than `limit` bytes: escaping can make a string
+/// several times longer.
+pub(crate) fn write_str_repr(out: &mut EcoString, s: &str, limit: usize) -> Result<(), TooLong> {
+    let escaped = s.chars().try_fold(out.len().saturating_add(2), |len, c| {
+        let len = len.saturating_add(c.escape_debug().map(char::len_utf8).sum());
+        (len <= limit).then_some(len)
+    });
+    if escaped.is_none() {
+        return Err(TooLong);
+    }
+    write!(out, "{s:?}").unwrap();
+    Ok(())
+}
+
+/// Takes from `budget` at least the bytes the representation of `row`
+/// writes, or fails once it is spent. Each node is visited once for each
+/// time it occurs, which a formula's node limit bounds.
+fn repr_budget(row: &folio_math::Row, budget: &mut u64) -> Result<(), TooLong> {
+    use folio_math::Node;
+    /// More than any node writes besides its text and its rows.
+    const OWN: u64 = 64;
+    for node in row.nodes() {
+        let text = match node {
+            Node::Ident(atom) | Node::Number(atom) | Node::Symbol(atom) | Node::Text(atom) => {
+                // Escaped, a character takes at most ten bytes.
+                10 * atom.text.len() as u64
+            }
+            Node::Operator(op) => op.name.len() as u64,
+            _ => 0,
+        };
+        *budget = budget.checked_sub(OWN + text).ok_or(TooLong)?;
+        for inner in node.rows() {
+            repr_budget(inner, budget)?;
+        }
+    }
+    Ok(())
+}
 
 /// A representation that would be longer than its limit
 /// ([`Value::repr_within`]).

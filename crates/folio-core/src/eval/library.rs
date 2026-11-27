@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use ecow::{EcoString, eco_format};
 use folio_component::{Color, QualifiedName, Scalar};
-use folio_syntax::Span;
+use folio_syntax::{Span, ast};
 
 use super::content::Content;
 use super::error::{At, EvalError, EvalResult, StrResult, bail};
@@ -976,34 +976,33 @@ fn str_method(
     args: &mut Args,
     span: Span,
 ) -> EvalResult<Value> {
-    let chars: Vec<char> = s.chars().collect();
     Ok(match name {
         "len" => Value::Int(s.len() as i64),
         "first" | "last" => {
             let c = if name == "first" {
-                chars.first()
+                s.chars().next()
             } else {
-                chars.last()
+                s.chars().next_back()
             };
             match c {
-                Some(c) => Value::Str((*c).into()),
+                Some(c) => Value::Str(c.into()),
                 None => bail!(span, "the string is empty"),
             }
         }
         "at" => {
             let i: i64 = args.expect("index")?;
             let default: Option<Value> = args.named("default")?;
-            match (index(chars.len(), i), default) {
-                (Ok(i), _) => Value::Str(chars[i].into()),
+            match (index(s.chars().count(), i), default) {
+                (Ok(i), _) => Value::Str(s.chars().nth(i).unwrap_or_default().into()),
                 (Err(_), Some(d)) => d,
                 (Err(e), None) => return Err(EvalError::new(span, e).into()),
             }
         }
         "slice" => {
-            let (start, end) = slice_bounds(args, chars.len(), span)?;
-            let chars = &chars[start..end];
-            vm.alloc(chars.iter().map(|c| c.len_utf8() as u64).sum(), span)?;
-            Value::Str(chars.iter().collect::<String>().into())
+            let (start, end) = slice_bounds(args, s.chars().count(), span)?;
+            let chars = || s.chars().skip(start).take(end - start);
+            vm.alloc(chars().map(|c| c.len_utf8() as u64).sum(), span)?;
+            Value::Str(chars().collect::<String>().into())
         }
         "contains" => Value::Bool(s.contains(args.expect::<EcoString>("pattern")?.as_str())),
         "starts-with" => Value::Bool(s.starts_with(args.expect::<EcoString>("pattern")?.as_str())),
@@ -1056,14 +1055,14 @@ fn str_method(
         }
         "rev" => {
             vm.alloc(s.len() as u64, span)?;
-            Value::Str(chars.iter().rev().collect::<String>().into())
+            Value::Str(s.chars().rev().collect::<String>().into())
         }
         "codepoints" => {
             vm.alloc(
-                (ITEM * chars.len() as u64).saturating_add(s.len() as u64),
+                (ITEM * s.chars().count() as u64).saturating_add(s.len() as u64),
                 span,
             )?;
-            Value::Array(chars.iter().map(|c| Value::Str((*c).into())).collect())
+            Value::Array(s.chars().map(|c| Value::Str(c.into())).collect())
         }
         "replace" => {
             let from: EcoString = args.expect("pattern")?;
@@ -1071,8 +1070,13 @@ fn str_method(
             if from.is_empty() {
                 bail!(span, "the pattern must not be empty");
             }
+            // The result is a new string, with each match replaced.
             let count = s.matches(from.as_str()).count() as u64;
-            vm.alloc(count.saturating_mul(to.len() as u64), span)?;
+            let kept = (s.len() as u64).saturating_sub(count.saturating_mul(from.len() as u64));
+            vm.alloc(
+                kept.saturating_add(count.saturating_mul(to.len() as u64)),
+                span,
+            )?;
             Value::Str(s.replace(from.as_str(), &to))
         }
         _ => bail!(span, "a string has no method `{name}`"),
@@ -1236,14 +1240,13 @@ fn array_method(
                     None => bail!(span, "cannot {name} an empty array without a default"),
                 };
             };
+            let op = if name == "sum" {
+                ast::BinOp::Add
+            } else {
+                ast::BinOp::Mul
+            };
             for item in iter {
-                acc = if name == "sum" {
-                    vm.alloc(item.shallow_size(), span)?;
-                    ops::add(acc, item)
-                } else {
-                    ops::mul(acc, item)
-                }
-                .at(span)?;
+                acc = vm.apply(op, acc, item, span)?;
             }
             acc
         }

@@ -17,7 +17,7 @@ use ecow::{EcoString, EcoVec};
 use folio_component::{ElementKind, Location, Name, QualifiedName};
 use folio_syntax::{Span, SyntaxNode};
 
-use super::value::{Dict, Equality, LazyHash, TooLong, Value, compare_once};
+use super::value::{Dict, Equality, LazyHash, TooLong, Value, compare_once, write_str_repr};
 
 /// A sequence of content nodes.
 ///
@@ -181,7 +181,7 @@ impl Content {
                 out.push_str(", ");
             }
             match node {
-                Node::Text { text, .. } => write!(out, "{text:?}").unwrap(),
+                Node::Text { text, .. } => write_str_repr(out, text, limit)?,
                 Node::Space(_) => out.push_str("space"),
                 Node::Linebreak(_) => out.push_str("linebreak"),
                 Node::Parbreak(_) => out.push_str("parbreak"),

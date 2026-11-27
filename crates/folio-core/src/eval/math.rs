@@ -849,6 +849,8 @@ impl Vm<'_> {
                 for node in content.nodes() {
                     match node {
                         Node::Text { text, span: own } => {
+                            // Content shares its texts; the run copies them.
+                            self.alloc(text.len() as u64, span)?;
                             let own = if own.is_detached() { span } else { *own };
                             run.get_or_insert_with(|| (EcoString::new(), own))
                                 .0
