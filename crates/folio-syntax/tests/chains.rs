@@ -7,6 +7,10 @@ use folio_syntax::{Source, SyntaxNode};
 /// The stack of the compile threads, the watcher and the language server.
 const STACK: usize = 2 * 1024 * 1024;
 
+/// How tall a tree may get: a few levels per level of the parser's depth
+/// limit (256).
+const MAX_HEIGHT: usize = 3 * 256;
+
 /// Runs `f` on a thread with a 2 MiB stack.
 fn small_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
@@ -45,7 +49,7 @@ fn check(text: String) -> Vec<String> {
     let source = Source::detached(text.clone());
     assert_eq!(source.root().full_text(), text);
     let h = height(source.root());
-    assert!(h < 600, "the tree is {h} levels deep");
+    assert!(h <= MAX_HEIGHT, "the tree is {h} levels deep");
     errors(&source)
 }
 
@@ -90,7 +94,7 @@ fn the_error_ends_with_the_chain() {
             stack.extend(node.children());
         }
         assert_eq!(texts.len(), 1);
-        assert!(texts[0].starts_with("^x^x"), "{:?}", &texts[0][..20]);
+        assert!(texts[0].starts_with("x^x"), "{:?}", &texts[0][..20]);
         assert!(
             texts[0].ends_with("^x^f(x)^(y)'_[z]!"),
             "{:?}",
@@ -137,5 +141,69 @@ fn code_chains_within_the_limit_parse() {
             format!("{op}x").repeat(200).replace("()x", "()")
         );
         assert_eq!(check(text), Vec::<String>::new(), "{op:?}");
+    }
+}
+
+#[test]
+fn nested_chains_stay_shallow() {
+    small_stack(|| {
+        // Each level puts the chain so far in brackets as the first operand
+        // of a new chain: the heights of the levels must not add up.
+        for (open, close, op, eq) in [("(", ")", "/x", true), ("(", ")", "+x", false)] {
+            let mut s = String::from("x");
+            for _ in 0..200 {
+                s = format!("{open}{s}{close}{}", op.repeat(300));
+            }
+            let text = if eq {
+                format!("${s}$\n")
+            } else {
+                format!("#({s})\n")
+            };
+            let errors = check(text);
+            assert!(
+                !errors.is_empty() && errors.len() <= 200,
+                "{op:?}: {}",
+                errors.len()
+            );
+        }
+    });
+}
+
+#[test]
+fn a_chain_does_not_count_against_its_last_operand() {
+    // The last operand of a chain is shallow in the tree, so nesting in it
+    // has the depth limit's full room, as it does in an incremental reparse
+    // of a block there.
+    let nested = |n: usize| format!("{}a{}", "#[".repeat(n), "]".repeat(n));
+    for (before, after) in [("$x", "$"), ("#(x", ")")] {
+        let op = if before == "$x" { "/x" } else { "+x" };
+        let text = format!("{before}{}/#[{} b]{after}\n", op.repeat(212), nested(20))
+            .replace("/#[", if before == "$x" { "/#[" } else { "+[" });
+        assert_eq!(check(text), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn embedded_code_in_a_bracketed_operand_stays_in_its_group() {
+    small_stack(|| {
+        let text = format!("$({}(a #f b) + c) / d$\n", "x^".repeat(300));
+        let source = Source::detached(text);
+        assert_eq!(errors(&source), ["maximum parsing depth exceeded"]);
+    });
+}
+
+#[test]
+fn reparsing_in_the_last_operand_matches_a_full_parse() {
+    for (before, op, block, after) in [("$x", "/x", "/#[", "$"), ("#(x", "+x", "+[", ")")] {
+        for n in [212, 250, 254] {
+            let text = format!("{before}{}{block}a b]{after}\n", op.repeat(n));
+            let mut source = Source::detached(text.clone());
+            let at = text.find("a b").unwrap();
+            let with = format!("{}a{}", "#[".repeat(20), "]".repeat(20));
+            source.edit(at..at + 1, &with);
+            let fresh = Source::detached(source.text().to_string());
+            assert_eq!(errors(&source), errors(&fresh), "{op:?} × {n}");
+            assert!(source.root().spanless_eq(fresh.root()), "{op:?} × {n}");
+        }
     }
 }
