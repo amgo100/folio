@@ -1227,7 +1227,10 @@ impl Writer<'_> {
                 other => self.item(surface, other, *offset, Tagger::TOP),
             }
         }
-        for (note, at, node) in std::mem::take(&mut self.deferred) {
+        // From the top of the footnote area down, as they are read.
+        let mut deferred = std::mem::take(&mut self.deferred);
+        deferred.sort_by(|a, b| a.1.y.to_pt().total_cmp(&b.1.y.to_pt()));
+        for (note, at, node) in deferred {
             self.fragment(surface, &note, at, node);
             self.tagger.advance();
         }
@@ -1287,7 +1290,14 @@ impl Writer<'_> {
         match item {
             FragmentItem::Group(group) => {
                 let child = self.tagger.enter(node, group.location(), at.y);
-                if child != node && self.tagger.is_foot(child) {
+                // A note's box is drawn last whether or not its node was
+                // found, so that content order never breaks a sentence.
+                let foot = if child != node {
+                    self.tagger.is_foot(child)
+                } else {
+                    self.tagger.is_foot_box(group.location())
+                };
+                if foot {
                     self.deferred.push((group.clone(), at, child));
                 } else {
                     self.fragment(surface, group, at, child);

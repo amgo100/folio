@@ -1251,3 +1251,84 @@ fn links_in_footnotes_keep_their_destinations() {
     let order: Vec<&str> = found.iter().map(|(d, _)| d.as_str()).collect();
     assert_eq!(order, ["a", "c", "b"]);
 }
+
+/// A footnote whose anchor has a formula after it on the same line, which
+/// the writer enters before the note's box (#308, the acceptance exam's
+/// question 4): the note is still its `Note`, and still written after the
+/// page's body, inside a section with a list and another section after it.
+#[test]
+fn a_note_after_a_formula_on_its_anchors_line_is_found_and_written_last() {
+    let formula = Tag {
+        instance: 0,
+        text: Some("4.9".into()),
+        ..tag(Role::Formula, 6, vec![])
+    };
+    let note = Tag {
+        foot: true,
+        ..tag(Role::Note, 4, vec![tag(Role::Paragraph, 5, vec![])])
+    };
+    let structure = tag(
+        Role::Document,
+        1,
+        vec![
+            tag(
+                Role::Section,
+                2,
+                vec![
+                    tag(Role::Paragraph, 3, vec![note, formula]),
+                    tag(
+                        Role::List(ListKind::Numbered),
+                        7,
+                        vec![tag(
+                            Role::ListItem,
+                            7,
+                            vec![tag(Role::Paragraph, 8, vec![])],
+                        )],
+                    ),
+                ],
+            ),
+            tag(Role::Section, 9, vec![tag(Role::Paragraph, 10, vec![])]),
+        ],
+    );
+    let pages = [page(vec![boxed(
+        1,
+        vec![
+            boxed(
+                2,
+                vec![
+                    boxed(
+                        3,
+                        vec![
+                            run("of the metal2 is", 13),
+                            located(6, 0, vec![run("4.9", 16)]),
+                            boxed(4, vec![boxed(5, vec![run("2 The resistivity.", 15)])]),
+                        ],
+                    ),
+                    boxed(
+                        7,
+                        vec![boxed(7, vec![boxed(8, vec![run("(a) Show that.", 18)])])],
+                    ),
+                ],
+            ),
+            boxed(9, vec![boxed(10, vec![run("5 Progressive waves.", 20)])]),
+        ],
+    )])];
+    let document = document(&pages, &structure);
+    let (tree, _) = tagged(&document);
+    assert!(tree.contains("Note"), "{tree}");
+    assert!(tree.contains("Formula"), "{tree}");
+    let mut body = Vec::new();
+    let mut notes = Vec::new();
+    let rendered = render_with(&document, true, &mut |tree: &TagTree, _| {
+        mcids(&tree.children, "P", false, &mut body);
+        mcids(&tree.children, "Note", false, &mut notes);
+    });
+    assert!(rendered.result.is_ok(), "{:?}", rendered.result.err());
+    let body: Vec<i32> = body.into_iter().filter(|id| !notes.contains(id)).collect();
+    assert!(!notes.is_empty() && body.len() >= 3, "{body:?} {notes:?}");
+    let last_body = body.iter().max().unwrap();
+    assert!(
+        notes.iter().all(|n| n > last_body),
+        "body {body:?}, notes {notes:?}"
+    );
+}

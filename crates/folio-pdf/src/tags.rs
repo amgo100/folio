@@ -48,6 +48,8 @@ pub(crate) struct Tagger<'a> {
     undescribed: Vec<SourceRef>,
     /// The `Link` node of each run of a link's glyphs, by the run's index.
     links: Vec<Option<usize>>,
+    /// The nodes of the input that are footnotes' notes ([`Tag::foot`]).
+    feet: Vec<&'a Tag>,
 }
 
 /// What the tagger gives: the tag tree, the headings for the outline, and
@@ -128,7 +130,17 @@ impl<'a> Tagger<'a> {
             untitled: Vec::new(),
             undescribed: Vec::new(),
             links: Vec::new(),
+            feet: Vec::new(),
         };
+        fn feet<'a>(tag: &'a Tag, out: &mut Vec<&'a Tag>) {
+            if tag.foot {
+                out.push(tag);
+            }
+            for child in &tag.children {
+                feet(child, out);
+            }
+        }
+        feet(root, &mut tagger.feet);
         tagger.push(Kind::Top, std::slice::from_ref(root), 0);
         tagger
     }
@@ -175,12 +187,25 @@ impl<'a> Tagger<'a> {
             return entered;
         }
         let from = out.cursor.map_or(0, |last| last + 1);
-        let Some(index) = children[from..]
+        let found = children[from..]
             .iter()
             .position(|child| is_box_of(child, location))
-            .map(|i| from + i)
-        else {
-            return node;
+            .map(|i| from + i);
+        // A footnote's box comes after its anchor's line, whose formulas
+        // after the anchor the cursor has passed: it is found among the
+        // notes not yet entered before the cursor too, and leaves the
+        // cursor where it is (SPEC §7.8).
+        let behind = || {
+            children[..from].iter().enumerate().position(|(i, child)| {
+                child.foot && out.entered[i].is_none() && is_box_of(child, location)
+            })
+        };
+        let (index, moves) = match found {
+            Some(index) => (index, true),
+            None => match behind() {
+                Some(index) => (index, false),
+                None => return node,
+            },
         };
         let tag = &children[index];
         let sections = out.sections + u16::from(tag.role == Role::Section);
@@ -188,7 +213,9 @@ impl<'a> Tagger<'a> {
         let child = self.push(Kind::Input(tag), &tag.children, sections);
         self.nodes[parent].kids.push(Kid::Node(child));
         let out = &mut self.nodes[node];
-        out.cursor = Some(index);
+        if moves {
+            out.cursor = Some(index);
+        }
         out.entered[index] = Some(child);
         if tag.role == Role::Heading {
             self.nodes[child].top = Some((self.page, pt(y)));
@@ -200,6 +227,12 @@ impl<'a> Tagger<'a> {
     /// drawn after the rest of their page.
     pub(crate) fn is_foot(&self, node: usize) -> bool {
         matches!(self.nodes[node].kind, Kind::Input(tag) if tag.foot)
+    }
+
+    /// Whether a box of the element instance at `location` is a footnote's
+    /// note, whether or not its node could be entered.
+    pub(crate) fn is_foot_box(&self, location: Location) -> bool {
+        self.feet.iter().any(|tag| is_box_of(tag, location))
     }
 
     /// Adds marked content to `node`: to the `Link` of run `link` in it,

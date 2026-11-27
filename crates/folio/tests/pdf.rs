@@ -115,9 +115,16 @@ fn expected_text(world: &World, variant: Option<&Name>) -> String {
         collect_maths(&page.fragment, &maths, &mut drawn, &mut |at| {
             first_page.entry(at).or_insert(i);
         });
-        let mut page_notes = String::new();
+        let mut page_notes = Vec::new();
         collect_notes(&page.fragment, &notes, Point::zero(), &mut page_notes);
-        on_page.push(page_notes);
+        // From the top of the footnote area down.
+        page_notes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        on_page.push(
+            page_notes
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<String>(),
+        );
     }
     let mut line_page = HashMap::new();
     for (i, page) in pages.pages.iter().enumerate() {
@@ -164,8 +171,13 @@ fn collect_maths(
 }
 
 /// The text of the boxes of notes in `fragment`, at `at`, each line of it
-/// on a line of its own.
-fn collect_notes(fragment: &Fragment, notes: &HashSet<Location>, at: Point, out: &mut String) {
+/// on a line of its own, with the top of the box.
+fn collect_notes(
+    fragment: &Fragment,
+    notes: &HashSet<Location>,
+    at: Point,
+    out: &mut Vec<(f64, String)>,
+) {
     for (pos, item) in fragment.items.iter() {
         if let FragmentItem::Group(group) = item {
             let pos = Point::new(at.x + pos.x, at.y + pos.y);
@@ -173,15 +185,17 @@ fn collect_notes(fragment: &Fragment, notes: &HashSet<Location>, at: Point, out:
             if notes.contains(&location) {
                 let mut found = Vec::new();
                 positioned(group, pos, &mut found);
+                let mut text = String::new();
                 let mut y = None;
                 for (line, run) in found {
                     if y != Some(line) {
-                        out.push('\n');
+                        text.push('\n');
                         y = Some(line);
                     }
-                    out.push_str(&run);
+                    text.push_str(&run);
                 }
-                out.push('\n');
+                text.push('\n');
+                out.push((pos.y.to_pt(), text));
             } else {
                 collect_notes(group, notes, pos, out);
             }
@@ -605,5 +619,57 @@ fn footnotes_follow_their_page_in_content_order() {
         fs::create_dir_all(&out).unwrap();
         fs::write(out.join("footnotes.pdf"), &pdf).unwrap();
         fs::write(out.join("footnotes.txt"), expected).unwrap();
+    }
+}
+
+/// A note in a question-like section: its anchor has a quantity after it
+/// on the same line, an enumerated list follows, and another section
+/// follows on the same page (#308, the acceptance exam's question 4).
+const SECTIONED_FOOTNOTES: &str = "#doc(title: [Resistivity])
+
+= Resistivity
+
+A student makes a resistor from a wire of length $qty(1.50, \"m\")$. The resistivity of the \
+metal#footnote[The resistivity of constantan at room temperature. It changes little with \
+temperature, which is why the alloy is used for resistors.] is $qty(4.9e-7, \"ohm m\")$.
+
++ Show that the resistance of the wire is about 3.7 ohms.
++ Calculate the current in the wire.
+
+= Progressive waves
+
+A microphone connected to an oscilloscope detects the sound from a loudspeaker.
+";
+
+/// The note of [`SECTIONED_FOOTNOTES`] is written after the whole page's
+/// body; with `FOLIO_PDF_OUT` set, `tests/pdf/corpus.py` checks the order.
+#[test]
+fn a_note_in_a_section_follows_the_whole_page() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\n";
+    let mut world = World::new(manifest).unwrap();
+    world.set_source("main.fol", SECTIONED_FOOTNOTES).unwrap();
+    let (pdf, diagnostics) = build(&world);
+    let problems: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error || d.message.contains("PDF"))
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("<pdfuaid:part>1</pdfuaid:part>"));
+    assert_eq!(
+        text.matches("/S/Note").count(),
+        1,
+        "the note keeps its Note"
+    );
+    let expected = expected_text(&world, None);
+    let flat = expected.split_whitespace().collect::<Vec<_>>().join(" ");
+    let last_body = flat.find("detects the sound").unwrap();
+    let note = flat.find("The resistivity of constantan").unwrap();
+    assert!(last_body < note, "{flat}");
+    if let Some(out) = std::env::var_os("FOLIO_PDF_OUT").map(PathBuf::from) {
+        fs::create_dir_all(&out).unwrap();
+        fs::write(out.join("footnotes-sections.pdf"), &pdf).unwrap();
+        fs::write(out.join("footnotes-sections.txt"), expected).unwrap();
     }
 }
