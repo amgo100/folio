@@ -366,6 +366,7 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         loader,
         world: None,
         errors: None,
+        unreadable: false,
         warnings: Vec::new(),
         revision: 0,
         dirty: false,
@@ -428,6 +429,10 @@ struct Engine {
     /// The errors of the manifest or lockfile on disk, which the world did
     /// not take.
     errors: Option<ProjectErrors>,
+    /// Whether `folio.toml` or `folio.lock` could not be read when it last
+    /// changed: the world keeps the last valid one, as with `errors`, and
+    /// nothing is written.
+    unreadable: bool,
     /// Problems reading the project, shown with the next revision.
     warnings: Vec<Diagnostic>,
     revision: u64,
@@ -527,6 +532,7 @@ impl Engine {
     fn load(&mut self) {
         self.world = None;
         self.errors = None;
+        self.unreadable = false;
         let builder = World::builder().long_lived(true).mode(BuildMode::Watch);
         let mut world = match self.loader.world(builder) {
             Ok(world) => world,
@@ -565,7 +571,9 @@ impl Engine {
                 .iter()
                 .any(|path| self.loader_path(path).is_some_and(|rel| rel == name))
         };
-        let project_file = names(loader::MANIFEST) || names(loader::LOCKFILE);
+        // The project directory itself, as after the watcher lost events,
+        // is read again whole, the manifest and lockfile among it.
+        let project_file = names(loader::MANIFEST) || names(loader::LOCKFILE) || names("");
         let Some(world) = &mut self.world else {
             // The project could not be loaded: try again when a file it
             // reads changes.
@@ -593,7 +601,14 @@ impl Engine {
             }
         };
         if project_file {
+            // Cleared only here, where the change is a new revision
+            // (`edited` below), whose check schedules the writes that the
+            // errors held back.
             self.errors = update.errors;
+            // The loader warns about a file it cannot read and keeps the
+            // last valid one, which `folio build` would not.
+            self.unreadable =
+                self.loader.read_manifest().is_err() || self.loader.read_lockfile().is_err();
         }
         let fonts = update.changed.iter().any(|path| {
             path == loader::LOCKFILE
@@ -797,7 +812,14 @@ impl Engine {
             diagnostics: frame.diagnostics,
             files: frame.files,
         })));
-        if self.world.is_some() && self.written < revision && self.settings.on_outputs.is_some() {
+        // Outputs follow the manifest on disk, as `folio build` does: while
+        // it has errors, the pages follow its last valid version, but
+        // nothing is written under it.
+        if self.world.is_some()
+            && self.writable()
+            && self.written < revision
+            && self.settings.on_outputs.is_some()
+        {
             self.idle_at = Some(Instant::now() + self.settings.idle);
         }
     }
@@ -908,17 +930,31 @@ impl Engine {
         });
     }
 
+    /// Whether outputs may be written: not while `folio.toml` or
+    /// `folio.lock` has errors or cannot be read, as `folio build` refuses
+    /// the project then.
+    fn writable(&self) -> bool {
+        self.errors.is_none() && !self.unreadable
+    }
+
     /// Compiles every build on a thread of its own and hands them to the
-    /// outputs hook. An edit cancels the compilation.
+    /// outputs hook, unless the project is not [`Self::writable`]. An edit
+    /// cancels the compilation, and the outputs of a revision an edit has
+    /// overtaken are not handed on.
     fn write_outputs(&mut self) {
         let (Some(world), Some(hook)) = (&self.world, self.settings.on_outputs.clone()) else {
             return;
         };
+        if !self.writable() {
+            // `folio build` refuses the project; so does the writer.
+            return;
+        }
         let revision = self.revision;
         self.written = revision;
         let handle = world.clone();
         let files: Arc<dyn Files + Send + Sync> = Arc::new(world.snapshot());
         let tx = self.tx.clone();
+        let current = self.current.clone();
         let _ = thread::Builder::new()
             .name("folio-preview-write".into())
             .spawn(move || {
@@ -926,8 +962,13 @@ impl Engine {
                 let manifest = handle.manifest().clone();
                 let outputs = folio::compile_builds(&handle, builds);
                 drop(handle);
-                if outputs.iter().any(|o| o.result.is_err()) {
-                    // An edit overtook it; its revision is written instead.
+                // An edit overtook it, and its revision is written instead
+                // if it can be. A manifest that does not parse leaves the
+                // world as it was, so it cancels nothing, but it is a new
+                // revision too.
+                if outputs.iter().any(|o| o.result.is_err())
+                    || current.load(Ordering::Relaxed) != revision
+                {
                     return;
                 }
                 let outputs = outputs

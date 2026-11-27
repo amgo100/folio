@@ -27,10 +27,12 @@
 //!   the element's first paragraph, or in its caption.
 //! - **References**: each `@label` as the text it shows, by its target's
 //!   `ref-format`: the target's reference word in the reference's language
-//!   ([`crate::locale`]) and its number, trimmed of the pattern's text
-//!   before and after (`Figure 3`, `Section 2.1`). An element without
-//!   `numbering` still counts, and a reference to it shows the values as
-//!   `1.1` would. A reference to a label that no shown element has, or to
+//!   ([`crate::locale`]) and its number in the pattern it was numbered
+//!   with (an item's own, or its enum's), trimmed of the pattern's text
+//!   before and after (`Figure 3`, `Section 2.1`, `b` for an item `(b)`).
+//!   An element without `numbering`, or whose pattern has no counting
+//!   symbol, still counts, and a reference to it shows the values as `1.1`
+//!   would. A reference to a label that no shown element has, or to
 //!   an element without a counter, is a warning, and shows [`UNRESOLVED`].
 //!
 //! - **Footnotes** (SPEC §7.8): a footnote counts with the counter
@@ -363,10 +365,7 @@ impl Resolution {
                 let entry = &mut self.numbers.make_mut()[n];
                 // A reference to the footnote shows its number as the
                 // footnote does: the number, after its supplement if any.
-                let shown = |values: &[u64]| match &footnote.pattern {
-                    Some(pattern) => pattern.format_trimmed(values),
-                    None => Pattern::parse("1.1").format(values),
-                };
+                let shown = |values: &[u64]| shown(footnote.pattern.as_ref(), values);
                 let (old, new) = (shown(&entry.values), shown(&[value]));
                 entry.values = EcoVec::from([value]);
                 entry.number = number.clone();
@@ -439,6 +438,7 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
         out: Resolution::default(),
         refs: Vec::new(),
         styles: HashMap::new(),
+        patterns: HashMap::new(),
     };
     walk.out.footnotes_per_page = page_resets(db, build, styled);
     walk.element(&doc.root, &styled.root);
@@ -585,6 +585,10 @@ struct Walk<'a> {
     refs: Vec<PendingRef>,
     /// The style of each target, for its `ref-format`.
     styles: HashMap<Location, ComputedStyle>,
+    /// The pattern each labelled element instance was numbered with, where
+    /// it has one: its own `numbering`, or, for an item, its enum's. A
+    /// reference shows the number as the target does.
+    patterns: HashMap<Location, Pattern>,
 }
 
 /// The counters that components' elements declare `within` another
@@ -774,6 +778,9 @@ impl Walk<'_> {
                 line: Some(line),
             };
             let number = pattern.as_ref().map(|p| p.format(&values));
+            if let Some(pattern) = &pattern {
+                self.patterns.insert(element.location, pattern.clone());
+            }
             self.out.numbers.push(Number {
                 target,
                 counter: name.clone(),
@@ -795,6 +802,12 @@ impl Walk<'_> {
         pattern: Option<&Pattern>,
     ) {
         let number = pattern.map(|p| p.format(&values));
+        // Only a labelled element can be referred to.
+        if let Some(pattern) = pattern
+            && element.label.is_some()
+        {
+            self.patterns.insert(element.location, pattern.clone());
+        }
         self.out.numbers.push(Number {
             target: Target::element(element.location),
             counter,
@@ -983,13 +996,10 @@ impl Walk<'_> {
             return UNRESOLVED.into();
         };
         let style = self.styles.get(&labelled.target.location).cloned();
-        let pattern = style.as_ref().and_then(|s| self.pattern(s));
-        // An element without `numbering` still has its counter's values:
-        // the reference shows them as `1.1` would.
-        let shown = match &pattern {
-            Some(pattern) => pattern.format_trimmed(&number.values),
-            None => Pattern::parse("1.1").format(&number.values),
-        };
+        // The pattern the target was numbered with: an item's own, or its
+        // enum's (#325).
+        let pattern = self.patterns.get(&labelled.target.location);
+        let shown = shown(pattern, &number.values);
         let number_only = matches!(
             style.as_ref().and_then(|s| s.value(self.props, self.ids.ref_format)),
             Some(StyleValue::Keyword(k)) if k.as_str() == "number"
@@ -1103,6 +1113,17 @@ impl Walk<'_> {
         if self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
+    }
+}
+
+/// A number as a reference shows it: formatted by the pattern its element
+/// was numbered with, without the pattern's text before and after. An
+/// element without a pattern, or with one that shows no values, still has
+/// its counter's values, shown as `1.1` would.
+fn shown(pattern: Option<&Pattern>, values: &[u64]) -> EcoString {
+    match pattern.filter(|p| p.counts()) {
+        Some(pattern) => pattern.format_trimmed(values),
+        None => Pattern::parse("1.1").format(values),
     }
 }
 

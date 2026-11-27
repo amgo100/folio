@@ -1,3 +1,8 @@
 // Numbered figures: the caption starts with "Figure 1: ".
 figure { numbering: "1"; }
 figure > caption { font-style: italic; }
+
+// References into nested enumerations (#325): an item takes its enum's
+// pattern, and a reference to it shows the number as the item does.
+enum { numbering: "(a)"; }
+enum enum { numbering: "(i)"; }
