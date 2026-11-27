@@ -346,11 +346,13 @@ fn the_viewer_may_be_framed() {
     assert_eq!(header(&head, "X-Frame-Options"), None, "{head}");
 }
 
-/// Whether Node.js can load Playwright, which the browser test drives
-/// Chromium with.
+/// Whether Node.js can load Playwright and Playwright has its Chromium,
+/// which the browser test drives.
 fn playwright() -> bool {
+    let probe = "process.exit(require('fs').existsSync(\
+                 require('playwright').chromium.executablePath()) ? 0 : 1)";
     std::process::Command::new("node")
-        .args(["-e", "require('playwright')"])
+        .args(["-e", probe])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()

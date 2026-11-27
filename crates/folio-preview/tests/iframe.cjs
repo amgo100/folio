@@ -41,13 +41,31 @@ async function main() {
     page.on('pageerror', (e) => problems.push(String(e)));
     await page.goto(`http://127.0.0.1:${port}/`);
     const frame = page.frameLocator('iframe');
-    // The viewer's pages, drawn on canvases from the display lists that
-    // arrive on its websocket.
-    await frame.locator('#pages .page canvas').first().waitFor({ timeout: TIMEOUT });
-    const status = await frame.locator('#status').textContent({ timeout: TIMEOUT });
-    if (/Connecting/.test(status)) throw new Error(`the viewer did not connect: ${status}`);
-    const blocked = problems.filter((p) => /frame-ancestors|Refused to frame|X-Frame-Options/.test(p));
-    if (blocked.length) throw new Error(blocked.join('\n'));
+    // The status names the revision once its update has arrived on the
+    // websocket, and the first page is drawn on a canvas with a size.
+    const status = frame.locator('#status');
+    await status.filter({ hasText: /revision \d+/ }).waitFor({ timeout: TIMEOUT });
+    const canvas = frame.locator('#pages .page canvas').first();
+    await canvas.waitFor({ timeout: TIMEOUT });
+    const drawn = await canvas.evaluate(async (c) => {
+      // Waits for a frame in which something other than blank is painted.
+      for (let i = 0; i < 300; i++) {
+        if (c.width > 0 && c.height > 0) {
+          const data = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+          for (let j = 0; j < data.length; j += 4) {
+            if (data[j + 3] !== 0 && (data[j] < 250 || data[j + 1] < 250 || data[j + 2] < 250)) {
+              return true;
+            }
+          }
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return false;
+    });
+    if (!drawn) throw new Error('the viewer drew nothing on its first page');
+    const text = await status.textContent();
+    if (!/revision \d+/.test(text)) throw new Error(`the viewer lost its connection: ${text}`);
+    if (problems.length) throw new Error(problems.join('\n'));
   } finally {
     await browser.close();
     embedder.close();

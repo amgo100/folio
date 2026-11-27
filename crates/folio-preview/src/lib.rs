@@ -42,7 +42,10 @@
 //! `Content-Security-Policy` sets no `frame-ancestors` and the server sends
 //! no `X-Frame-Options`. Any page that knows the URL with the token may
 //! frame the viewer; one that does not cannot load it at all, as every
-//! request needs the token. The viewer inside a frame is a page of the
+//! request needs the token. A page that has it could hide the viewer under
+//! a decoy and turn the clicks it catches into reveals of the source in
+//! the editor; that is accepted, as such a page could already open the
+//! websocket itself. The viewer inside a frame is a page of the
 //! preview's own origin, so its websocket passes the `Origin` check. The
 //! policy otherwise loads only the server's own scripts, styles, images and
 //! connections (decision D-332-1).
