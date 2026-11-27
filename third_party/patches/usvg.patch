@@ -1,0 +1,92 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
++++ b/Cargo.toml	2026-11-27 06:05:40.237570921 +0000
+@@ -63,6 +63,9 @@
+     "memmap-fonts",
+ ]
+ 
++[dependencies.libm]
++version = "0.2.16"
++
+ [dependencies.base64]
+ version = "0.22"
+ 
+diff -ruN a/FOLIO.md b/FOLIO.md
+--- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
++++ b/FOLIO.md	2026-11-27 06:05:40.237371959 +0000
+@@ -0,0 +1,23 @@
++# usvg 0.47.0, patched for Folio
++
++This is the crates.io release of `usvg` 0.47.0
++(https://crates.io/crates/usvg/0.47.0), unpacked as published, with Folio's
++patch applied. Folio uses it through `[patch.crates-io]` in its root
++`Cargo.toml`. Its licence is unchanged: Apache-2.0 OR MIT (LICENSE-APACHE, LICENSE-MIT).
++
++Folio's changes make its floating-point code call the `libm` crate where it
++called std's transcendental functions, whose results come from the
++platform's maths library, so that SVG figures give the same PDF bytes on
++every platform (Folio's SPEC §2.4, decision D-300-1). Each changed place
++carries a comment that starts with `Folio:`.
++
++- `src/parser/marker.rs`: the angle of markers with `orient="auto"` (and
++  `auto-start-reverse`) with `libm::atan2f`. This is the call that gave
++  arrowheads other rotations on aarch64 than on x86-64 (#300).
++- `src/parser/units.rs`: the diagonal for percentages and the named font
++  sizes multiply out instead of calling `powi`.
++- `Cargo.toml`: depends on `libm`.
++
++The whole change is `third_party/patches/usvg.patch` in Folio's repository;
++`scripts/patch-third-party.sh` rebuilds this directory from the release and
++the patch, and `third_party/README.md` says how to move to a new release.
+diff -ruN a/src/parser/marker.rs b/src/parser/marker.rs
+--- a/src/parser/marker.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/parser/marker.rs	2026-11-27 06:05:40.238352720 +0000
+@@ -419,7 +419,8 @@
+     }
+ 
+     fn vector_angle(vx: f32, vy: f32) -> f32 {
+-        let rad = vy.atan2(vx);
++        // Folio: libm instead of the platform maths library (SPEC §2.4).
++        let rad = libm::atan2f(vy, vx);
+         if rad.is_nan() { 0.0 } else { normalize(rad) }
+     }
+ 
+diff -ruN a/src/parser/units.rs b/src/parser/units.rs
+--- a/src/parser/units.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/parser/units.rs	2026-11-27 06:05:40.238294155 +0000
+@@ -54,7 +54,9 @@
+                     | AId::Y1
+                     | AId::Y2 => convert_percent(length, view_box.height()),
+                     _ => {
+-                        let mut vb_len = view_box.width().powi(2) + view_box.height().powi(2);
++                        // Folio: multiplied out instead of `powi` (SPEC §2.4).
++                        let mut vb_len = view_box.width() * view_box.width()
++                            + view_box.height() * view_box.height();
+                         vb_len = (vb_len / 2.0).sqrt();
+                         convert_percent(length, vb_len)
+                     }
+@@ -124,7 +126,7 @@
+ }
+ 
+ fn convert_named_font_size(name: &str, parent_font_size: f32) -> f32 {
+-    let factor = match name {
++    let factor: i32 = match name {
+         "xx-small" => -3,
+         "x-small" => -2,
+         "small" => -1,
+@@ -141,5 +143,14 @@
+     };
+ 
+     // 'On a computer screen a scaling factor of 1.2 is suggested between adjacent indexes.'
+-    parent_font_size * 1.2f32.powi(factor)
++    // Folio: multiplied out instead of `powi`, whose result the language
++    // leaves unspecified (SPEC §2.4).
++    let mut scale = 1.0f32;
++    for _ in 0..factor.unsigned_abs() {
++        scale *= 1.2;
++    }
++    if factor < 0 {
++        scale = 1.0 / scale;
++    }
++    parent_font_size * scale
+ }

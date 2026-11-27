@@ -1,0 +1,139 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
++++ b/Cargo.toml	2026-11-27 06:05:39.121558560 +0000
+@@ -73,6 +73,9 @@
+ name = "minimal"
+ path = "examples/minimal.rs"
+ 
++[dependencies.libm]
++version = "0.2.16"
++
+ [dependencies.gif]
+ version = "0.14.1"
+ optional = true
+diff -ruN a/FOLIO.md b/FOLIO.md
+--- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
++++ b/FOLIO.md	2026-11-27 06:05:39.121360501 +0000
+@@ -0,0 +1,25 @@
++# resvg 0.47.0, patched for Folio
++
++This is the crates.io release of `resvg` 0.47.0
++(https://crates.io/crates/resvg/0.47.0), unpacked as published, with Folio's
++patch applied. Folio uses it through `[patch.crates-io]` in its root
++`Cargo.toml`. Its licence is unchanged: Apache-2.0 OR MIT (LICENSE-APACHE, LICENSE-MIT).
++
++Folio's changes make its floating-point code call the `libm` crate where it
++called std's transcendental functions, whose results come from the
++platform's maths library, so that SVG figures give the same PDF bytes on
++every platform (Folio's SPEC §2.4, decision D-300-1). Each changed place
++carries a comment that starts with `Folio:`.
++
++- `src/filter/lighting.rs`: the distant light's direction, the spot
++  light's cone and the specular exponents with `libm` (`cosf`, `sinf`,
++  `powf`).
++- `src/filter/color_matrix.rs`: `hueRotate` with `libm::cosf`/`sinf`.
++- `src/filter/component_transfer.rs`: the `gamma` function with
++  `libm::powf`.
++- `src/filter/iir_blur.rs`: the blur's post-scale with `libm::pow`.
++- `Cargo.toml`: depends on `libm`.
++
++The whole change is `third_party/patches/resvg.patch` in Folio's repository;
++`scripts/patch-third-party.sh` rebuilds this directory from the release and
++the patch, and `third_party/README.md` says how to move to a new release.
+diff -ruN a/src/filter/color_matrix.rs b/src/filter/color_matrix.rs
+--- a/src/filter/color_matrix.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/color_matrix.rs	2026-11-27 06:05:39.123005020 +0000
+@@ -53,8 +53,9 @@
+         }
+         ColorMatrix::HueRotate(angle) => {
+             let angle = angle.to_radians();
+-            let a1 = angle.cos();
+-            let a2 = angle.sin();
++            // Folio: libm instead of the platform maths library (SPEC §2.4).
++            let a1 = libm::cosf(angle);
++            let a2 = libm::sinf(angle);
+             let m = [
+                 0.213 + 0.787 * a1 - 0.213 * a2,
+                 0.715 - 0.715 * a1 - 0.715 * a2,
+diff -ruN a/src/filter/component_transfer.rs b/src/filter/component_transfer.rs
+--- a/src/filter/component_transfer.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/component_transfer.rs	2026-11-27 06:05:39.123060828 +0000
+@@ -65,7 +65,7 @@
+             amplitude,
+             exponent,
+             offset,
+-        } => amplitude * c.powf(*exponent) + offset,
++        } => amplitude * libm::powf(c, *exponent) + offset, // Folio: libm instead of the platform maths library (SPEC §2.4).
+     };
+ 
+     (f32_bound(0.0, c, 1.0) * 255.0) as u8
+diff -ruN a/src/filter/iir_blur.rs b/src/filter/iir_blur.rs
+--- a/src/filter/iir_blur.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/iir_blur.rs	2026-11-27 06:05:39.123280327 +0000
+@@ -135,8 +135,11 @@
+         (1.0, 1.0)
+     };
+ 
+-    let post_scale =
+-        ((dnu_x * dnu_y).sqrt() / (lambda_x * lambda_y).sqrt()).powi(2 * d.steps as i32);
++    // Folio: libm instead of the platform maths library (SPEC §2.4).
++    let post_scale = libm::pow(
++        (dnu_x * dnu_y).sqrt() / (lambda_x * lambda_y).sqrt(),
++        f64::from(2 * d.steps as i32),
++    );
+     buf.iter_mut().for_each(|v| *v *= post_scale);
+ }
+ 
+diff -ruN a/src/filter/lighting.rs b/src/filter/lighting.rs
+--- a/src/filter/lighting.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/filter/lighting.rs	2026-11-27 06:05:39.123342308 +0000
+@@ -197,7 +197,7 @@
+             if fe.specular_exponent().approx_eq_ulps(&1.0, 4) {
+                 n_dot_h
+             } else {
+-                n_dot_h.powf(fe.specular_exponent())
++                libm::powf(n_dot_h, fe.specular_exponent()) // Folio: libm instead of the platform maths library (SPEC §2.4).
+             }
+         } else {
+             let mut n = normal.normal * (fe.surface_scale() / 255.0);
+@@ -210,7 +210,7 @@
+             if fe.specular_exponent().approx_eq_ulps(&1.0, 4) {
+                 n_dot_h
+             } else {
+-                n_dot_h.powf(fe.specular_exponent())
++                libm::powf(n_dot_h, fe.specular_exponent()) // Folio: libm instead of the platform maths library (SPEC §2.4).
+             }
+         };
+ 
+@@ -249,10 +249,11 @@
+         LightSource::DistantLight(light) => {
+             let azimuth = light.azimuth.to_radians();
+             let elevation = light.elevation.to_radians();
++            // Folio: libm instead of the platform maths library (SPEC §2.4).
+             Vector3::new(
+-                azimuth.cos() * elevation.cos(),
+-                azimuth.sin() * elevation.cos(),
+-                elevation.sin(),
++                libm::cosf(azimuth) * libm::cosf(elevation),
++                libm::sinf(azimuth) * libm::cosf(elevation),
++                libm::sinf(elevation),
+             )
+         }
+         _ => Vector3::new(1.0, 1.0, 1.0),
+@@ -324,12 +325,14 @@
+             }
+ 
+             if let Some(limiting_cone_angle) = light.limiting_cone_angle {
+-                if minus_l_dot_s < limiting_cone_angle.to_radians().cos() {
++                // Folio: libm instead of the platform maths library (SPEC §2.4).
++                if minus_l_dot_s < libm::cosf(limiting_cone_angle.to_radians()) {
+                     return Color::black();
+                 }
+             }
+ 
+-            let factor = minus_l_dot_s.powf(light.specular_exponent.get());
++            // Folio: libm instead of the platform maths library (SPEC §2.4).
++            let factor = libm::powf(minus_l_dot_s, light.specular_exponent.get());
+             let compute = |x| (f32_bound(0.0, x as f32 * factor, 255.0) + 0.5) as u8;
+ 
+             Color::new_rgb(

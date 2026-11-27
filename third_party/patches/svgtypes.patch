@@ -1,0 +1,66 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
++++ b/Cargo.toml	2026-11-27 06:05:39.341487308 +0000
+@@ -49,6 +49,9 @@
+ name = "svgtypes"
+ path = "src/lib.rs"
+ 
++[dependencies.libm]
++version = "0.2.16"
++
+ [dependencies.kurbo]
+ version = "0.13"
+ default-features = false
+diff -ruN a/FOLIO.md b/FOLIO.md
+--- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
++++ b/FOLIO.md	2026-11-27 06:05:39.341299003 +0000
+@@ -0,0 +1,20 @@
++# svgtypes 0.16.2, patched for Folio
++
++This is the crates.io release of `svgtypes` 0.16.2
++(https://crates.io/crates/svgtypes/0.16.2), unpacked as published, with Folio's
++patch applied. Folio uses it through `[patch.crates-io]` in its root
++`Cargo.toml`. Its licence is unchanged: Apache-2.0 OR MIT (LICENSE-APACHE, LICENSE-MIT).
++
++Folio's changes make its floating-point code call the `libm` crate where it
++called std's transcendental functions, whose results come from the
++platform's maths library, so that SVG figures give the same PDF bytes on
++every platform (Folio's SPEC §2.4, decision D-300-1). Each changed place
++carries a comment that starts with `Folio:`.
++
++- `src/transform.rs`: `rotate`, `skewX` and `skewY` with `libm::cos`,
++  `sin` and `tan`.
++- `Cargo.toml`: depends on `libm`.
++
++The whole change is `third_party/patches/svgtypes.patch` in Folio's repository;
++`scripts/patch-third-party.sh` rebuilds this directory from the release and
++the patch, and `third_party/README.md` says how to move to a new release.
+diff -ruN a/src/transform.rs b/src/transform.rs
+--- a/src/transform.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/transform.rs	2026-11-27 06:05:39.342729698 +0000
+@@ -246,18 +246,21 @@
+                 }
+                 TransformListToken::Rotate { angle } => {
+                     let v = angle.to_radians();
+-                    let a = v.cos();
+-                    let b = v.sin();
++                    // Folio: libm instead of the platform maths library (SPEC §2.4).
++                    let a = libm::cos(v);
++                    let b = libm::sin(v);
+                     let c = -b;
+                     let d = a;
+                     ts = multiply(&ts, &Self::new(a, b, c, d, 0.0, 0.0));
+                 }
+                 TransformListToken::SkewX { angle } => {
+-                    let c = angle.to_radians().tan();
++                    // Folio: libm instead of the platform maths library (SPEC §2.4).
++                    let c = libm::tan(angle.to_radians());
+                     ts = multiply(&ts, &Self::new(1.0, 0.0, c, 1.0, 0.0, 0.0));
+                 }
+                 TransformListToken::SkewY { angle } => {
+-                    let b = angle.to_radians().tan();
++                    // Folio: libm instead of the platform maths library (SPEC §2.4).
++                    let b = libm::tan(angle.to_radians());
+                     ts = multiply(&ts, &Self::new(1.0, b, 0.0, 1.0, 0.0, 0.0));
+                 }
+             }
