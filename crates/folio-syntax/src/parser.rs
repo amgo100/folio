@@ -427,9 +427,13 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
                 ast::Assoc::Left => prec + 1,
                 ast::Assoc::Right => prec,
             };
-            let m_rhs = p.marker();
-            math_expr_prec(p, prec, chain_set);
-            math_unparen(p, m_rhs);
+            if wrapper == SyntaxKind::MathAttach {
+                math_script(p, prec, chain_set);
+            } else {
+                let m_rhs = p.marker();
+                math_expr_prec(p, prec, chain_set);
+                math_unparen(p, m_rhs);
+            }
         }
 
         // Avoid interrupting a chain when initially parsing a prime.
@@ -439,9 +443,7 @@ fn math_expr_prec(p: &mut Parser<'_>, min_prec: u8, stop_set: SyntaxSet) {
             while p.at_set(chain_set) {
                 chain_set = chain_set.remove(p.current());
                 p.eat();
-                let m_chain_rhs = p.marker();
-                math_expr_prec(p, prec, chain_set);
-                math_unparen(p, m_chain_rhs);
+                math_script(p, prec, chain_set);
             }
         }
 
@@ -558,6 +560,60 @@ fn math_chain_group(p: &mut Parser<'_>) {
         if balance == 0 {
             break;
         }
+    }
+}
+
+/// Parses the script after `^` or `_`: one operand, whose parentheses are
+/// removed (`x^(a+b)`).
+///
+/// A sign directly followed by an operand binds to it, so that `10^-3`,
+/// `e^-x` and `x_+1` take the signed operand as their script, as
+/// `10^(-3)` does (SPEC §8.1, D-323-1). A sign with a space or nothing
+/// after it is the script alone, as in the electron `e^-` or the ion
+/// `Cl^- + Na^+`.
+fn math_script(p: &mut Parser<'_>, prec: u8, stop_set: SyntaxSet) {
+    let m = p.marker();
+    if math_sign_binds(p) {
+        p.eat();
+        math_expr_prec(p, prec, stop_set);
+        p.wrap(m, SyntaxKind::Math);
+    } else {
+        math_expr_prec(p, prec, stop_set);
+        math_unparen(p, m);
+    }
+}
+
+/// Whether the parser is at a sign (`-`, `+` or `−`) directly followed by
+/// something that starts an operand: a name, a number or letter, a bracket,
+/// a root, a string, an escape or embedded code.
+fn math_sign_binds(p: &Parser<'_>) -> bool {
+    let sign = match p.current() {
+        SyntaxKind::MathShorthand => p.current_text() == "-",
+        SyntaxKind::MathText => matches!(p.current_text(), "+" | "−"),
+        _ => false,
+    };
+    if !sign {
+        return false;
+    }
+    let (kind, node) = p.lexer.clone().next();
+    match kind {
+        SyntaxKind::MathIdent
+        | SyntaxKind::MathFieldAccess
+        | SyntaxKind::Hash
+        | SyntaxKind::LeftParen
+        | SyntaxKind::Root
+        | SyntaxKind::Str
+        | SyntaxKind::Escape => true,
+        // An opening bracket, but not `|]`, which the lexer gives as a brace.
+        SyntaxKind::LeftBrace => true,
+        SyntaxKind::MathText => node.leaf_text().chars().next().is_some_and(|c| {
+            c.is_alphanumeric()
+                || matches!(
+                    default_math_class(c),
+                    Some(MathClass::Alphabetic | MathClass::Normal)
+                )
+        }),
+        _ => false,
     }
 }
 
