@@ -2011,6 +2011,8 @@ fn field(target: Value, name: &str, span: Span) -> EvalResult<Value> {
         },
         Value::Module(module) => match module.scope().get(name) {
             Some(value) => Ok(value.clone()),
+            // `tok.warn`: a token reference (SPEC §5.4).
+            None if let Some(token) = module.token(name) => Ok(token),
             None if module.failed(name) => Err(Stop::Reported),
             None => bail!(span, "module `{}` does not contain `{name}`", module.name()),
         },

@@ -434,6 +434,69 @@ fn local_overrides_and_hints() {
     );
 }
 
+/// Content names a token `tok.name` (SPEC §5.4): evaluation keeps the name
+/// and each build resolves it against its own tokens, so a variant's
+/// overlay that redefines the token changes the value in that variant.
+#[test]
+fn token_references_in_content() {
+    let tokens = world(
+        "#figure(override: (space-before: tok.gap, color: tok.warn), width: tok.half)[] \
+         #figure(override: (padding: (tok.gap, 2pt)))[]\n",
+        &[
+            (
+                "styles/main.fsty",
+                "$gap: 6pt;\n$warn: #d62728;\n$half: 50%;\n",
+            ),
+            ("styles/markscheme.fsty", "$gap: 9pt;\n"),
+        ],
+    );
+    let exam = styled(&tokens, "exam", Target::Pdf);
+    let figures = all(&exam, "figure");
+    assert_eq!(get(&exam, figures[0], "space-before"), pt(6.0));
+    assert_eq!(
+        get(&exam, figures[0], "color"),
+        Value::Color(Color::rgb(0xd6, 0x27, 0x28))
+    );
+    let literal = world("#figure(width: 50%)[]\n", &[]);
+    let literal = styled(&literal, "exam", Target::Pdf);
+    assert_eq!(
+        get(&exam, figures[0], "width"),
+        get(&literal, first(&literal, "figure"), "width")
+    );
+    let literal = world("#figure(override: (padding: (6pt, 2pt)))[]\n", &[]);
+    let literal = styled(&literal, "exam", Target::Pdf);
+    assert_eq!(
+        get(&exam, figures[1], "padding"),
+        get(&literal, first(&literal, "figure"), "padding")
+    );
+    let markscheme = styled(&tokens, "markscheme", Target::Pdf);
+    assert_eq!(
+        get(&markscheme, all(&markscheme, "figure")[0], "space-before"),
+        pt(9.0)
+    );
+    // The hint resolves like any other value; nothing lays figure widths
+    // out yet.
+    assert_eq!(
+        messages(&tokens),
+        ["`width` is not implemented yet for `figure`, so it has no effect"]
+    );
+
+    // An unknown token is an error at the element, in the build.
+    let unknown = world("#figure(override: (space-before: tok.gpa))[]\n", &[]);
+    assert_eq!(messages(&unknown), ["unknown token `$gpa`"]);
+
+    // A script cannot compute with a token reference.
+    let computed = world("#figure(override: (space-before: tok.gap * 2))[]\n", &[]);
+    let compiled = folio::compile(&computed, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert!(
+        compiled.diagnostics[0]
+            .message
+            .starts_with("cannot multiply a token and an int: a token's value is known only"),
+        "{:?}",
+        compiled.diagnostics
+    );
+}
+
 /// Inline declarations rank by form, whatever order their fields are
 /// written in (SPEC §5.4): hints, then scoped hints, then `override`, then
 /// scoped `override@…`.
