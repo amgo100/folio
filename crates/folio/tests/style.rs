@@ -491,6 +491,20 @@ fn token_references_in_content() {
     assert_eq!(compiled.diagnostics[0].message, "unknown token `tok.gpa`");
     assert_eq!(compiled.diagnostics[0].hints[0], "did you mean `tok.gap`?");
 
+    // Deeper than an item of a list, a token reference is not resolved.
+    let nested = world(
+        "#figure(override: (padding: ((tok.gap,), 2pt)))[]\n",
+        &[("styles/main.fsty", "$gap: 6pt;\n")],
+    );
+    let compiled = folio::compile(&nested, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert!(
+        compiled.diagnostics[0]
+            .message
+            .ends_with("`tok.gap` can be a whole value or an item of a list only, not nested deeper"),
+        "{:?}",
+        compiled.diagnostics
+    );
+
     // A token reference is not text, and has no value to compare yet.
     for (source, start) in [
         (

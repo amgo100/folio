@@ -104,6 +104,12 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
             }
             Value::Dict(pairs)
         }
+        // Resolved only as a whole value or an item of a list (SPEC §5.4).
+        V::Token(name) => {
+            return Err(eco_format!(
+                "`tok.{name}` can be a whole value or an item of a list only, not nested deeper"
+            ));
+        }
         other => {
             return Err(eco_format!(
                 "{} cannot be a property value",

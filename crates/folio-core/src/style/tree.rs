@@ -714,7 +714,7 @@ fn holds_token(value: &Value) -> bool {
 fn resolve_tokens(values: &Values<'_>, value: &Value, span: Span) -> Option<Declared> {
     match value {
         Value::Token(name) => values.token(name, span),
-        Value::Array(items) => items
+        Value::Array(items) if holds_token(value) => items
             .iter()
             .map(|item| match item {
                 Value::Token(name) => values.token(name, span),
