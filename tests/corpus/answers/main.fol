@@ -8,7 +8,7 @@ Sketch a graph of the car's velocity against time for these #qty(6.0, "s"). Use 
 
 #figure(class: "working")[]
 
-Calculate the acceleration of the car.
+Calculate the acceleration $a$ of the car, using $v = u + a t$.
 
 #figure(class: "answer")[]
 
