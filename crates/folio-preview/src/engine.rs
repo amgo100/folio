@@ -762,8 +762,9 @@ impl Engine {
     /// truncate and the end of the write of a save in place: any file
     /// still open for writing, and the sources that read [`torn`]; and
     /// holds them until their writers close them, [`MAX_HOLD`] at most.
-    /// Returns the world's sources as they are, by project path, which
-    /// [`Self::recheck`] checks the loader's reads against.
+    /// Returns the files whose hold ran out, which [`Self::recheck`] lets
+    /// through as they are, or `None` when nothing is held: no watcher
+    /// that reports closes, or no world.
     fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Option<Before> {
         // Released files are read as they are, once.
         let released: BTreeSet<PathBuf> = paths
@@ -837,17 +838,20 @@ impl Engine {
     /// under several, through links inside the project, or under a
     /// directory read again, and whether it is being written is told by
     /// its path or the path it resolves to. Returns whether it put any
-    /// back: the world changed twice, which cancelled the check running,
-    /// so its revision must be checked again.
+    /// back (the world changed twice, which cancelled the check running,
+    /// so its revision must be checked again), and the sources read torn
+    /// that it could not put back.
     fn recheck(
         &mut self,
         before: Option<Before>,
         changed: &mut BTreeSet<String>,
         warned: usize,
-    ) -> bool {
+    ) -> (bool, BTreeSet<String>) {
         let Some(before) = before else {
-            return false;
+            return (false, BTreeSet::new());
         };
+        // Read torn, held, and not put back.
+        let mut kept = BTreeSet::new();
         // The files being written: open, or with a write waiting to be
         // handled, by their paths and the paths they resolve to.
         self.queue.extend(self.rx.try_iter());
@@ -901,6 +905,7 @@ impl Engine {
                 held.push((file, rel));
             } else {
                 self.held.entry(file).or_insert(Instant::now() + MAX_HOLD);
+                kept.insert(rel);
             }
         }
         let restored = !held.is_empty();
@@ -916,29 +921,41 @@ impl Engine {
             });
             self.held.entry(file).or_insert(until);
         }
-        restored
+        (restored, kept)
     }
 
-    /// Records the world's texts of all its sources ([`Self::texts`]).
+    /// Records the world's texts of all its sources ([`Self::texts`]),
+    /// but for those still open for writing, which keep the text recorded
+    /// before, as the world's may be a torn read.
     fn record_all(&mut self) {
-        self.texts = self.world.as_ref().map_or_else(HashMap::new, |world| {
-            world
-                .source_paths()
-                .filter_map(|path| {
-                    let path = path.as_str();
-                    Some((path.to_owned(), world.source(path)?))
-                })
-                .collect()
-        });
+        let Some(world) = &self.world else {
+            self.texts.clear();
+            return;
+        };
+        let mut texts = HashMap::new();
+        for path in world.source_paths() {
+            let path = path.as_str();
+            let open =
+                !self.open.is_empty() && self.open.contains(&resolved(&self.root.join(path)));
+            let text = match open {
+                true => self.texts.get(path).cloned().or_else(|| world.source(path)),
+                false => world.source(path),
+            };
+            if let Some(text) = text {
+                texts.insert(path.to_owned(), text);
+            }
+        }
+        self.texts = texts;
     }
 
     /// Records the world's texts of the sources at the paths that changed
-    /// ([`Self::texts`]).
-    fn record(&mut self, changed: &BTreeSet<String>) {
+    /// ([`Self::texts`]), but for those in `torn`, read torn and held
+    /// without their text put back.
+    fn record(&mut self, changed: &BTreeSet<String>, torn: &BTreeSet<String>) {
         let Some(world) = &self.world else {
             return;
         };
-        for rel in changed {
+        for rel in changed.difference(torn) {
             match world.source(rel) {
                 Some(source) => self.texts.insert(rel.clone(), source),
                 None => self.texts.remove(rel),
@@ -1032,8 +1049,8 @@ impl Engine {
                 return;
             }
         };
-        let restored = self.recheck(before, &mut update.changed, warned);
-        self.record(&update.changed);
+        let (restored, torn) = self.recheck(before, &mut update.changed, warned);
+        self.record(&update.changed, &torn);
         if project_file {
             // Cleared only here, where the change is a new revision
             // (`edited` below), whose check schedules the writes that the
