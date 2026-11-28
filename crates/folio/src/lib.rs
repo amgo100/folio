@@ -418,6 +418,30 @@ pub fn styles(
     })
 }
 
+/// What a variant of the world's document shows for a target (SPEC §2.1,
+/// §6.2, §6.3): its document tree after Select, with the content the
+/// variant does not show left out (`display: none`, `#in-variant` of
+/// another variant, `#except-variant` of this one, what `show-only` leaves
+/// out) and placeholders in place of the content they replace; or `None`
+/// when the document could not be styled. The variant is `None` only for a
+/// project that declares no variants.
+///
+/// The problems found are diagnostics that [`compile`] reports for the
+/// build. Fails only when an edit to the world cancels it.
+pub fn select(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+) -> Result<Option<model::Document>, Cancelled> {
+    catch(world, || {
+        let db = world.db();
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        folio_core::pipeline::selected_root(db, build).map(|root| model::Document {
+            root: root.clone(),
+        })
+    })
+}
+
 /// Resolves the counters, markers, labels and cross-references of a variant
 /// of the world's document for a target (SPEC §2.1, §4.5): each numbered
 /// element's values and number, the marker set before its content, what

@@ -705,7 +705,8 @@ fn keys_that_are_not_implemented_yet() {
         ),
         "strict mode is not implemented yet, so overrides in content are not checked \
          @ \"strict\"\n  \
-         hint: until it is, strict mode only makes an unpinned system font an error\n\
+         hint: until it is, strict mode only makes an unpinned system font and a reference to \
+         content the variant does not show errors\n\
          `strict-paths` is not implemented yet, so it has no effect @ \"questions/**\"\n  \
          hint: strict mode does not check content for overrides yet\n\
          `allow-overrides-sheet` is not implemented yet, so it has no effect @ true\n  \

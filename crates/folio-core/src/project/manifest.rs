@@ -414,7 +414,10 @@ impl Manifest {
                     formatting.mode.span,
                     "strict mode is not implemented yet, so overrides in content are not checked",
                 )
-                .with_hint("until it is, strict mode only makes an unpinned system font an error"),
+                .with_hint(
+                    "until it is, strict mode only makes an unpinned system font and a \
+                     reference to content the variant does not show errors",
+                ),
             );
         }
         if let Some(first) = formatting.strict_paths.first() {

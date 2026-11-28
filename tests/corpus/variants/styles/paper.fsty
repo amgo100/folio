@@ -1,0 +1,18 @@
+// The paper (SPEC §6.2): content says what things are, and the variant
+// overlay decides what each variant shows.
+page { page-size: A5; margin-top: 15mm; margin-bottom: 15mm; margin-inner: 15mm; margin-outer: 15mm; }
+doc { font: "Source Serif 4"; font-size: 10.5pt; }
+heading { font-size: 13pt; space-after: 6pt; keep-with-next: true; }
+enum-item { space-before: 8pt; }
+
+figure.space { rule-lines: 3; space-before: 2pt; }
+figure.answer { display: none; }
+strong.mark { display: none; }
+emph.hint { display: placeholder("(The hint is given in the mark scheme.)"); }
+
+@variant markscheme {
+  figure.space { display: none; }
+  figure.answer { display: block; border: 0.5pt solid #808080; padding: 4pt; space-before: 4pt; }
+  strong.mark { display: inline; }
+  emph.hint { display: inline; }
+}
