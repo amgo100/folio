@@ -291,6 +291,44 @@ fn builds_the_chosen_variants_into_the_manifest_path() {
     assert!(stderr(&output).contains("declares no variant `slides`"));
 }
 
+/// `folio check --report overrides` lists the local overrides on
+/// standard output, by file and position (SPEC §5.4).
+#[test]
+fn check_reports_local_overrides() {
+    let manifest = format!(
+        "{MANIFEST}\n[variants.exam]\ntargets = [\"pdf\"]\n\n[variants.markscheme]\ntargets = [\"pdf\"]\n\n\
+         [formatting]\noverrides-sheet = \"styles/overrides.fsty\"\n"
+    );
+    let dir = project(&[
+        ("folio.toml", &manifest),
+        (
+            "styles/overrides.fsty",
+            "#{fig:ball} {\n  space-after: 4pt;\n}\n",
+        ),
+        (
+            "main.fol",
+            "#rule @variant markscheme strong { font-weight: 400; }\n\
+             = Forces\n\n\
+             #figure(placement: wrap, override: (space-before: 24pt))[A] <fig:ball>\n\n\
+             Read #styled(font-weight: 700)[carefully] now.\n",
+        ),
+    ]);
+    let output = folio(dir.path(), &["check", "--report", "overrides"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "main.fol:1:2: scoped-rule @variant markscheme strong: font-weight\n\
+         main.fol:4:2: hint figure <fig:ball>: placement\n\
+         main.fol:4:2: override figure <fig:ball>: space-before\n\
+         main.fol:6:7: styled: font-weight\n\
+         styles/overrides.fsty:1:1: id-rule #{fig:ball}: space-after\n"
+    );
+    // Without the flag, nothing is listed.
+    let output = folio(dir.path(), &["check"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(output.stdout.is_empty());
+}
+
 #[test]
 fn rejects_what_is_not_supported_yet() {
     let dir = project(&[("folio.toml", MANIFEST), ("main.fol", "Text.\n")]);
@@ -300,7 +338,6 @@ fn rejects_what_is_not_supported_yet() {
         &["build", "--strict-a11y"],
         &["present"],
         &["check", "--leaks"],
-        &["check", "--report", "overrides"],
         &["promote"],
     ] {
         let output = folio(dir.path(), args);

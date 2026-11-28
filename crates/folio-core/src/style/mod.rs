@@ -32,6 +32,7 @@
 //! interface settles.
 
 mod computed;
+mod overrides;
 mod props;
 mod rules;
 mod selector;
@@ -40,6 +41,8 @@ mod tree;
 mod value;
 
 pub use self::computed::{Computed, ComputedStyle, PropertyGroup};
+pub(crate) use self::overrides::is_styled;
+pub use self::overrides::{OVERRIDE_LITERAL, Override, OverrideForm, STYLED, local_overrides};
 pub use self::props::{GroupId, PropId, Properties, Property};
 pub use self::rules::{
     BASE_STYLESHEET, Cascade, Decl, DeclValue, Origin, Priority, Rule, StepRule, Steps, cascade,

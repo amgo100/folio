@@ -311,6 +311,50 @@ pub(crate) fn diagnostics(
     out
 }
 
+/// The local overrides of a check (SPEC §5.4), as the request
+/// `folio/overrides` answers them, by the project path of the file they
+/// are written in: each with its URI, range, form, subject, label,
+/// properties and scope.
+pub(crate) fn overrides(
+    files: &dyn Files,
+    list: &[folio::Override],
+    uris: &Uris<'_>,
+    encoding: Encoding,
+) -> BTreeMap<String, Vec<serde_json::Value>> {
+    let mut out: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+    let mut indexes: HashMap<folio::FileId, String> = HashMap::new();
+    for item in list {
+        let Some(location) = diag::locate(files, item.span.into()) else {
+            continue;
+        };
+        let Some(uri) = uris.get(&location.path) else {
+            continue;
+        };
+        if !indexes.contains_key(&location.id)
+            && let Some(lines) = files.lines(location.id)
+        {
+            indexes.insert(location.id, lines.text().to_owned());
+        }
+        let range = indexes
+            .get(&location.id)
+            .map_or_else(lsp::Range::default, |text| {
+                LineIndex::new(text).range(location.bytes.clone(), encoding)
+            });
+        out.entry(location.path.to_string())
+            .or_default()
+            .push(serde_json::json!({
+                "uri": uri,
+                "range": range,
+                "form": item.form.name(),
+                "subject": item.subject,
+                "label": item.label,
+                "properties": item.properties,
+                "scope": item.scope,
+            }));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

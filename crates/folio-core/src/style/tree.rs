@@ -19,6 +19,7 @@ use folio_syntax::{Span, SyntaxNode};
 use folio_text::Lang;
 
 use super::computed::{ComputedStyle, Styler};
+use super::overrides::{OVERRIDE_LITERAL, is_style_field, is_styled, literal_colours};
 use super::props::Properties;
 use super::rules::{Cascade, Compiler, Decl, DeclValue, Origin, Rule, StepRule, cascade};
 use super::selector::{Attr, Needs, NodeName, NodeView, Position, Role, Subject};
@@ -738,6 +739,19 @@ impl<'a> Walker<'a> {
             return;
         }
         self.compiler.lint_rule(&compiled);
+        for literal in literal_colours(rule) {
+            diag::report(
+                self.db,
+                Diagnostic::warning(
+                    literal.span(),
+                    eco_format!("a raw colour, `{}`, in a scoped rule", literal.full_text()),
+                )
+                .with_code(OVERRIDE_LITERAL)
+                .with_hint(
+                    "define a token for it in a stylesheet (`$warn: #d62728;`) and write `$warn` here",
+                ),
+            );
+        }
         for rule in &compiled.rules {
             self.scoped_needs.add(&rule.selector);
         }
@@ -778,8 +792,9 @@ impl<'a> Walker<'a> {
     /// `override`, then scoped `override@…`.
     fn inline(&self, element: &Element) -> Vec<Decl> {
         // One list per form, in rank order: [hint, scoped hint, override,
-        // scoped override].
-        let mut ranked: [Vec<Decl>; 4] = Default::default();
+        // scoped override, the fields of `styled`].
+        let mut ranked: [Vec<Decl>; 5] = Default::default();
+        let styled = is_styled(&element.name);
         for (key, value) in element.fields.iter() {
             let (field, scope) = match key.split_once('@') {
                 Some((field, scope)) => (field, Some(scope)),
@@ -805,6 +820,11 @@ impl<'a> Walker<'a> {
                 && let Some(decl) = self.inline_decl(key, field, value, element.span)
             {
                 ranked[scoped].push(decl);
+            } else if styled
+                && is_style_field(field)
+                && let Some(decl) = self.inline_decl(key, field, value, element.span)
+            {
+                ranked[4].push(decl);
             }
         }
         ranked.into_iter().flatten().collect()
@@ -818,6 +838,19 @@ impl<'a> Walker<'a> {
         let prop = self.compiler.property_named(name, span)?;
         let property = self.cascade.properties.get(prop);
         let declared = self.resolve_tokens(value, span)?;
+        if holds_colour(value) {
+            diag::report(
+                self.db,
+                Diagnostic::warning(
+                    span,
+                    eco_format!("a raw colour for `{}` in `{key}`", property.name),
+                )
+                .with_code(OVERRIDE_LITERAL)
+                .with_hint(
+                    "define a token for it in a stylesheet (`$warn: #d62728;`) and name it here as `tok.warn`",
+                ),
+            );
+        }
         if let Err(message) = check(&declared, &property.ty, true) {
             diag::report(
                 self.db,
@@ -1026,6 +1059,17 @@ fn word(value: &folio_component::Value) -> Option<EcoString> {
 /// Whether a value is a token reference or a list with one as an item. It
 /// looks one level deep only: values can share parts, and a walk of all of
 /// them could take exponential time.
+/// Whether a value of content is or holds a colour written as a literal,
+/// such as `rgb("d62728")`, rather than a token reference: the lint
+/// `override-literal` (SPEC §5.4).
+fn holds_colour(value: &Value) -> bool {
+    match value {
+        Value::Color(_) => true,
+        Value::Array(items) => items.iter().any(holds_colour),
+        _ => false,
+    }
+}
+
 fn holds_token(value: &Value) -> bool {
     match value {
         Value::Token(_) => true,

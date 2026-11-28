@@ -355,6 +355,53 @@ fn diagnostics_follow_typing() {
     client.shut_down();
 }
 
+/// `folio/overrides` answers the local overrides of the last check, with
+/// their ranges, and follows the editor's buffer (SPEC §5.4, §12.3).
+#[test]
+fn overrides_are_listed() {
+    let dir = project(&manifest(folio::VERSION), VALID);
+    let main = uri(&dir.path().join("main.fol"));
+    let mut client = Client::start(dir.path(), |_| {});
+    client.settle();
+    let response = client.request("folio/overrides", json!({}));
+    assert_eq!(response.response_result.unwrap(), json!([]));
+
+    client.open(&main, VALID);
+    client.change(
+        &main,
+        2,
+        [2, 17, 2, 17],
+        "\n#figure(override: (space-before: 2pt))[]",
+    );
+    client.settle();
+    let response = client.request(
+        "folio/overrides",
+        json!({ "textDocument": { "uri": main } }),
+    );
+    let list = response.response_result.expect("an answer");
+    assert_eq!(
+        list,
+        json!([{
+            "uri": main,
+            "range": {
+                "start": { "line": 3, "character": 1 },
+                "end": { "line": 3, "character": 40 },
+            },
+            "form": "override",
+            "subject": "figure",
+            "label": null,
+            "properties": ["space-before"],
+            "scope": null,
+        }])
+    );
+    let response = client.request(
+        "folio/overrides",
+        json!({ "textDocument": { "uri": "file:///elsewhere/main.fol" } }),
+    );
+    assert!(response.response_result.is_err());
+    client.shut_down();
+}
+
 /// A gate that holds the first query to run after it is armed until an
 /// edit asks the running queries to stop.
 #[derive(Default)]

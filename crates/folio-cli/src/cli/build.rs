@@ -39,8 +39,23 @@ pub(crate) fn build(args: &ProjectArgs) -> ExitCode {
 /// Runs `folio build` or `folio check`, showing the layout diagnostics
 /// that `layout` shows.
 pub(super) fn run_command(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics) -> ExitCode {
+    run_command_then(args, mode, layout, None)
+}
+
+/// What a command does after its builds, with the world and the builds it
+/// chose, such as listing their local overrides (`folio check --report
+/// overrides`). It returns whether it failed.
+pub(super) type Then<'a> = &'a dyn Fn(&World, &[BuildKey], &mut Report) -> bool;
+
+/// [`run_command`], running `then` after the builds when they were run.
+pub(super) fn run_command_then(
+    args: &ProjectArgs,
+    mode: Mode,
+    layout: LayoutDiagnostics,
+    then: Option<Then<'_>>,
+) -> ExitCode {
     let mut report = Report::new(args);
-    let status = run(args, mode, layout, &mut report);
+    let status = run(args, mode, layout, &mut report, then);
     report.finish();
     status
 }
@@ -63,7 +78,13 @@ enum Done {
 }
 
 /// Builds or checks, reporting what it finds to `report`.
-fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut Report) -> ExitCode {
+fn run(
+    args: &ProjectArgs,
+    mode: Mode,
+    layout: LayoutDiagnostics,
+    report: &mut Report,
+    then: Option<Then<'_>>,
+) -> ExitCode {
     let mut fail = |message: String| {
         report.diagnostics(&TextFiles::new(), &[error(message)]);
         ExitCode::from(FAILURE)
@@ -122,7 +143,10 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
         world.set_today(Some(today));
     }
 
-    let outputs: Vec<(BuildKey, Outcome)> = if diagnostics.iter().any(Diagnostic::is_error) {
+    let chosen = builds.clone();
+    // Problems before compiling stop the builds, and what comes after them.
+    let diagnostics_before = diagnostics.iter().any(Diagnostic::is_error);
+    let outputs: Vec<(BuildKey, Outcome)> = if diagnostics_before {
         Vec::new()
     } else {
         match mode {
@@ -234,6 +258,12 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
                 failed = true;
             }
         }
+    }
+    if let Some(then) = then
+        && !chosen.is_empty()
+        && !diagnostics_before
+    {
+        failed |= then(&world, &chosen, report);
     }
     if failed {
         ExitCode::from(FAILURE)

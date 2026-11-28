@@ -193,7 +193,9 @@ pub(crate) struct CheckArgs {
     #[arg(long)]
     pub(crate) leaks: bool,
 
-    /// List the local overrides (not yet supported)
+    /// Also list the local overrides of the checked builds on standard
+    /// output, one per line: the id rules of the overrides sheet, scoped
+    /// rules, layout hints, `override` fields and `styled` spans
     #[arg(long, value_name = "WHAT", value_parser = ["overrides"])]
     pub(crate) report: Option<String>,
 }
@@ -201,13 +203,7 @@ pub(crate) struct CheckArgs {
 impl CheckArgs {
     /// The first flag given that is not supported yet.
     fn later(&self) -> Option<&'static str> {
-        if self.leaks {
-            Some("--leaks")
-        } else if self.report.is_some() {
-            Some("--report")
-        } else {
-            None
-        }
+        if self.leaks { Some("--leaks") } else { None }
     }
 }
 
@@ -312,7 +308,7 @@ pub(crate) fn run() -> ExitCode {
     }
     match cli.command {
         Command::Build(args) => build::build(&args.project),
-        Command::Check(args) => check::check(&args.project, args.layout),
+        Command::Check(args) => check::check(&args.project, args.layout, args.report.is_some()),
         Command::Watch(args) => watch::watch(&args),
         Command::Fmt(args) => fmt::fmt(&args),
         Command::Lsp(args) => lsp::lsp(&args),
@@ -402,10 +398,7 @@ mod tests {
         assert_eq!(args.later(), None);
         assert_eq!(parse(&["--layout"]).unwrap().later(), None);
         assert_eq!(parse(&["--leaks"]).unwrap().later(), Some("--leaks"));
-        assert_eq!(
-            parse(&["--report", "overrides"]).unwrap().later(),
-            Some("--report")
-        );
+        assert_eq!(parse(&["--report", "overrides"]).unwrap().later(), None);
         assert!(parse(&["--report", "fonts"]).is_err());
         assert!(parse(&["--strict"]).is_err());
     }

@@ -663,7 +663,11 @@ fn scoped_rules_take_stylesheet_values() {
         Value::Color(Color::rgb(0xd6, 0x27, 0x28))
     );
     assert_eq!(get(&exam, p, "indent"), pt(3.0));
-    assert!(messages(&known).is_empty(), "{:?}", messages(&known));
+    // The raw colour is linted (`override-literal`), the token is not.
+    assert_eq!(
+        messages(&known),
+        ["a raw colour, `#d62728`, in a scoped rule"]
+    );
 
     // A token that no sheet of the build defines is an error at the
     // declaration.

@@ -25,6 +25,10 @@ const PREVIEW_COMMAND: &str = "folio.preview";
 /// The notification that shows the editor's cursor in the preview.
 const REVEAL: &str = "folio/reveal";
 
+/// The request that answers the local overrides of the last check, of the
+/// whole project or of one file (SPEC §5.4, §12.3).
+const OVERRIDES: &str = "folio/overrides";
+
 /// Runs the server on a connection until the client shuts it down or goes
 /// away: answers `initialize`, then handles messages. The caller joins the
 /// connection's I/O threads after.
@@ -83,6 +87,7 @@ pub fn run(connection: &Connection, options: Options) -> Result<(), Error> {
         dirty: false,
         results_tx,
         published: BTreeMap::new(),
+        overrides: BTreeMap::new(),
         noticed: BTreeSet::new(),
         request_id: 0,
         watch: Watch::No,
@@ -166,6 +171,9 @@ struct Done {
     files: Option<BTreeMap<String, Vec<lsp::Diagnostic>>>,
     /// The versions of the open files the check saw, by project path.
     versions: HashMap<String, i32>,
+    /// The local overrides the check found, by project path, as
+    /// `folio/overrides` answers them.
+    overrides: BTreeMap<String, Vec<serde_json::Value>>,
 }
 
 struct Server<'a> {
@@ -183,6 +191,8 @@ struct Server<'a> {
     /// The files that have diagnostics shown, by project path, with the URI
     /// they were published under.
     published: BTreeMap<String, Uri>,
+    /// The local overrides of the last check published, by project path.
+    overrides: BTreeMap<String, Vec<serde_json::Value>>,
     /// The compiler pins the server gave notice of.
     noticed: BTreeSet<String>,
     request_id: i32,
@@ -343,11 +353,48 @@ impl Server<'_> {
             self.send(response);
             return;
         }
+        if request.method == OVERRIDES {
+            let response = self.overrides(&request);
+            self.send(response);
+            return;
+        }
         self.send(Response::new_err(
             request.id,
             ErrorCode::MethodNotFound as i32,
             format!("`{}` is not supported", request.method),
         ));
+    }
+
+    /// Answers `folio/overrides`: the local overrides that the last check
+    /// published found, in the files of the project, or in the one file
+    /// whose `textDocument` the parameters name.
+    fn overrides(&self, request: &Request) -> Response {
+        let id = request.id.clone();
+        let file = request
+            .params
+            .get("textDocument")
+            .and_then(|doc| doc.get("uri"))
+            .and_then(|uri| uri.as_str());
+        let list: Vec<&serde_json::Value> = match file {
+            None => self.overrides.values().flatten().collect(),
+            Some(text) => {
+                let path = text
+                    .parse::<Uri>()
+                    .ok()
+                    .as_ref()
+                    .and_then(convert::uri_to_path)
+                    .and_then(|path| self.project.as_ref()?.project_path(&path));
+                let Some(path) = path else {
+                    return Response::new_err(
+                        id,
+                        ErrorCode::InvalidParams as i32,
+                        format!("`{text}` is not a file of the project"),
+                    );
+                };
+                self.overrides.get(&path).into_iter().flatten().collect()
+            }
+        };
+        Response::new_ok(id, list)
     }
 
     /// Starts the preview of the project, unless it runs already, and
@@ -916,6 +963,7 @@ impl Server<'_> {
                 revision,
                 files: Some(BTreeMap::new()),
                 versions,
+                overrides: BTreeMap::new(),
             });
             return;
         };
@@ -936,7 +984,17 @@ impl Server<'_> {
         let spawned = thread::Builder::new()
             .name("folio-lsp-check".into())
             .spawn(move || {
+                let keys: Vec<folio::BuildKey> = builds
+                    .iter()
+                    .map(|(variant, target)| folio::BuildKey {
+                        variant: variant.clone(),
+                        version: None,
+                        target: *target,
+                    })
+                    .collect();
                 let outputs = folio::check_builds(&handle, builds);
+                // The overrides of the same revision: its checks found them.
+                let overrides = folio::overrides(&handle, keys);
                 // The next edit waits for every handle to go.
                 drop(handle);
                 let mut diagnostics = Vec::new();
@@ -950,6 +1008,7 @@ impl Server<'_> {
                                 revision,
                                 files: None,
                                 versions,
+                                overrides: BTreeMap::new(),
                             });
                             return;
                         }
@@ -960,10 +1019,23 @@ impl Server<'_> {
                     open: &open,
                 };
                 let files = convert::diagnostics(&snapshot, &diagnostics, &uris, encoding);
+                let overrides = match overrides {
+                    Ok(list) => convert::overrides(&snapshot, &list, &uris, encoding),
+                    Err(folio::Cancelled) => {
+                        let _ = tx.send(Done {
+                            revision,
+                            files: None,
+                            versions,
+                            overrides: BTreeMap::new(),
+                        });
+                        return;
+                    }
+                };
                 let _ = tx.send(Done {
                     revision,
                     files: Some(files),
                     versions,
+                    overrides,
                 });
             });
         if let Err(e) = spawned {
@@ -988,6 +1060,7 @@ impl Server<'_> {
             Some(_) if revision != self.revision => Outcome::Stale,
             Some(files) => {
                 self.publish(files, &done.versions);
+                self.overrides = done.overrides;
                 Outcome::Published
             }
         };

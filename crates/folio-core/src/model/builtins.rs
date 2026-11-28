@@ -164,6 +164,13 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
             .fields([FieldDecl::required(name("message"), FieldType::Str)])
             .body(content(Inline))
             .build(),
+        // A styled span or block (SPEC §5.4): a local override whose
+        // fields are style properties (D-341-3), so it declares none of
+        // its own. The evaluator makes an instance whose body holds blocks
+        // a block.
+        element("styled", ElementKind::Inline, true)
+            .body(content(Inline))
+            .build(),
         // Content for one variant, or for all but one (SPEC §6.2):
         // `#in-variant("markscheme")[Accept 7.2 to 7.4 m.]`. The Select
         // stage leaves it out of the variants it is not for; elsewhere it
