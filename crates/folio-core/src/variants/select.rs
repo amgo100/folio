@@ -369,25 +369,16 @@ impl Select<'_> {
         // document model made is kept for what the template shows.
         let mut emptied = false;
         for (key, value) in element.fields.iter() {
-            let Value::Content(original) = value else {
+            let Value::Content(content) = value else {
                 continue;
             };
-            // An inline element's template sets only inline content in its
-            // line: the blocks in content it places are left out, and
-            // content with nothing inline left is not placed at all.
+            // An inline element's template sets only content with something
+            // inline in its line (blocks among it are anchored after the
+            // line, as the text stage anchors them); content of blocks
+            // alone is not placed at all.
             let inline_owner = placed.is_some() && element.kind == ElementKind::Inline;
-            let mut dropped = Edits::default();
-            let filtered = if inline_owner {
-                without_blocks(original, &mut dropped)
-            } else {
-                None
-            };
-            if key == BODY {
-                edits.removed.extend(dropped.removed.iter().copied());
-            }
-            let content = filtered.as_ref().unwrap_or(original);
             let blocks_in_line =
-                inline_owner && !original.is_empty() && !crate::text::is_inline(content);
+                inline_owner && !content.is_empty() && !crate::text::is_inline(content);
             // A part of a block shown as a space keeps its block whether
             // or not the template places it (SPEC §6.3), as `part` keeps it.
             let space = placed.is_some()
@@ -397,7 +388,7 @@ impl Select<'_> {
                     .and_then(|name| part_kids.part(&name))
                     .is_some_and(|part| matches!(self.shown(None, part), Shown::Space(_)));
             if let Some(placed) = &placed
-                && !original.is_empty()
+                && !content.is_empty()
                 && !space
                 && (blocks_in_line || !placed.iter().any(|name| name.as_str() == key.as_str()))
             {
@@ -405,7 +396,7 @@ impl Select<'_> {
                 // Scoped rules apply to the element wherever they are
                 // written, so they stay (SPEC §5.4).
                 let mut rules = Vec::new();
-                for child in original.nodes() {
+                for child in content.nodes() {
                     match child {
                         Node::Element(child) if key == BODY => {
                             edits.removed.insert(child.location);
@@ -463,26 +454,6 @@ impl Select<'_> {
                 };
                 self.part(element, key, content, part, only, &mut edits)
             };
-            // Content whose blocks an inline template left out changed
-            // even where nothing else did, and a part's node leaves out
-            // their nodes.
-            let new = new.or_else(|| filtered.clone().map(Some));
-            if filtered.is_some()
-                && key != BODY
-                && let Some(part) = Name::new(key).and_then(|name| part_kids.part(&name))
-            {
-                let current = match edits.parts.get(key.as_str()) {
-                    Some(Some(node)) => Some(node.clone()),
-                    // The part is left out anyway.
-                    Some(None) => None,
-                    None => Some(part.clone()),
-                };
-                if let Some(current) = current {
-                    edits
-                        .parts
-                        .insert(key.clone(), Some(dropped.apply(&current)));
-                }
-            }
             if let Some(new) = new {
                 let fields = fields.get_or_insert_with(|| element.fields.clone());
                 match new {
@@ -838,31 +809,6 @@ impl Select<'_> {
 pub(crate) fn is_block(element: &Element) -> bool {
     crate::model::is_block(element.kind)
         && !(element.name.namespace.is_none() && element.name.name.as_str() == "doc")
-}
-
-/// Content with the block elements left out, as an inline element's
-/// template sets it in its line, recording them in `dropped`: `None` if it
-/// holds none.
-fn without_blocks(content: &Content, dropped: &mut Edits) -> Option<Content> {
-    let is_line =
-        |element: &Element| matches!(element.kind, ElementKind::Inline | ElementKind::Note);
-    if !content
-        .nodes()
-        .iter()
-        .any(|node| matches!(node, Node::Element(e) if !is_line(e)))
-    {
-        return None;
-    }
-    let mut kept = Vec::with_capacity(content.nodes().len());
-    for node in content.nodes() {
-        match node {
-            Node::Element(element) if !is_line(element) => {
-                dropped.removed.insert(element.location);
-            }
-            other => kept.push(other.clone()),
-        }
-    }
-    Some(tidy(kept))
 }
 
 /// Whether the document model made an element to hold content: a

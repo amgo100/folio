@@ -913,8 +913,16 @@ impl Collector<'_> {
                     };
                     // A field in a line shows its content there; one whose
                     // content a space replaced shows nothing in the line,
-                    // and its space stands where a `slot` places it.
-                    if content.is_empty() || !self.place(name) {
+                    // and its space stands where a `slot` places it, or
+                    // after the body.
+                    if content.is_empty()
+                        && self
+                            .spaces
+                            .contains_key(&(element.location, Some(name.clone())))
+                    {
+                        continue;
+                    }
+                    if !self.place(name) || content.is_empty() {
                         continue;
                     }
                     let Some(part) = part_node(node, name) else {

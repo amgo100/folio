@@ -773,8 +773,8 @@ fn a_space_a_template_shows_only_in_a_line_keeps_its_space() {
 #[test]
 fn what_select_keeps_of_content_a_template_leaves_out() {
     // A list whose template does not place its body keeps the template's
-    // text; a display equation inside inline content an inline template
-    // places is left out with its number.
+    // text; what an inline template places in its line is kept as it is
+    // without a template.
     let lists = world(
         "render list { body: \"(list omitted)\"; }\n",
         "Before.\n\n- one\n- two\n\nAfter.\n",
@@ -795,20 +795,23 @@ Text #hint[#note[see $ x = 1 $ <eq:a>]] more.
 
 $ y = 2 $
 "#;
-    let world = world(
-        "math { numbering: \"(1)\"; }\nrender hint { body: \"(\" slot(note) \")\"; }\n",
-        content,
-    );
-    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
-        .unwrap()
-        .unwrap();
-    assert!(resolution.label("eq:a").is_none());
+    let count = |style: &str| {
+        let world = world(style, content);
+        let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+            .unwrap()
+            .unwrap();
+        (
+            resolution.label("eq:a").is_some(),
+            resolution
+                .numbers
+                .iter()
+                .filter(|n| n.counter == "equation")
+                .count(),
+        )
+    };
+    // The template keeps what the line holds: the same as without it.
     assert_eq!(
-        resolution
-            .numbers
-            .iter()
-            .filter(|n| n.counter == "equation")
-            .count(),
-        1
+        count("math { numbering: \"(1)\"; }\nrender hint { body: \"(\" slot(note) \")\"; }\n"),
+        count("math { numbering: \"(1)\"; }\n")
     );
 }
