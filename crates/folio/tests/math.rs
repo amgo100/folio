@@ -259,6 +259,11 @@ fn pre_scripts_on_an_empty_text() {
         tree("$\"\"^14_6 upright(C)$"),
         tree("$:tex {}^{14}_{6}\\mathrm{C}$")
     );
+    // A degree sign on an empty text is no pre-script.
+    assert_eq!(
+        tree("$25 \"\"^degree \"C\"$"),
+        "[num(25), attach([], sup: [sym(°)]), text(\"C\")]"
+    );
     // Before a relation an empty text stays a base.
     assert_eq!(
         tree("$\"\"^2 = x$"),

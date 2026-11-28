@@ -174,53 +174,46 @@ struct Items {
 
 impl Items {
     fn push(&mut self, node: Node) {
-        if matches!(
-            node,
-            Node::Ident(_)
-                | Node::Number(_)
-                | Node::Text(_)
-                | Node::Styled(_)
-                | Node::Accent(_)
-                | Node::Vector(_)
-        ) {
-            self.push_nucleus(Row::new([node]), |row| Item::Node(row.nodes()[0].clone()));
+        if node.is_nucleus() && self.takes_nucleus() {
+            self.fold(Row::new([node]));
         } else {
             self.items.push(Item::Node(node));
         }
     }
 
-    /// A group, which is a nucleus when it is not empty: `{}^{4}_{2}{He}`.
+    /// A group, which is a nucleus when it holds nuclei: `{}^{4}_{2}{He}`.
     fn push_group(&mut self, row: Row) {
-        if row.nodes().is_empty() {
-            self.items.push(Item::Group(row));
+        if !row.nodes().is_empty()
+            && row.nodes().iter().all(Node::is_nucleus)
+            && self.takes_nucleus()
+        {
+            self.fold(row);
         } else {
-            self.push_nucleus(row, Item::Group);
+            self.items.push(Item::Group(row));
         }
     }
 
-    /// Pushes what may be a nucleus: scripts on an empty base before it
-    /// are its pre-scripts, `{}^{14}_{6}\mathrm{C}`; otherwise it is
-    /// pushed as `item` makes it.
-    fn push_nucleus(&mut self, base: Row, item: impl FnOnce(Row) -> Item) {
-        if let Some(Item::Node(Node::Attach(attach))) = self.items.last()
-            && attach.base.nodes().is_empty()
-            && attach.primes == 0
-            && attach.pre_sub.is_none()
-            && attach.pre_sup.is_none()
-        {
-            let attach = Attach {
-                base,
-                sub: None,
-                sup: None,
-                primes: 0,
-                pre_sub: attach.sub.clone(),
-                pre_sup: attach.sup.clone(),
-                span: attach.span,
-            };
-            *self.items.last_mut().expect("an item") = Item::Node(Node::Attach(Arc::new(attach)));
-            return;
-        }
-        self.items.push(item(base));
+    /// Whether the last item is scripts on an empty base that a nucleus
+    /// takes as its pre-scripts: `{}^{14}_{6}\mathrm{C}`.
+    fn takes_nucleus(&self) -> bool {
+        matches!(self.items.last(), Some(Item::Node(Node::Attach(attach))) if attach.is_pre_script())
+    }
+
+    /// Makes the last item's scripts the pre-scripts of `base`.
+    fn fold(&mut self, base: Row) {
+        let Some(Item::Node(Node::Attach(pre))) = self.items.last() else {
+            unreachable!("takes_nucleus checked it");
+        };
+        let attach = Attach {
+            base,
+            sub: None,
+            sup: None,
+            primes: 0,
+            pre_sub: pre.sub.clone(),
+            pre_sup: pre.sup.clone(),
+            span: pre.span,
+        };
+        *self.items.last_mut().expect("an item") = Item::Node(Node::Attach(Arc::new(attach)));
     }
 
     fn into_nodes(self) -> Vec<Node> {
@@ -2114,6 +2107,12 @@ mod tests {
             repr("{}^{0}_{0}\\bar{\\nu}"),
             "[attach([accent(\u{304}, [ν])], pre-sub: [num(0)], pre-sup: [num(0)])]"
         );
+        // A degree sign is no pre-script, nor is a group of relations.
+        assert_eq!(
+            repr("25{}^\\circ\\mathrm{C}"),
+            "[num(25), attach([], sup: [bin(∘)]), upright([C])]"
+        );
+        assert_eq!(repr("{}^{n}{=}"), "[attach([], sup: [n]), rel(=)]");
         // Before an operator or a relation, an empty base stays a base.
         assert_eq!(repr("{}^2 = x"), "[attach([], sup: [num(2)]), rel(=), x]");
     }

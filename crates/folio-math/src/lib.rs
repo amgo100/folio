@@ -571,6 +571,20 @@ impl Node {
         }))
     }
 
+    /// Whether it can carry pre-scripts: a letter, a number, text, an
+    /// accent, a vector or a body in an alphabet.
+    pub fn is_nucleus(&self) -> bool {
+        matches!(
+            self,
+            Self::Ident(_)
+                | Self::Number(_)
+                | Self::Text(_)
+                | Self::Styled(_)
+                | Self::Accent(_)
+                | Self::Vector(_)
+        )
+    }
+
     /// How deeply the node nests: as deeply as its deepest row, or `0` for
     /// a node without rows.
     pub fn depth(&self) -> u32 {
@@ -804,6 +818,29 @@ pub struct Attach {
     pub pre_sup: Option<Row>,
     /// Where it was written.
     pub span: Span,
+}
+
+impl Attach {
+    /// Whether its scripts are the pre-scripts of a nucleus that follows
+    /// it, as in ²³⁵₉₂U (SPEC §8.1): it has an empty base, no primes and no
+    /// pre-scripts, and each script holds a letter or a number, so that
+    /// `{}^\circ\mathrm{C}` stays a degree sign.
+    pub fn is_pre_script(&self) -> bool {
+        let holds_atom = |row: &Option<Row>| {
+            row.as_ref().is_none_or(|row| {
+                row.nodes()
+                    .iter()
+                    .any(|node| matches!(node, Node::Number(_) | Node::Ident(_) | Node::Text(_)))
+            })
+        };
+        self.base.nodes().is_empty()
+            && self.primes == 0
+            && self.pre_sub.is_none()
+            && self.pre_sup.is_none()
+            && (self.sub.is_some() || self.sup.is_some())
+            && holds_atom(&self.sub)
+            && holds_atom(&self.sup)
+    }
 }
 
 /// An n-ary operator such as a sum, a product or an integral, with its

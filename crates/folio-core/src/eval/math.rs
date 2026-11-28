@@ -1479,46 +1479,35 @@ fn fold_pre_scripts(out: &mut Vec<math::Node>, before: usize) {
     let math::Node::Attach(pre) = &out[before - 1] else {
         return;
     };
-    if !pre.base.nodes().is_empty()
-        || pre.primes > 0
-        || pre.pre_sub.is_some()
-        || pre.pre_sup.is_some()
-    {
+    if !pre.is_pre_script() {
         return;
     }
-    let nucleus = |node: &math::Node| {
-        matches!(
-            node,
-            math::Node::Ident(_)
-                | math::Node::Number(_)
-                | math::Node::Text(_)
-                | math::Node::Styled(_)
-                | math::Node::Accent(_)
-                | math::Node::Vector(_)
-        )
-    };
-    let attach = match &out[before] {
-        node if nucleus(node) => math::Attach {
+    let base = match &out[before] {
+        node if node.is_nucleus() => math::Attach {
             base: Row::new([node.clone()]),
             sub: None,
             sup: None,
             primes: 0,
-            pre_sub: pre.sub.clone(),
-            pre_sup: pre.sup.clone(),
+            pre_sub: None,
+            pre_sup: None,
             span: pre.span,
         },
         math::Node::Attach(post)
             if post.pre_sub.is_none()
                 && post.pre_sup.is_none()
-                && matches!(post.base.nodes(), [node] if nucleus(node)) =>
+                && matches!(post.base.nodes(), [node] if node.is_nucleus()) =>
         {
             math::Attach {
-                pre_sub: pre.sub.clone(),
-                pre_sup: pre.sup.clone(),
+                span: pre.span,
                 ..math::Attach::clone(post)
             }
         }
         _ => return,
+    };
+    let attach = math::Attach {
+        pre_sub: pre.sub.clone(),
+        pre_sup: pre.sup.clone(),
+        ..base
     };
     out.truncate(before - 1);
     out.push(math::Node::Attach(Arc::new(attach)));
