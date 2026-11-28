@@ -553,11 +553,12 @@ impl<'a> Walker<'a> {
         style: &ComputedStyle,
     ) -> Option<Arc<Expansion>> {
         let cascade = self.cascade;
-        if cascade.templates.is_empty() {
-            return None;
-        }
         let props = &cascade.properties;
-        let name = match style.value(props, props.builtin("template")) {
+        let name: Option<EcoString> = match style.value(props, props.builtin("template")) {
+            // Most builds have no templates: `auto` asks for none then.
+            Some(folio_component::Value::Auto) | None if cascade.templates.is_empty() => {
+                return None;
+            }
             Some(folio_component::Value::Auto) | None => None,
             Some(folio_component::Value::Keyword(name)) => Some(name.as_str().into()),
             Some(folio_component::Value::Str(name)) => Some(name.clone()),

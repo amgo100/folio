@@ -735,20 +735,7 @@ impl Collector<'_> {
                     b.push_part(text, style, element.span, TextSource::WHOLE, false);
                 }
                 TemplatePiece::Counter { style } => {
-                    let number = self
-                        .resolution
-                        .number(crate::resolve::Target::element(element.location))
-                        .map(|n| match &n.number {
-                            Some(number) => number.clone(),
-                            None => n
-                                .values
-                                .iter()
-                                .map(|v| v.to_string())
-                                .collect::<Vec<_>>()
-                                .join(".")
-                                .into(),
-                        });
-                    if let Some(number) = number {
+                    if let Some(number) = self.counter_text(element) {
                         let b = builder.get_or_insert_with(|| self.builder());
                         b.push_part(&number, style, element.span, TextSource::WHOLE, false);
                     }
@@ -779,7 +766,7 @@ impl Collector<'_> {
                     let b = builder.get_or_insert_with(|| self.builder());
                     b.object_with(style, element, element.location, None, image);
                 }
-                TemplatePiece::Slot { name } => {
+                TemplatePiece::Slot { name, .. } => {
                     self.flush(builder.take(), style, element, &mut anchored);
                     if let Some(eval::Value::Content(content)) = element.field(name.as_str()) {
                         self.slot(element, node, name, content);
@@ -792,6 +779,84 @@ impl Collector<'_> {
             }
         }
         self.flush(builder, style, element, &mut anchored);
+    }
+
+    /// The number of an element as a template's `counter()` shows it: its
+    /// formatted number, or its values as `1.1` would show them where it
+    /// has no `numbering`. `None` for an element without a counter.
+    fn counter_text(&self, element: &Element) -> Option<EcoString> {
+        let number = self
+            .resolution
+            .number(crate::resolve::Target::element(element.location))?;
+        Some(match &number.number {
+            Some(text) => text.clone(),
+            None => number
+                .values
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(".")
+                .into(),
+        })
+    }
+
+    /// Adds the pieces of an inline element's template to the paragraph
+    /// it stands in: its header's, then its body's. A block a template
+    /// makes in a line, such as a row, gives its text only.
+    fn inline_pieces<'a>(
+        &mut self,
+        element: &'a Element,
+        node: &'a StyledNode,
+        pieces: &[TemplatePiece],
+        out: &mut Builder,
+        anchored: &mut Vec<Anchored<'a>>,
+    ) {
+        for piece in pieces {
+            match piece {
+                TemplatePiece::Text { text, style } => {
+                    out.push_part(text, style, element.span, TextSource::WHOLE, false);
+                }
+                TemplatePiece::Counter { style } => {
+                    if let Some(number) = self.counter_text(element) {
+                        out.push_part(&number, style, element.span, TextSource::WHOLE, false);
+                    }
+                }
+                TemplatePiece::Field { name, style } => {
+                    if let (Some(eval::Value::Content(content)), Some(part)) =
+                        (element.field(name.as_str()), part_node(node, name))
+                    {
+                        let mut kids = StyledChildren::new(part);
+                        self.inline(content, style, element.span, &mut kids, out, anchored);
+                    }
+                }
+                TemplatePiece::Slot { name, style } => {
+                    let Some(eval::Value::Content(content)) = element.field(name.as_str()) else {
+                        continue;
+                    };
+                    let kids_node = if name.as_str() == BODY {
+                        Some(node)
+                    } else {
+                        part_node(node, name)
+                    };
+                    if let Some(kids_node) = kids_node {
+                        let mut kids = StyledChildren::new(kids_node);
+                        self.inline(content, style, element.span, &mut kids, out, anchored);
+                    }
+                }
+                TemplatePiece::Image {
+                    path,
+                    width,
+                    style,
+                    span,
+                } => {
+                    let image = self.template_image(path, width, *span);
+                    out.object_with(style, element, element.location, None, image);
+                }
+                TemplatePiece::Block(block) => {
+                    self.inline_pieces(element, node, &block.children, out, anchored);
+                }
+            }
+        }
     }
 
     /// Finishes a paragraph of a template's pieces, if one was started,
@@ -1208,6 +1273,17 @@ impl Collector<'_> {
         let style = &node.style;
         if !is_builtin(&element.name, "image") {
             self.check_width(element, style);
+        }
+        if element.kind == ElementKind::Inline
+            && let Some(expansion) = &node.template
+        {
+            if let Some(header) = &expansion.header {
+                self.inline_pieces(element, node, &header.items, out, anchored);
+            }
+            if let Some(body) = &expansion.body {
+                self.inline_pieces(element, node, body, out, anchored);
+                return;
+            }
         }
         match element.kind {
             ElementKind::Inline => {}

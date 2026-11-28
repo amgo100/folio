@@ -886,10 +886,13 @@ pub enum Piece {
         style: ComputedStyle,
     },
     /// The content of the body ([`BODY`]), a slot or a content field, as
-    /// blocks, in the style of its part.
+    /// blocks, in the style of its part; in a line, as an inline element's
+    /// template places it, in the style of the primitives around it.
     Slot {
         /// The slot.
         name: Name,
+        /// The style of the primitives around it.
+        style: ComputedStyle,
     },
     /// An image of the project.
     Image {
@@ -1122,7 +1125,10 @@ impl<R: Restyle> Expander<'_, '_, R> {
                     });
                 }
             }
-            Item::Slot(name) => out.push(Piece::Slot { name: name.clone() }),
+            Item::Slot(name) => out.push(Piece::Slot {
+                name: name.clone(),
+                style: at.inline.clone(),
+            }),
             Item::Inline(kind, items) => {
                 let name = match kind {
                     Inline::Strong => element_name("strong"),

@@ -320,7 +320,8 @@ fn navigation(resolution: &Resolution) -> Navigation {
 ///
 /// A grid is a table (SPEC §7.4, §11.1): a `TR` for each of its rows, as
 /// `grids` place its cells, holding the cells that start in it, `TH` in
-/// its header rows and `TD` in the others.
+/// its header rows and `TD` in the others. A render template's header is
+/// a group, and so are its rows and their cells (SPEC §5.3).
 pub(crate) fn structure(block: &TextBlock, text: &Text, grids: &[GridLayout]) -> Tag {
     let s = Structure { text, grids };
     s.of(block, false)
@@ -409,7 +410,11 @@ fn structure_of(block: &TextBlock, s: &Structure<'_>, in_note: bool) -> Tag {
         Role::Formula => tag.text = display_math(block, text).and_then(formula_alt),
         _ => {}
     }
-    if matches!(block.table, Some(TableRole::Grid { .. })) {
+    // A render template's row sets its cells side by side: it is layout,
+    // not a table, so it and its cells are groups (SPEC §5.3). A
+    // template's `grid` is a table.
+    let template_row = block.part.as_ref().is_some_and(|p| p.as_str() == "row");
+    if matches!(block.table, Some(TableRole::Grid { .. })) && !template_row {
         tag.role = Role::Table;
         if s.table(block, &mut tag, in_note) {
             return tag;
