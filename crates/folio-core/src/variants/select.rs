@@ -83,10 +83,13 @@ pub fn select(
             root: None,
             styled: node.clone(),
         },
-        Out::Changed(root, styled) => Selection {
-            root: Some(root),
-            styled,
-        },
+        Out::Changed(changed) => {
+            let (root, styled) = *changed;
+            Selection {
+                root: Some(root),
+                styled,
+            }
+        }
     }
 }
 
@@ -108,7 +111,7 @@ enum Out {
     Removed,
     /// The element with some of its content left out or replaced, and its
     /// styled node with the same nodes left out.
-    Changed(Element, StyledNode),
+    Changed(Box<(Element, StyledNode)>),
 }
 
 /// The names that `show-only` keeps.
@@ -202,7 +205,10 @@ impl Select<'_> {
         match self.shown(Some(element), node) {
             Shown::Removed => return Out::Removed,
             Shown::Placeholder(text) => {
-                return Out::Changed(placeholder(element, text), placeholder_node(node));
+                return Out::Changed(Box::new((
+                    placeholder(element, text),
+                    placeholder_node(node),
+                )));
             }
             Shown::Kept => {}
         }
@@ -250,7 +256,7 @@ impl Select<'_> {
             fields,
             ..element.clone()
         };
-        Out::Changed(element, edits.apply(node))
+        Out::Changed(Box::new((element, edits.apply(node))))
     }
 
     /// Selects a part: `None` if it is as it was, `Some(None)` if it is
@@ -366,7 +372,8 @@ impl Select<'_> {
                 edits.removed.insert(child.location);
                 None
             }
-            Out::Changed(element, styled) => {
+            Out::Changed(changed) => {
+                let (element, styled) = *changed;
                 edits.replaced.insert(child.location, styled);
                 Some((Node::Element(element), true))
             }
