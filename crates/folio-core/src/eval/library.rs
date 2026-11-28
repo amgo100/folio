@@ -528,9 +528,20 @@ fn read(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 fn json(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let (bytes, span, id) = load(vm, args)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| {
+        // An error without a place, or in a file that is not text, has no
+        // lines to show.
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(text) if err.line() > 0 => text,
+            _ => {
+                return DataError {
+                    message: eco_format!("the file is not valid JSON: {err}"),
+                    range: None,
+                }
+                .at(span, id);
+            }
+        };
         // serde_json counts columns in bytes, from 1, and ends its message
         // with them; the other readers count characters.
-        let text = String::from_utf8_lossy(&bytes);
         let start = text
             .split_inclusive('\n')
             .take(err.line().saturating_sub(1))
@@ -543,7 +554,7 @@ fn json(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
         let suffix = format!(" at line {} column {}", err.line(), err.column());
         let message = message.strip_suffix(&suffix).unwrap_or(&message);
         DataError::new(
-            &text,
+            text,
             eco_format!("the file is not valid JSON: {message}"),
             start..end,
         )
@@ -717,8 +728,9 @@ fn parse_csv(text: &str, delimiter: char) -> Result<Value, DataError> {
 /// anchor.
 fn yaml(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let (text, span, id) = load_text(vm, args)?;
-    let (value, size) = parse_yaml(&text).map_err(|err| err.at(span, id))?;
-    vm.alloc(size.saturating_mul(ITEM), span)?;
+    let (value, repeated) = parse_yaml(&text).map_err(|err| err.at(span, id))?;
+    // The file's bytes are counted already; what its aliases repeat is not.
+    vm.alloc(repeated.saturating_mul(ITEM), span)?;
     Ok(value)
 }
 
@@ -740,8 +752,8 @@ struct YamlAnchor {
     text: Option<EcoString>,
 }
 
-/// Reads a YAML file's one document. Returns its value and its size in
-/// items, counting each alias as the items of the value it repeats, so
+/// Reads a YAML file's one document. Returns its value and the items its
+/// aliases repeat, each alias counting the items of the value it names, so
 /// that a file whose aliases repeat each other cannot stand for more items
 /// than the memory limit allows.
 fn parse_yaml(text: &str) -> Result<(Value, u64), DataError> {
@@ -761,9 +773,10 @@ fn parse_yaml(text: &str) -> Result<(Value, u64), DataError> {
     let nested = || eco_format!("the data is nested more than {MAX_NESTING} deep");
     let mut stack: Vec<YamlNode> = Vec::new();
     let mut anchors: BTreeMap<usize, YamlAnchor> = BTreeMap::new();
-    // The documents' values and sizes, and where the second one starts.
-    let mut documents: Vec<(Value, u64)> = Vec::new();
+    // The documents' values, and where the second one starts.
+    let mut documents: Vec<Value> = Vec::new();
     let mut second = None;
+    let mut repeated: u64 = 0;
     for event in Parser::new_from_str(text) {
         let (event, place) = event.map_err(|err| {
             let marker = *err.marker();
@@ -820,6 +833,7 @@ fn parse_yaml(text: &str) -> Result<(Value, u64), DataError> {
                 if stack.len() as u64 + u64::from(value.depth()) > u64::from(MAX_NESTING) {
                     return Err(error(nested(), place));
                 }
+                repeated = repeated.saturating_add(named.size);
                 (value, 0, named.size)
             }
             Event::SequenceStart(anchor, _) | Event::MappingStart(anchor, _) => {
@@ -847,7 +861,7 @@ fn parse_yaml(text: &str) -> Result<(Value, u64), DataError> {
                 if documents.len() == 1 {
                     second = Some(place);
                 }
-                documents.push((Value::None, 0));
+                documents.push(Value::None);
                 continue;
             }
             Event::Nothing | Event::StreamStart | Event::StreamEnd | Event::DocumentEnd => continue,
@@ -877,14 +891,14 @@ fn parse_yaml(text: &str) -> Result<(Value, u64), DataError> {
             }
             None => {
                 if let Some(document) = documents.last_mut() {
-                    *document = (value, size);
+                    *document = value;
                 }
             }
         }
     }
     match documents.len() {
         0 => Ok((Value::None, 0)),
-        1 => Ok(documents.pop().expect("there is one")),
+        1 => Ok((documents.pop().expect("there is one"), repeated)),
         n => {
             let message = eco_format!("the file holds {n} YAML documents, and `yaml` reads one");
             Err(match second {
@@ -1891,8 +1905,10 @@ mod tests {
             let refs = vec![format!("*a{}", i - 1); 10].join(", ");
             laughs.push_str(&format!("a{i}: &a{i} [{refs}]\n"));
         }
-        let (_, size) = parse_yaml(&laughs).unwrap();
-        assert!(size > 1_000_000_000, "{size}");
+        let (_, repeated) = parse_yaml(&laughs).unwrap();
+        assert!(repeated > 1_000_000_000, "{repeated}");
+        // A file without aliases repeats nothing.
+        assert_eq!(parse_yaml("[1, [2, 3], {a: 4}]").unwrap().1, 0);
         // An alias cannot nest a value beyond the limit.
         let deep = |name: &str, inner: &str| {
             format!(
