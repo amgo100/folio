@@ -199,12 +199,8 @@ fn conditions_read_the_fields_of_each_element() {
            body: if not field(title) { \"Untitled\" } else { field(title) } \
            \" (\" text(\"core\") \")\" if field(difficulty) != \"extension\";\n}",
     );
-    let world = world_with(&style, CONTENT);
+    let world = world(&style, CONTENT);
     assert_eq!(example_outlines(&world)[1], "-[\"Untitled (core)\"]");
-}
-
-fn world_with(style: &str, content: &str) -> World {
-    world(style, content)
 }
 
 #[test]
@@ -215,7 +211,10 @@ fn the_number_follows_numbering_and_the_word_the_language() {
     );
     let world = world(&style, CONTENT);
     let outlines = example_outlines(&world);
-    assert!(outlines[0].contains("\"Example (a): Projectile on a slope\""), "{outlines:?}");
+    assert!(
+        outlines[0].contains("\"Example (a): Projectile on a slope\""),
+        "{outlines:?}"
+    );
     assert!(outlines[1].contains("\"przykł. (b)\""), "{outlines:?}");
     // The element's marker is not set: the template places its number.
     assert!(!outlines[0].contains("(a) Example"), "{outlines:?}");
@@ -254,9 +253,11 @@ fn templates_record_their_office_class() {
     );
     // Graphic primitives draw nothing yet, which is reported.
     assert!(
-        located(&world).iter().any(|(severity, message, at)| *severity == Severity::Warning
-            && message.starts_with("graphic primitives are not drawn yet")
-            && at.starts_with("render example as drawn")),
+        located(&world)
+            .iter()
+            .any(|(severity, message, at)| *severity == Severity::Warning
+                && message.starts_with("graphic primitives are not drawn yet")
+                && at.starts_with("render example as drawn")),
         "{:?}",
         located(&world)
     );
@@ -285,10 +286,7 @@ fn errors_in_templates_point_at_the_primitive() {
                 "`example` has no slot or content field `answer`".into(),
                 "slot(answer)".into()
             ),
-            (
-                "`example` has no field `colour`".into(),
-                "colour".into()
-            ),
+            ("`example` has no field `colour`".into(), "colour".into()),
             (
                 "`frobnicate` is not a template primitive".into(),
                 "frobnicate".into()
@@ -337,7 +335,10 @@ fn later_origins_and_later_templates_win() {
     assert_eq!(shown(&world, "markscheme"), ["marked"]);
     // `none` shows the element without its template.
     world
-        .set_source("styles/main.fsty", "render example { body: \"first\"; }\nexample { template: none; }\n")
+        .set_source(
+            "styles/main.fsty",
+            "render example { body: \"first\"; }\nexample { template: none; }\n",
+        )
         .unwrap();
     assert_eq!(shown(&world, "exam"), Vec::<String>::new());
 }
@@ -358,7 +359,9 @@ fn template_parts_are_styled_by_selectors() {
         .unwrap();
     assert_eq!(
         header.style.value(&styled.properties, size),
-        Some(&folio_component::Value::Length(folio_component::Abs::pt(14.0)))
+        Some(&folio_component::Value::Length(folio_component::Abs::pt(
+            14.0
+        )))
     );
 }
 
@@ -429,7 +432,9 @@ fn components_provide_default_templates() {
             .components(registry.clone())
             .build(MANIFEST, None)
             .unwrap();
-        world.set_source("main.fol", "#timer.aside[Read this.]\n").unwrap();
+        world
+            .set_source("main.fol", "#timer.aside[Read this.]\n")
+            .unwrap();
         world.set_source("styles/main.fsty", style).unwrap();
         world
     };
@@ -444,7 +449,10 @@ fn components_provide_default_templates() {
     assert_eq!(shown(&world), "-[header[\"Note\"] -[\"Read this.\"]]");
     // The component's named template, and the project's own default,
     // which wins over the component's.
-    assert_eq!(shown(&make("aside { template: plain; }\n")), "-[-[\"Read this.\"]]");
+    assert_eq!(
+        shown(&make("aside { template: plain; }\n")),
+        "-[-[\"Read this.\"]]"
+    );
     assert_eq!(
         shown(&make("render aside { header: \"Aside\"; }\n")),
         "-[header[\"Aside\"] -[\"Read this.\"]]"

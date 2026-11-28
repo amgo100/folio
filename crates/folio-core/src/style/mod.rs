@@ -48,10 +48,10 @@ pub use self::selector::{
     Attr, AttrOp, AttrTest, Combinator, Compound, NameNeeds, Need, Needs, NodeName, NodeView,
     Position, Pseudo, Role, Selector, Specificity, Subject,
 };
-pub(crate) use self::tree::{Child, content_elements, styled_children};
-pub use self::tree::{NOTE_PART, Styled, StyledNode, VECTOR_PART, styles};
 pub use self::template::{
     Arranged, Block as TemplateBlock, BlockKind, Expansion, HEADER_PART, OfficeClass, Piece,
     Template,
 };
+pub(crate) use self::tree::{Child, content_elements, styled_children};
+pub use self::tree::{NOTE_PART, Styled, StyledNode, VECTOR_PART, styles};
 pub use self::value::{Declared, coerce, compute};

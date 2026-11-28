@@ -111,7 +111,7 @@ enum Item {
     /// A field's value, or the content of a content field, inline.
     Field(Name),
     /// The element's number.
-    Counter(Span),
+    Counter,
     /// The element's reference word.
     Term,
     /// The content of the body (`slot()`), a slot or a content field, as
@@ -294,7 +294,11 @@ impl Compile<'_> {
             return None;
         }
         if header.is_none() && body.is_none() {
-            self.error(span, "this template has no parts", Some("write `body: ..;`"));
+            self.error(
+                span,
+                "this template has no parts",
+                Some("write `body: ..;`"),
+            );
             return None;
         }
         let mut reads = EcoVec::new();
@@ -511,7 +515,10 @@ impl Compile<'_> {
                         Some(name) => name,
                         None => return false,
                     },
-                    _ => return self.arity(span, "`slot` takes one slot name, or none for the body"),
+                    _ => {
+                        return self
+                            .arity(span, "`slot` takes one slot name, or none for the body");
+                    }
                 };
                 if !self.check_slot(&slot, span) {
                     return false;
@@ -535,7 +542,7 @@ impl Compile<'_> {
                     return self.arity(span, &format!("`{name}` takes no arguments"));
                 }
                 if name == "counter" {
-                    Item::Counter(span)
+                    Item::Counter
                 } else {
                     Item::Term
                 }
@@ -692,8 +699,7 @@ impl Compile<'_> {
     fn cond(&self, expr: ast::Expr<'_>) -> Option<Cond> {
         Some(match expr {
             ast::Expr::Parenthesized(p) => return self.cond(p.expr()),
-            ast::Expr::FuncCall(call)
-                if matches!(call.callee(), ast::Expr::Ident(i) if i.get() == "field") =>
+            ast::Expr::FuncCall(call) if matches!(call.callee(), ast::Expr::Ident(i) if i.get() == "field") =>
             {
                 let args: Vec<_> = call.args().items().collect();
                 let [ast::Arg::Pos(expr)] = args[..] else {
@@ -706,8 +712,7 @@ impl Compile<'_> {
                 }
                 Cond::Field(name)
             }
-            ast::Expr::FuncCall(call)
-                if matches!(call.callee(), ast::Expr::Ident(i) if is_primitive(i.get())) =>
+            ast::Expr::FuncCall(call) if matches!(call.callee(), ast::Expr::Ident(i) if is_primitive(i.get())) =>
             {
                 self.error(
                     call.span(),
@@ -824,7 +829,7 @@ fn scan(items: &[Item], reads: &mut EcoVec<Name>, office: &mut OfficeClass) {
                 scan(otherwise, reads, office);
             }
             Item::Text(_)
-            | Item::Counter(_)
+            | Item::Counter
             | Item::Term
             | Item::Slot(_)
             | Item::Rule(..)
@@ -1034,7 +1039,7 @@ pub(super) fn expand<R: Restyle>(
         };
         ex.items(items, &at)
     });
-    Arranged::trim(Expansion {
+    trim(Expansion {
         name: template.name.clone(),
         span: template.span,
         office: template.office,
@@ -1043,18 +1048,17 @@ pub(super) fn expand<R: Restyle>(
     })
 }
 
-impl Arranged {
-    /// An expansion without a header that holds nothing: it shows nothing.
-    fn trim(mut expansion: Expansion) -> Expansion {
-        if expansion
-            .header
-            .as_ref()
-            .is_some_and(|h| h.items.is_empty())
-        {
-            expansion.header = None;
-        }
-        expansion
+/// An expansion whose header holds nothing, as when its conditions all
+/// fail, has no header block.
+fn trim(mut expansion: Expansion) -> Expansion {
+    if expansion
+        .header
+        .as_ref()
+        .is_some_and(|h| h.items.is_empty())
+    {
+        expansion.header = None;
     }
+    expansion
 }
 
 struct Expander<'r, 'e, R: Restyle> {
@@ -1114,7 +1118,7 @@ impl<R: Restyle> Expander<'_, '_, R> {
                     });
                 }
             },
-            Item::Counter(_) => out.push(Piece::Counter {
+            Item::Counter => out.push(Piece::Counter {
                 style: at.inline.clone(),
             }),
             Item::Term => {
@@ -1146,12 +1150,14 @@ impl<R: Restyle> Expander<'_, '_, R> {
                 }
             }
             Item::Layout(layout, cells, columns, span) => {
-                out.push(Piece::Block(self.layout(*layout, cells, columns, *span, at)));
+                out.push(Piece::Block(
+                    self.layout(*layout, cells, columns, *span, at),
+                ));
             }
             Item::Box(items) => {
-                let (style, cx) = self
-                    .restyle
-                    .restyle(part_name("box"), at.cx, &at.block, EcoVec::new());
+                let (style, cx) =
+                    self.restyle
+                        .restyle(part_name("box"), at.cx, &at.block, EcoVec::new());
                 let children = self.items(items, &at.with(cx, &style));
                 out.push(Piece::Block(Block {
                     kind: BlockKind::Box,

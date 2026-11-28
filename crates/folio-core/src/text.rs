@@ -66,8 +66,8 @@ use crate::locate::StyledChildren;
 use crate::pipeline::{resolution, step_styled};
 use crate::resolve::{Resolution, UNRESOLVED};
 use crate::style::{
-    BlockKind, Child, ComputedStyle, Expansion, HEADER_PART, Piece as TemplatePiece, Properties, StyledNode,
-    TemplateBlock, content_elements, styled_children,
+    BlockKind, Child, ComputedStyle, Expansion, HEADER_PART, Piece as TemplatePiece, Properties,
+    StyledNode, TemplateBlock, content_elements, styled_children,
 };
 
 pub use folio_text::Cache;
@@ -944,7 +944,10 @@ impl Collector<'_> {
             diag::report(db, Diagnostic::error(span, message));
         };
         let Some(project_path) = crate::project::ProjectPath::new(path) else {
-            report(self.db, eco_format!("`{path}` is not a path in the project"));
+            report(
+                self.db,
+                eco_format!("`{path}` is not a path in the project"),
+            );
             return None;
         };
         let Some(file) = data_file(self.db, self.project, project_path) else {

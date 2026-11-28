@@ -341,8 +341,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
         let values = Values::new(cx.values, path);
         cx.applies.set(true);
         *cx.own.borrow_mut() = namespace;
-        let compiled =
-            cx.compile_template(&values, render, (Origin::ComponentDefault, 0), true);
+        let compiled = cx.compile_template(&values, render, (Origin::ComponentDefault, 0), true);
         templates.extend(compiled.map(Arc::new));
     }
     *cx.own.borrow_mut() = None;
