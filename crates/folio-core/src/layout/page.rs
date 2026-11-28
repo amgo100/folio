@@ -473,7 +473,14 @@ pub fn pages(db: &dyn Db, build: Build<'_>) -> Option<Pages> {
             }
             report(db, out);
             for (paragraph, layout) in rebroken {
-                report_lines(db, project, &text.paragraphs[*paragraph], layout);
+                report_lines(
+                    db,
+                    project,
+                    props,
+                    &text.paragraphs[*paragraph],
+                    layout,
+                    &[],
+                );
             }
         },
     );
