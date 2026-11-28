@@ -456,9 +456,12 @@ fn watching_image() -> Prepared {
     let mut images = wire::Images::new();
     while decoded_lists(&mut client, &mut images).0 < revision {}
     assert_eq!(images.len(), 1, "the photograph was sent");
-    // The client shows the first page, which is laid out and sent first.
+    // The client shows the first page, which is laid out and sent first,
+    // and keeps the images it was sent, which the lists after name alone.
     client
-        .send(Message::text(r#"{"type":"visible","pages":[0]}"#))
+        .send(Message::text(
+            r#"{"type":"visible","pages":[0],"images":true}"#,
+        ))
         .expect("the client says what it shows");
     let file = dir.path().join("main.fol");
     let text = std::fs::read_to_string(&file).expect("the entry file");

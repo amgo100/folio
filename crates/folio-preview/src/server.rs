@@ -482,13 +482,15 @@ async fn websocket(mut stream: TcpStream, request: &Request, shared: Arc<Shared>
 }
 
 /// What a client has: of each page, its content and entry numbers
-/// ([`PageEntry`](crate::engine::PageEntry)); and the content hashes of
-/// the images it was sent whole, which the lists sent after name alone
-/// (`folio_render::wire::encode_with`).
+/// ([`PageEntry`](crate::engine::PageEntry)); the content hashes and
+/// formats of the images it keeps, those of the pages it has, which the
+/// lists sent after name alone (`folio_render::wire::encode_with`); and
+/// whether it said it keeps them (`"images": true` in `visible`).
 #[derive(Default)]
 struct Known {
     pages: Vec<(u64, u64)>,
-    images: std::collections::HashSet<u64>,
+    images: std::collections::HashSet<(u64, folio_component::ImageFormat)>,
+    keeps_images: bool,
 }
 
 /// Serves a websocket client: every revision it has not seen, until it
@@ -522,9 +524,10 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
             }
             message = ws.next() => match message {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
-                    Ok(ClientMessage::Visible { pages }) => {
+                    Ok(ClientMessage::Visible { pages, images }) => {
                         shared.visible.show(id, &pages);
                         visible = pages;
+                        known.keeps_images |= images;
                     }
                     Ok(ClientMessage::Click { revision, page, x, y }) => {
                         let current = published.borrow().clone();
@@ -638,8 +641,13 @@ struct SourceMessage<'a> {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum ClientMessage {
-    /// The pages the client shows now.
-    Visible { pages: Vec<usize> },
+    /// The pages the client shows now, and whether it keeps the images of
+    /// the pages it has, so that lists may name them alone.
+    Visible {
+        pages: Vec<usize>,
+        #[serde(default)]
+        images: bool,
+    },
     /// A click at a point of a page, in points from its top-left corner,
     /// as the client shows the revision.
     Click {
@@ -724,10 +732,16 @@ async fn send(
         let entry = &published.pages[i];
         let body = if spans_only {
             &entry.spans
-        } else if entry.images.iter().all(|hash| known.images.contains(hash)) {
+        } else if known.keeps_images
+            && entry
+                .images
+                .iter()
+                .all(|image| known.images.contains(image))
+        {
             &entry.bytes
         } else {
-            // Every image of the page whole, once per connection.
+            // Every image of the page whole, and then named alone while
+            // the client's pages show it.
             known.images.extend(entry.images.iter().copied());
             entry.whole()
         };
@@ -744,6 +758,13 @@ async fn send(
         .pages
         .iter()
         .map(|entry| (entry.content, entry.id))
+        .collect();
+    // The client keeps the images of the pages it has now, as the server
+    // sends them, and drops the rest.
+    known.images = published
+        .pages
+        .iter()
+        .flat_map(|entry| entry.images.iter().copied())
         .collect();
     Ok(())
 }

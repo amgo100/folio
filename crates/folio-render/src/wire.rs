@@ -33,7 +33,7 @@
 //! that way, and so did its two last fields, the image's content hash
 //! (`Image::content_hash`, eight bytes, little-endian) and a byte that says
 //! whether the bytes were left out (`1`) because the receiver already has
-//! the image ([`Images`]). A sender leaves them out only for an image it
+//! the image, by that hash and the format byte ([`Images`]). A sender leaves them out only for an image it
 //! sent whole on the same channel before ([`encode_with`]); a decoder of a
 //! version before them reads such an item as an empty image.
 //! Every other change raises [`VERSION`], and a decoder rejects a version
@@ -179,11 +179,11 @@ pub fn encode_spans(spans: &SpanMap) -> Vec<u8> {
     w.buf
 }
 
-/// The images a receiver has been sent whole, by content hash, which the
-/// lists sent after them on the same channel name without their bytes
-/// ([`decode_with`], [`encode_with`]).
+/// The images a receiver has been sent whole, by content hash and format,
+/// which the lists sent after them on the same channel name without their
+/// bytes ([`decode_with`], [`encode_with`]).
 #[derive(Debug, Clone, Default)]
-pub struct Images(HashMap<u64, Image>);
+pub struct Images(HashMap<(u64, ImageFormat), Image>);
 
 impl Images {
     /// No images.
@@ -191,9 +191,15 @@ impl Images {
         Self::default()
     }
 
-    /// The image with the content hash, if it was received.
-    pub fn get(&self, hash: u64) -> Option<&Image> {
-        self.0.get(&hash)
+    /// The image with the content hash and format, if it was received.
+    pub fn get(&self, hash: u64, format: ImageFormat) -> Option<&Image> {
+        self.0.get(&(hash, format))
+    }
+
+    /// Keeps only the images `keep` accepts, as a receiver that drops the
+    /// images its sender no longer names alone.
+    pub fn retain(&mut self, mut keep: impl FnMut(&Image) -> bool) {
+        self.0.retain(|_, image| keep(image));
     }
 
     /// How many images there are.
@@ -596,18 +602,17 @@ impl<'a> Reader<'a> {
                 if !bytes.is_empty() {
                     return Err(DecodeError::Invalid);
                 }
-                let image = images.get(hash).ok_or(DecodeError::UnknownImage)?;
-                if image.format() != format {
-                    return Err(DecodeError::Invalid);
-                }
-                image.clone()
+                images
+                    .get(hash, format)
+                    .ok_or(DecodeError::UnknownImage)?
+                    .clone()
             }
             Some((hash, false)) => {
                 let image = Image::new(Arc::from(bytes), format);
                 if image.content_hash() != hash {
                     return Err(DecodeError::Invalid);
                 }
-                images.0.insert(hash, image.clone());
+                images.0.insert((hash, format), image.clone());
                 image
             }
             None => Image::new(Arc::from(bytes), format),

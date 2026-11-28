@@ -199,7 +199,10 @@ function command(tag, r) {
         const hi = r.view.getUint32(r.pos + 4, true);
         r.pos += 8;
         key = hi.toString(16).padStart(8, "0") + lo.toString(16).padStart(8, "0");
-        known = r.u8() === 1;
+        const flag = r.u8();
+        if (flag > 1) throw new DecodeError("an image's flag is not 0 or 1");
+        known = flag === 1;
+        if (known && n !== 0) throw new DecodeError("an image left out has bytes");
       }
       return { kind: "image", rect, format, bytes, key, known };
     }
@@ -260,9 +263,10 @@ const RASTER_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 // it is decoded or fetched, or waits to be fetched again, `pending` an
 // object that names the request.
 let imageCache = new Map();
-// Content hash → the bytes of every image this connection carried whole,
-// which later lists name alone. The server sends each once per
-// connection, so they are kept until it closes.
+// Content hash → the bytes of the images of the pages the viewer has,
+// which later lists name alone: the server sends an image whole once and
+// then names it while the client's pages show it (the viewer says it
+// keeps them in `visible`).
 let knownImages = new Map();
 // Content hash → how many times fetching a figure has failed.
 const imageFailures = new Map();
@@ -809,7 +813,7 @@ let socket = null;
 let lastVisible = "";
 function sendVisible() {
   const pagesShown = [...visible].sort((a, b) => a - b);
-  const text = JSON.stringify({ type: "visible", pages: pagesShown });
+  const text = JSON.stringify({ type: "visible", pages: pagesShown, images: true });
   if (socket && socket.readyState === WebSocket.OPEN && text !== lastVisible) {
     socket.send(text);
     lastVisible = text;
@@ -1077,10 +1081,18 @@ function apply({ update, frames }) {
     if (i >= update.pages) continue;
     const page = pages[i];
     if (decoded.kind === "list") {
+      // An image named alone that the viewer does not have: the page is
+      // shown as the server renders it.
+      const lacking = decoded.list.items.some((item) => item.kind === "image" && item.known
+        && !knownImages.has(item.key));
+      if (lacking) {
+        showImage(page, i, update.revision);
+        continue;
+      }
       page.list = decoded.list;
       for (const item of page.list.items) {
         if (item.kind !== "image" || item.key === null) continue;
-        if (item.known) item.bytes = knownImages.get(item.key) || new Uint8Array();
+        if (item.known) item.bytes = knownImages.get(item.key);
         else knownImages.set(item.key, item.bytes);
       }
       if (page.img) {
@@ -1093,6 +1105,14 @@ function apply({ update, frames }) {
     }
     // A span map changes nothing that is drawn.
   }
+  // The images of the pages the viewer has are kept, as the server
+  // expects; the rest are dropped.
+  const onPages = new Set();
+  for (const page of pages) {
+    if (!page || !page.list) continue;
+    for (const item of page.list.items) if (item.kind === "image" && item.key) onPages.add(item.key);
+  }
+  for (const key of knownImages.keys()) if (!onPages.has(key)) knownImages.delete(key);
   retryFailedImages();
   if (fitting || !zoom) zoom = fitZoom();
   for (const page of pages) if (page) layoutPage(page);

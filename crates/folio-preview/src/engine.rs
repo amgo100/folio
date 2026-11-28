@@ -225,8 +225,8 @@ pub(crate) struct PageEntry {
     /// The display list in the wire format, without the bytes of its
     /// images: for a client that has them ([`Self::images`]).
     pub(crate) bytes: Arc<[u8]>,
-    /// The content hashes of its images, if it has any.
-    pub(crate) images: Arc<[u64]>,
+    /// The content hashes and formats of its images, if it has any.
+    pub(crate) images: Arc<[(u64, folio_component::ImageFormat)]>,
     /// The display list in the wire format with every image's bytes, made
     /// when a client first needs it, so that an edit to a page with a
     /// large image does not copy the image ([`Self::whole`]).
@@ -1631,16 +1631,18 @@ fn entry(pages: &Pages, index: usize) -> PageEntry {
     let list = DisplayList::from_fragment(&pages.pages[index].fragment);
     let bytes: Arc<[u8]> = wire::encode_with(&list, |_| true).into();
     let spans = wire::encode_spans(&list.spans()).into();
-    let mut images: Vec<u64> = list
+    let mut images: Vec<(u64, folio_component::ImageFormat)> = list
         .items
         .iter()
         .filter_map(|item| match &item.command {
-            folio_render::Command::Image(image) => Some(image.image.content_hash()),
+            folio_render::Command::Image(image) => {
+                Some((image.image.content_hash(), image.image.format()))
+            }
             _ => None,
         })
         .collect();
-    images.sort_unstable();
-    images.dedup();
+    let mut seen = std::collections::HashSet::new();
+    images.retain(|image| seen.insert(*image));
     // Without images, the two encodings are the same.
     let whole = OnceLock::new();
     if images.is_empty() {

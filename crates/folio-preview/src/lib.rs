@@ -102,7 +102,8 @@
 //!
 //! A new connection receives every page. Pages that the client says are
 //! visible come first: it sends `{"type": "visible", "pages": [..]}`
-//! whenever that changes. They are also laid out first (SPEC §12.2): once
+//! whenever that changes (with `"images": true` from a client that keeps
+//! images; see below). They are also laid out first (SPEC §12.2): once
 //! any client has said what it shows, a revision whose document has pages
 //! after the last visible one, as the revision before had, may come in two
 //! updates: the first, with `partial` true, sends the pages through it
@@ -143,12 +144,14 @@
 //! height of zero. An answer holds at most 32 MiB of coverage: the glyphs
 //! past it are left out, and the count says how many it holds.
 //!
-//! Images arrive in the display lists with their files' bytes, once per
-//! connection: the first list that holds an image carries its bytes and
-//! its content hash, and the lists after it on the same connection name it
-//! by the hash alone, with its bytes left out (the image item's last
-//! fields, [`folio_render::wire::encode_with`]), so a client keeps the
-//! images it was sent until the connection closes
+//! Images arrive in the display lists with their files' bytes and content
+//! hashes. A client that keeps them says so with `"images": true` in its
+//! `visible` message; from then on, the server sends an image's bytes in
+//! the first list that holds it, and the lists after it name it by its
+//! hash and format alone, with its bytes left out (the image item's last
+//! fields, [`folio_render::wire::encode_with`]), for as long as the pages
+//! the client has show it. Such a client keeps the images of the pages it
+//! has after each update, and may drop the rest
 //! ([`folio_render::wire::Images`]). A client decodes JPEG, PNG, WebP and
 //! GIF itself (a JPEG as stored, without
 //! turning it by its Exif orientation, which PDF output ignores), and asks for SVG and PDF
