@@ -390,9 +390,16 @@ impl<'a> Vm<'a> {
         // In a grid's body, the pipe rows of consecutive lines are evaluated
         // together, as one run; `skip` passes over the rest of a run.
         let mut skip = 0;
+        let mut after_run = false;
         for (i, &item) in items.iter().enumerate() {
             if i < skip {
                 continue;
+            }
+            if !matches!(
+                item,
+                ast::MarkupItem::Expr(ast::Expr::Space(_) | ast::Expr::Label(_))
+            ) {
+                after_run = false;
             }
             let expr = match item {
                 ast::MarkupItem::Expr(expr) => expr,
@@ -407,6 +414,15 @@ impl<'a> Vm<'a> {
             };
             if let ast::Expr::Label(label) = expr {
                 out.trim_end_spaces();
+                // After a run of pipe rows, the last element may be an empty
+                // cell that fills a short row; a cell's label goes in it.
+                if after_run {
+                    self.tolerate(
+                        EvalError::new(label.span(), "a label after a pipe row has no cell")
+                            .with_hint("write it in the cell it labels: `| a <label> |`"),
+                    )?;
+                    continue;
+                }
                 match out.last_element_mut() {
                     // The construct the label was for failed, and was
                     // reported; a reference to the label must not find its
@@ -435,6 +451,7 @@ impl<'a> Vm<'a> {
                 ast::Expr::TableRow(_) if rows => {
                     let run = row_run(&items[i..]);
                     skip = i + run.1;
+                    after_run = true;
                     self.nest(|vm| vm.row_run(&run.0))
                 }
                 _ => self.markup_expr(expr),

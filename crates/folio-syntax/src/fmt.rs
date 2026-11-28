@@ -1556,8 +1556,8 @@ mod tests {
         markup("|   a   |  |b|\n", "| a || b |\n");
         // A separator does not divide the rows, and stays as written.
         markup(
-            "| Head | X |\n|---|:-:|\n| 1 | 22 |\n",
-            "| Head | X  |\n|---|:-:|\n| 1    | 22 |\n",
+            "| Head | X |\n|---|:---:|\n| 1 | 22 |\n",
+            "| Head | X  |\n|---|:---:|\n| 1    | 22 |\n",
         );
         // Rows with other indentation or another number of cells, or after
         // a blank line, are aligned apart.

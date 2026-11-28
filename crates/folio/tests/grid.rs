@@ -695,10 +695,15 @@ fn pipe_row_errors() {
     // Pipes after a block's `[` or a list marker are text.
     assert!(errors("#let n(v) = [|#v|]\n#n[x] #strong[|x|]\n- |v| is the speed\n").is_empty());
     // Data rows.
-    assert_eq!(
-        errors("#grid(rows: ((cell(column: 2)[x],),))\n"),
-        ["a cell of a row gives its place by both `row` and `column`, or by neither"]
-    );
+    for text in [
+        "#grid(rows: ((cell(column: 2)[x],),))\n",
+        "#grid(rows: ((cell(row: 1, column: 2)[x], [a]),))\n",
+    ] {
+        assert_eq!(
+            errors(text),
+            ["a cell of a row is placed by the row, not by `row` or `column`"]
+        );
+    }
     assert_eq!(
         errors("#grid(rows: (1, 2))\n"),
         ["row 1 of `rows`: a row is an array of cells, not an int"]
@@ -724,15 +729,6 @@ fn rows_in_a_named_body_and_through_with() {
     same_pages(
         "#let t = grid.with(column-tracks: 2, header-rows: 1)\n#t[\n  | H | I |\n  |---|---|\n  | a | b |\n]\n",
         "#grid(column-tracks: 2, header-rows: 1)[\n  | H | I |\n  | a | b |\n]\n",
-        &[],
-    );
-}
-
-#[test]
-fn a_data_cell_at_its_own_place_is_not_covered() {
-    same_pages(
-        "#grid(column-tracks: 2)[\n  #cell[a] #cell[x]\n  #cell[b] #cell[c]\n]\n",
-        "#grid(rows: ((cell(row: 1, column: 2)[x], [a]), ([b], [c])))\n",
         &[],
     );
 }
@@ -781,7 +777,34 @@ fn more_pipe_row_errors() {
     }
     assert_eq!(
         errors("#grid[\n  | a | #cell(column: 3)[b] |\n  #cell[c]\n]\n"),
-        ["a cell of a row gives its place by both `row` and `column`, or by neither"]
+        ["a cell of a row is placed by the row, not by `row` or `column`"]
+    );
+    // A span past the rows it is written with.
+    for text in [
+        "#grid(rows: ((cell(rowspan: 2)[A], [b]),))[\n  | c |\n]\n",
+        "#grid[\n  | #cell(rowspan: 2)[A] | b |\n  #cell[c]\n]\n",
+    ] {
+        assert_eq!(
+            errors(text),
+            ["this cell spans 2 rows, past the last of the rows it is in"]
+        );
+    }
+    assert_eq!(
+        errors("#grid(rows: (([#cell[a] #cell[b]], [c]),))\n"),
+        ["a cell of `rows` that holds `cell(..)[..]` holds nothing else"]
+    );
+    // Labels.
+    assert_eq!(
+        errors("#grid[\n  | a | b |\n  | c |\n  <t>\n]\n"),
+        ["a label after a pipe row has no cell"]
+    );
+    assert!(errors("#grid[\n  | a | b | <t>\n]\nSee @t.\n").is_empty());
+    // A binding above a header line, and a row of dashes below it.
+    assert!(
+        errors(
+            "#grid[\n  #let u = \"m\"\n  | L | #u |\n  |---|---|\n  | 1 | 2 |\n  | - | - |\n]\n"
+        )
+        .is_empty()
     );
     // Strong text in a cell keeps a pipe inside brackets.
     assert!(errors("#grid(column-tracks: 2)[\n  | *a [x | y]* | b |\n]\n").is_empty());

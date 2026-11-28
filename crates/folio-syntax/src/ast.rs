@@ -896,11 +896,11 @@ impl<'a> TableRow<'a> {
         self.0.children().filter_map(SyntaxNode::cast)
     }
 
-    /// Whether the row is a separator line, as in Markdown: `|---|:--:|`.
-    /// Each of its cells holds only `-`, `:` and spaces, and at least one
-    /// holds a `-`. The rows above it are header rows.
+    /// Whether the row is a separator line, as in Markdown: `|---|:---:|`.
+    /// Each of its cells holds only `-`, `:` and spaces, with at least three
+    /// `-`, so that a row of single dashes, which a table writes for "no
+    /// value", stays a row. The rows above it are header rows.
     pub fn is_separator(self) -> bool {
-        let mut dash = false;
         let mut any = false;
         for cell in self.cells() {
             any = true;
@@ -908,12 +908,12 @@ impl<'a> TableRow<'a> {
             if !text
                 .chars()
                 .all(|c| matches!(c, '-' | ':') || c.is_whitespace())
+                || text.chars().filter(|&c| c == '-').count() < 3
             {
                 return false;
             }
-            dash |= text.contains('-');
         }
-        any && dash
+        any
     }
 }
 

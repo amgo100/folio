@@ -111,9 +111,28 @@ impl Vm<'_> {
         if row.is_separator() {
             return Ok(out);
         }
-        for cell in row.cells() {
+        let count = row.cells().count();
+        for (i, cell) in row.cells().enumerate() {
             self.step(cell.span())?;
             let (content, label) = self.markup_labelled(cell)?;
+            // A label alone after the last pipe is the last cell's:
+            // `| a | b | <t>`.
+            if let Some(label) = label
+                && i + 1 == count
+                && i > 0
+                && content
+                    .nodes()
+                    .iter()
+                    .all(|node| matches!(node, Node::Space(_)))
+                && !row
+                    .to_untyped()
+                    .children()
+                    .last()
+                    .is_some_and(|n| n.kind() == folio_syntax::SyntaxKind::TablePipe)
+            {
+                out = super::vm::labelled(out, Some(label));
+                break;
+            }
             if content.nodes().iter().any(is_cell_node) && lone_cell(&content).is_none() {
                 return Err(EvalError::new(
                     cell.span(),
@@ -273,86 +292,56 @@ impl Vm<'_> {
     /// auto-flow (SPEC §7.4) starts each row on a row of its own: its first
     /// cell's column is left of where the row before it ends, or that row
     /// is full there. No cell is given its row, which would bound the
-    /// number of rows.
+    /// number of rows. A cell of the rows gives no place of its own, and
+    /// spans no row past the last, since the places of other cells are
+    /// known only within the rows.
     pub(super) fn data_cells(&mut self, data: Vec<(Vec<Value>, Span)>) -> EvalResult<Content> {
+        let count = data.len();
         // Which places of each row are taken, and the cells of each row
         // with their columns.
-        let mut taken: Vec<Vec<bool>> = Vec::new();
-        let mut placed: Vec<(Vec<(usize, Content)>, Span)> = Vec::new();
+        let mut taken: Vec<Vec<bool>> = vec![Vec::new(); count];
+        let mut placed: Vec<(Vec<(usize, Content)>, Span)> = Vec::with_capacity(count);
         let mut columns = 0;
-        // Cells made first, so that the places of those placed by their own
-        // fields are known before the others are placed.
-        let mut made: Vec<(Vec<Content>, Span)> = Vec::with_capacity(data.len());
-        for (values, span) in data {
-            let mut cells = Vec::with_capacity(values.len());
-            for value in values {
-                self.step(span)?;
-                let content = self.data_cell(value, span)?;
-                if let Some(Node::Element(cell)) = content.nodes().first() {
-                    let given = |field: &str| match cell.field(field) {
-                        Some(Value::Int(n)) => {
-                            Some(usize::try_from(*n).unwrap_or(1).clamp(1, MAX_TRACKS))
-                        }
-                        _ => None,
-                    };
-                    match (given("row"), given("column")) {
-                        (Some(row), Some(column)) => {
-                            let spans = |field: &str| given(field).unwrap_or(1);
-                            let (r, c) = (row - 1, column - 1);
-                            let end = (c + spans("colspan")).min(MAX_TRACKS);
-                            let rowspan = spans("rowspan");
-                            self.alloc(((end - c) * rowspan) as u64, span)?;
-                            if taken.len() < r + rowspan {
-                                taken.resize(r + rowspan, Vec::new());
-                            }
-                            for row in &mut taken[r..r + rowspan] {
-                                if row.len() < end {
-                                    row.resize(end, false);
-                                }
-                                for place in &mut row[c..end] {
-                                    *place = true;
-                                }
-                            }
-                            columns = columns.max(end);
-                        }
-                        (None, None) => {}
-                        _ => bail!(
-                            if cell.span.is_detached() {
-                                span
-                            } else {
-                                cell.span
-                            },
-                            "a cell of a row gives its place by both `row` and `column`, or by \
-                             neither"
-                        ),
-                    }
-                }
-                cells.push(content);
-            }
-            made.push((cells, span));
-        }
-        for (r, (values, span)) in made.into_iter().enumerate() {
-            if taken.len() <= r {
-                taken.resize(r + 1, Vec::new());
-            }
+        for (r, (values, span)) in data.into_iter().enumerate() {
             placed.push((Vec::with_capacity(values.len()), span));
             let mut c = 0;
-            for mut content in values {
+            for value in values {
+                self.step(span)?;
+                let mut content = self.data_cell(value, span)?;
                 let Some(Node::Element(cell)) = content.nodes().first().cloned() else {
                     unreachable!("a data cell is a cell element");
                 };
-                // A cell placed by its own fields keeps its place.
-                if cell.field("column").is_some_and(|v| *v != Value::None)
-                    || cell.field("row").is_some_and(|v| *v != Value::None)
+                let at = if cell.span.is_detached() {
+                    span
+                } else {
+                    cell.span
+                };
+                if ["row", "column"]
+                    .iter()
+                    .any(|field| cell.field(field).is_some_and(|v| *v != Value::None))
                 {
-                    placed[r].0.push((usize::MAX, content));
-                    continue;
+                    return Err(EvalError::new(
+                        at,
+                        "a cell of a row is placed by the row, not by `row` or `column`",
+                    )
+                    .with_hint("write a cell at a place of its own after the rows, as `#cell(row: .., column: ..)[..]`")
+                    .into());
                 }
                 let span_of = |field: &str| match cell.field(field) {
                     Some(Value::Int(n)) => usize::try_from(*n).unwrap_or(1).clamp(1, MAX_TRACKS),
                     _ => 1,
                 };
                 let (colspan, rowspan) = (span_of("colspan"), span_of("rowspan"));
+                if r + rowspan > count {
+                    return Err(EvalError::new(
+                        at,
+                        eco_format!(
+                            "this cell spans {rowspan} rows, past the last of the rows it is in"
+                        ),
+                    )
+                    .with_hint("a cell of a pipe row or of `rows` spans the rows written with it")
+                    .into());
+                }
                 while taken[r].get(c).copied().unwrap_or(false) {
                     c += 1;
                 }
@@ -362,9 +351,6 @@ impl Vm<'_> {
                 let end = (c + colspan).min(MAX_TRACKS);
                 // The places a cell takes count against the memory limit.
                 self.alloc(((end - c) * rowspan) as u64, span)?;
-                if taken.len() < r + rowspan {
-                    taken.resize(r + rowspan, Vec::new());
-                }
                 for row in &mut taken[r..r + rowspan] {
                     if row.len() < end {
                         row.resize(end, false);
@@ -382,7 +368,7 @@ impl Vm<'_> {
         // Empty cells where a row leaves places free.
         let mut out = Content::new();
         for (r, (mut cells, span)) in placed.into_iter().enumerate() {
-            let row = taken.get(r).map(Vec::as_slice).unwrap_or_default();
+            let row = taken[r].as_slice();
             for c in 0..columns {
                 if !row.get(c).copied().unwrap_or(false) {
                     self.step(span)?;
@@ -404,10 +390,18 @@ impl Vm<'_> {
     /// A cell of a data row: a `cell` element as it is, other content in a
     /// cell, and a string, a number or another value as its text.
     fn data_cell(&mut self, value: Value, span: Span) -> EvalResult<Content> {
-        if let Value::Content(content) = &value
-            && let Some(i) = lone_cell(content)
-        {
-            return Ok(Content::node(content.nodes()[i].clone()));
+        if let Value::Content(content) = &value {
+            if let Some(i) = lone_cell(content) {
+                return Ok(Content::node(content.nodes()[i].clone()));
+            }
+            if content.nodes().iter().any(is_cell_node) {
+                return Err(EvalError::new(
+                    span,
+                    "a cell of `rows` that holds `cell(..)[..]` holds nothing else",
+                )
+                .with_hint("give each cell of the row as an item of its own")
+                .into());
+            }
         }
         let body = self.display(value, span)?;
         self.builtin("cell", [("body", body.into())], span)
@@ -514,6 +508,8 @@ fn separator(body: ast::Markup<'_>) -> EvalResult<Option<(i64, Span)>> {
                 found = Some((rows, row.span()));
             }
             ast::Expr::TableRow(_) => rows += 1,
+            // Bindings and imports make no content.
+            ast::Expr::LetBinding(_) | ast::Expr::ModuleImport(_) => {}
             _ => other = true,
         }
     }

@@ -830,13 +830,13 @@ fn a_cell_block_may_run_over_lines() {
 
 #[test]
 fn separator_rows() {
-    let root = root("| a | b |\n|---|:--:|\n| - | : |\n| --- x |\n");
+    let root = root("| a | b |\n|---|:---:|\n| - | - |\n| --- x |\n|  :--- | ---- |\n");
     let rows: Vec<bool> = nodes(&root)
         .into_iter()
         .filter_map(SyntaxNode::cast::<ast::TableRow<'_>>)
         .map(ast::TableRow::is_separator)
         .collect();
-    assert_eq!(rows, [false, true, true, false]);
+    assert_eq!(rows, [false, true, false, false, true]);
     assert!(!first::<ast::TableRow<'_>>(&self::root("| :: |\n")).is_separator());
 }
 
