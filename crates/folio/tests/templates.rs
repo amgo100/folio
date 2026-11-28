@@ -559,3 +559,259 @@ fn a_slot_shown_as_answer_space_keeps_its_space_where_the_template_places_it() {
         text.spaces.iter().map(|s| &s.part).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn content_a_template_leaves_out_is_not_counted() {
+    // `compact` shows the statement only: the equation in the solution it
+    // leaves out is neither numbered nor referable, so the next one is
+    // number 1 (#446).
+    let content = r#"#element example() {
+  kind: block
+  body: slots(statement: blocks, solution: blocks)
+}
+
+#example(class: "short")[
+  #statement[A ball is dropped.]
+  #solution[$ s = 1/2 g t^2 $ <eq:dropped>]
+]
+
+$ v = u + a t $ <eq:speed>
+
+See @eq:speed.
+"#;
+    let style = "math { numbering: \"(1)\"; }\n\
+                 render example as compact { body: slot(statement); }\n\
+                 example.short { template: compact; }\n";
+    let compact = world(style, content);
+    let resolution = folio::resolve(&compact, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    let numbers: Vec<String> = resolution
+        .numbers
+        .iter()
+        .filter(|n| n.counter == "equation")
+        .filter_map(|n| n.number.as_ref().map(|s| s.to_string()))
+        .collect();
+    assert_eq!(numbers, ["(1)"]);
+    assert!(resolution.label("eq:dropped").is_none());
+    assert!(resolution.label("eq:speed").is_some());
+    // Without the template the solution is shown, and counted.
+    let world = world("math { numbering: \"(1)\"; }\n", content);
+    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resolution
+            .numbers
+            .iter()
+            .filter(|n| n.counter == "equation")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn a_body_the_template_leaves_out_and_a_slot_its_header_places() {
+    // The body (with a numbered equation) is not placed: it is not
+    // counted. The note is placed by the header: it is kept.
+    let content = r#"#element card(note: content = none) {
+  kind: block
+  body: blocks
+}
+
+#card(note: [Read first.])[
+  $ x = 1 $ <eq:hidden>
+]
+
+$ y = 2 $
+"#;
+    let style = "math { numbering: \"(1)\"; }\n\
+                 render card { header: field(note); body: \"Card\"; }\n";
+    let world = world(style, content);
+    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    let equations = resolution
+        .numbers
+        .iter()
+        .filter(|n| n.counter == "equation")
+        .count();
+    assert_eq!(equations, 1);
+    assert!(resolution.label("eq:hidden").is_none());
+    let text = text(&world);
+    let mut found = Vec::new();
+    blocks(&text.root, "project.card", &mut found);
+    assert_eq!(
+        outline(found[0], &text),
+        "-[header[\"Read first.\"] \"Card\"]"
+    );
+}
+
+#[test]
+fn a_part_shown_as_a_space_is_kept_but_conditions_read_it_unset() {
+    // `if field(solution) { "Worked solution" slot(solution) }`: in the
+    // exam the solution is a space, so the condition fails and the heading
+    // does not tell that a solution exists (SPEC §6.4). Select still keeps
+    // the part's block, so the variant counts what it counts without a
+    // template, and its space stands after the body.
+    let content = r#"#element example() {
+  kind: block
+  body: slots(statement: blocks, solution: blocks)
+}
+
+#example[
+  #statement[A ball is dropped.]
+  #solution[$ s = 1/2 g t^2 $]
+]
+"#;
+    let count = |world: &World, variant: &str| {
+        let variant = Name::new(variant);
+        folio::resolve(world, Target::Pdf, variant.as_ref())
+            .unwrap()
+            .unwrap()
+            .numbers
+            .iter()
+            .filter(|n| n.counter == "equation")
+            .count()
+    };
+    for display in ["hidden", "answer-space"] {
+        let overlay = format!("@variant exam {{ example > solution {{ display: {display}; }} }}\n");
+        let templated = world(
+            &format!(
+                "math {{ numbering: \"(1)\"; }}\n\
+                 render example {{ body: slot(statement) \
+                 if field(solution) {{ \"Worked solution\" slot(solution) }}; }}\n{overlay}"
+            ),
+            content,
+        );
+        let plain = world(
+            &format!("math {{ numbering: \"(1)\"; }}\n{overlay}"),
+            content,
+        );
+        for variant in ["exam", "markscheme"] {
+            assert_eq!(
+                count(&templated, variant),
+                count(&plain, variant),
+                "{display} {variant}"
+            );
+        }
+        let outline = &example_outlines(&templated)[0];
+        assert!(!outline.contains("Worked solution"), "{display}: {outline}");
+        let spaced = text(&templated)
+            .spaces
+            .iter()
+            .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution"));
+        assert!(spaced, "{display}: {outline}");
+    }
+}
+
+#[test]
+fn blocks_an_inline_template_cannot_set_are_not_counted() {
+    let content = r#"#element hint() {
+  kind: inline
+  body: slots(note: blocks)
+}
+
+Text #hint[#note[$ x = 1 $]] more.
+
+$ y = 2 $
+"#;
+    let style = "math { numbering: \"(1)\"; }\nrender hint { body: \"(hint)\" slot(note); }\n";
+    let world = world(style, content);
+    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resolution
+            .numbers
+            .iter()
+            .filter(|n| n.counter == "equation")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_field_in_a_line_shows_nothing_of_a_space() {
+    // In the exam the solution is answer space: the header's line shows
+    // its text and nothing of the space, which stands where `slot` places
+    // it.
+    let style = "render example {\n  \
+                   header: strong(\"Answer: \" field(solution));\n  \
+                   body: slot(statement) slot(solution);\n}\n\
+                 @variant exam { example > solution { display: answer-space; } }\n";
+    let world = world(style, CONTENT);
+    assert_eq!(
+        example_outlines(&world)[0],
+        "-[header[\"Answer: \"] statement[-[\"A particle is projected up a slope.\"]] \
+         solution[]]"
+    );
+}
+
+#[test]
+fn a_space_a_template_shows_only_in_a_line_keeps_its_space() {
+    // The solution is placed by `field` alone: in the exam its answer
+    // space follows the body, so the answer lines are not lost.
+    let style = "render example {\n  \
+                   header: strong(\"Answer: \" field(solution));\n  \
+                   body: slot(statement);\n}\n\
+                 @variant exam { example > solution { display: answer-space; } }\n";
+    let world = world(style, CONTENT);
+    assert_eq!(
+        example_outlines(&world)[0],
+        "-[header[\"Answer: \"] statement[-[\"A particle is projected up a slope.\"]] \
+         solution[]]"
+    );
+    assert!(
+        text(&world)
+            .spaces
+            .iter()
+            .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution"))
+    );
+}
+
+#[test]
+fn what_select_keeps_of_content_a_template_leaves_out() {
+    // A list whose template does not place its body keeps the template's
+    // text; what an inline template places in its line is kept as it is
+    // without a template.
+    let lists = world(
+        "render list { body: \"(list omitted)\"; }\n",
+        "Before.\n\n- one\n- two\n\nAfter.\n",
+    );
+    let shown: Vec<String> = text(&lists)
+        .paragraphs
+        .iter()
+        .map(|p| p.shaped.text().to_string())
+        .collect();
+    assert_eq!(shown, ["Before.", "(list omitted)", "After."]);
+
+    let content = r#"#element hint() {
+  kind: inline
+  body: slots(note: inline)
+}
+
+Text #hint[#note[see $ x = 1 $ <eq:a>]] more.
+
+$ y = 2 $
+"#;
+    let count = |style: &str| {
+        let world = world(style, content);
+        let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+            .unwrap()
+            .unwrap();
+        (
+            resolution.label("eq:a").is_some(),
+            resolution
+                .numbers
+                .iter()
+                .filter(|n| n.counter == "equation")
+                .count(),
+        )
+    };
+    // The template keeps what the line holds: the same as without it.
+    assert_eq!(
+        count("math { numbering: \"(1)\"; }\nrender hint { body: \"(\" slot(note) \")\"; }\n"),
+        count("math { numbering: \"(1)\"; }\n")
+    );
+}

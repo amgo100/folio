@@ -849,7 +849,36 @@ impl Collector<'_> {
             self.close();
         }
         match &expansion.body {
-            Some(body) => self.pieces(element, node, body, &node.style),
+            Some(body) => {
+                self.pieces(element, node, body, &node.style);
+                // A part shown as a space that the template does not place
+                // as blocks (it shows it only in a line, with `field`, or a
+                // condition leaves it out) keeps its block after the body,
+                // so that no answer space is lost and a hidden part takes
+                // its room (SPEC §6.3).
+                // In the order of the element's fields.
+                let unplaced: Vec<Name> = if self.spaces.is_empty() {
+                    Vec::new()
+                } else {
+                    element
+                        .fields
+                        .iter()
+                        .filter_map(|(key, _)| Name::new(key))
+                        .filter(|name| {
+                            self.spaces
+                                .contains_key(&(element.location, Some(name.clone())))
+                        })
+                        .filter(|name| !self.placed.contains(name))
+                        .collect()
+                };
+                for name in unplaced {
+                    if let Some(eval::Value::Content(content)) = element.field(name.as_str())
+                        && self.place(&name)
+                    {
+                        self.slot(element, node, &name, content);
+                    }
+                }
+            }
             None => self.element_content(element, node),
         }
     }
@@ -879,12 +908,23 @@ impl Collector<'_> {
                     }
                 }
                 TemplatePiece::Field { name, style } => {
-                    if !self.place(name) {
-                        continue;
-                    }
                     let Some(eval::Value::Content(content)) = element.field(name.as_str()) else {
                         continue;
                     };
+                    // A field in a line shows its content there; one whose
+                    // content a space replaced shows nothing in the line,
+                    // and its space stands where a `slot` places it, or
+                    // after the body.
+                    if content.is_empty()
+                        && self
+                            .spaces
+                            .contains_key(&(element.location, Some(name.clone())))
+                    {
+                        continue;
+                    }
+                    if !self.place(name) || content.is_empty() {
+                        continue;
+                    }
                     let Some(part) = part_node(node, name) else {
                         continue;
                     };
@@ -2123,7 +2163,7 @@ fn is_builtin(name: &QualifiedName, builtin: &str) -> bool {
 /// Whether content is inline: it has text, or an inline element or a note.
 /// Content of blocks has neither: the document model groups inline content
 /// between blocks into paragraphs.
-fn is_inline(content: &Content) -> bool {
+pub(crate) fn is_inline(content: &Content) -> bool {
     content.nodes().iter().any(|node| match node {
         Node::Text { .. } | Node::Space(_) | Node::Linebreak(_) | Node::Quote { .. } => true,
         Node::Element(element) => matches!(element.kind, ElementKind::Inline | ElementKind::Note),

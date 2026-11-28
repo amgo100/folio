@@ -175,7 +175,10 @@ impl Cond {
         use ast::BinOp::*;
         match self {
             Self::Value(value) => value.clone(),
-            Self::Field(name) => element.get(name).cloned().unwrap_or(eval::Value::None),
+            Self::Field(name) => element
+                .condition(name)
+                .cloned()
+                .unwrap_or(eval::Value::None),
             Self::Not(inner) => eval::Value::Bool(!truthy(&inner.eval(element))),
             Self::Binary(op, lhs, rhs) => {
                 let bool = eval::Value::Bool;
@@ -216,24 +219,40 @@ impl Cond {
     }
 }
 
-/// The fields of an element as a template reads them: those of a part
-/// that the build's variant hides (`display: none`, `hidden` or
-/// `answer-space`, or left out by the element's `show-only`) are unset, so
-/// that a template shows nothing of what a variant hides (SPEC §6.4).
+/// The fields of an element as a template reads them. A part that the
+/// build's variant removes (`display: none`, left out by the element's
+/// `show-only`, or shown as `hidden` or `answer-space` where the element
+/// keeps no block for it) is unset. A part shown as `hidden` or
+/// `answer-space` that keeps its block is placed by `slot` and `field`, so
+/// that its space stands where the template puts it, but conditions read
+/// it as unset, so that a template shows nothing of what a variant hides
+/// (SPEC §6.3, §6.4).
 pub(super) struct Fields<'e> {
     /// The element.
     pub(super) element: &'e Element,
-    /// The parts the variant hides.
+    /// The parts the variant removes.
     pub(super) hidden: Vec<Name>,
+    /// The parts the variant shows as a space, with their blocks kept.
+    pub(super) spaces: Vec<Name>,
 }
 
 impl Fields<'_> {
-    /// A field's value, if it is set and not hidden.
+    /// A field's value as `slot` and `field` place it, if it is set and
+    /// not removed.
     fn get(&self, name: &Name) -> Option<&eval::Value> {
         if self.hidden.contains(name) {
             return None;
         }
         self.element.field(name.as_str())
+    }
+
+    /// A field's value as a condition reads it: unset where the variant
+    /// removes it or shows it as a space.
+    fn condition(&self, name: &Name) -> Option<&eval::Value> {
+        if self.spaces.contains(name) {
+            return None;
+        }
+        self.get(name)
     }
 }
 
@@ -334,7 +353,8 @@ impl Compile<'_> {
                 self.db,
                 Diagnostic::warning(
                     span,
-                    "graphic primitives are not drawn yet, so this template leaves them out",
+                    "graphic primitives are not drawn yet, so this template leaves them out, \
+                     with any slot or field inside them",
                 )
                 .with_hint("graphics arrive in a later version (SPEC §9)"),
             );
@@ -886,6 +906,48 @@ pub struct Expansion {
     /// no body, so the element's content is shown as it would be without
     /// one.
     pub body: Option<EcoVec<Piece>>,
+    /// The content fields it places ([`Expansion::placed`]), worked out
+    /// once.
+    placed: Option<EcoVec<Name>>,
+}
+
+impl Expansion {
+    /// The content fields the expansion places: the body ([`BODY`]),
+    /// slots and content fields that its `slot` and `field` pieces show.
+    /// `None` where the template has no body, so the element's content is
+    /// shown as it would be without one. Content it does not place is not
+    /// shown (SPEC §5.3), and Select leaves it out, so that no later stage
+    /// counts, numbers or labels it.
+    pub fn placed(&self) -> Option<&[Name]> {
+        self.placed.as_deref()
+    }
+
+    /// Works out [`Expansion::placed`].
+    fn find_placed(&mut self) {
+        fn walk(pieces: &[Piece], out: &mut EcoVec<Name>) {
+            for piece in pieces {
+                match piece {
+                    Piece::Slot { name, .. } | Piece::Field { name, .. } => {
+                        if !out.contains(name) {
+                            out.push(name.clone());
+                        }
+                    }
+                    Piece::Block(block) => walk(&block.children, out),
+                    Piece::Text { .. } | Piece::Counter { .. } | Piece::Image { .. } => {}
+                }
+            }
+        }
+        let Some(body) = &self.body else {
+            self.placed = None;
+            return;
+        };
+        let mut out = EcoVec::new();
+        if let Some(header) = &self.header {
+            walk(&header.items, &mut out);
+        }
+        walk(body, &mut out);
+        self.placed = Some(out);
+    }
 }
 
 /// A block of pieces in a style.
@@ -1027,7 +1089,12 @@ pub(super) fn read_fields(template: &Template, fields: &Fields<'_>) -> EcoVec<ev
     template
         .reads
         .iter()
-        .map(|name| fields.get(name).cloned().unwrap_or(eval::Value::None))
+        .flat_map(|name| {
+            [
+                fields.get(name).cloned().unwrap_or(eval::Value::None),
+                eval::Value::Bool(fields.spaces.contains(name)),
+            ]
+        })
         .collect()
 }
 
@@ -1066,13 +1133,16 @@ pub(super) fn expand<R: Restyle>(
         };
         ex.items(items, &at)
     });
-    trim(Expansion {
+    let mut expansion = trim(Expansion {
         name: template.name.clone(),
         span: template.span,
         office: template.office,
         header,
         body,
-    })
+        placed: None,
+    });
+    expansion.find_placed();
+    expansion
 }
 
 /// An expansion whose header holds nothing, as when its conditions all

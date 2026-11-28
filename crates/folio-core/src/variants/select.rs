@@ -20,6 +20,9 @@
 //!   names, whole, and the children that hold one, condensed in the same
 //!   way; text and every other child are left out.
 //! - **Shown**: `block`, `inline` and `auto` show the node as it is.
+//! - **Not placed**: an element shown with a render template whose body
+//!   leaves out its body, a slot or a content field (SPEC §5.3) has that
+//!   content left out of both trees, as `display: none` leaves it out.
 //!
 //! - **Spaces**: `hidden` and `answer-space` keep a block element or part,
 //!   which is still counted and styled, and leave all of its content out,
@@ -39,7 +42,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{BODY, Location, Name, QualifiedName, Value as Style};
+use folio_component::{BODY, ElementKind, Location, Name, QualifiedName, Value as Style};
 use folio_syntax::Span;
 
 use crate::db::Db;
@@ -358,10 +361,77 @@ impl Select<'_> {
         let mut edits = Edits::default();
         let mut body_kids = StyledChildren::new(node);
         let mut part_kids = StyledChildren::new(node);
+        // What the element's render template does not place is not shown
+        // (SPEC §5.3), so it is left out like content `display: none`
+        // removes.
+        let placed = node.template.as_ref().and_then(|t| t.placed());
+        // Whether the template left the body out, so that an element the
+        // document model made is kept for what the template shows.
+        let mut emptied = false;
         for (key, value) in element.fields.iter() {
             let Value::Content(content) = value else {
                 continue;
             };
+            // An inline element's template sets only content with something
+            // inline in its line (blocks among it are anchored after the
+            // line, as the text stage anchors them); content of blocks
+            // alone is not placed at all.
+            let inline_owner = placed.is_some() && element.kind == ElementKind::Inline;
+            let blocks_in_line =
+                inline_owner && !content.is_empty() && !crate::text::is_inline(content);
+            // A part of a block shown as a space keeps its block whether
+            // or not the template places it (SPEC §6.3), as `part` keeps it.
+            let space = placed.is_some()
+                && key != BODY
+                && is_block(element)
+                && Name::new(key)
+                    .and_then(|name| part_kids.part(&name))
+                    .is_some_and(|part| matches!(self.shown(None, part), Shown::Space(_)));
+            if let Some(placed) = &placed
+                && !content.is_empty()
+                && !space
+                && (blocks_in_line || !placed.iter().any(|name| name.as_str() == key.as_str()))
+            {
+                let fields = fields.get_or_insert_with(|| element.fields.clone());
+                // Scoped rules apply to the element wherever they are
+                // written, so they stay (SPEC §5.4).
+                let mut rules = Vec::new();
+                for child in content.nodes() {
+                    match child {
+                        Node::Element(child) if key == BODY => {
+                            edits.removed.insert(child.location);
+                        }
+                        Node::Rule(_) => rules.push(child.clone()),
+                        _ => {}
+                    }
+                }
+                if key == BODY {
+                    emptied = true;
+                    fields.insert(key.clone(), Value::Content(tidy(rules)));
+                    continue;
+                }
+                let part = Name::new(key).and_then(|name| part_kids.part(&name));
+                // A part an inline element cannot keep the block of is
+                // reported as where it is placed.
+                if let Some(part) = part
+                    && let Shown::Space(kind) = self.shown(None, part)
+                    && !is_block(element)
+                {
+                    self.warn_inline(kind, part.span);
+                }
+                if rules.is_empty() {
+                    edits.parts.insert(key.clone(), None);
+                    fields.remove(key);
+                } else {
+                    if let Some(part) = part {
+                        edits
+                            .parts
+                            .insert(key.clone(), Some(placeholder_node(part)));
+                    }
+                    fields.insert(key.clone(), Value::Content(tidy(rules)));
+                }
+                continue;
+            }
             let new = if key == BODY {
                 self.content(content, &mut body_kids, only, &mut edits)
                     .map(Some)
@@ -399,7 +469,7 @@ impl Select<'_> {
         };
         // What the document model made to hold content goes when nothing
         // is left in it.
-        if made(element) && is_empty(&fields) {
+        if made(element) && is_empty(&fields) && !emptied {
             return Out::Removed;
         }
         let element = Element {
@@ -736,7 +806,7 @@ impl Select<'_> {
 
 /// Whether an element is a block, whose box `hidden` and `answer-space`
 /// keep ([`crate::model::is_block`]), but not the `doc` element.
-fn is_block(element: &Element) -> bool {
+pub(crate) fn is_block(element: &Element) -> bool {
     crate::model::is_block(element.kind)
         && !(element.name.namespace.is_none() && element.name.name.as_str() == "doc")
 }
