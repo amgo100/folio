@@ -103,6 +103,7 @@ mod content;
 mod decl;
 mod element;
 mod error;
+mod grid;
 mod library;
 mod math;
 pub(crate) mod ops;

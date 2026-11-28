@@ -315,6 +315,8 @@ pub enum Expr<'a> {
     EnumItem(EnumItem<'a>),
     /// An item in a term list: `/ Term: Details`.
     TermItem(TermItem<'a>),
+    /// A row of a table in a grid's body: `| a | b |`.
+    TableRow(TableRow<'a>),
     /// A mathematical equation: `$x$`, `$ x^2 $`.
     Equation(Equation<'a>),
     /// An equation in LaTeX input mode: `$:tex \frac{1}{2} m v^2$`.
@@ -448,6 +450,7 @@ impl<'a> AstNode<'a> for Expr<'a> {
             SyntaxKind::ListItem => Some(Self::ListItem(ListItem(node))),
             SyntaxKind::EnumItem => Some(Self::EnumItem(EnumItem(node))),
             SyntaxKind::TermItem => Some(Self::TermItem(TermItem(node))),
+            SyntaxKind::TableRow => Some(Self::TableRow(TableRow(node))),
             SyntaxKind::Equation => Some(Self::Equation(Equation(node))),
             SyntaxKind::TexEquation => Some(Self::TexEquation(TexEquation(node))),
             SyntaxKind::Math => Some(Self::Math(Math(node))),
@@ -524,6 +527,7 @@ impl<'a> AstNode<'a> for Expr<'a> {
             Self::ListItem(v) => v.to_untyped(),
             Self::EnumItem(v) => v.to_untyped(),
             Self::TermItem(v) => v.to_untyped(),
+            Self::TableRow(v) => v.to_untyped(),
             Self::Equation(v) => v.to_untyped(),
             Self::TexEquation(v) => v.to_untyped(),
             Self::Math(v) => v.to_untyped(),
@@ -877,6 +881,39 @@ impl<'a> ListItem<'a> {
     /// The contents of the list item.
     pub fn body(self) -> Markup<'a> {
         self.0.cast_first()
+    }
+}
+
+node! {
+    /// A row of a table in a grid's body: `| a | b |` (SPEC §7.4).
+    struct TableRow
+}
+
+impl<'a> TableRow<'a> {
+    /// The cells of the row, each the markup between two pipes, or after
+    /// the last one, without the spaces around it.
+    pub fn cells(self) -> impl DoubleEndedIterator<Item = Markup<'a>> {
+        self.0.children().filter_map(SyntaxNode::cast)
+    }
+
+    /// Whether the row is a separator line, as in Markdown: `|---|:---:|`.
+    /// Each of its cells holds only `-`, `:` and spaces, with at least three
+    /// `-`, so that a row of single dashes, which a table writes for "no
+    /// value", stays a row. The rows above it are header rows.
+    pub fn is_separator(self) -> bool {
+        let mut any = false;
+        for cell in self.cells() {
+            any = true;
+            let text = cell.to_untyped().full_text();
+            if !text
+                .chars()
+                .all(|c| matches!(c, '-' | ':') || c.is_whitespace())
+                || text.chars().filter(|&c| c == '-').count() < 3
+            {
+                return false;
+            }
+        }
+        any
     }
 }
 

@@ -748,3 +748,106 @@ fn latex_math_errors() {
     let equation: ast::TexEquation<'_> = first(&root);
     assert_eq!(equation.mode(), "foo");
 }
+
+/// The text of each cell of each table row in `text`.
+fn rows(text: &str) -> Vec<Vec<String>> {
+    let root = root(text);
+    nodes(&root)
+        .into_iter()
+        .filter_map(SyntaxNode::cast::<ast::TableRow<'_>>)
+        .map(|row| {
+            row.cells()
+                .map(|cell| cell.to_untyped().full_text().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn pipe_rows_split_into_trimmed_cells() {
+    let text = "#grid[\n  | a | *b* c |\n  | 1 ||  |\n]\n";
+    ok(text);
+    assert_eq!(
+        rows(text),
+        [vec!["a", "*b* c"], vec!["1", "", ""]]
+            .map(|r| r.into_iter().map(String::from).collect::<Vec<_>>())
+    );
+    // Text after the last pipe is a cell, and a row may close its block.
+    assert_eq!(
+        rows("#grid[\n| a | b]"),
+        [vec!["a".to_string(), "b".into()]]
+    );
+}
+
+#[test]
+fn a_pipe_in_maths_code_raw_brackets_or_an_escape_splits_no_cell() {
+    let text = "| $|x|$ | `a|b` | #f(\"|\") | #g[x | y] | [p | q] | a \\| b |\n";
+    ok(text);
+    assert_eq!(
+        rows(text),
+        [vec![
+            "$|x|$",
+            "`a|b`",
+            "#f(\"|\")",
+            "#g[x | y]",
+            "[p | q]",
+            "a \\| b"
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>()]
+    );
+}
+
+#[test]
+fn a_pipe_not_at_a_line_start_is_text() {
+    // After a content block's `[` or a list marker, a pipe is text.
+    for text in [
+        "#let n(v) = [|#v|]\n",
+        "#box[|x|]\n",
+        "- |v| is the speed\n",
+        "+ |a|\n",
+    ] {
+        ok(text);
+        assert_eq!(count(&root(text), SyntaxKind::TableRow), 0, "{text:?}");
+    }
+    assert_eq!(count(&root("a | b | c\n"), SyntaxKind::TableRow), 0);
+    assert_eq!(count(&root("a | b\n| c |\n"), SyntaxKind::TableRow), 1);
+    ok("x | y");
+}
+
+#[test]
+fn a_cell_block_may_run_over_lines() {
+    let text =
+        "#grid[\n  | 3(a) | #cell[\n      One.\n\n      Two.\n    ] | 2 |\n  | 3(b) | x | 1 |\n]\n";
+    ok(text);
+    let cells = rows(text);
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0].len(), 3);
+    assert_eq!(cells[0][2], "2");
+    assert_eq!(cells[1], ["3(b)", "x", "1"]);
+}
+
+#[test]
+fn separator_rows() {
+    let root = root("| a | b |\n|---|:---:|\n| - | - |\n| --- x |\n|  :--- | ---- |\n");
+    let rows: Vec<bool> = nodes(&root)
+        .into_iter()
+        .filter_map(SyntaxNode::cast::<ast::TableRow<'_>>)
+        .map(ast::TableRow::is_separator)
+        .collect();
+    assert_eq!(rows, [false, true, false, false, true]);
+    assert!(!first::<ast::TableRow<'_>>(&self::root("| :: |\n")).is_separator());
+}
+
+#[test]
+fn strong_and_emph_in_a_cell_end_at_its_pipe() {
+    assert_eq!(rows("| *a* | _b_ c |\n").len(), 1);
+    assert_eq!(rows("| *a* | _b_ c |\n")[0], ["*a*", "_b_ c"]);
+    // An unclosed one is an error at the pipe, and the next row stays a
+    // row.
+    let text = "| *Total | Mean | 3 |\n| c | d |\n";
+    assert!(!errors(text).is_empty());
+    assert_eq!(rows(text).len(), 2);
+    assert_eq!(rows(text)[0].len(), 3);
+}

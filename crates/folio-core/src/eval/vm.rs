@@ -14,6 +14,7 @@ use super::content::{Content, Node, anchor};
 use super::decl;
 use super::element;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
+use super::grid;
 use super::library;
 use super::ops::{self, a_type};
 use super::value::{
@@ -100,6 +101,16 @@ pub(crate) struct Vm<'a> {
     /// The origin of the elements made now: the loop iterations being
     /// evaluated, inside the open origin of a closure call (SPEC §2.3).
     pub(crate) origin: Origin,
+    /// Whether the markup evaluated next is a grid's body, where pipe rows
+    /// make cells (SPEC §7.4). [`Vm::markup_labelled`] takes it, so the
+    /// markup nested in it is not.
+    pub(super) rows: bool,
+    /// The `|---|` line of the grid body being evaluated, which marks its
+    /// header rows; a later row like it is a row of em dashes.
+    pub(super) header_line: Option<Span>,
+    /// Whether the call whose arguments are evaluated next is one of the
+    /// built-in `grid`, whose content block is its body.
+    grid_call: bool,
 }
 
 /// What an error marker shows (SPEC §12.2).
@@ -180,6 +191,9 @@ impl<'a> Vm<'a> {
             poisoned: BTreeSet::new(),
             math_depth: 0,
             origin: Origin::ROOT,
+            rows: false,
+            header_line: None,
+            grid_call: false,
         }
     }
 
@@ -226,7 +240,7 @@ impl<'a> Vm<'a> {
     /// against the memory limit. Text of the content that records no node,
     /// such as a string joined to content with `+`, is the text of the
     /// expression that shows it.
-    fn display(&mut self, value: Value, span: Span) -> EvalResult<Content> {
+    pub(super) fn display(&mut self, value: Value, span: Span) -> EvalResult<Content> {
         Ok(match value {
             Value::None => Content::new(),
             Value::Content(content) => content
@@ -279,11 +293,11 @@ impl<'a> Vm<'a> {
         self.scopes.define(name, value);
     }
 
-    fn enter(&mut self) {
+    pub(super) fn enter(&mut self) {
         self.scopes.layers.push(BTreeMap::new());
     }
 
-    fn exit(&mut self) {
+    pub(super) fn exit(&mut self) {
         self.scopes.layers.pop();
     }
 
@@ -360,7 +374,7 @@ impl<'a> Vm<'a> {
 
     /// Evaluates markup. A label at its end that has no element to attach
     /// to is an error.
-    fn markup(&mut self, markup: ast::Markup<'_>) -> EvalResult<Content> {
+    pub(super) fn markup(&mut self, markup: ast::Markup<'_>) -> EvalResult<Content> {
         let (content, label) = self.markup_labelled(markup)?;
         if let Some(label) = label {
             self.tolerate(label_without_element(label.span()))?;
@@ -370,13 +384,27 @@ impl<'a> Vm<'a> {
 
     /// Evaluates markup, and returns a label at its end that has no element
     /// before it, for the heading or list item around it to take.
-    fn markup_labelled<'s>(
+    pub(super) fn markup_labelled<'s>(
         &mut self,
         markup: ast::Markup<'s>,
     ) -> EvalResult<(Content, Option<ast::Label<'s>>)> {
+        let rows = std::mem::replace(&mut self.rows, false);
         let mut out = Content::new();
         let items: Vec<ast::MarkupItem<'s>> = markup.items().collect();
+        // In a grid's body, the pipe rows of consecutive lines are evaluated
+        // together, as one run; `skip` passes over the rest of a run.
+        let mut skip = 0;
+        let mut after_run = false;
         for (i, &item) in items.iter().enumerate() {
+            if i < skip {
+                continue;
+            }
+            if !matches!(
+                item,
+                ast::MarkupItem::Expr(ast::Expr::Space(_) | ast::Expr::Label(_))
+            ) {
+                after_run = false;
+            }
             let expr = match item {
                 ast::MarkupItem::Expr(expr) => expr,
                 // `check_source` reports the error.
@@ -390,6 +418,15 @@ impl<'a> Vm<'a> {
             };
             if let ast::Expr::Label(label) = expr {
                 out.trim_end_spaces();
+                // After a run of pipe rows, the last element may be an empty
+                // cell that fills a short row; a cell's label goes in it.
+                if after_run {
+                    self.tolerate(
+                        EvalError::new(label.span(), "a label after a pipe row has no cell")
+                            .with_hint("write it in the cell it labels: `| a <label> |`"),
+                    )?;
+                    continue;
+                }
                 match out.last_element_mut() {
                     // The construct the label was for failed, and was
                     // reported; a reference to the label must not find its
@@ -414,7 +451,16 @@ impl<'a> Vm<'a> {
                 }
                 continue;
             }
-            let content = match self.markup_expr(expr) {
+            let evaluated = match expr {
+                ast::Expr::TableRow(_) if rows => {
+                    let run = row_run(&items[i..]);
+                    skip = i + run.1;
+                    after_run = true;
+                    self.nest(|vm| vm.row_run(&run.0))
+                }
+                _ => self.markup_expr(expr),
+            };
+            let content = match evaluated {
                 // A file's own markup is in no loop or function (code turns
                 // recovery off), so a `break`, `continue` or `return` that
                 // reaches it fails the construct it came from, and the
@@ -436,9 +482,14 @@ impl<'a> Vm<'a> {
         Ok((out, None))
     }
 
+    /// Whether a `break`, `continue` or `return` was reached.
+    pub(super) fn flow_is_set(&self) -> bool {
+        self.flow.is_some()
+    }
+
     /// Records an error in markup that need not stop it: a file's own
     /// markup reports it and goes on, and markup inside code fails.
-    fn tolerate(&mut self, error: EvalError) -> EvalResult<()> {
+    pub(super) fn tolerate(&mut self, error: EvalError) -> EvalResult<()> {
         if !self.recover {
             return Err(error.into());
         }
@@ -622,6 +673,13 @@ impl<'a> Vm<'a> {
                     label,
                 )
             }
+            // Pipe rows make cells only in a grid's body, where
+            // `markup_labelled` evaluates them (SPEC §7.4).
+            ast::Expr::TableRow(_) => {
+                return Err(EvalError::new(span, "a pipe row makes cells only in a grid's body")
+                    .with_hint("put it in `#grid(..)[..]`, or write `\\|` for a pipe at the start of a line")
+                    .into());
+            }
             // Native math becomes a formula of the math tree (SPEC §8.1).
             ast::Expr::Equation(eq) => {
                 self.step(span)?;
@@ -755,6 +813,7 @@ impl<'a> Vm<'a> {
             | ast::Expr::ListItem(_)
             | ast::Expr::EnumItem(_)
             | ast::Expr::TermItem(_)
+            | ast::Expr::TableRow(_)
             | ast::Expr::Equation(_)
             | ast::Expr::TexEquation(_) => self.markup_expr(expr).map(Value::Content),
             ast::Expr::Label(label) => Ok(Value::Label(label.get().into())),
@@ -1421,6 +1480,9 @@ impl<'a> Vm<'a> {
         let Some(name) = callee.and_then(element_of) else {
             return self.args(args, span, false);
         };
+        if grid::is_grid(name) {
+            self.grid_call = true;
+        }
         let slots = match crate::model::schema(self.db, self.project, name).map(|s| &s.body) {
             Some(Body::Slots(slots)) => slots.clone(),
             _ => return self.args(args, span, true),
@@ -1436,9 +1498,25 @@ impl<'a> Vm<'a> {
     }
 
     fn args(&mut self, args: ast::Args<'_>, span: Span, element: bool) -> EvalResult<Args> {
+        // The content block of a grid call is its body, where pipe rows make
+        // cells; the calls nested in its arguments are not grid calls.
+        let grid = std::mem::replace(&mut self.grid_call, false);
+        let mut header = None;
         let mut items = EcoVec::new();
         for arg in args.items() {
             match arg {
+                ast::Arg::Pos(ast::Expr::ContentBlock(block)) if grid => {
+                    self.step(block.span())?;
+                    let (body, rows) = self.nest(|vm| vm.grid_body(block))?;
+                    header = header.or(rows);
+                    items.push(Arg {
+                        span: block.span(),
+                        name: None,
+                        scope: None,
+                        value: Value::Content(body),
+                        spelling: None,
+                    });
+                }
                 ast::Arg::Pos(expr) => items.push(Arg {
                     span: expr.span(),
                     name: None,
@@ -1457,6 +1535,15 @@ impl<'a> Vm<'a> {
                         {
                             self.step(word.span())?;
                             Value::Str(word.get().clone())
+                        }
+                        // `body: [..]` is the body as the trailing block is.
+                        ast::Expr::ContentBlock(block)
+                            if grid && name == "body" && named.scope().is_none() =>
+                        {
+                            self.step(block.span())?;
+                            let (body, rows) = self.nest(|vm| vm.grid_body(block))?;
+                            header = header.or(rows);
+                            Value::Content(body)
                         }
                         expr => self.expr(expr)?,
                     };
@@ -1501,6 +1588,11 @@ impl<'a> Vm<'a> {
                     ),
                 },
             }
+        }
+        // A `|---|` line's header rows, which instantiation checks against
+        // the grid's other arguments, those applied with `.with` included.
+        if let Some((rows, at)) = header {
+            items.push(grid::separator_arg(rows, at));
         }
         Ok(Args::new(span, items))
     }
@@ -2067,6 +2159,25 @@ fn descend<R>(
     }
 }
 
+/// The pipe rows on consecutive lines from the first of `items`, a table
+/// row, and how many items they and the line breaks between them take.
+fn row_run<'s>(items: &[ast::MarkupItem<'s>]) -> (Vec<ast::TableRow<'s>>, usize) {
+    let mut rows = Vec::new();
+    let mut taken = 0;
+    for (i, item) in items.iter().enumerate() {
+        match item {
+            ast::MarkupItem::Expr(ast::Expr::TableRow(row)) => {
+                rows.push(*row);
+                taken = i + 1;
+            }
+            ast::MarkupItem::Expr(ast::Expr::Space(_)) => {}
+            // A blank line ends the run, as it ends a paragraph.
+            _ => break,
+        }
+    }
+    (rows, taken)
+}
+
 /// The element a function makes, directly or with arguments applied.
 fn element_of(value: &Value) -> Option<&QualifiedName> {
     fn func(f: &Func) -> Option<&QualifiedName> {
@@ -2083,7 +2194,7 @@ fn element_of(value: &Value) -> Option<&QualifiedName> {
 }
 
 /// Attaches the label that a heading's or list item's body ended with.
-fn labelled(mut content: Content, label: Option<ast::Label<'_>>) -> Content {
+pub(super) fn labelled(mut content: Content, label: Option<ast::Label<'_>>) -> Content {
     if let (Some(label), Some(element)) = (label, content.last_element_mut()) {
         element.label = Some(label.get().into());
     }

@@ -184,11 +184,18 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
         // row. The tracks are the layout hint and property
         // `column-tracks`, and the property `row-tracks`.
         element("grid", Block, true)
-            .fields([FieldDecl::with_default(
-                name("header-rows"),
-                FieldType::Int,
-                Value::Int(0),
-            )])
+            .fields([
+                FieldDecl::with_default(name("header-rows"), FieldType::Int, Value::Int(0)),
+                // Data rows (SPEC §7.4): an array of rows, each an array of
+                // cells, and a header row, or `auto` for the first row of
+                // `rows`. Evaluation turns them into cells before the
+                // body's (`eval::grid`), so no instance keeps them.
+                optional(
+                    "rows",
+                    FieldType::Array(Box::new(FieldType::Array(Box::new(FieldType::Content)))),
+                ),
+                optional("header", FieldType::Array(Box::new(FieldType::Content))),
+            ])
             .body(content(Blocks))
             .build(),
         // A cell of a grid: it spans `colspan` columns and `rowspan` rows,

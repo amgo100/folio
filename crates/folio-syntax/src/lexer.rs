@@ -466,6 +466,7 @@ impl Lexer<'_> {
             '$' => SyntaxKind::Dollar,
             '~' => SyntaxKind::Shorthand,
             ':' => SyntaxKind::Colon,
+            '|' => SyntaxKind::TablePipe,
             '=' => {
                 self.s.eat_while('=');
                 if self.space_or_end() {
@@ -645,7 +646,7 @@ impl Lexer<'_> {
         table! {
             | ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r' | '\\' | '/'
             | '[' | ']' | '~' | '-' | '.' | '\'' | '"' | '*' | '_'
-            | ':' | 'h' | '`' | '$' | '<' | '>' | '@' | '#'
+            | ':' | 'h' | '`' | '$' | '<' | '>' | '@' | '#' | '|'
         };
 
         loop {
