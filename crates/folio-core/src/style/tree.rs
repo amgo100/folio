@@ -186,7 +186,13 @@ pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
     // The rules first, so that their errors are reported even when the
     // document cannot be built.
     let cascade = cascade(db, build);
-    let doc = document(db, project, build.variant(db).clone()).as_ref()?;
+    let doc = document(
+        db,
+        project,
+        build.variant(db).clone(),
+        build.version(db).clone(),
+    )
+    .as_ref()?;
     let tokens = cascade.tokens();
     let compiler = Compiler::for_cascade(db, project, cascade, &tokens);
 

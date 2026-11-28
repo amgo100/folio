@@ -757,6 +757,25 @@ impl World {
             .collect()
     }
 
+    /// Every build the manifest declares, each in every version it declares
+    /// (SPEC §6.4): [`World::builds`] once per version, the versions in
+    /// declaration order, or once without a version for a project without
+    /// versions.
+    pub fn versioned_builds(&self) -> Vec<crate::BuildKey> {
+        let builds = self.builds();
+        self.manifest()
+            .version_keys()
+            .into_iter()
+            .flat_map(|version| {
+                builds.iter().map(move |(variant, target)| crate::BuildKey {
+                    variant: variant.clone(),
+                    version: version.clone(),
+                    target: *target,
+                })
+            })
+            .collect()
+    }
+
     /// Whether the world serves a long-lived process
     /// ([`WorldBuilder::long_lived`]).
     pub fn is_long_lived(&self) -> bool {
