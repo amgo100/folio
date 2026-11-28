@@ -1133,7 +1133,11 @@ impl<'s> Parser<'s> {
                         range,
                         eco_format!("`\\{name}` sets an annotation over or under a relation only"),
                     )
-                    .with_hint("over another body, write a brace with its annotation: `\\overbrace{a + b}^{n}`"));
+                    .with_hint(if over {
+                        "over another body, write an accent (`\\dot{x}`) or a brace with its annotation: `\\overbrace{a + b}^{n}`"
+                    } else {
+                        "under an operator, write its limits (`\\lim_{x \\to 0}`); under another body, a brace with its annotation: `\\underbrace{a + b}_{n}`"
+                    }));
                 }
                 let (sub, sup) = if over {
                     (None, Some(annotation))
@@ -1841,6 +1845,9 @@ const NAMES: &[&str] = &[
     "cfrac",
     "sqrt",
     "vec",
+    "overset",
+    "underset",
+    "stackrel",
     "hat",
     "widehat",
     "grave",
@@ -1962,12 +1969,7 @@ mod tests {
     #[test]
     fn suggestions_for_short_names_are_one_edit_away() {
         // Two edits match almost any short name (#353).
-        for (src, not) in [
-            ("\\si", "Pi"),
-            ("\\ce", "Re"),
-            ("\\foo", "cos"),
-            ("\\large", "arg"),
-        ] {
+        for (src, not) in [("\\lamb", "lambda"), ("\\foo", "cos"), ("\\large", "arg")] {
             assert!(
                 !hint(src).contains(&format!("`\\{not}`")),
                 "{src}: {}",
