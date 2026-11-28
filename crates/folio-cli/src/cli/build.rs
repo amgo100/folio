@@ -727,8 +727,11 @@ impl Report {
 
     /// Reports a file that `folio fmt` rewrote.
     pub(super) fn formatted(&mut self, path: &str) {
-        match self.json.as_mut().and_then(|d| d.formatted.as_mut()) {
-            Some(formatted) => formatted.push(path.to_owned()),
+        match &mut self.json {
+            Some(document) => document
+                .formatted
+                .get_or_insert_default()
+                .push(path.to_owned()),
             None => errln!("formatted {path}"),
         }
     }

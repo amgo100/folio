@@ -44,7 +44,7 @@ A reader that closes standard error before the document ends, as `head` does, ge
 | `version` | integer | The version of this shape: `1`. |
 | `diagnostics` | array of diagnostics | Every diagnostic of the command, in the order the terminal would show them. A diagnostic that several builds report appears once. |
 | `builds` | array of builds | The builds that were compiled or checked, in the manifest's order, each once. It is empty when the command stopped before compiling, for example because the manifest has errors, and always from `folio fmt`, which builds nothing. |
-| `formatted` | array of strings | Only from `folio fmt`: the files it rewrote, relative to the project directory with `/` between directories, in path order. Empty with `--check`, which rewrites nothing, and when every file was formatted already. A file that a link leads to is listed once, under the first path that reaches it. |
+| `formatted` | array of strings | Only from `folio fmt`: the files it rewrote, relative to the project directory with `/` between directories, in path order. Empty with `--check`, which rewrites nothing, and when every file was formatted already. A file that a link leads to is listed once, under the first path that reaches it. Compilers before the field was added leave it out, so a missing field means the files are not known, not that none was rewritten. |
 
 ### A diagnostic
 

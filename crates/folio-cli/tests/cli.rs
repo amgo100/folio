@@ -689,6 +689,12 @@ fn formats_the_corpus_without_changing_its_outputs() {
         );
         let output = folio(messy.path(), &["fmt", "--diagnostics", "json"]);
         assert_eq!(json(&output)["formatted"], serde_json::json!([]), "{name}");
+        // Without the flag, each rewritten file is a line.
+        let lines = folio(tidy.path(), &["fmt"]);
+        assert!(lines.status.success(), "{name}: {}", stderr(&lines));
+        for line in stderr(&lines).lines() {
+            assert!(line.starts_with("formatted "), "{name}: {line}");
+        }
         for dir in [tidy.path(), messy.path()] {
             let output = folio(dir, &["fmt"]);
             assert!(output.status.success(), "{name}: {}", stderr(&output));
