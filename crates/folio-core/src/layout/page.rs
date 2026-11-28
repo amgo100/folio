@@ -1902,6 +1902,7 @@ fn lay(
                     .is_none_or(|next| next.read != piece.read);
             if ends {
                 draw_band(run, piece, top, asm);
+                draw_rule(piece, top, asm);
                 band_top = None;
                 for waited in waiting.drain(..) {
                     after(waited, asm);
@@ -2084,6 +2085,28 @@ fn draw_band(run: &Run<'_>, piece: &Piece, top: Abs, asm: &mut Assembler) {
             asm.baseline(last);
         }
     }
+}
+
+/// Draws the rule under a grid's header rows at the foot of `piece`'s band
+/// when the read ends there (D-62-2).
+fn draw_rule(piece: &Piece, top: Abs, asm: &mut Assembler) {
+    let Some((stroke, x, width)) = &piece.band.rule else {
+        return;
+    };
+    if !piece.ends {
+        return;
+    }
+    let at = top + piece.to - stroke.thickness / 2.0;
+    let mut path = Path::new();
+    path.move_to(Point::new(Abs::zero(), Abs::zero()));
+    path.line_to(Point::new(*width, Abs::zero()));
+    asm.add(
+        Point::new(*x, at),
+        FragmentItem::Shape {
+            shape: Shape::stroked(path, stroke.clone()),
+            source: source_ref(piece.band.span),
+        },
+    );
 }
 
 /// Marks the boxes among `items` as a copy, such as a header band set

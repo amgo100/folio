@@ -264,7 +264,11 @@ fn a_row_breaks_only_with_row_breakable() {
     // With it, the row starts on the first page and continues.
     let broken = pages(&tall("row-breakable: true;"));
     assert!(find(&broken.pages[0], "Short").is_some());
-    assert!(find(&broken.pages[1], "Long").is_some());
+    assert!(
+        page_runs(&broken.pages[1])
+            .iter()
+            .any(|(_, t)| t.contains("tall"))
+    );
 }
 
 #[test]
@@ -315,7 +319,7 @@ fn footnotes_in_cells_go_to_the_page_foot() {
 #[test]
 fn cells_carry_their_boxes() {
     let world = world(
-        "cell { background: #eeeeee; padding: 4pt; }\n",
+        "grid { border-top: none; border-bottom: none; }\ncell { background: #eeeeee; padding: 4pt; }\n",
         "#grid(column-tracks: (1fr, 1fr))[\n  #cell[Short] #cell[A cell with much more text \
          in it than the other, so that it runs onto several lines.]\n]\n",
     );
@@ -424,7 +428,7 @@ fn blocks_stand_for_cells() {
 #[test]
 fn a_finished_cell_keeps_its_box_where_its_row_continues() {
     let world = world(
-        "grid { row-breakable: true; }\ncell { background: #eeeeee; }\n",
+        "grid { row-breakable: true; border-top: none; border-bottom: none; }\ncell { background: #eeeeee; }\n",
         &format!(
             "#grid(column-tracks: (1fr, 1fr))[\n  #cell[Short] #cell[{}]\n]\n",
             "Long words in a very tall cell. ".repeat(150)
@@ -469,4 +473,30 @@ fn ratio_tracks_of_a_nested_grid_need_no_width() {
     let outer = outer.unwrap();
     assert_eq!(outer.overflow, Abs::zero());
     assert!(outer.columns[0] < Abs::mm(60.0), "{:?}", outer.columns);
+}
+
+#[test]
+fn the_base_look_rules_the_header_on_every_page() {
+    let world = world("", &long_table(80, ""));
+    let pages = pages(&world);
+    assert!(pages.pages.len() >= 2);
+    // Each page has the rule under its header: a line as wide as the grid.
+    fn rules(fragment: &Fragment, out: &mut usize) {
+        for (_, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(g) => rules(g, out),
+                FragmentItem::Shape { .. } => *out += 1,
+                _ => {}
+            }
+        }
+    }
+    let mut first = 0;
+    rules(&pages.pages[0].fragment, &mut first);
+    // The top border and the header rule.
+    assert_eq!(first, 2);
+    for page in &pages.pages[1..pages.pages.len() - 1] {
+        let mut n = 0;
+        rules(&page.fragment, &mut n);
+        assert_eq!(n, 1, "the header rule alone");
+    }
 }

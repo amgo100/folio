@@ -51,7 +51,7 @@ use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
 use super::grid::{GridLayout, Measurer, Place, bands, total};
-use super::master::{BlockBox, BreakBefore, Rules, Sides, length};
+use super::master::{BlockBox, BreakBefore, Rules, Sides, length, stroke};
 use super::math::{Display, Lead, Maths, display_content, laid_image};
 use super::page::{SizeBlock, SizeObject};
 use super::paragraph::{
@@ -487,6 +487,10 @@ pub(super) struct Band {
     /// For a band after a grid's header bands, the header bands, which the
     /// page builder sets again at the top of a page that starts with it.
     pub headers: EcoVec<Arc<Band>>,
+    /// For a grid's last header band, its `header-rule`, with where the
+    /// grid's content starts from the left of the body and how wide it is:
+    /// the rule drawn at the band's foot.
+    pub rule: Option<(Stroke, Abs, Abs)>,
     /// A hash of the rest, for the page cache's lookups.
     pub hash: u64,
 }
@@ -1420,6 +1424,16 @@ impl Builder<'_> {
                 })
                 .collect();
             let header = start < layout.header_rows;
+            let last_header = header && end + 1 >= layout.header_rows;
+            let rule = if last_header {
+                block
+                    .style
+                    .value(self.props, self.props.builtin("header-rule"))
+                    .and_then(stroke)
+                    .map(|s| (s, x, boxed.content().1))
+            } else {
+                None
+            };
             let mut band = Band {
                 cells: band_cells,
                 height: total(&heights_of),
@@ -1431,6 +1445,7 @@ impl Builder<'_> {
                 } else {
                     headers.clone()
                 },
+                rule,
                 hash: 0,
             };
             let mut hasher = Fx::default();

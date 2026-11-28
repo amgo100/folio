@@ -562,6 +562,10 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     // across pages only with `row-breakable: true` on its grid.
     prop("row-tracks", Any, Value::Auto, Layout);
     prop("row-breakable", Bool, Value::Bool(false), Layout);
+    // The rule under a grid's header rows, drawn at the foot of the last
+    // of them across the grid's content, wherever they are set again: a
+    // border such as `0.5pt solid black`, or `none` (D-62-2).
+    prop("header-rule", Any, Value::None, Layout);
 
     group = GroupId::PAGE;
     let mut prop =

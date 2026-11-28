@@ -330,7 +330,7 @@ fn padding(value: Option<&Value>) -> Sides<Abs> {
 /// `dashed`, `dotted`, `none`) and a colour, in any order and each
 /// optional (`1.5pt solid $accent`). A thickness alone is solid black; a
 /// colour or style alone is a point thick. `None` for no border.
-fn stroke(value: &Value) -> Option<Stroke> {
+pub(super) fn stroke(value: &Value) -> Option<Stroke> {
     let items: &[Value] = match value {
         Value::Array(items) => items,
         Value::None | Value::Auto => return None,
