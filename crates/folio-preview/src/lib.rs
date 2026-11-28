@@ -146,13 +146,17 @@
 //!
 //! Images arrive in the display lists with their files' bytes and content
 //! hashes. A client that keeps them says so with `"images": true` in its
-//! `visible` message; from then on, the server sends an image's bytes in
-//! the first list that holds it, and the lists after it name it by its
-//! hash and format alone, with its bytes left out (the image item's last
-//! fields, [`folio_render::wire::encode_with`]), for as long as the pages
-//! the client has show it. Such a client keeps the images of the pages it
-//! has after each update, and may drop the rest
-//! ([`folio_render::wire::Images`]). A client decodes JPEG, PNG, WebP and
+//! `visible` message: it keeps, from the start of the connection, the
+//! images of the lists it was sent for the pages it has after each update,
+//! and may drop the rest ([`folio_render::wire::Images`]). From then on,
+//! lists name the images of those pages by hash and format alone, with
+//! their bytes left out (the image item's last fields,
+//! [`folio_render::wire::encode_with`]): an image's bytes come in the
+//! first list that holds it, and again only after the client's pages
+//! stopped showing it. A client that finds an image named
+//! alone that it does not have sends `{"type": "missing", "images":
+//! [hash, ..]}`, the hashes as 16 lowercase hexadecimal digits, and is sent
+//! the pages that show them again, whole. A client decodes JPEG, PNG, WebP and
 //! GIF itself (a JPEG as stored, without
 //! turning it by its Exif orientation, which PDF output ignores), and asks for SVG and PDF
 //! figures as SVG through `/figure/<hash>.svg`: `<hash>` is the content

@@ -263,7 +263,8 @@ const RASTER_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 // it is decoded or fetched, or waits to be fetched again, `pending` an
 // object that names the request.
 let imageCache = new Map();
-// Content hash → the bytes of the images of the pages the viewer has,
+// Content hash and format (`hash/format`) → the bytes of the images of the
+// pages the viewer has,
 // which later lists name alone: the server sends an image whole once and
 // then names it while the client's pages show it (the viewer says it
 // keeps them in `visible`).
@@ -1059,6 +1060,10 @@ function connect() {
   };
 }
 
+// The hashes of images lists named alone that the viewer lacks, which it
+// asks the server for after the update.
+const missing = new Set();
+
 function apply({ update, frames }) {
   incoming = null;
   revision = update.revision;
@@ -1085,23 +1090,27 @@ function apply({ update, frames }) {
     if (decoded.kind === "list") {
       // The images of the list the server sent, which it names alone from
       // now on, whether or not the page can be drawn from it.
+      // By content hash and format, as the server names them.
+      const stored = (item) => `${item.key}/${item.format}`;
       page.imageKeys = [];
       for (const item of decoded.list.items) {
         if (item.kind !== "image" || item.key === null) continue;
-        page.imageKeys.push(item.key);
-        if (!item.known) knownImages.set(item.key, item.bytes);
+        page.imageKeys.push(stored(item));
+        if (!item.known) knownImages.set(stored(item), item.bytes);
       }
       // An image named alone that the viewer does not have: the page is
-      // shown as the server renders it.
-      const lacking = decoded.list.items.some((item) => item.kind === "image" && item.known
-        && !knownImages.has(item.key));
-      if (lacking) {
+      // shown as the server renders it, and the server is asked for the
+      // image, which comes with the page again.
+      const lacking = decoded.list.items.filter((item) => item.kind === "image" && item.known
+        && !knownImages.has(stored(item)));
+      if (lacking.length) {
+        for (const item of lacking) missing.add(item.key);
         showImage(page, i, update.revision);
         continue;
       }
       page.list = decoded.list;
       for (const item of page.list.items) {
-        if (item.kind === "image" && item.known) item.bytes = knownImages.get(item.key);
+        if (item.kind === "image" && item.known) item.bytes = knownImages.get(stored(item));
       }
       if (page.img) {
         page.img.remove();
@@ -1133,6 +1142,10 @@ function apply({ update, frames }) {
   // After drawing, so that the visible pages have hashed their images.
   pruneImages();
   sendVisible();
+  if (missing.size && socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "missing", images: [...missing] }));
+  }
+  missing.clear();
 }
 
 // ---------------------------------------------------------------------

@@ -1518,6 +1518,37 @@ fn images_are_sent_once_to_clients_that_keep_them() {
         0,
         "a plain client was sent lists without bytes"
     );
+
+    // A client that lacks an image it was named is sent the pages that show
+    // it again, whole.
+    let hash = kept
+        .iter()
+        .find_map(|frame| {
+            let Ok(wire::Message::List(list)) = wire::decode_with(frame, &mut images) else {
+                return None;
+            };
+            list.items.iter().find_map(|item| match &item.command {
+                folio_render::Command::Image(image) => Some(image.image.content_hash()),
+                _ => None,
+            })
+        })
+        .expect("an image on the pages");
+    let missing = serde_json::json!({"type": "missing", "images": [format!("{hash:016x}")]});
+    keeps.send(Message::text(missing.to_string())).unwrap();
+    // Updates already on their way (the overlays) may come first.
+    let whole_again = (0..5).any(|_| {
+        raw_frames(&mut keeps)
+            .1
+            .iter()
+            .any(|frame| match wire::decode(frame) {
+                Ok(wire::Message::List(list)) => list.items.iter().any(|item| {
+                    matches!(&item.command, folio_render::Command::Image(image)
+                        if image.image.content_hash() == hash)
+                }),
+                _ => false,
+            })
+    });
+    assert!(whole_again, "the missing image was not sent again");
     preview.stop();
 }
 

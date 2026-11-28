@@ -527,7 +527,28 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
                     Ok(ClientMessage::Visible { pages, images }) => {
                         shared.visible.show(id, &pages);
                         visible = pages;
+                        // It has kept the images of every list since it
+                        // connected.
                         known.keeps_images |= images;
+                    }
+                    Ok(ClientMessage::Missing { images }) => {
+                        // Sent whole again, with the pages that show them.
+                        let current = published.borrow().clone();
+                        let missing: Vec<u64> = images
+                            .iter()
+                            .filter_map(|hex| u64::from_str_radix(hex, 16).ok())
+                            .collect();
+                        known.images.retain(|(hash, _)| !missing.contains(hash));
+                        for (i, entry) in current.pages.iter().enumerate() {
+                            if entry.images.iter().any(|(hash, _)| missing.contains(hash))
+                                && let Some(page) = known.pages.get_mut(i)
+                            {
+                                *page = (0, 0);
+                            }
+                        }
+                        if send(&mut ws, &current, &mut known, &visible).await.is_err() {
+                            break;
+                        }
                     }
                     Ok(ClientMessage::Click { revision, page, x, y }) => {
                         let current = published.borrow().clone();
@@ -648,6 +669,10 @@ enum ClientMessage {
         #[serde(default)]
         images: bool,
     },
+    /// Images, by their content hashes in hexadecimal, that a list named
+    /// alone although the client does not keep them: they are sent whole
+    /// again, with the pages that show them.
+    Missing { images: Vec<String> },
     /// A click at a point of a page, in points from its top-left corner,
     /// as the client shows the revision.
     Click {
