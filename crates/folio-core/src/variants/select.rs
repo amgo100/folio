@@ -21,11 +21,16 @@
 //!   way; text and every other child are left out.
 //! - **Shown**: `block`, `inline` and `auto` show the node as it is.
 //!
-//! `hidden` is to keep the space of the content without drawing it, and
-//! `answer-space` to put answer space in its place; until layout measures
-//! content it does not draw, both leave the content out, with a warning,
-//! so that it never reaches the output (`Select::answer_space` is where
-//! answer space plugs in).
+//! - **Spaces**: `hidden` and `answer-space` keep a block element or part,
+//!   which is still counted and styled, and leave all of its content out,
+//!   as a placeholder does, so that it never reaches the output (SPEC
+//!   §6.4). Layout gives the empty block its height ([`Space`]): `hidden`
+//!   the height of the content it held, `answer-space` its ruled lines,
+//!   its `answer-height`, or the content's height times `answer-scale`.
+//!   Where the height is the content's, Select keeps the content as the
+//!   variant would show it with `display: block`, for layout to measure in
+//!   a discarded layout ([`Space::measure`]). An inline element has no
+//!   block to keep, so both leave its content out, with a warning.
 //!
 //! Select copies only what changes: an element whose subtree it leaves as
 //! it is keeps its content shared with the document tree, and a document
@@ -33,7 +38,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ecow::{EcoString, eco_format};
+use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{BODY, Location, Name, QualifiedName, Value as Style};
 use folio_syntax::Span;
 
@@ -54,6 +59,48 @@ pub struct Selection {
     /// The `doc` element's node of the styled tree, with the same nodes
     /// left out.
     pub styled: StyledNode,
+    /// The elements and parts whose content `hidden` or `answer-space`
+    /// replaced, in the order Select met them: inner ones, within content
+    /// kept for measuring, before outer ones.
+    pub spaces: EcoVec<Space>,
+}
+
+/// What keeps the space of content that a variant does not show (SPEC
+/// §6.3).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum SpaceKind {
+    /// `display: hidden`: the space the content takes, with nothing drawn.
+    Hidden,
+    /// `display: answer-space`: ruled lines or a box.
+    Answer,
+}
+
+/// An element or part whose content `hidden` or `answer-space` replaced:
+/// it stays in both trees with no content, and layout sizes its block.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Space {
+    /// The element instance.
+    pub location: Location,
+    /// For a part, its name; `None` for the element itself.
+    pub part: Option<Name>,
+    /// What keeps its space.
+    pub kind: SpaceKind,
+    /// The content as the variant would show it with `display: block`,
+    /// where the space is as tall as it: always for `hidden`, and for
+    /// `answer-space` without `rule-lines` and with `answer-height: auto`.
+    /// Layout measures it and draws none of it; `None` where nothing is
+    /// measured, or nothing would be shown.
+    pub measure: Option<Measure>,
+}
+
+/// Content that layout measures for a [`Space`], selected as the variant
+/// would show it.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum Measure {
+    /// An element, with its styled node.
+    Element(Element, StyledNode),
+    /// The content of a part, with the part's styled node.
+    Part(Content, StyledNode),
 }
 
 /// Selects what a variant shows of a document (SPEC §6.2, §6.3): `root` is
@@ -77,11 +124,15 @@ pub fn select(
         display: props.builtin("display"),
         show_only: props.builtin("show-only"),
         warned: HashSet::new(),
+        spaces: EcoVec::new(),
     };
-    match select.element(root, node, None) {
+    let out = select.element(root, node, None);
+    let spaces = select.spaces;
+    match out {
         Out::Same => Selection {
             root: None,
             styled: node.clone(),
+            spaces,
         },
         // A variant that hides the whole document shows an empty one.
         Out::Removed => {
@@ -103,6 +154,7 @@ pub fn select(
                     children: Default::default(),
                     ..node.clone()
                 },
+                spaces,
             }
         }
         Out::Changed(changed) => {
@@ -110,6 +162,7 @@ pub fn select(
             Selection {
                 root: Some(root),
                 styled,
+                spaces,
             }
         }
     }
@@ -123,6 +176,8 @@ enum Shown {
     Placeholder(EcoString),
     /// Shown, condensed if it has `show-only`.
     Kept,
+    /// Its content left out, its space kept.
+    Space(SpaceKind),
 }
 
 /// What Select made of an element.
@@ -218,6 +273,8 @@ struct Select<'a> {
     show_only: PropId,
     /// The display modes already warned of in this build.
     warned: HashSet<&'static str>,
+    /// The spaces found so far.
+    spaces: EcoVec<Space>,
 }
 
 impl Select<'_> {
@@ -232,8 +289,69 @@ impl Select<'_> {
                     placeholder_node(node),
                 )));
             }
+            Shown::Space(kind) => return self.space(element, node, only, kind),
             Shown::Kept => {}
         }
+        self.kept(element, node, only)
+    }
+
+    /// Keeps the block of an element whose content `hidden` or
+    /// `answer-space` leaves out, and records its [`Space`], with the
+    /// content as the variant would show it where layout measures it. An
+    /// inline element is left out, with a warning.
+    fn space(
+        &mut self,
+        element: &Element,
+        node: &StyledNode,
+        only: Option<&Only>,
+        kind: SpaceKind,
+    ) -> Out {
+        if !is_block(element) {
+            self.warn_inline(kind, node.span);
+            return Out::Removed;
+        }
+        let measure = if self.measures(kind, node) {
+            match self.kept(element, node, only) {
+                Out::Same => Some(Measure::Element(element.clone(), node.clone())),
+                Out::Changed(changed) => {
+                    let (element, node) = *changed;
+                    Some(Measure::Element(element, node))
+                }
+                Out::Removed => None,
+            }
+        } else {
+            None
+        };
+        self.spaces.push(Space {
+            location: element.location,
+            part: None,
+            kind,
+            measure,
+        });
+        Out::Changed(Box::new((
+            replaced(element, Content::new()),
+            placeholder_node(node),
+        )))
+    }
+
+    /// Whether layout measures the content of a space (SPEC §6.3): that of
+    /// `hidden`, and that of `answer-space` whose height is the answer's,
+    /// as it has no `rule-lines` and `answer-height: auto`.
+    fn measures(&self, kind: SpaceKind, node: &StyledNode) -> bool {
+        match kind {
+            SpaceKind::Hidden => true,
+            SpaceKind::Answer => {
+                let value = |name: &str| node.style.value(self.props, self.props.builtin(name));
+                let lines = matches!(value("rule-lines"), Some(Style::Int(n)) if *n > 0);
+                let auto = matches!(value("answer-height"), None | Some(Style::Auto));
+                !lines && auto
+            }
+        }
+    }
+
+    /// Selects an element that is shown, condensed if it has `show-only`
+    /// or `only` condenses it.
+    fn kept(&mut self, element: &Element, node: &StyledNode, only: Option<&Only>) -> Out {
         let own = self.show_only(node);
         let only = own.as_ref().or(only);
         let mut fields = None;
@@ -264,7 +382,7 @@ impl Select<'_> {
                     }
                     continue;
                 };
-                self.part(key, content, part, only, &mut edits)
+                self.part(element, key, content, part, only, &mut edits)
             };
             if let Some(new) = new {
                 let fields = fields.get_or_insert_with(|| element.fields.clone());
@@ -295,6 +413,7 @@ impl Select<'_> {
     /// left out, and `Some(Some(content))` if its content changed.
     fn part(
         &mut self,
+        owner: &Element,
         key: &EcoString,
         content: &Content,
         node: &StyledNode,
@@ -321,16 +440,52 @@ impl Select<'_> {
                     .insert(key.clone(), Some(placeholder_node(node)));
                 Some(Some(text_content(text)))
             }
+            // A part of a block keeps its block, as an element does.
+            Shown::Space(kind) if is_block(owner) => {
+                let measure =
+                    self.measures(kind, node)
+                        .then(|| match self.kept_part(content, node, only) {
+                            Some((content, node)) => Measure::Part(content, node),
+                            None => Measure::Part(content.clone(), node.clone()),
+                        });
+                self.spaces.push(Space {
+                    location: owner.location,
+                    part: Name::new(key),
+                    kind,
+                    measure,
+                });
+                edits
+                    .parts
+                    .insert(key.clone(), Some(placeholder_node(node)));
+                Some(Some(Content::new()))
+            }
+            Shown::Space(kind) => {
+                self.warn_inline(kind, node.span);
+                edits.parts.insert(key.clone(), None);
+                Some(None)
+            }
             Shown::Kept => {
-                let own = self.show_only(node);
-                let only = own.as_ref().or(only);
-                let mut kids = StyledChildren::new(node);
-                let mut inner = Edits::default();
-                let new = self.content(content, &mut kids, only, &mut inner)?;
-                edits.parts.insert(key.clone(), Some(inner.apply(node)));
+                let (new, node) = self.kept_part(content, node, only)?;
+                edits.parts.insert(key.clone(), Some(node));
                 Some(Some(new))
             }
         }
+    }
+
+    /// Selects the content of a part that is shown: `None` if it is as it
+    /// was, else the content and the part's styled node.
+    fn kept_part(
+        &mut self,
+        content: &Content,
+        node: &StyledNode,
+        only: Option<&Only>,
+    ) -> Option<(Content, StyledNode)> {
+        let own = self.show_only(node);
+        let only = own.as_ref().or(only);
+        let mut kids = StyledChildren::new(node);
+        let mut inner = Edits::default();
+        let new = self.content(content, &mut kids, only, &mut inner)?;
+        Some((new, inner.apply(node)))
     }
 
     /// Selects the elements of content, whose styled nodes `kids` finds,
@@ -476,18 +631,8 @@ impl Select<'_> {
         match node.style.value(self.props, self.display) {
             Some(Style::None) => Shown::Removed,
             Some(Style::Keyword(mode)) => match mode.as_str() {
-                "hidden" => {
-                    self.warn_left_out(
-                        "hidden",
-                        node.span,
-                        "`display: hidden` does not keep the space of its content yet, so the \
-                         content is left out and takes no space",
-                        "until it does, pages after it may break differently from the variants \
-                         that show it",
-                    );
-                    Shown::Removed
-                }
-                "answer-space" => self.answer_space(node),
+                "hidden" => Shown::Space(SpaceKind::Hidden),
+                "answer-space" => Shown::Space(SpaceKind::Answer),
                 _ => Shown::Kept,
             },
             Some(Style::Call(name, args)) if name.as_str() == "placeholder" => match &args[..] {
@@ -500,29 +645,26 @@ impl Select<'_> {
         }
     }
 
-    /// What `display: answer-space` makes of a node (SPEC §6.3). Until
-    /// answer space is laid out, the content is left out, with a warning,
-    /// so that the answer never reaches the output.
-    fn answer_space(&mut self, node: &StyledNode) -> Shown {
-        self.warn_left_out(
-            "answer-space",
-            node.span,
-            "`display: answer-space` does not draw answer space yet, so the content is left out \
-             and nothing takes its place",
-            "until it does, give the space with a sized block, such as `min-height` or \
-             `rule-lines`, on an element the variant shows",
-        );
-        Shown::Removed
-    }
-
-    /// Warns, once per build and mode, that content is left out where a
-    /// display mode asks for more.
-    fn warn_left_out(&mut self, mode: &'static str, span: Span, message: &str, hint: &str) {
+    /// Warns, once per build and mode, that the content of an inline
+    /// element is left out where a display mode asks for its space, which
+    /// only blocks keep.
+    fn warn_inline(&mut self, kind: SpaceKind, span: Span) {
+        let (mode, message, hint) = match kind {
+            SpaceKind::Hidden => (
+                "hidden",
+                "`display: hidden` keeps the space of blocks only, so the content of this inline \
+                 element is left out and takes no space",
+                "hide a block around it, or leave it out with `display: none`",
+            ),
+            SpaceKind::Answer => (
+                "answer-space",
+                "`display: answer-space` makes answer space of blocks only, so the content of \
+                 this inline element is left out and nothing takes its place",
+                "give the answer space to a block, such as the one around it",
+            ),
+        };
         if self.warned.insert(mode) {
-            diag::report(
-                self.db,
-                Diagnostic::warning(span, message.to_owned()).with_hint(hint.to_owned()),
-            );
+            diag::report(self.db, Diagnostic::warning(span, message).with_hint(hint));
         }
     }
 
@@ -592,6 +734,13 @@ impl Select<'_> {
     }
 }
 
+/// Whether an element is a block, whose box `hidden` and `answer-space`
+/// keep ([`crate::model::is_block`]), but not the `doc` element.
+fn is_block(element: &Element) -> bool {
+    crate::model::is_block(element.kind)
+        && !(element.name.namespace.is_none() && element.name.name.as_str() == "doc")
+}
+
 /// Whether the document model made an element to hold content: a
 /// paragraph, a list or a section (SPEC §4.2).
 fn made(element: &Element) -> bool {
@@ -646,6 +795,12 @@ fn text_content(text: EcoString) -> Content {
 /// left out, and every other field a built-in element shows, and the text
 /// as its body.
 fn placeholder(element: &Element, text: EcoString) -> Element {
+    replaced(element, text_content(text))
+}
+
+/// An element with every field of content, and every other field a
+/// built-in element shows, left out, and `body` as its body.
+fn replaced(element: &Element, body: Content) -> Element {
     let mut element = element.clone();
     let content: Vec<EcoString> = element
         .fields
@@ -671,9 +826,7 @@ fn placeholder(element: &Element, text: EcoString) -> Element {
             element.fields.remove(key);
         }
     }
-    element
-        .fields
-        .insert(BODY.into(), Value::Content(text_content(text)));
+    element.fields.insert(BODY.into(), Value::Content(body));
     element
 }
 

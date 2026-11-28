@@ -1,0 +1,398 @@
+//! Answer space and hidden content (SPEC §6.3): `display: answer-space`
+//! as ruled lines, a box of `answer-height`, or the answer's own height
+//! times `answer-scale`; `display: hidden` keeping the height of what it
+//! hides, so that a paper and its mark scheme break pages alike; the
+//! heights layout gives them, for the Office writers; and nothing of what
+//! they leave out reaching the output (SPEC §6.4).
+
+use folio::{Abs, Compiled, Fragment, FragmentItem, Name, Pages, Point, Severity, Target, World};
+
+/// A5 with 15mm margins: a body of 118mm by 180mm.
+const PAGE: &str = "page { page-size: A5; margin-top: 15mm; margin-bottom: 15mm; \
+                    margin-inner: 15mm; margin-outer: 15mm; }\n\
+                    doc { font: \"Source Serif 4\"; font-size: 11pt; }\n";
+
+fn world(style: &str, markscheme: &str, text: &str) -> World {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\nstyles = [\"styles/main.fsty\"]\n\n\
+                    [variants.exam]\ntargets = [\"pdf\", \"docx\"]\n\n\
+                    [variants.markscheme]\ntargets = [\"pdf\"]\n\
+                    styles = [\"styles/markscheme.fsty\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world
+        .set_source("styles/main.fsty", &format!("{PAGE}{style}"))
+        .unwrap();
+    world
+        .set_source("styles/markscheme.fsty", markscheme)
+        .unwrap();
+    world.set_source("main.fol", text).unwrap();
+    world
+}
+
+fn name(variant: &str) -> Name {
+    Name::new(variant).unwrap()
+}
+
+fn pages(world: &World, variant: &str) -> Pages {
+    folio::pages(world, Target::Pdf, Some(&name(variant)))
+        .unwrap()
+        .unwrap()
+}
+
+fn compile(world: &World, variant: &str) -> Compiled {
+    folio::compile(world, Target::Pdf, Some(&name(variant))).unwrap()
+}
+
+/// The warnings and errors of a variant's build.
+fn diagnostics(world: &World, variant: &str) -> Vec<String> {
+    compile(world, variant)
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, Severity::Error | Severity::Warning))
+        .map(|d| d.message.to_string())
+        .collect()
+}
+
+/// A paragraph of `n` words.
+fn prose(n: usize) -> String {
+    let words = ["force", "energy", "momentum", "field", "charge", "wave"];
+    let mut out = String::from("Text");
+    for i in 0..n {
+        out.push(' ');
+        out.push_str(words[i % words.len()]);
+    }
+    out.push('.');
+    out
+}
+
+/// Every glyph run on the pages: its page, where its baseline starts on
+/// the page, and its text.
+fn runs(pages: &Pages) -> Vec<(usize, Point, String)> {
+    fn walk(fragment: &Fragment, at: Point, page: usize, out: &mut Vec<(usize, Point, String)>) {
+        for (pos, item) in &fragment.items {
+            let here = Point::new(at.x + pos.x, at.y + pos.y);
+            match item {
+                FragmentItem::Group(group) => walk(group, here, page, out),
+                FragmentItem::Text(run) => {
+                    let text: String = run
+                        .glyphs
+                        .iter()
+                        .map(|g| &run.text[g.range.start as usize..g.range.end as usize])
+                        .collect();
+                    out.push((page, here, text));
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (i, page) in pages.pages.iter().enumerate() {
+        walk(&page.fragment, Point::zero(), i, &mut out);
+    }
+    out
+}
+
+/// All the text the pages show.
+fn shown(pages: &Pages) -> String {
+    runs(pages)
+        .into_iter()
+        .map(|(.., text)| text)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Where the first run that shows `word` is: its page and baseline.
+fn find(pages: &Pages, word: &str) -> (usize, Abs) {
+    runs(pages)
+        .into_iter()
+        .find(|(.., text)| text.contains(word))
+        .map(|(page, at, _)| (page, at.y))
+        .unwrap_or_else(|| panic!("no run shows {word:?}: {:?}", shown(pages)))
+}
+
+/// The number of horizontal rules drawn on the pages.
+fn rules(pages: &Pages) -> usize {
+    fn walk(fragment: &Fragment, out: &mut usize) {
+        for (_, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(group) => walk(group, out),
+                FragmentItem::Shape { .. } => *out += 1,
+                _ => {}
+            }
+        }
+    }
+    let mut out = 0;
+    for page in &pages.pages {
+        walk(&page.fragment, &mut out);
+    }
+    out
+}
+
+/// Asserts that two runs are at the same place, but for rounding.
+#[track_caller]
+fn assert_same(a: (usize, Abs), b: (usize, Abs), what: &str) {
+    assert!(a.0 == b.0 && close(a.1, b.1), "{what}: {a:?} and {b:?}");
+}
+
+fn close(a: Abs, b: Abs) -> bool {
+    (a.to_pt() - b.to_pt()).abs() < 0.01
+}
+
+const SHOWN: &str = "figure.answer { display: block; }\n";
+
+#[test]
+fn ruled_lines_take_the_place_of_the_answer() {
+    let world = world(
+        "figure.answer { display: answer-space; rule-lines: 4; rule-spacing: 10mm; }\n",
+        SHOWN,
+        "Question one.\n\n#figure(class: \"answer\")[SECRET answer.]\n\nAfter.\n",
+    );
+    let exam = pages(&world, "exam");
+    assert!(!shown(&exam).contains("SECRET"), "{}", shown(&exam));
+    assert_eq!(rules(&exam), 4);
+    assert_eq!(exam.spaces.len(), 1);
+    assert!(close(exam.spaces[0].height, Abs::mm(40.0)));
+    let (_, question) = find(&exam, "Question");
+    let (_, after) = find(&exam, "After");
+    assert!(after - question > Abs::mm(40.0));
+    assert!(
+        diagnostics(&world, "exam").is_empty(),
+        "{:?}",
+        diagnostics(&world, "exam")
+    );
+    // The mark scheme shows the answer.
+    assert!(shown(&pages(&world, "markscheme")).contains("SECRET"));
+}
+
+#[test]
+fn a_fixed_height_is_a_box_of_that_height() {
+    let style = "figure.answer { display: answer-space; answer-height: 30mm; }\n";
+    let answer = world(
+        style,
+        SHOWN,
+        "Question one.\n\n#figure(class: \"answer\")[SECRET answer.]\n\nAfter.\n",
+    );
+    let exam = pages(&answer, "exam");
+    assert!(!shown(&exam).contains("SECRET"));
+    assert_eq!(rules(&exam), 0);
+    assert!(close(exam.spaces[0].height, Abs::mm(30.0)));
+    // As tall as an empty block of that `min-height`.
+    let sized = world(
+        "figure.answer { min-height: 30mm; }\n",
+        "",
+        "Question one.\n\n#figure(class: \"answer\")[]\n\nAfter.\n",
+    );
+    assert_same(
+        find(&exam, "After"),
+        find(&pages(&sized, "exam"), "After"),
+        "After",
+    );
+}
+
+#[test]
+fn auto_answer_space_is_as_tall_as_the_answer_shown() {
+    let text = format!(
+        "Question one.\n\n#figure(class: \"answer\")[SECRET {}\n\n{}]\n\nAfter.\n",
+        prose(40),
+        prose(25)
+    );
+    let shown_world = world(
+        "figure.answer { display: answer-space; border: 0.5pt; padding: 2mm; }\n",
+        SHOWN,
+        &text,
+    );
+    let exam = pages(&shown_world, "exam");
+    let markscheme = pages(&shown_world, "markscheme");
+    assert!(!shown(&exam).contains("SECRET"));
+    // With `answer-scale: 1` the box is as tall as the answer set in it,
+    // so what follows starts where it does in the mark scheme.
+    assert_same(find(&exam, "After"), find(&markscheme, "After"), "After");
+    assert!(exam.spaces[0].height > Abs::mm(20.0));
+
+    // `answer-scale` multiplies the content's height, not the box's.
+    let scaled = world(
+        "figure.answer { display: answer-space; border: 0.5pt; padding: 2mm; \
+         answer-scale: 1.5; }\n",
+        SHOWN,
+        &text,
+    );
+    let scaled = pages(&scaled, "exam");
+    let ratio = scaled.spaces[0].height.to_pt() / exam.spaces[0].height.to_pt();
+    assert!((ratio - 1.5).abs() < 1e-6, "{ratio}");
+}
+
+#[test]
+fn hidden_content_keeps_its_height() {
+    let text = format!(
+        "Question one.\n\n#figure(class: \"note\")[HIDDEN {}]\n\nAfter.\n",
+        prose(60)
+    );
+    let world = world(
+        "figure.note { display: hidden; border: 1pt; padding: 3mm; space-before: 4mm; \
+         background: #eeeeee; }\n",
+        "figure.note { display: block; }\n",
+        &text,
+    );
+    let exam = pages(&world, "exam");
+    let markscheme = pages(&world, "markscheme");
+    assert!(!shown(&exam).contains("HIDDEN"), "{}", shown(&exam));
+    assert!(shown(&markscheme).contains("HIDDEN"));
+    assert_same(find(&exam, "After"), find(&markscheme, "After"), "After");
+    // Nothing is drawn: no border, no background.
+    assert_eq!(rules(&exam), 0);
+    assert_eq!(exam.spaces.len(), 1);
+    assert!(
+        diagnostics(&world, "exam").is_empty(),
+        "{:?}",
+        diagnostics(&world, "exam")
+    );
+}
+
+#[test]
+fn hidden_content_keeps_paper_and_mark_scheme_paginated_alike() {
+    // A question set over several pages, its working hidden in the paper.
+    let mut text = String::new();
+    for i in 1..=8 {
+        text.push_str(&format!(
+            "Question {i}. {}\n\n#figure(class: \"working\")[WORKING {}\n\n$ v = u + a t $]\n\n",
+            prose(30),
+            prose(50)
+        ));
+    }
+    text.push_str("End of paper.\n");
+    let world = world(
+        "figure.working { display: hidden; }\n",
+        "figure.working { display: block; }\n",
+        &text,
+    );
+    let exam = pages(&world, "exam");
+    let markscheme = pages(&world, "markscheme");
+    assert!(exam.pages.len() > 2);
+    assert_eq!(exam.pages.len(), markscheme.pages.len());
+    for i in 1..=8 {
+        let q = format!("Question {i}.");
+        assert_same(find(&exam, &q), find(&markscheme, &q), &q);
+    }
+    assert_same(find(&exam, "End"), find(&markscheme, "End"), "End");
+    assert!(!shown(&exam).contains("WORKING"));
+    assert_eq!(exam.spaces.len(), 8);
+}
+
+#[test]
+fn nested_answer_space_is_measured_as_space() {
+    // A hidden question holding an answer space is as tall as the question
+    // with its answer space, not with the answer.
+    let text = format!(
+        "#figure(class: \"q\")[Stem.\n\n#figure(class: \"answer\")[SECRET {}]]\n\nAfter.\n",
+        prose(80)
+    );
+    let style = "figure.answer { display: answer-space; rule-lines: 2; }\n\
+                 figure.q { display: hidden; }\n";
+    let hidden = world(style, "figure.q { display: block; }\n", &text);
+    let exam = pages(&hidden, "exam");
+    let markscheme = pages(&hidden, "markscheme");
+    assert!(!shown(&exam).contains("SECRET"));
+    assert!(!shown(&markscheme).contains("SECRET"));
+    assert_same(find(&exam, "After"), find(&markscheme, "After"), "After");
+    // The outer space and the inner one measured with it.
+    assert_eq!(exam.spaces.len(), 1);
+}
+
+#[test]
+fn a_part_keeps_its_space() {
+    let world = world(
+        "figure > caption { display: hidden; }\n",
+        "figure > caption { display: block; }\n",
+        "#figure(caption: [SECRET caption that runs to a second line or more, \
+         as captions of figures often do.])[Body.]\n\nAfter.\n",
+    );
+    let exam = pages(&world, "exam");
+    let markscheme = pages(&world, "markscheme");
+    assert!(!shown(&exam).contains("SECRET"), "{}", shown(&exam));
+    assert!(shown(&exam).contains("Body"));
+    assert_same(find(&exam, "After"), find(&markscheme, "After"), "After");
+    assert_eq!(exam.spaces.len(), 1);
+    assert_eq!(
+        exam.spaces[0].part.as_ref().map(|p| p.as_str()),
+        Some("caption")
+    );
+}
+
+#[test]
+fn inline_content_is_left_out_with_a_warning() {
+    let world = world(
+        "strong.mark { display: hidden; }\nemph.mark { display: answer-space; }\n",
+        "",
+        "One #strong(class: \"mark\")[SECRET] two #emph(class: \"mark\")[OTHER] three.\n",
+    );
+    let exam = pages(&world, "exam");
+    assert!(!shown(&exam).contains("SECRET"));
+    assert!(!shown(&exam).contains("OTHER"));
+    let found = diagnostics(&world, "exam");
+    let count = |what: &str| found.iter().filter(|m| m.contains(what)).count();
+    assert_eq!(
+        count("`display: hidden` keeps the space of blocks only"),
+        1,
+        "{found:?}"
+    );
+    assert_eq!(
+        count("`display: answer-space` makes answer space of blocks only"),
+        1
+    );
+}
+
+#[test]
+fn heights_are_measured_for_the_office_targets() {
+    // SPEC §2.1: DOCX takes the heights Folio's layout measures.
+    let world = world(
+        "figure.note { display: hidden; }\n",
+        "",
+        &format!("#figure(class: \"note\")[{}]\n\nAfter.\n", prose(40)),
+    );
+    let pdf = pages(&world, "exam");
+    let docx = folio::pages(&world, Target::Docx, Some(&name("exam")))
+        .unwrap()
+        .unwrap();
+    assert_eq!(pdf.spaces, docx.spaces);
+    assert!(pdf.spaces[0].height > Abs::zero());
+}
+
+#[test]
+fn nothing_hidden_reaches_the_pdf() {
+    // SPEC §6.4: no text, tag, bookmark or alt text of what a space
+    // replaced, though layout measured it.
+    let world = world(
+        "figure.answer { display: answer-space; border: 0.5pt; }\n\
+         figure.note { display: hidden; }\n",
+        "figure.answer, figure.note { display: block; }\n",
+        "#doc(title: [Paper])\n\n= Questions\n\nQuestion one.\n\n\
+         #figure(class: \"answer\")[= Zebrafish\n\nQuokka #image(\"wave.svg\", alt: \"Narwhal\")]\n\n\
+         #figure(class: \"note\")[= Axolotl\n\nPangolin.]\n\nAfter.\n",
+    );
+    let mut world = world;
+    world
+        .set_file(
+            "wave.svg",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\">\
+              <rect width=\"20\" height=\"10\"/></svg>"
+                .to_vec(),
+        )
+        .unwrap();
+    let pdf = |variant: &str| {
+        let compiled = compile(&world, variant);
+        String::from_utf8_lossy(compiled.output.as_deref().unwrap()).into_owned()
+    };
+    let words = ["Zebrafish", "Quokka", "Narwhal", "Axolotl", "Pangolin"];
+    let markscheme = pdf("markscheme");
+    // The words are found where they are shown, so their absence means
+    // something.
+    assert!(markscheme.contains("Zebrafish") && markscheme.contains("Narwhal"));
+    let exam = pdf("exam");
+    for word in words {
+        assert!(!exam.contains(word), "{word} reached the paper");
+    }
+    let exam = pages(&world, "exam");
+    for word in words {
+        assert!(!shown(&exam).contains(word), "{word} was drawn");
+    }
+}

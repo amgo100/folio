@@ -52,7 +52,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::{EcoVec, eco_format};
 use folio_component::{
-    Abs, Fragment, FragmentItem, Location, ObjectBox, Path, Point, Shape, Size, Stroke,
+    Abs, Fragment, FragmentItem, Location, Name, ObjectBox, Path, Point, Shape, Size, Stroke,
 };
 use folio_syntax::Span;
 
@@ -74,7 +74,7 @@ use crate::pipeline::{resolution, step_styled};
 use crate::resolve::PageNumbers;
 use crate::span_map::source_ref;
 use crate::style::{DeclValue, NodeName, NodeView, Position, Properties, Styled, Subject};
-use crate::text::{Text, TextBlock, TextObject, text};
+use crate::text::{SpaceKind, Text, TextBlock, TextObject, text};
 
 /// How much a page's emptiness costs: an empty page would cost this much.
 pub const FILL: f64 = 1_000.0;
@@ -108,6 +108,32 @@ pub struct Pages {
     /// none. The fixpoint keeps its own record of them; these tell a
     /// reader of the pages which numbers they show.
     pub page_refs: PageNumbers,
+    /// The blocks whose content `hidden` or `answer-space` left out, with
+    /// the heights layout gave them (SPEC §6.3), in document order: what
+    /// the Office writers measure with Folio's layout (§2.1).
+    pub spaces: EcoVec<SpaceHeight>,
+}
+
+/// The most `answer-scale` multiplies an answer's height by: more is
+/// taken as this, and the space is no taller than the body anyway.
+pub const MAX_ANSWER_SCALE: f64 = 100.0;
+
+/// The height layout gave a block whose content `hidden` or `answer-space`
+/// left out (SPEC §6.3).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct SpaceHeight {
+    /// The element instance of the block.
+    pub location: Location,
+    /// For a part's block, the part.
+    pub part: Option<Name>,
+    /// What keeps the space.
+    pub kind: SpaceKind,
+    /// How tall its content box is: for `hidden`, the border box of the
+    /// content it held, measured in a discarded layout; for answer space,
+    /// its ruled lines, its `answer-height`, or its content's height times
+    /// `answer-scale`. At most the body's height, but for ruled lines,
+    /// which may be broken across pages.
+    pub height: Abs,
 }
 
 impl Pages {
@@ -711,6 +737,7 @@ fn build_pages(
         pages,
         hashes,
         page_refs: PageNumbers::default(),
+        spaces: flow.spaces.clone(),
     };
     (pages, complete)
 }

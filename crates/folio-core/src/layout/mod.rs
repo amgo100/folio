@@ -78,7 +78,7 @@ mod page;
 mod paragraph;
 mod set;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
@@ -95,8 +95,8 @@ use self::math::maths;
 pub use self::math::{Display, LaidMath, MATH_FONT, Maths, Number};
 pub(crate) use self::math::{math_face, math_settings};
 pub use self::page::{
-    FILL, FirstPages, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject,
-    pages, pages_through, paginate,
+    FILL, FirstPages, LineRef, MAX_ANSWER_SCALE, Page, PageCache, PageStats, Pages, Regions,
+    SizeBlock, SizeObject, SpaceHeight, pages, pages_through, paginate,
 };
 pub use self::paragraph::{
     Align, Line, LineSlot, Measures, ObjectBreak, ObjectMetrics, ParagraphInput, ParagraphLayout,
@@ -112,7 +112,7 @@ use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
 use crate::pipeline::step_styled;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{TextParagraph, TextSource, text};
+use crate::text::{Text, TextBlock, TextFlow, TextParagraph, TextSource, text};
 
 /// How long total fit may take for a paragraph on the editor's typing path
 /// before the paragraph is broken greedily instead (SPEC §7.2): pass
@@ -209,6 +209,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let (slots, display_widths, grids) = flow::slots_with(
         &text.root,
         &text.notes,
+        &text.spaces,
         props,
         width,
         text.paragraphs.len(),
@@ -271,8 +272,12 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     if build.is_pass(db) {
         return Some(lines);
     }
-    for (paragraph, layout) in text.paragraphs.iter().zip(&lines.paragraphs) {
-        report_lines(db, build.project(db), paragraph, layout);
+    // The content that spaces measure is not shown (SPEC §6.3).
+    let measured = measured_paragraphs(text);
+    for (i, (paragraph, layout)) in text.paragraphs.iter().zip(&lines.paragraphs).enumerate() {
+        if !measured.contains(&i) {
+            report_lines(db, build.project(db), paragraph, layout);
+        }
     }
     // A grid whose tracks need more than its width is overfull (SPEC
     // §7.4, §7.9).
@@ -323,6 +328,28 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         }
     }
     Some(lines)
+}
+
+/// The paragraphs of the content that spaces measure (SPEC §6.3), by index
+/// into the build's text: they are laid out only to be measured.
+fn measured_paragraphs(text: &Text) -> HashSet<usize> {
+    fn walk(block: &TextBlock, out: &mut HashSet<usize>) {
+        for child in &block.children {
+            match child {
+                TextFlow::Paragraph(i) => {
+                    out.insert(*i);
+                }
+                TextFlow::Block(b) => walk(b, out),
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    for space in &text.spaces {
+        if let Some(block) = &space.measure {
+            walk(block, &mut out);
+        }
+    }
+    out
 }
 
 /// What the paragraph builder reads of a paragraph of the text stage: its

@@ -35,7 +35,8 @@
 //! builder takes the cheapest break and reports the constraints it had to
 //! relax (SPEC §7.2).
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -53,7 +54,7 @@ use super::cache::Cache;
 use super::grid::{GridLayout, Measurer, Place, bands, total};
 use super::master::{BlockBox, BreakBefore, Rules, Sides, length, stroke};
 use super::math::{Display, Lead, Maths, display_content, laid_image};
-use super::page::{SizeBlock, SizeObject};
+use super::page::{MAX_ANSWER_SCALE, SizeBlock, SizeObject, SpaceHeight};
 use super::paragraph::{
     LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
 };
@@ -61,7 +62,9 @@ use super::set::set_line;
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{TableRole, Text, TextBlock, TextFlow, TextImage, TextSource};
+use crate::text::{
+    SpaceKind, TableRole, Text, TextBlock, TextFlow, TextImage, TextSource, TextSpace,
+};
 
 /// The cost of a break that leaves a widow or an orphan (TeX's
 /// `\widowpenalty` and `\clubpenalty`).
@@ -91,7 +94,7 @@ pub(super) fn slots(
     count: usize,
     maths: &[crate::text::TextMath],
 ) -> (Vec<LineSlot>, Vec<(usize, Abs)>) {
-    let (slots, widths, _) = slots_with(root, notes, props, width, count, maths, None);
+    let (slots, widths, _) = slots_with(root, notes, &[], props, width, count, maths, None);
     (slots, widths)
 }
 
@@ -100,6 +103,7 @@ pub(super) fn slots(
 pub(super) fn slots_with(
     root: &TextBlock,
     notes: &[TextBlock],
+    spaces: &[TextSpace],
     props: &Properties,
     width: Abs,
     count: usize,
@@ -108,6 +112,7 @@ pub(super) fn slots_with(
 ) -> (Vec<LineSlot>, Vec<(usize, Abs)>, Vec<GridLayout>) {
     struct Walk<'a, 'm, 'p> {
         props: &'a Properties,
+        spaces: &'a [TextSpace],
         displays: HashMap<Location, usize>,
         slots: Vec<LineSlot>,
         widths: Vec<(usize, Abs)>,
@@ -153,11 +158,30 @@ pub(super) fn slots_with(
                 TextFlow::Block(b) => walk(b, &boxed.child(&b.style, w.props, b.span), w),
             }
         }
+        // The content a space measures is as wide as the space's block
+        // (SPEC §6.3); its displays are not shown, so their widths are not
+        // checked.
+        let measure = w
+            .spaces
+            .iter()
+            .find(|s| s.location == block.location && s.part == block.part)
+            .and_then(|s| s.measure.as_ref())
+            .filter(|m| !std::ptr::eq(*m, block));
+        if let Some(measure) = measure {
+            let widths = w.widths.len();
+            walk(
+                measure,
+                &BlockBox::of(&measure.style, w.props, measure.span, boxed.x, boxed.width),
+                w,
+            );
+            w.widths.truncate(widths);
+        }
     }
     let mut w = Walk {
         measurer,
         grids: Vec::new(),
         props,
+        spaces,
         displays: maths
             .iter()
             .enumerate()
@@ -771,6 +795,11 @@ pub(super) struct Flow {
     /// band is equal wherever an edit moved it (SPEC §2.3). Empty in the
     /// flows of notes and cells.
     pub cells: CellOrigins,
+    /// The spaces of `hidden` and `answer-space` laid out, with the
+    /// heights they keep (SPEC §6.3), in the order they were built. Empty
+    /// in the flows of notes and cells, whose spaces their build's flow
+    /// holds.
+    pub spaces: EcoVec<SpaceHeight>,
 }
 
 impl Flow {
@@ -803,6 +832,7 @@ impl Flow {
             .filter(|(_, m)| m.display)
             .map(|(i, m)| (m.location, i))
             .collect();
+        let spaces = RefCell::new(Vec::new());
         let builder = Builder {
             sizes,
             displays,
@@ -827,8 +857,18 @@ impl Flow {
             fills: Vec::new(),
             grids: &grids,
             cells: Vec::new(),
+            spaces: &spaces,
         };
-        builder.flow(&text.root)
+        let mut flow = builder.flow(&text.root);
+        // A note or cell may be built more than once; each space counts
+        // once.
+        let mut seen = HashSet::new();
+        flow.spaces = spaces
+            .into_inner()
+            .into_iter()
+            .filter(|s| seen.insert((s.location, s.part.clone())))
+            .collect();
+        flow
     }
 
     /// The boundary before leaf `i`, or after the last for `i == len`.
@@ -1129,6 +1169,37 @@ pub(super) fn flow_height(flow: &Flow) -> Abs {
     height + flow.end.walk(Walk::End, |_, _| {})
 }
 
+/// How tall a flow is, unbroken, as one block of a page holds it: the
+/// spaces that collapse through its top, the height from there to where
+/// the spaces that collapse through its bottom start, and those. The
+/// spaces between its leaves, and those that padding or a border holds
+/// inside a box, are in the height (SPEC §6.3).
+fn extent(flow: &Flow) -> (Abs, Abs, Abs) {
+    fn edge<'a>(parts: impl Iterator<Item = &'a Part>) -> Abs {
+        let mut space = Abs::zero();
+        for part in parts {
+            match part {
+                Part::Space(s) => space = space.max(*s),
+                Part::Lead(h) | Part::Solid(h) if *h != Abs::zero() => break,
+                _ => {}
+            }
+        }
+        space
+    }
+    let first = flow.boundary(0);
+    let before = edge(first.parts.iter());
+    let after = edge(flow.end.parts.iter().rev());
+    let mut height = first.gap() - before;
+    for (i, item) in flow.items.iter().enumerate() {
+        if i > 0 {
+            height += item.before.gap();
+        }
+        height += leaf_height(&item.leaf);
+    }
+    height += flow.end.gap() - after;
+    (before, height.max(Abs::zero()), after)
+}
+
 /// What the boundary being built has seen since the last leaf.
 enum Event {
     Close(Arc<BlockBox>),
@@ -1188,6 +1259,9 @@ struct Builder<'a> {
     grids: &'a HashMap<Location, GridLayout>,
     /// Where the leaves of each band's cells come from ([`Flow::cells`]).
     cells: CellOrigins,
+    /// The spaces laid out so far, shared with the builders of notes and
+    /// cells ([`Flow::spaces`]).
+    spaces: &'a RefCell<Vec<SpaceHeight>>,
 }
 
 /// A block with a `min-height` (SPEC §6.3): the leaves it holds, and how
@@ -1224,6 +1298,7 @@ impl Builder<'_> {
             end,
             origins: self.origins,
             cells: self.cells,
+            spaces: EcoVec::new(),
         };
         // Inner blocks first, so that an outer block measures the inner
         // ones grown.
@@ -1262,6 +1337,7 @@ impl Builder<'_> {
             fills: Vec::new(),
             grids: self.grids,
             cells: Vec::new(),
+            spaces: self.spaces,
         };
         let mark = continued.and_then(|i| builder.paragraph_info(i));
         let mut flow = builder.flow(block);
@@ -1283,6 +1359,7 @@ impl Builder<'_> {
         })
     }
     fn block(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) {
+        let boxed = self.space(block, boxed);
         self.stack.push((boxed.clone(), block.location));
         self.pending
             .push(Event::Open(boxed.clone(), block.location));
@@ -1508,6 +1585,7 @@ impl Builder<'_> {
             fills: Vec::new(),
             grids: self.grids,
             cells: Vec::new(),
+            spaces: self.spaces,
         };
         match child {
             TextFlow::Block(b) => {
@@ -1535,6 +1613,7 @@ impl Builder<'_> {
             end,
             origins: builder.origins,
             cells: Vec::new(),
+            spaces: EcoVec::new(),
         };
         for fill in &builder.fills {
             flow.fill(fill);
@@ -1589,6 +1668,117 @@ impl Builder<'_> {
             items: items.into_iter().collect(),
             rtl: info.shaped.level % 2 == 1,
         }))
+    }
+
+    /// The box of a block whose content `hidden` or `answer-space` left out
+    /// (SPEC §6.3), which holds nothing, or `boxed` for any other block.
+    /// A hidden block keeps its spaces and how it breaks and is as tall as
+    /// the border box of the content it held, with nothing drawn: no
+    /// padding, border, background or ruled lines. Answer space keeps its
+    /// box and its ruled lines; without them, its content box is
+    /// `answer-height` tall, or, for `auto`, as tall as the content's
+    /// times `answer-scale`, and at least its `min-height`. The content is
+    /// measured in a discarded layout at the block's width.
+    fn space(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) -> Arc<BlockBox> {
+        if self.text.spaces.is_empty() {
+            return boxed;
+        }
+        let Some(space) = self
+            .text
+            .spaces
+            .iter()
+            .find(|s| s.location == block.location && s.part == block.part)
+        else {
+            return boxed;
+        };
+        // The content measured is the space's block as it would be shown.
+        if space
+            .measure
+            .as_ref()
+            .is_some_and(|m| std::ptr::eq(m, block))
+        {
+            return boxed;
+        }
+        let measured = space.measure.as_ref().map(|m| self.measure(m, boxed.width));
+        let mut sized = (*boxed).clone();
+        match space.kind {
+            // The spaces that would collapse through the content's edges
+            // are the hidden block's.
+            SpaceKind::Hidden => {
+                let (before, height, after) = measured.unwrap_or_default();
+                sized.padding = Sides::default();
+                sized.border = Sides::default();
+                sized.background = None;
+                sized.rules = None;
+                sized.min_height = height;
+                if measured.is_some() {
+                    sized.space_before = before;
+                    sized.space_after = after;
+                }
+            }
+            SpaceKind::Answer if sized.rules.is_some() => {}
+            SpaceKind::Answer => {
+                let value = |name: &str| block.style.value(self.props, self.props.builtin(name));
+                let height = match value("answer-height") {
+                    Some(Value::Length(height)) => *height,
+                    _ => {
+                        let scale = match value("answer-scale") {
+                            Some(Value::Number(n)) => n.get().clamp(0.0, MAX_ANSWER_SCALE),
+                            _ => 1.0,
+                        };
+                        let inset = sized.inset();
+                        let (_, height, _) = measured.unwrap_or_default();
+                        let content = height - inset.top - inset.bottom;
+                        content.max(Abs::zero()) * scale
+                    }
+                };
+                sized.min_height = sized.min_height.max(height);
+            }
+        }
+        let height = match &sized.rules {
+            Some(rules) => rules.spacing * rules.count as f64,
+            None => sized.min_height.min(self.height),
+        };
+        self.spaces.borrow_mut().push(SpaceHeight {
+            location: block.location,
+            part: block.part.clone(),
+            kind: space.kind,
+            height,
+        });
+        self.shared.block(Arc::new(sized), self.now)
+    }
+
+    /// How tall `block` is as a block `width` wide, as [`extent`] gives
+    /// it: its flow built on its own and discarded (SPEC §6.3).
+    fn measure(&self, block: &TextBlock, width: Abs) -> (Abs, Abs, Abs) {
+        let discarded = RefCell::new(Vec::new());
+        let builder = Builder {
+            sizes: self.sizes,
+            displays: self.displays.clone(),
+            text: self.text,
+            cache: self.cache,
+            shared: self.shared,
+            now: self.now,
+            layouts: self.layouts,
+            slots: self.slots,
+            props: self.props,
+            fonts: self.fonts,
+            width,
+            height: self.height,
+            metrics: FaceMetrics::new(self.fonts),
+            stack: EcoVec::new(),
+            pending: Vec::new(),
+            prev: None,
+            items: Vec::new(),
+            origins: Vec::new(),
+            in_note: self.in_note,
+            in_cell: self.in_cell,
+            fills: Vec::new(),
+            grids: self.grids,
+            cells: Vec::new(),
+            spaces: &discarded,
+        };
+        extent(&builder.flow(block))
     }
 
     /// The ruled lines of a block (SPEC §6.3), after its content: a leaf
