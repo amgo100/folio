@@ -20,6 +20,10 @@
 //! - **Matching** ([`styles()`]): a node is matched by a query keyed by
 //!   what rules can see of it, so an insertion re-matches only the
 //!   siblings whose position or neighbours a rule tests.
+//! - **Render templates** ([`Expansion`]): `render` blocks, and those of
+//!   the components in use, are compiled with the cascade; each element
+//!   whose computed `template` chooses one carries its expansion, the
+//!   pieces the text stage collects in place of its content (SPEC §5.3).
 //! - **Computed styles** ([`ComputedStyle`]): text properties inherit, box
 //!   properties do not; `em` lengths become absolute; values are stored as
 //!   shared property groups with cheap hashes.
@@ -31,6 +35,7 @@ mod computed;
 mod props;
 mod rules;
 mod selector;
+mod template;
 mod tree;
 mod value;
 
@@ -42,6 +47,10 @@ pub use self::rules::{
 pub use self::selector::{
     Attr, AttrOp, AttrTest, Combinator, Compound, NameNeeds, Need, Needs, NodeName, NodeView,
     Position, Pseudo, Role, Selector, Specificity, Subject,
+};
+pub use self::template::{
+    Arranged, Block as TemplateBlock, BlockKind, Expansion, HEADER_PART, OfficeClass, Piece,
+    Template,
 };
 pub(crate) use self::tree::{Child, content_elements, styled_children};
 pub use self::tree::{NOTE_PART, Styled, StyledNode, VECTOR_PART, styles};
