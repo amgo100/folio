@@ -1,0 +1,79 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 419.53 × 595.28, 2 page(s)
+page 1 419.53 × 595.28, 14 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 20.82..429.88
+    box (0.00, 0.00) 334.49 × 437.08 main.fol:1:2 baselines 20.82..429.88
+      box (0.00, 0.00) 334.49 × 29.86 main.fol:1:2 baselines 20.82..20.82 keep penalty 10000
+        text (0.00, 20.82) SourceSerif4-Bold 16.80 w 82.81 11 glyph(s) "Projectiles"
+      box (0.00, 46.66) 334.49 × 42.44 main.fol:3:2 baselines 14.29..35.51
+        text (0.00, 14.29) SourceSerif4-Regular 10.50 w 106.46 23 glyph(s) "1.\u{a0}Horizontal launch, 1"
+        text (0.00, 35.51) SourceSerif4-Regular 10.50 w 110.11 24 glyph(s) "3.\u{a0}Launch at an angle, 2"
+      box (0.00, 89.10) 334.49 × 63.66 main.fol:5:2 baselines 14.29..56.73
+        text (0.00, 14.29) SourceSerif4-Regular 10.50 w 178.83 41 glyph(s) "Figure\u{a0}1: Sketch the path of the ball., 1"
+        text (0.00, 35.51) SourceSerif4-Regular 10.50 w 201.33 44 glyph(s) "Figure\u{a0}2: Horizontal and vertical motion., 1"
+        text (0.00, 56.73) SourceSerif4-Regular 10.50 w 234.13 52 glyph(s) "Figure\u{a0}4: The launch, with the velocity resolved., 2"
+      box (0.00, 168.36) 334.49 × 268.72 main.fol:7:1 baselines 16.88..261.52
+        box (0.00, 0.00) 334.49 × 24.65 main.fol:7:1 baselines 16.88..16.88 keep penalty 10000
+          text (0.00, 16.88) SourceSerif4-Bold 13.00 w 121.78 20 glyph(s) "1.\u{a0}Horizontal launch"
+        box (0.00, 30.65) 334.49 × 42.44 main.fol:9:1 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 334.49 74 glyph(s) "A ball is thrown horizontally at 8.0 m/s from a cliff 20 m high. The motion"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 204.47 44 glyph(s) "splits into two independent parts, shown in "
+          text (204.47, 35.51) SourceSerif4-Regular 10.50 w 38.04 8 glyph(s) "Figure\u{a0}2"
+          text (242.51, 35.51) SourceSerif4-Regular 10.50 w 3.15 1 glyph(s) "."
+        box (0.00, 78.34) 334.49 × 57.69 main.fol:11:2 baselines 14.79..14.79
+          shape (0.00, 0.00) M(0.00, 0.25) L(334.49, 0.25) stroke #808080ff 0.50 Butt Miter main.fol:11:2
+          shape (0.00, 0.00) M(0.00, 57.44) L(334.49, 57.44) stroke #808080ff 0.50 Butt Miter main.fol:11:2
+          shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 57.69) stroke #808080ff 0.50 Butt Miter main.fol:11:2
+          shape (0.00, 0.00) M(334.24, 0.00) L(334.24, 57.69) stroke #808080ff 0.50 Butt Miter main.fol:11:2
+          box (0.50, 0.50) 333.49 × 21.22 main.fol:11:2 baselines 14.29..14.29
+            text (82.54, 14.29) SourceSerif4-Regular 10.50 w 168.40 38 glyph(s) "Figure\u{a0}1: Sketch the path of the ball."
+        box (0.00, 144.03) 334.49 × 68.91 main.fol:13:2 baselines 14.29..61.98
+          box (0.00, 0.00) 334.49 × 42.44 main.fol:13:53 baselines 14.29..35.51
+            text (0.00, 14.29) SourceSerif4-Regular 10.50 w 334.49 71 glyph(s) "The horizontal speed stays 8.0 m/s; the vertical speed grows by 9.8 m/s"
+            text (136.93, 35.51) SourceSerif4-Regular 10.50 w 60.63 12 glyph(s) "each second."
+          box (0.00, 47.69) 334.49 × 21.22 main.fol:13:2 baselines 14.29..14.29
+            text (71.79, 14.29) SourceSerif4-Regular 10.50 w 190.90 41 glyph(s) "Figure\u{a0}2: Horizontal and vertical motion."
+        box (0.00, 220.94) 334.49 × 21.22 main.fol:15:1 baselines 14.29..14.29
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 237.22 51 glyph(s) "The time of flight follows from the vertical motion:"
+        box (0.00, 247.41) 334.49 × 21.30 main.fol:17:1 baselines 14.10..14.10
+          text (147.44, 14.10) NewCMMath-Regular 10.50 w 4.92 1 glyph(s) "𝑠"
+          text (155.28, 14.10) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
+          text (167.42, 6.99) NewCMMath-Regular 10.50 w 5.25 1 glyph(s) "1"
+          text (167.42, 21.30) NewCMMath-Regular 10.50 w 5.25 1 glyph(s) "2"
+          shape (167.42, 11.27) M(0.00, 0.00) L(5.25, 0.00) L(5.25, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:17:7
+          text (173.72, 14.10) NewCMMath-Regular 10.50 w 5.27 1 glyph(s) "𝑔"
+          text (178.99, 14.10) NewCMMath-Regular 10.50 w 3.79 1 glyph(s) "𝑡"
+          text (182.78, 10.29) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
+          text (321.07, 14.10) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "(1)"
+page 2 419.53 × 595.28, 7 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 13.47..196.55
+    box (0.00, 0.00) 334.49 × 200.07 main.fol:1:2 baselines 13.47..196.55
+      box (0.00, 0.00) 334.49 × 200.07 main.fol:29:1 baselines 13.47..196.55
+        box (0.00, 0.00) 334.49 × 21.24 main.fol:29:1 baselines 13.47..13.47 keep penalty 10000
+          text (0.00, 13.47) SourceSerif4-Bold 13.00 w 126.02 21 glyph(s) "3.\u{a0}Launch at an angle"
+        box (0.00, 27.24) 334.49 × 42.44 main.fol:31:1 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 284.01 62 glyph(s) "A ball is launched at 30° above the horizontal at 12 m/s. Use "
+          text (284.01, 14.29) SourceSerif4-Regular 10.50 w 50.48 10 glyph(s) "Equation\u{a0}1"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 191.16 43 glyph(s) "for its vertical motion, and find its range."
+        box (0.00, 74.93) 334.49 × 47.69 main.fol:33:2 baselines 14.29..40.76
+          box (0.00, 0.00) 334.49 × 21.22 main.fol:33:61 baselines 14.29..14.29
+            text (26.00, 14.29) SourceSerif4-Regular 10.50 w 282.49 58 glyph(s) "Horizontal component 10.4 m/s, vertical component 6.0 m/s."
+          box (0.00, 26.47) 334.49 × 21.22 main.fol:33:2 baselines 14.29..14.29
+            text (55.39, 14.29) SourceSerif4-Regular 10.50 w 223.70 49 glyph(s) "Figure\u{a0}4: The launch, with the velocity resolved."
+        box (0.00, 130.62) 334.49 × 25.17 main.fol:35:1 baselines 15.82..15.82
+          text (136.55, 15.82) NewCMMath-Regular 10.50 w 8.22 1 glyph(s) "𝑅"
+          text (147.69, 15.82) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
+          text (159.83, 8.71) NewCMMath-Regular 10.50 w 6.01 1 glyph(s) "𝑢"
+          text (165.83, 4.90) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
+          text (171.85, 8.71) NewCMMath-Regular 10.50 w 12.97 3 glyph(s) "sin"
+          text (186.56, 8.71) NewCMMath-Regular 10.50 w 5.25 1 glyph(s) "2"
+          text (191.81, 8.71) NewCMMath-Regular 10.50 w 5.07 1 glyph(s) "𝜃"
+          text (175.72, 23.02) NewCMMath-Regular 10.50 w 5.27 1 glyph(s) "𝑔"
+          shape (159.83, 12.98) M(0.00, 0.00) L(37.06, 0.00) L(37.06, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:35:7
+          text (321.07, 15.82) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "(3)"
+        box (0.00, 161.04) 334.49 × 39.03 main.fol:37:1 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 50.49 10 glyph(s) "Equation\u{a0}3"
+          text (50.49, 14.29) SourceSerif4-Regular 10.50 w 23.46 5 glyph(s) " and "
+          text (73.95, 14.29) SourceSerif4-Regular 10.50 w 38.52 8 glyph(s) "Figure\u{a0}4"
+          text (112.47, 14.29) SourceSerif4-Regular 10.50 w 222.01 45 glyph(s) " are numbered alike in the paper and the mark"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 38.99 7 glyph(s) "scheme."

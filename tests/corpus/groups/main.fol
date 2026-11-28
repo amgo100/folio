@@ -1,0 +1,37 @@
+#doc(title: [Projectiles], subject: "Year 12 physics")
+
+#outline(heading)
+
+#list-of(figure)
+
+= Horizontal launch
+
+A ball is thrown horizontally at 8.0 m/s from a cliff 20 m high. The motion splits into two independent parts, shown in @fig:parts.
+
+#figure(class: "space", caption: [Sketch the path of the ball.])[]
+
+#figure(caption: [Horizontal and vertical motion.])[The horizontal speed stays 8.0 m/s; the vertical speed grows by 9.8 m/s each second.] <fig:parts>
+
+The time of flight follows from the vertical motion:
+
+$ s = 1/2 g t^2 $ <eq:fall>
+
+#heading(class: "answers")[Worked answer]
+
+#figure(class: "answers", caption: [The path, drawn to scale.])[
+  A parabola from the cliff top to a point 16 m from its foot, reached after
+
+  $ t = sqrt((2 s) / g) = sqrt((2 times 20) / 9.8) = 2.0 $ <eq:time>
+]
+
+#strong(class: "answers")[Using @eq:fall gives @eq:time.]
+
+= Launch at an angle
+
+A ball is launched at 30° above the horizontal at 12 m/s. Use @eq:fall for its vertical motion, and find its range.
+
+#figure(caption: [The launch, with the velocity resolved.])[Horizontal component 10.4 m/s, vertical component 6.0 m/s.] <fig:launch>
+
+$ R = (u^2 sin 2 theta) / g $ <eq:range>
+
+@eq:range and @fig:launch are numbered alike in the paper and the mark scheme.

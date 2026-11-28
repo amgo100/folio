@@ -1,0 +1,18 @@
+[project]
+entry = "main.fol"
+edition = "2027"
+compiler = "0.0.0"
+lang = "en-GB"
+styles = ["styles/paper.fsty"]
+
+# SPEC §6.1: the paper and its mark scheme number figures, equations and
+# sections alike, though each shows what the other hides.
+[variants.exam]
+targets = ["pdf"]
+
+[variants.markscheme]
+targets = ["pdf"]
+
+[numbering-groups.paper]
+variants = ["exam", "markscheme"]
+shared-counters = ["heading", "figure", "equation"]

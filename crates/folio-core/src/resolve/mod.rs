@@ -55,14 +55,14 @@
 //!   ([`Resolution::set_pages`]), in the bounded fixpoint of
 //!   [`page_refs`].
 //!
-//! Counters are resolved per build, on the variant's own tree. Shared
-//! counters of a numbering group (SPEC §6.1) will be resolved on the
-//! group's common tree: the walk takes the tree to count as an argument,
-//! so that pass can run it on another tree and keep the counters it
-//! shares.
+//! Counters are resolved per build, on the variant's own tree, except the
+//! shared counters of a numbering group (SPEC §6.1), whose values come from
+//! the group's common tree ([`crate::variants::common`]), counted by the
+//! same walk without reporting anything ([`count_common`]).
 
 mod numbering;
 pub mod page_refs;
+pub mod query;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -77,6 +77,7 @@ use folio_text::Lang;
 
 pub use self::numbering::Pattern;
 pub use self::page_refs::PageNumbers;
+pub use self::query::{Entry, Query, QueryResult};
 
 use crate::component::Reason;
 use crate::db::{Build, Db, component_host};
@@ -208,6 +209,9 @@ pub struct Resolution {
     /// Whether footnotes are numbered from 1 on every page: `page {
     /// counter-reset: footnote; }`.
     pub footnotes_per_page: bool,
+    /// The queries: totals, outlines and figure lists (SPEC §4.5), in
+    /// document order.
+    pub queries: EcoVec<Query>,
     index: Index,
 }
 
@@ -236,6 +240,7 @@ struct Index {
     markers: HashMap<Location, usize>,
     labels: HashMap<EcoString, usize>,
     references: HashMap<Location, usize>,
+    queries: HashMap<Location, usize>,
 }
 
 impl PartialEq for Resolution {
@@ -248,6 +253,7 @@ impl PartialEq for Resolution {
             && self.pages == other.pages
             && self.footnotes == other.footnotes
             && self.footnotes_per_page == other.footnotes_per_page
+            && self.queries == other.queries
     }
 }
 
@@ -262,6 +268,7 @@ impl Hash for Resolution {
         self.pages.hash(state);
         self.footnotes.hash(state);
         self.footnotes_per_page.hash(state);
+        self.queries.hash(state);
     }
 }
 
@@ -288,6 +295,12 @@ impl Resolution {
         Some(&self.labels[*self.index.labels.get(label)?])
     }
 
+    /// The result of a query element instance: a total, an outline or a
+    /// figure list.
+    pub fn query(&self, location: Location) -> Option<&Query> {
+        Some(&self.queries[*self.index.queries.get(&location)?])
+    }
+
     /// The reference that a `ref` element instance is.
     pub fn reference(&self, location: Location) -> Option<&Reference> {
         Some(&self.references[*self.index.references.get(&location)?])
@@ -295,7 +308,8 @@ impl Resolution {
 
     /// What layout must find the pages of: the targets of the page-number
     /// references, each once, in the order they are first referred to,
-    /// then, when footnotes are numbered per page, the footnotes.
+    /// then, when footnotes are numbered per page, the footnotes, then the
+    /// instances that outlines and figure lists list.
     pub fn page_targets(&self) -> Vec<Location> {
         let mut seen = HashSet::new();
         let footnotes = self
@@ -303,12 +317,17 @@ impl Resolution {
             .iter()
             .filter(|_| self.footnotes_per_page)
             .map(|f| f.location);
+        let entries = self.queries.iter().flat_map(|q| match &q.result {
+            QueryResult::List(entries) => entries.iter().map(|e| e.target).collect(),
+            QueryResult::Total(_) => Vec::new(),
+        });
         self.references
             .iter()
             .filter(|r| r.page.is_some())
             .filter_map(|r| r.target)
             .map(|t| t.location)
             .chain(footnotes)
+            .chain(entries)
             .filter(|l| seen.insert(*l))
             .collect()
     }
@@ -337,6 +356,17 @@ impl Resolution {
             } else {
                 eco_format!("{word}{NBSP}{page}")
             };
+        }
+        for q in self.queries.make_mut() {
+            let QueryResult::List(entries) = &mut q.result else {
+                continue;
+            };
+            for entry in entries.make_mut() {
+                entry.page = match numbers.page(entry.target) {
+                    Some(page) => eco_format!("{page}"),
+                    None => UNRESOLVED.into(),
+                };
+            }
         }
         self.pages = numbers;
     }
@@ -414,6 +444,9 @@ impl Resolution {
         for (i, r) in self.references.iter().enumerate() {
             index.references.entry(r.location).or_insert(i);
         }
+        for (i, q) in self.queries.iter().enumerate() {
+            index.queries.entry(q.location).or_insert(i);
+        }
         self.index = index;
     }
 }
@@ -423,40 +456,100 @@ impl Resolution {
 /// element without a node is not counted, and its label names nothing.
 /// Reports references that do not resolve.
 pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolution {
-    let project = build.project(db);
     let Some(root) = crate::pipeline::selected_root(db, build) else {
         return Resolution::default();
     };
-    let props = &styled.properties;
-    let default_lang =
-        Lang::new(project.manifest(db).project.lang.v.as_str()).unwrap_or_else(Lang::english);
-    let mut walk = Walk {
-        db,
-        build,
-        props,
-        ids: Ids::new(props),
-        default_lang,
-        within: within_decls(db, build),
-        scopes: scope_decls(db, build),
-        counters: HashMap::new(),
-        lists: Vec::new(),
-        seen: HashSet::new(),
-        schemas: HashMap::new(),
-        counter_keys: HashMap::new(),
-        reported: HashSet::new(),
-        out: Resolution::default(),
-        refs: Vec::new(),
-        styles: HashMap::new(),
-        patterns: HashMap::new(),
-    };
+    let mut walk = Walk::new(db, build, &styled.properties);
+    walk.shared = shared(db, build, &mut walk);
     walk.out.footnotes_per_page = page_resets(db, build, styled);
     walk.element(root, &styled.root);
     // Numbers and labels are looked up as references resolve.
     walk.out.reindex();
     walk.references();
+    // Titles show the references' text.
+    walk.out.reindex();
+    walk.queries(root, &styled.root);
     let mut out = walk.out;
     out.reindex();
     out
+}
+
+/// Counts the common tree of a numbering group (SPEC §6.1;
+/// [`crate::variants::common`]): every counter's values for each counted
+/// instance. It reports nothing: what the tree holds is reported by the
+/// builds of the variants that show it.
+pub fn count_common(
+    db: &dyn Db,
+    build: Build<'_>,
+    root: &Element,
+    styled: &StyledNode,
+) -> Vec<Number> {
+    let Some(selected) = crate::pipeline::select(db, build).as_ref() else {
+        return Vec::new();
+    };
+    let mut walk = Walk::new(db, build, &selected.styled.properties);
+    walk.quiet = true;
+    walk.element(root, styled);
+    walk.out.numbers.into_iter().collect()
+}
+
+/// The counters a build shares with the other variants of its numbering
+/// group, with the values the group's common tree gives them; `None` when
+/// it shares none. Reports a shared counter that names no counter, at its
+/// name in the manifest.
+fn shared(db: &dyn Db, build: Build<'_>, walk: &mut Walk<'_>) -> Option<Shared> {
+    let group_build = crate::variants::common::group_build(db, build)?;
+    let project = build.project(db);
+    let variant = build.variant(db).as_ref()?;
+    let group = project.manifest(db).numbering_group(variant.as_str())?;
+    if group.shared_counters.is_empty() {
+        return None;
+    }
+    let mut counters = HashSet::new();
+    for name in &group.shared_counters {
+        let written: EcoString = name.v.to_string().into();
+        match walk.counter_key(&written) {
+            Ok(key) => {
+                counters.insert(key);
+            }
+            Err(_) => diag::report(
+                db,
+                Diagnostic::warning(
+                    name.span,
+                    eco_format!(
+                        "there is no counter `{written}`, so numbering group `{}` cannot share it",
+                        group.name.v
+                    ),
+                )
+                .with_hint(
+                    "counters are named after the elements they number, such as `figure` or a \
+                     component's `question`, and display equations are counted by `equation`",
+                ),
+            ),
+        }
+    }
+    if counters.is_empty() {
+        return None;
+    }
+    crate::variants::common::check_target_overlays(db, build, &group.name.v);
+    // A variant of the group that cannot be styled reports so in its own
+    // build; meanwhile each variant counts its own content.
+    let common = crate::variants::common::common_numbers(db, group_build).as_ref()?;
+    Some(Shared {
+        counters,
+        values: common
+            .numbers
+            .iter()
+            .map(|(target, counter, values)| (*target, (counter.clone(), values.clone())))
+            .collect(),
+    })
+}
+
+/// The counters a build shares with its numbering group, and the values
+/// the group's common tree gives each counted instance.
+struct Shared {
+    counters: HashSet<EcoString>,
+    values: HashMap<Target, (EcoString, EcoVec<u64>)>,
 }
 
 /// Whether `counter-reset` on `page` restarts the footnotes on every page.
@@ -522,6 +615,7 @@ struct Ids {
     marker: PropId,
     ref_format: PropId,
     lang: PropId,
+    decimal_marker: PropId,
 }
 
 impl Ids {
@@ -532,6 +626,7 @@ impl Ids {
             marker: props.builtin("marker"),
             ref_format: props.builtin("ref-format"),
             lang: props.builtin("lang"),
+            decimal_marker: props.builtin("decimal-marker"),
         }
     }
 }
@@ -611,6 +706,13 @@ struct Walk<'a> {
     /// it has one: its own `numbering`, or, for an item, its enum's. A
     /// reference shows the number as the target does.
     patterns: HashMap<Location, Pattern>,
+    /// The counters shared with the build's numbering group, whose values
+    /// come from the group's common tree.
+    shared: Option<Shared>,
+    /// Whether the walk reports nothing: the walk of a common tree.
+    quiet: bool,
+    /// The queries waiting for the whole tree.
+    pending_queries: Vec<query::Pending>,
 }
 
 /// The counters that components' elements declare `within` another
@@ -677,6 +779,48 @@ fn scope_decls(db: &dyn Db, build: Build<'_>) -> Vec<ScopeDecl> {
         }
     }
     out
+}
+
+impl<'a> Walk<'a> {
+    fn new(db: &'a dyn Db, build: Build<'a>, props: &'a Properties) -> Self {
+        let default_lang = Lang::new(build.project(db).manifest(db).project.lang.v.as_str())
+            .unwrap_or_else(Lang::english);
+        Self {
+            db,
+            build,
+            props,
+            ids: Ids::new(props),
+            default_lang,
+            within: within_decls(db, build),
+            scopes: scope_decls(db, build),
+            counters: HashMap::new(),
+            lists: Vec::new(),
+            seen: HashSet::new(),
+            schemas: HashMap::new(),
+            counter_keys: HashMap::new(),
+            reported: HashSet::new(),
+            out: Resolution::default(),
+            refs: Vec::new(),
+            styles: HashMap::new(),
+            patterns: HashMap::new(),
+            shared: None,
+            quiet: false,
+            pending_queries: Vec::new(),
+        }
+    }
+
+    /// The values the common tree gives a target of a shared counter, in
+    /// place of `own`, the values the build's own tree gives it.
+    fn shared_values(&self, counter: &str, target: Target, own: EcoVec<u64>) -> EcoVec<u64> {
+        match &self.shared {
+            Some(shared) if shared.counters.contains(counter) => shared
+                .values
+                .get(&target)
+                .filter(|(name, _)| name == counter)
+                .map_or(own, |(_, values)| values.clone()),
+            _ => own,
+        }
+    }
 }
 
 impl Walk<'_> {
@@ -785,6 +929,7 @@ impl Walk<'_> {
         } else if counted.counter.is_some() {
             let name: EcoString = element.name.to_string().into();
             let values = self.step(&name, element);
+            let values = self.shared_values(&name, Target::element(element.location), values);
             let pattern = self.pattern(style);
             self.number(element, name, values, pattern.as_ref());
             numbered = true;
@@ -834,6 +979,8 @@ impl Walk<'_> {
         }
         self.restart_within(element);
 
+        self.query(element, style);
+
         if is_builtin(&element.name, "ref")
             && let Some(Value::Label(label)) = element.field("target")
         {
@@ -850,6 +997,134 @@ impl Walk<'_> {
                 page: is_page_form(element),
             });
         }
+    }
+
+    /// Takes a query element, to resolve once the whole tree is walked.
+    fn query(&mut self, element: &Element, style: &ComputedStyle) {
+        let list = is_builtin(&element.name, "outline") || is_builtin(&element.name, "list-of");
+        let total = is_builtin(&element.name, "total");
+        if !list && !total {
+            return;
+        }
+        let Some(Value::Str(target)) = element.field("target") else {
+            return;
+        };
+        let kind = if total {
+            let Some(Value::Str(field)) = element.field("field") else {
+                return;
+            };
+            let marker = locale::number_format(
+                &self.lang(style),
+                style.value(self.props, self.ids.decimal_marker),
+            )
+            .decimal_marker;
+            query::Kind::Total {
+                field: field.clone(),
+                marker,
+            }
+        } else {
+            query::Kind::List
+        };
+        self.pending_queries.push(query::Pending {
+            location: element.location,
+            span: element.span,
+            target: target.clone(),
+            kind,
+        });
+    }
+
+    /// Resolves the queries the walk took (SPEC §4.5): the entries of
+    /// outlines and figure lists from `root`, the variant's own tree, with
+    /// the markers the walk set; totals from the numbering group's common
+    /// tree, or from `root` outside a group.
+    fn queries(&mut self, root: &Element, styled: &StyledNode) {
+        let pending = std::mem::take(&mut self.pending_queries);
+        if pending.is_empty() {
+            return;
+        }
+        let group = crate::variants::common::group_build(self.db, self.build);
+        let common =
+            group.and_then(|group| crate::variants::common::common_tree(self.db, group).as_ref());
+        // Only the instances the build styled are shown, so only they are
+        // listed.
+        let mut shown = HashSet::new();
+        if pending.iter().any(|q| matches!(q.kind, query::Kind::List)) {
+            fn collect(node: &StyledNode, out: &mut HashSet<Location>) {
+                out.insert(node.location);
+                for child in &node.children {
+                    collect(child, out);
+                }
+            }
+            collect(styled, &mut shown);
+        }
+        let mut out = Vec::with_capacity(pending.len());
+        for q in pending {
+            let result = match &q.kind {
+                query::Kind::List => {
+                    let resolution = &self.out;
+                    // A reference in a title shows the text Resolve gave it.
+                    let text = |element: &Element| {
+                        is_builtin(&element.name, "ref").then(|| {
+                            resolution
+                                .reference(element.location)
+                                .map_or(UNRESOLVED.into(), |r| r.text.clone())
+                        })
+                    };
+                    let entries = query::instances(root, &q.target)
+                        .into_iter()
+                        .filter(|element| shown.contains(&element.location))
+                        .filter_map(|element| {
+                            let marker = resolution.marker(element.location).and_then(|m| {
+                                // A marker in a part other than the caption
+                                // is not the entry's.
+                                (m.part.is_none()
+                                    || m.part.as_ref().is_some_and(|p| p.as_str() == "caption"))
+                                .then(|| m.text.clone())
+                            });
+                            let title = query::title(element, &text);
+                            // An instance with neither, such as a figure
+                            // without a caption, has nothing to list.
+                            if marker.is_none() && title.is_empty() {
+                                return None;
+                            }
+                            Some(Entry {
+                                target: element.location,
+                                level: query::level(element),
+                                marker,
+                                title,
+                                page: UNRESOLVED.into(),
+                            })
+                        })
+                        .collect();
+                    QueryResult::List(entries)
+                }
+                query::Kind::Total { field, marker } => {
+                    if common.is_none()
+                        && let Some(variant) = self.build.variant(self.db)
+                        && group.is_some()
+                        && let Some(decl) = self
+                            .build
+                            .project(self.db)
+                            .manifest(self.db)
+                            .numbering_group(variant.as_str())
+                    {
+                        let name = decl.name.v.to_string();
+                        self.report(query::group_unavailable(q.span, &name));
+                    }
+                    let tree = common.map_or(root, |c| &c.root);
+                    let (sum, wrong) = query::sum(query::instances(tree, &q.target), field);
+                    if let Some(element) = wrong {
+                        self.report(query::not_a_number(q.span, field, element));
+                    }
+                    QueryResult::Total(query::format(sum, *marker))
+                }
+            };
+            out.push(Query {
+                location: q.location,
+                result,
+            });
+        }
+        self.out.queries = out.into_iter().collect();
     }
 
     fn label(&mut self, label: EcoString, target: Target, element: &Element) {
@@ -883,6 +1158,7 @@ impl Walk<'_> {
         let name = EcoString::from("equation");
         if lines.is_empty() {
             let values = self.step(&name, element);
+            let values = self.shared_values(&name, Target::element(element.location), values);
             self.number(element, name, values, pattern.as_ref());
             return true;
         }
@@ -892,6 +1168,7 @@ impl Walk<'_> {
                 location: element.location,
                 line: Some(line),
             };
+            let values = self.shared_values(&name, target, values);
             let number = pattern.as_ref().map(|p| p.format(&values));
             if let Some(pattern) = &pattern {
                 self.patterns.insert(element.location, pattern.clone());
@@ -1301,11 +1578,13 @@ impl Walk<'_> {
     }
 
     fn report(&self, diagnostic: Diagnostic) {
-        diag::report(self.db, diagnostic);
+        if !self.quiet {
+            diag::report(self.db, diagnostic);
+        }
     }
 
     fn report_once(&mut self, key: EcoString, diagnostic: Diagnostic) {
-        if self.reported.insert(key) {
+        if !self.quiet && self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
     }

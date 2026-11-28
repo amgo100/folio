@@ -543,3 +543,19 @@ fn content_placed_twice_is_shown_once_and_empty_rows_vanish() {
         ]
     );
 }
+
+#[test]
+fn a_slot_shown_as_answer_space_keeps_its_space_where_the_template_places_it() {
+    let style = format!(
+        "{TEMPLATES}\n@variant exam {{ example > solution {{ display: answer-space; }} }}\n"
+    );
+    let world = world(&style, CONTENT);
+    let text = text(&world);
+    assert!(
+        text.spaces
+            .iter()
+            .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution")),
+        "{:?}",
+        text.spaces.iter().map(|s| &s.part).collect::<Vec<_>>()
+    );
+}

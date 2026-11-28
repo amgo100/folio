@@ -50,6 +50,13 @@
 //!   [`KEEP`], [`UNBREAKABLE`]); `break-before` forces one. Constraints are
 //!   costs, not rules: the least-bad page wins, and the constraints it
 //!   relaxes are warnings (§7.2).
+//! - **Spaces** (SPEC §6.3): a block whose content `hidden` or
+//!   `answer-space` left out is sized from the content it measures, whose
+//!   flow is built at the block's width and discarded: hidden content
+//!   keeps that height with nothing drawn; answer space keeps its box and
+//!   takes its ruled lines, its `answer-height`, or the content's height
+//!   times `answer-scale`. [`Pages::spaces`] holds the heights, which the
+//!   Office writers will take.
 //! - **Fragments**: each page a [`Fragment`](folio_component::Fragment)
 //!   of the master's size, holding its body, which holds a fragment for
 //!   each block with its background, borders, glyph runs, baselines and
@@ -78,13 +85,13 @@ mod page;
 mod paragraph;
 mod set;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ecow::{EcoVec, eco_format};
-use folio_component::{Abs, Location, Value};
+use folio_component::{Abs, Location, Name, Value};
 use folio_syntax::{DiagSpan, SubRange};
 
 pub use self::cache::{Cache, Stats};
@@ -95,8 +102,8 @@ use self::math::maths;
 pub use self::math::{Display, LaidMath, MATH_FONT, Maths, Number};
 pub(crate) use self::math::{math_face, math_settings};
 pub use self::page::{
-    FILL, FirstPages, LineRef, Page, PageCache, PageStats, Pages, Regions, SizeBlock, SizeObject,
-    pages, pages_through, paginate,
+    FILL, FirstPages, LineRef, MAX_ANSWER_SCALE, Page, PageCache, PageStats, Pages, Regions,
+    SizeBlock, SizeObject, SpaceHeight, pages, pages_through, paginate,
 };
 pub use self::paragraph::{
     Align, Line, LineSlot, Measures, ObjectBreak, ObjectMetrics, ParagraphInput, ParagraphLayout,
@@ -112,7 +119,7 @@ use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
 use crate::pipeline::step_styled;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{TextParagraph, TextSource, text};
+use crate::text::{Text, TextBlock, TextFlow, TextParagraph, TextSource, text};
 
 /// How long total fit may take for a paragraph on the editor's typing path
 /// before the paragraph is broken greedily instead (SPEC §7.2): pass
@@ -126,7 +133,7 @@ pub const TYPING_BUDGET: Duration = Duration::from_millis(5);
 pub struct Lines {
     /// The width of the default page master's body.
     pub width: Abs,
-    /// The paragraphs, in the order of the build's [`Text`](crate::text::Text),
+    /// The paragraphs, in the order of the build's [`Text`],
     /// each shared with every build and revision that breaks an equal
     /// paragraph in the same width.
     pub paragraphs: EcoVec<Arc<ParagraphLayout>>,
@@ -206,9 +213,28 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         display: &display,
         grids: HashMap::new(),
     };
+    // Grids are sized from the content that their hidden cells measure,
+    // as the variant that shows it sizes them (SPEC §6.3).
+    let substituted;
+    let (root, notes) = if text.spaces.iter().any(|s| s.measure.is_some()) {
+        let spaces: HashMap<(Location, Option<Name>), &TextBlock> = text
+            .spaces
+            .iter()
+            .filter_map(|s| Some(((s.location, s.part.clone()), s.measure.as_ref()?)))
+            .collect();
+        let notes: Vec<TextBlock> = text
+            .notes
+            .iter()
+            .map(|n| with_measured(n, &spaces))
+            .collect();
+        substituted = (with_measured(&text.root, &spaces), notes);
+        (&substituted.0, &substituted.1[..])
+    } else {
+        (&text.root, &text.notes[..])
+    };
     let (slots, display_widths, grids) = flow::slots_with(
-        &text.root,
-        &text.notes,
+        root,
+        notes,
         props,
         width,
         text.paragraphs.len(),
@@ -271,13 +297,17 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     if build.is_pass(db) {
         return Some(lines);
     }
-    for (paragraph, layout) in text.paragraphs.iter().zip(&lines.paragraphs) {
-        report_lines(db, build.project(db), paragraph, layout);
+    // The content that spaces measure is not shown (SPEC §6.3).
+    let (measured, measured_blocks) = measured_content(text);
+    for (i, (paragraph, layout)) in text.paragraphs.iter().zip(&lines.paragraphs).enumerate() {
+        if !measured.contains(&i) {
+            report_lines(db, build.project(db), paragraph, layout);
+        }
     }
     // A grid whose tracks need more than its width is overfull (SPEC
     // §7.4, §7.9).
     for grid in &lines.grids {
-        if grid.overflow > Abs::zero() {
+        if grid.overflow > Abs::zero() && !measured_blocks.contains(&grid.location) {
             diag::report(
                 db,
                 Diagnostic::warning(
@@ -297,6 +327,9 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     }
     // A display wider than its block is an overfull line (SPEC §7.9).
     for (i, content) in display_widths {
+        if measured_blocks.contains(&text.maths[i].location) {
+            continue;
+        }
         let maths = &lines.maths;
         let Some(display) = maths.display(i) else {
             continue;
@@ -323,6 +356,56 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         }
     }
     Some(lines)
+}
+
+/// The paragraphs of the content that spaces measure (SPEC §6.3), by index
+/// into the build's text, and the element instances of its blocks: they
+/// are laid out only to be measured.
+fn measured_content(text: &Text) -> (HashSet<usize>, HashSet<Location>) {
+    fn walk(block: &TextBlock, out: &mut (HashSet<usize>, HashSet<Location>)) {
+        out.1.insert(block.location);
+        for child in &block.children {
+            match child {
+                TextFlow::Paragraph(i) => {
+                    out.0.insert(*i);
+                }
+                TextFlow::Block(b) => walk(b, out),
+            }
+        }
+    }
+    let mut out = (HashSet::new(), HashSet::new());
+    for space in &text.spaces {
+        if let Some(block) = &space.measure {
+            walk(block, &mut out);
+        }
+    }
+    out
+}
+
+/// `block` with each space's block holding the content it measures (SPEC
+/// §6.3): what grids are sized from. It is never drawn.
+fn with_measured(
+    block: &TextBlock,
+    spaces: &HashMap<(Location, Option<Name>), &TextBlock>,
+) -> TextBlock {
+    let measure = spaces
+        .get(&(block.location, block.part.clone()))
+        .filter(|m| !std::ptr::eq(**m, block));
+    let (children, table) = match measure {
+        Some(measure) => (&measure.children, &measure.table),
+        None => (&block.children, &block.table),
+    };
+    TextBlock {
+        table: table.clone(),
+        children: children
+            .iter()
+            .map(|child| match child {
+                TextFlow::Block(b) => TextFlow::Block(with_measured(b, spaces)),
+                paragraph => paragraph.clone(),
+            })
+            .collect(),
+        ..block.clone()
+    }
 }
 
 /// What the paragraph builder reads of a paragraph of the text stage: its

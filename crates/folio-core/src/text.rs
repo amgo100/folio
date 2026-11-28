@@ -16,6 +16,13 @@
 //!   builder places at the foot of the anchor's page. Their paragraphs are
 //!   paragraphs of the build like any other, after the paragraph they are
 //!   anchored in.
+//! - **Spaces** (SPEC §6.3): the block of an element or part whose content
+//!   `hidden` or `answer-space` left out holds nothing. The content it
+//!   measures, as Select kept it, is collected as a footnote's blocks are,
+//!   into a tree of its own in no block of the document
+//!   ([`Text::spaces`]): its paragraphs and formulas are the build's, so
+//!   they are shaped, broken and laid out like any other, but no writer
+//!   reaches them.
 //! - **Generated text** (SPEC §4.5): a reference is the text the Resolve
 //!   stage gave it (`Figure 2`), and an element's marker (its number, a
 //!   list item's bullet, a figure's word and number) starts its first
@@ -69,6 +76,9 @@ use crate::style::{
     BlockKind, Child, ComputedStyle, Expansion, HEADER_PART, Piece as TemplatePiece, Properties,
     StyledNode, TemplateBlock, content_elements, styled_children,
 };
+use crate::variants::select::{Measure, Space};
+
+pub use crate::variants::select::SpaceKind;
 
 pub use folio_text::Cache;
 
@@ -96,6 +106,30 @@ pub struct Text {
     /// language of its first paragraph; `None` for a note without
     /// paragraphs. It is in no block either.
     pub continued: EcoVec<Option<usize>>,
+    /// The blocks whose content `hidden` or `answer-space` left out, each
+    /// with the content it measures (SPEC §6.3), in the order their blocks
+    /// close: a space inside content that another measures, or a part's,
+    /// comes before its element's.
+    pub spaces: EcoVec<TextSpace>,
+}
+
+/// A block whose content `hidden` or `answer-space` left out (SPEC §6.3):
+/// an element's block, or a part's, which holds nothing, and which layout
+/// sizes. The content it measures is collected as the variant would show
+/// it, with paragraphs and formulas of the build's text, but it is in no
+/// block of [`Text::root`]: layout measures it in a discarded layout and
+/// draws none of it, so it never reaches the output (SPEC §6.4).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TextSpace {
+    /// The element instance of the block.
+    pub location: Location,
+    /// For a part's block, the part.
+    pub part: Option<Name>,
+    /// What keeps its space.
+    pub kind: SpaceKind,
+    /// The block the content would be, which layout measures; `None` where
+    /// the space's height does not depend on the content.
+    pub measure: Option<TextBlock>,
 }
 
 /// The anchor of a footnote in a paragraph: its marker, or an object
@@ -381,6 +415,7 @@ pub fn text(db: &dyn Db, build: Build<'_>) -> Option<Text> {
         maths: collected.maths.clone(),
         notes: collected.notes.clone(),
         continued: collected.continued.clone(),
+        spaces: collected.spaces.clone(),
     })
 }
 
@@ -397,6 +432,8 @@ pub struct Collected {
     pub notes: EcoVec<TextBlock>,
     /// The marks of continued footnotes, as [`Text::continued`].
     pub continued: EcoVec<Option<usize>>,
+    /// The spaces, as [`Text::spaces`].
+    pub spaces: EcoVec<TextSpace>,
 }
 
 /// A paragraph of a build, split into segments set in their fonts, before
@@ -436,6 +473,16 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
     let styled = step_styled(db, build)?;
     let resolution = resolution(db, build)?;
     let root = crate::pipeline::selected_root(db, build)?;
+    let spaces = crate::pipeline::select(db, build.base(db))
+        .as_ref()
+        .map(|selected| {
+            selected
+                .spaces
+                .iter()
+                .map(|space| ((space.location, space.part.clone()), space))
+                .collect()
+        })
+        .unwrap_or_default();
     let fonts = fonts(db, project);
     let default_lang =
         Lang::new(project.manifest(db).project.lang.v.as_str()).unwrap_or_else(Lang::english);
@@ -463,6 +510,9 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         continued: Vec::new(),
         template_grids: 0,
         placed: Vec::new(),
+        spaces,
+        measuring: None,
+        measured: Vec::new(),
     };
     collector.element(root, &styled.root);
 
@@ -477,6 +527,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
             .map(|note| note.expect("every footnote is collected"))
             .collect(),
         continued: collector.continued.into_iter().collect(),
+        spaces: collector.measured.into_iter().collect(),
     })
 }
 
@@ -533,6 +584,13 @@ struct Collector<'a> {
     /// How many grids the template of the innermost templated element
     /// being collected has made, which tells their locations apart.
     template_grids: u64,
+    /// The spaces Select made, by element instance and part.
+    spaces: HashMap<(Location, Option<Name>), &'a Space>,
+    /// The element whose content is being collected for measuring, which
+    /// is not its own space there.
+    measuring: Option<Location>,
+    /// The spaces collected, as [`Text::spaces`].
+    measured: Vec<TextSpace>,
 }
 
 /// An element anchored in a paragraph whose content is blocks, and for a
@@ -658,7 +716,18 @@ impl Collector<'_> {
         if !is_builtin(&element.name, "image") {
             self.check_width(element, &node.style);
         }
+        let space = match self.measuring {
+            Some(location) if location == element.location => None,
+            _ => self.spaces.get(&(element.location, None)).copied(),
+        };
         self.open(&node.style, element, None);
+        // An emptied grid lays out no cells; the grid it measures does.
+        if space.is_some()
+            && let Some(block) = self.blocks.last_mut()
+            && matches!(block.table, Some(TableRole::Grid { .. }))
+        {
+            block.table = None;
+        }
         let owner = self.own(element);
         if let Some(expansion) = &node.template {
             self.templated(element, node, expansion);
@@ -667,10 +736,11 @@ impl Collector<'_> {
             return;
         }
         // A marker that no paragraph of the element takes is dropped with
-        // it.
+        // it. A space has no paragraph to take one.
         let markers = self.markers.len();
         if let Some(marker) = self.resolution.marker(element.location)
             && marker.part.is_none()
+            && space.is_none()
         {
             self.markers.push(Pending {
                 text: marker.text.clone(),
@@ -695,6 +765,59 @@ impl Collector<'_> {
         self.markers.truncate(markers);
         self.owner = owner;
         self.close();
+        if let Some(space) = space {
+            self.space(space, element);
+        }
+    }
+
+    /// Records a space of `element` (SPEC §6.3), with the block of the
+    /// content it measures, collected into a tree of its own, in no block
+    /// of the document's, as a footnote's blocks are; markers waiting for
+    /// a paragraph do not reach it.
+    fn space(&mut self, space: &Space, element: &Element) {
+        let measure = space.measure.as_ref().and_then(|measure| {
+            let blocks = std::mem::take(&mut self.blocks);
+            let root = self.root.take();
+            let markers = std::mem::take(&mut self.markers);
+            match measure {
+                Measure::Element(shown, node) => {
+                    let measuring = self.measuring.replace(element.location);
+                    self.element(shown, node);
+                    self.measuring = measuring;
+                }
+                Measure::Part(content, node) => {
+                    let mut kids = StyledChildren::new(node);
+                    self.open(&node.style, element, space.part.clone());
+                    let owner = self.own(element);
+                    // The part's marker starts it, as where it is shown.
+                    if let Some(marker) = self.resolution.marker(element.location)
+                        && marker.part == space.part
+                    {
+                        self.markers.push(Pending {
+                            text: marker.text.clone(),
+                            style: node.style.clone(),
+                            span: element.span,
+                            location: element.location,
+                        });
+                    }
+                    self.content(content, &node.style, element, &mut kids);
+                    self.markers.clear();
+                    self.owner = owner;
+                    self.close();
+                }
+            }
+            let measured = self.root.take();
+            self.root = root;
+            self.blocks = blocks;
+            self.markers = markers;
+            measured
+        });
+        self.measured.push(TextSpace {
+            location: space.location,
+            part: space.part.clone(),
+            kind: space.kind,
+            measure,
+        });
     }
 
     /// Collects an element shown with a render template (SPEC §5.3): its
@@ -941,6 +1064,15 @@ impl Collector<'_> {
         self.open(&part.style, element, Some(name.clone()));
         self.content(content, &part.style, element, &mut kids);
         self.close();
+        // A part shown as answer space has its space where the template
+        // places it (SPEC §6.3).
+        if let Some(space) = self
+            .spaces
+            .get(&(element.location, Some(name.clone())))
+            .copied()
+        {
+            self.space(space, element);
+        }
     }
 
     /// Collects a block of a template: a row or grid as a grid of cells
@@ -1093,6 +1225,26 @@ impl Collector<'_> {
                 self.maths[index].lead = self.lead();
                 return;
             }
+            // An outline or figure list (SPEC §4.5): a paragraph for each
+            // entry Resolve listed, in the list's style.
+            if is_builtin(&element.name, "outline") || is_builtin(&element.name, "list-of") {
+                if let Some(crate::resolve::QueryResult::List(entries)) =
+                    self.resolution.query(element.location).map(|q| &q.result)
+                {
+                    for entry in entries {
+                        let mut builder = self.builder();
+                        builder.push_part(
+                            &entry.text(),
+                            &node.style,
+                            element.span,
+                            TextSource::WHOLE,
+                            false,
+                        );
+                        self.finish(builder, &node.style, element);
+                    }
+                }
+                return;
+            }
             // An image where blocks stand is a paragraph of its own.
             if is_builtin(&element.name, "image") {
                 let mut builder = self.builder();
@@ -1167,6 +1319,9 @@ impl Collector<'_> {
                 self.content(content, &part_node.style, element, &mut part_kids);
                 self.markers.truncate(markers);
                 self.close();
+                if let Some(space) = self.spaces.get(&(element.location, Some(field))).copied() {
+                    self.space(space, element);
+                }
             }
         }
     }
@@ -1416,6 +1571,15 @@ impl Collector<'_> {
         }
         if let Some(text) = raw_text(element) {
             out.raw(text, style, element.span);
+            return;
+        }
+        // A total shows the sum Resolve gave it (SPEC §4.5).
+        if is_builtin(&element.name, "total") {
+            let text = match self.resolution.query(element.location).map(|q| &q.result) {
+                Some(crate::resolve::QueryResult::Total(text)) => text.as_str(),
+                _ => UNRESOLVED,
+            };
+            out.push_part(text, style, element.span, TextSource::WHOLE, false);
             return;
         }
         // A reference shows the text Resolve gave it.

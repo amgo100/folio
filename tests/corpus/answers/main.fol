@@ -25,3 +25,27 @@ Calculate the time the ball takes to reach the ground.
 Explain why an object falling freely near the surface of the Earth is said to move with uniform acceleration.
 
 #figure(class: "answer")[]
+
+= Answer space
+
+The answers below are in the source, and the worksheet shows answer space in their place (SPEC §6.3).
+
+A cyclist travels #qty(150, "m") in #qty(30, "s"). Calculate the cyclist's average speed.
+
+#figure(class: "solution lined")[Average speed is distance over time: $v = 150 / 30 = 5.0$ m/s.]
+
+Sketch the cyclist's distance against time.
+
+#figure(class: "solution fixed")[A straight line through the origin with a gradient of 5.0 m/s.]
+
+Show that a stone thrown upwards at #qty(12, "m s^-1") rises about #qty(7.3, "m").
+
+#figure(class: "solution")[At the top $v = 0$, so $v^2 = u^2 - 2 g s$ gives
+$ s = u^2 / (2 g) = 12^2 / (2 times 9.81) = 7.3 "m" $
+The stone rises #qty(7.3, "m").]
+
+#figure(class: "hint")[Hint: start from $v^2 = u^2 + 2 a s$, with $a = -g$.]
+
+Explain why the stone takes as long to fall as to rise.
+
+#figure(class: "solution")[The acceleration is the same on the way up and on the way down, so the motion is symmetric.]

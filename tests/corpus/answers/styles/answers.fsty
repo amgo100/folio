@@ -5,3 +5,9 @@ paragraph { space-after: 3pt; }
 figure.answer { rule-lines: 4; space-before: 2pt; space-after: 8pt; keep-with-next: false; }
 figure.answer.long { rule-lines: 9; }
 figure.working { min-height: 30mm; border: 0.5pt solid #808080; padding: 4pt; space-after: 8pt; }
+// SPEC §6.3: answer space in place of the answers, and a hint that keeps
+// its space.
+figure.solution { display: answer-space; answer-scale: 1.5; border: 0.5pt solid #808080; padding: 4pt; space-before: 2pt; space-after: 8pt; }
+figure.solution.lined { rule-lines: 3; border: none; padding: 0pt; }
+figure.solution.fixed { answer-height: 25mm; }
+figure.hint { display: hidden; }
