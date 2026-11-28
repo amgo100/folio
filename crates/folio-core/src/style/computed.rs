@@ -179,14 +179,6 @@ impl ComputedStyle {
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
-
-    /// The font size, which `em` lengths are relative to.
-    fn font_size(&self, props: &Properties) -> Abs {
-        match self.value(props, props.builtin("font-size")) {
-            Some(Value::Length(size)) => *size,
-            _ => Abs::pt(11.0),
-        }
-    }
 }
 
 impl Debug for ComputedStyle {
@@ -325,7 +317,7 @@ impl<'a> Styler<'a> {
 
         // The font size first: `em` lengths of the node are relative to it,
         // and those of its font size to the parent's.
-        let parent_size = base.font_size(props);
+        let parent_size = self.size_of(&base);
         let size = match cascaded.get(&self.font_size) {
             Some(DeclValue::Value(value)) => match compute_value(value, parent_size) {
                 Ok(Value::Length(size)) => size,
@@ -349,37 +341,95 @@ impl<'a> Styler<'a> {
                     let prop = props.get(id);
                     has_em(&prop.initial) && (!prop.inherited || parent.is_none())
                 });
-            if !touched && !em_initial && (all_inherit || parent.is_none()) {
-                groups.push(base.group(group).clone());
-                continue;
-            }
-            if !touched && !em_initial && none_inherit {
-                groups.push(self.initial.group(group).clone());
-                continue;
-            }
-            let values = members
-                .iter()
-                .map(|&id| {
-                    let prop = props.get(id);
-                    match cascaded.get(&id) {
-                        Some(DeclValue::Template(node)) => Computed::Template(node.clone()),
-                        // The font size is relative to the parent's.
-                        Some(DeclValue::Value(_)) if id == self.font_size => {
-                            Computed::Value(Value::Length(size))
+            // The group the node has where no declaration touches it: the
+            // parent's, or the initial one.
+            let untouched = if em_initial {
+                None
+            } else if all_inherit || parent.is_none() {
+                Some(base.group(group))
+            } else if none_inherit {
+                Some(self.initial.group(group))
+            } else {
+                None
+            };
+            if let Some(untouched) = untouched {
+                // Only the declared values can differ from it, and a group
+                // whose declarations set the values it has anyway is the
+                // same group, shared without hashing it again.
+                let mut values = untouched.values.clone();
+                let mut changed = false;
+                if touched {
+                    for (slot, &id) in members.iter().enumerate() {
+                        let Some(decl) = cascaded.get(&id) else {
+                            continue;
+                        };
+                        let value = self.declared(id, decl, parent, size);
+                        if values[slot] != value {
+                            values.make_mut()[slot] = value;
+                            changed = true;
                         }
-                        Some(DeclValue::Value(value)) => match compute_value(value, size) {
-                            Ok(v) if prop.ty.accepts(&coerce(v.clone(), &prop.ty, true)) => {
-                                Computed::Value(coerce(v, &prop.ty, true))
-                            }
-                            _ => self.fallback(id, parent, size),
-                        },
-                        None => self.fallback(id, parent, size),
                     }
-                })
-                .collect();
+                }
+                groups.push(if changed {
+                    self.group(PropertyGroup::new(props, group, values))
+                } else {
+                    untouched.clone()
+                });
+                continue;
+            }
+            let mut values = EcoVec::with_capacity(members.len());
+            for &id in members {
+                values.push(match cascaded.get(&id) {
+                    Some(decl) => self.declared(id, decl, parent, size),
+                    None => self.fallback(id, parent, size),
+                });
+            }
             groups.push(self.group(PropertyGroup::new(props, group, values)));
         }
+        if groups
+            .iter()
+            .zip(base.groups())
+            .all(|(a, b)| Arc::ptr_eq(a, b))
+        {
+            return base;
+        }
         self.style(groups)
+    }
+
+    /// The computed value of a declared property at a font size; the font
+    /// size itself is `size`, computed from the parent's. A value that does
+    /// not fit its property falls back as if it were not declared.
+    fn declared(
+        &self,
+        id: PropId,
+        decl: &DeclValue,
+        parent: Option<&ComputedStyle>,
+        size: Abs,
+    ) -> Computed {
+        let prop = self.props.get(id);
+        match decl {
+            DeclValue::Template(node) => Computed::Template(node.clone()),
+            DeclValue::Value(_) if id == self.font_size => Computed::Value(Value::Length(size)),
+            DeclValue::Value(value) => match compute_value(value, size) {
+                Ok(v) => {
+                    let v = coerce(v, &prop.ty, true);
+                    if prop.ty.accepts(&v) {
+                        Computed::Value(v)
+                    } else {
+                        self.fallback(id, parent, size)
+                    }
+                }
+                Err(_) => self.fallback(id, parent, size),
+            },
+        }
+    }
+
+    /// The font size of a style, which `em` lengths are relative to.
+    fn size_of(&self, style: &ComputedStyle) -> Abs {
+        match style.value(self.props, self.font_size) {
+            Some(Value::Length(size)) => *size,
+            _ => Abs::pt(11.0),
+        }
     }
 
     /// The value of a property that no declaration sets: the parent's if

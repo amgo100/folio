@@ -10,7 +10,7 @@
 //! insertion that is the inserted node, and the siblings whose position or
 //! previous siblings some rule tests (SPEC §5.1).
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{Name, QualifiedName};
@@ -147,18 +147,61 @@ impl Need {
     }
 }
 
-/// What a set of rules needs to see of nodes: their sibling dependencies.
+/// What a set of rules needs to see of nodes, by the nodes' names: a rule
+/// whose compound names an element tests only the nodes of that name, so
+/// one `heading[level=1]` or `heading + paragraph` adds nothing to the
+/// views of other nodes.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Needs {
-    /// For the node being styled.
+    /// What compounds without a name need, of every node.
+    any: NameNeeds,
+    /// What nodes of a name need: what compounds of that name need, and
+    /// what compounds without a name do.
+    named: BTreeMap<NodeName, NameNeeds>,
+}
+
+/// What a set of rules needs to see of the nodes of one name.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+pub struct NameNeeds {
+    /// As the node being styled.
     pub subject: Need,
-    /// For its ancestors and previous siblings.
+    /// As an ancestor or a previous sibling.
     pub context: Need,
     /// The fields attribute tests name.
     pub fields: BTreeSet<EcoString>,
 }
 
+/// The part a node plays for a selector.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum Role {
+    /// The node being styled.
+    Subject,
+    /// An ancestor or a previous sibling of it.
+    Context,
+}
+
+impl NameNeeds {
+    /// What a node needs in a role.
+    pub fn need(&self, role: Role) -> &Need {
+        match role {
+            Role::Subject => &self.subject,
+            Role::Context => &self.context,
+        }
+    }
+
+    fn extend(&mut self, other: &Self) {
+        self.subject = self.subject.union(other.subject);
+        self.context = self.context.union(other.context);
+        self.fields.extend(other.fields.iter().cloned());
+    }
+}
+
 impl Needs {
+    /// What the rules need to see of a node of a name.
+    pub fn of(&self, name: &NodeName) -> &NameNeeds {
+        self.named.get(name).unwrap_or(&self.any)
+    }
+
     /// Adds what a selector needs.
     pub fn add(&mut self, selector: &Selector) {
         let last = selector.steps.len() - 1;
@@ -172,25 +215,54 @@ impl Needs {
                 .steps
                 .get(i + 1)
                 .is_none_or(|(c, _)| *c != Some(Combinator::NextSibling));
+            let mut add = NameNeeds::default();
             let need = compound.need();
             if i == last {
-                self.subject = self.subject.union(need);
-                self.subject.prev = self.subject.prev.max(run);
+                add.subject = need;
+                add.subject.prev = run;
             } else {
-                self.context = self.context.union(need);
+                add.context = need;
                 if ends_segment {
-                    self.context.prev = self.context.prev.max(run);
+                    add.context.prev = run;
                 }
             }
-            compound.fields(&mut self.fields);
+            compound.own_fields(&mut add.fields);
+            self.add_for(compound.name.as_ref(), &add);
+            // The children that `:has` tests are seen with the fields its
+            // compounds name, as nodes of their own names.
+            for pseudo in &compound.pseudos {
+                if let Pseudo::Has(inner) = pseudo {
+                    let mut add = NameNeeds::default();
+                    inner.own_fields(&mut add.fields);
+                    self.add_for(inner.name.as_ref(), &add);
+                }
+            }
+        }
+    }
+
+    /// Adds what the nodes of a name need, or every node for `None`.
+    fn add_for(&mut self, name: Option<&NodeName>, add: &NameNeeds) {
+        match name {
+            Some(name) => self
+                .named
+                .entry(name.clone())
+                .or_insert_with(|| self.any.clone())
+                .extend(add),
+            None => {
+                self.any.extend(add);
+                for needs in self.named.values_mut() {
+                    needs.extend(add);
+                }
+            }
         }
     }
 
     /// Adds what another set needs.
     pub fn extend(&mut self, other: &Self) {
-        self.subject = self.subject.union(other.subject);
-        self.context = self.context.union(other.context);
-        self.fields.extend(other.fields.iter().cloned());
+        self.add_for(None, &other.any);
+        for (name, needs) in &other.named {
+            self.add_for(Some(name), needs);
+        }
     }
 }
 
@@ -404,13 +476,10 @@ impl Compound {
         need
     }
 
-    fn fields(&self, out: &mut BTreeSet<EcoString>) {
+    /// The fields the compound's own attribute tests name, without those
+    /// of `:has`.
+    fn own_fields(&self, out: &mut BTreeSet<EcoString>) {
         out.extend(self.attrs.iter().map(|a| a.field.clone()));
-        for pseudo in &self.pseudos {
-            if let Pseudo::Has(inner) = pseudo {
-                inner.fields(out);
-            }
-        }
     }
 
     fn add_specificity(&self, out: &mut Specificity) {
@@ -560,13 +629,67 @@ mod tests {
 
         let mut needs = Needs::default();
         needs.add(&scoped);
-        assert_eq!(needs.subject.prev, 1);
-        assert_eq!(needs.context.prev, 0);
-        assert!(needs.subject.has_sibling_dependencies());
+        let of_paragraph = needs.of(&el("paragraph"));
+        assert_eq!(of_paragraph.subject.prev, 1);
+        assert_eq!(of_paragraph.context.prev, 0);
+        assert!(of_paragraph.subject.has_sibling_dependencies());
+        // Only paragraphs see their previous siblings.
+        assert_eq!(needs.of(&el("heading")).subject.prev, 0);
+        assert_eq!(needs.of(&el("list")), &NameNeeds::default());
         let mut needs = Needs::default();
         needs.add(&descendant);
-        assert!(!needs.subject.has_sibling_dependencies());
-        assert!(!needs.context.has_sibling_dependencies());
+        let of_paragraph = needs.of(&el("paragraph"));
+        assert!(!of_paragraph.subject.has_sibling_dependencies());
+        assert!(!of_paragraph.context.has_sibling_dependencies());
+    }
+
+    #[test]
+    fn needs_by_name() {
+        use Combinator::*;
+        let mut level = compound("heading");
+        level.attrs.push(AttrTest {
+            field: "level".into(),
+            test: Some((AttrOp::Eq, eval::Value::Int(1))),
+        });
+        let mut first = Compound::default();
+        first.classes.push("x".into());
+        first.pseudos.push(Pseudo::First);
+        let mut has = compound("figure");
+        let mut marked = compound("strong");
+        marked.attrs.push(AttrTest {
+            field: "marks".into(),
+            test: None,
+        });
+        has.pseudos.push(Pseudo::Has(Box::new(marked)));
+
+        let mut needs = Needs::default();
+        needs.add(&selector(&[(None, level)]));
+        needs.add(&selector(&[(None, has)]));
+        fn fields(needs: &Needs, name: &str) -> Vec<String> {
+            needs
+                .of(&el(name))
+                .fields
+                .iter()
+                .map(|f| f.to_string())
+                .collect()
+        }
+        assert_eq!(fields(&needs, "heading"), ["level"]);
+        assert_eq!(fields(&needs, "strong"), ["marks"]);
+        assert!(fields(&needs, "paragraph").is_empty());
+        assert!(needs.of(&el("figure")).subject.children);
+        assert!(!needs.of(&el("heading")).subject.children);
+
+        // A compound without a name tests every node, whether its name
+        // was seen before or after it.
+        needs.add(&selector(&[
+            (None, first),
+            (Some(Descendant), compound("paragraph")),
+        ]));
+        for name in ["heading", "strong", "paragraph", "section"] {
+            assert!(needs.of(&el(name)).context.first, "{name}");
+        }
+        assert!(!needs.of(&el("paragraph")).subject.first);
+        assert_eq!(fields(&needs, "heading"), ["level"]);
     }
 
     #[test]
