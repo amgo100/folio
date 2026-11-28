@@ -1562,15 +1562,18 @@ fn every_version_is_written() {
     // A shuffled paper writes each variant in each version (SPEC §6.4),
     // never the paper in source order.
     let dir = project("versions");
-    let written: Arc<Mutex<Vec<String>>> = Arc::default();
+    let written: Arc<Mutex<Vec<(Option<String>, bool)>>> = Arc::default();
     let sink = written.clone();
     let (_preview, events) = start(dir.path(), |o| {
         o.watch(false)
             .idle(Duration::from_millis(200))
             .on_outputs(move |outputs: &Outputs| {
+                // Asserted on the test's thread, not the writer's.
+                let mut sink = sink.lock().unwrap();
+                sink.clear();
                 for (output, path) in &outputs.outputs {
-                    assert!(output.result.as_ref().is_ok_and(|c| c.output.is_some()));
-                    sink.lock().unwrap().push(path.clone().expect("a path"));
+                    let compiled = output.result.as_ref().is_ok_and(|c| c.output.is_some());
+                    sink.push((path.clone(), compiled));
                 }
             })
     });
@@ -1583,8 +1586,11 @@ fn every_version_is_written() {
             Err(_) => panic!("nothing was written"),
         }
     }
+    let written = written.lock().unwrap().clone();
+    assert!(written.iter().all(|(_, compiled)| *compiled), "{written:?}");
+    let paths: Vec<_> = written.into_iter().filter_map(|(path, _)| path).collect();
     assert_eq!(
-        *written.lock().unwrap(),
+        paths,
         [
             "out/main-exam-A.pdf",
             "out/main-markscheme-A.pdf",
