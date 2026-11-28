@@ -860,7 +860,9 @@ fn adds_many_files() {
 #[test]
 fn text_data_files_have_ids() {
     let mut world = World::new(MANIFEST).unwrap();
-    world.set_file("data/bank.yaml", b"a: 1\n".to_vec()).unwrap();
+    world
+        .set_file("data/bank.yaml", b"a: 1\n".to_vec())
+        .unwrap();
     world.set_file("figure.png", b"png".to_vec()).unwrap();
     let id = world.id("data/bank.yaml").unwrap();
     assert_eq!(world.path(id), Some("data/bank.yaml"));
