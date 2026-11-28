@@ -60,7 +60,8 @@ pub use folio_core::locate;
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, OutputPattern, ProjectError, ProjectPath};
 pub use folio_core::resolve::{
-    Labelled, Marker, Number, Reference, Resolution, Target as ResolveTarget,
+    Entry, Labelled, Marker, Number, Query, QueryResult, Reference, Resolution,
+    Target as ResolveTarget,
 };
 pub use folio_core::style;
 pub use folio_core::text::{SegmentStyle, Text, TextBlock, TextFlow, TextParagraph, TextSource};
