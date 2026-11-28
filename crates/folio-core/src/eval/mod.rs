@@ -100,6 +100,7 @@
 
 mod captures;
 mod content;
+mod decl;
 mod element;
 mod error;
 mod library;
@@ -115,6 +116,10 @@ use folio_component::Name;
 use folio_syntax::ast;
 
 pub use self::content::{Content, Element, Node, Slot};
+pub use self::decl::{
+    Declared, PROJECT, ProjectElements, Schema, file_elements, is_project, project_component,
+    project_elements,
+};
 pub(crate) use self::element::canonical_fields;
 pub use self::error::{EvalError, Tracepoint};
 pub use self::value::{

@@ -1,7 +1,26 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	1970-01-01 00:00:01.000000000 +0000
++++ b/Cargo.toml	2026-11-28 09:09:56.110242044 +0000
+@@ -48,12 +48,14 @@
+     "dep:rustc-hash",
+     "zune-jpeg?/std",
+ ]
++# Folio: without hayro-jpeg2000's SIMD paths, which it picks by CPU at run
++# time and which fuse multiply-adds on some CPUs only (Folio's SPEC §2.4,
++# #312; see FOLIO.md).
+ unsafe = [
+     "std",
+     "dep:flate2",
+     "dep:memchr",
+     "hayro-jbig2?/simd",
+-    "hayro-jpeg2000?/simd",
+     "zune-jpeg?/x86",
+     "zune-jpeg?/neon",
+ ]
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 15:34:28.371613900 +0000
-@@ -0,0 +1,49 @@
++++ b/FOLIO.md	2026-11-28 09:09:56.110849497 +0000
+@@ -0,0 +1,53 @@
 +# hayro-syntax 0.7.2, patched for Folio
 +
 +This is the crates.io release of `hayro-syntax` 0.7.2
@@ -22,6 +41,10 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +- `src/math.rs`: `powi_f64` always multiplies by squaring, as it already
 +  did without the `std` feature, instead of calling `powi`, whose result
 +  the language leaves unspecified.
++- `Cargo.toml`: the `unsafe` feature no longer turns on `hayro-jpeg2000`'s
++  `simd` feature, whose paths fearless_simd picks by CPU at run time and
++  which fuse multiply-adds on some CPUs only (#312; Folio's own copy of
++  hayro-jpeg2000 refuses to build them).
 +
 +Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
 +#333). These changes bound what reading one may take:
@@ -53,7 +76,7 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +the patch, and `third_party/README.md` says how to move to a new release.
 diff -ruN a/src/byte_reader.rs b/src/byte_reader.rs
 --- a/src/byte_reader.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/byte_reader.rs	2026-11-27 15:34:28.371593143 +0000
++++ b/src/byte_reader.rs	2026-11-28 09:09:56.111351490 +0000
 @@ -9,19 +9,42 @@
      pub data: &'a [u8],
      /// The current byte-offset.
@@ -101,7 +124,7 @@ diff -ruN a/src/byte_reader.rs b/src/byte_reader.rs
      /// Returns `true` if the reader has reached the end of the data.
 diff -ruN a/src/filter/ccitt.rs b/src/filter/ccitt.rs
 --- a/src/filter/ccitt.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/filter/ccitt.rs	2026-11-27 15:34:28.371027055 +0000
++++ b/src/filter/ccitt.rs	2026-11-28 09:09:56.112032648 +0000
 @@ -8,6 +8,18 @@
  use core::iter;
  use hayro_ccitt::{DecodeSettings, Decoder, DecoderContext, EncodingMode};
@@ -136,7 +159,7 @@ diff -ruN a/src/filter/ccitt.rs b/src/filter/ccitt.rs
          rows,
 diff -ruN a/src/filter/jbig2.rs b/src/filter/jbig2.rs
 --- a/src/filter/jbig2.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/filter/jbig2.rs	2026-11-27 15:34:28.371057143 +0000
++++ b/src/filter/jbig2.rs	2026-11-28 09:09:56.112100153 +0000
 @@ -8,6 +8,25 @@
  use alloc::vec::Vec;
  use core::iter;
@@ -178,7 +201,7 @@ diff -ruN a/src/filter/jbig2.rs b/src/filter/jbig2.rs
      // into an RGBA8 image.
 diff -ruN a/src/filter/jpx.rs b/src/filter/jpx.rs
 --- a/src/filter/jpx.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/filter/jpx.rs	2026-11-27 15:34:28.370983072 +0000
++++ b/src/filter/jpx.rs	2026-11-28 09:09:56.112128471 +0000
 @@ -18,6 +18,27 @@
      }
  }
@@ -221,7 +244,7 @@ diff -ruN a/src/filter/jpx.rs b/src/filter/jpx.rs
      let (mut data, mut alpha) = if !has_alpha {
 diff -ruN a/src/filter/mod.rs b/src/filter/mod.rs
 --- a/src/filter/mod.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/filter/mod.rs	2026-11-27 15:34:28.371106207 +0000
++++ b/src/filter/mod.rs	2026-11-28 09:09:56.112200580 +0000
 @@ -106,6 +106,19 @@
              Self::DctDecode => {
                  dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
@@ -244,7 +267,7 @@ diff -ruN a/src/filter/mod.rs b/src/filter/mod.rs
                  ccitt::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
 diff -ruN a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/lib.rs	2026-11-27 15:34:28.370612632 +0000
++++ b/src/lib.rs	2026-11-28 09:09:56.112267370 +0000
 @@ -111,3 +111,12 @@
  pub use data::PdfData;
  pub use filter::*;
@@ -260,7 +283,7 @@ diff -ruN a/src/lib.rs b/src/lib.rs
 +pub const MAX_NESTING: u32 = 256;
 diff -ruN a/src/math.rs b/src/math.rs
 --- a/src/math.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/math.rs	2026-11-27 15:34:28.371135466 +0000
++++ b/src/math.rs	2026-11-28 09:09:56.112326696 +0000
 @@ -40,11 +40,8 @@
  
  #[inline(always)]
@@ -277,7 +300,7 @@ diff -ruN a/src/math.rs b/src/math.rs
          let mut base = x;
 diff -ruN a/src/object/array.rs b/src/object/array.rs
 --- a/src/object/array.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/object/array.rs	2026-11-27 15:34:28.371194127 +0000
++++ b/src/object/array.rs	2026-11-28 09:09:56.112416261 +0000
 @@ -70,6 +70,14 @@
  
  impl Skippable for Array<'_> {
@@ -317,7 +340,7 @@ diff -ruN a/src/object/array.rs b/src/object/array.rs
          None
 diff -ruN a/src/object/dict.rs b/src/object/dict.rs
 --- a/src/object/dict.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/object/dict.rs	2026-11-27 15:34:28.371212915 +0000
++++ b/src/object/dict.rs	2026-11-28 09:09:56.112509439 +0000
 @@ -99,9 +99,11 @@
      pub fn entries(&self) -> impl Iterator<Item = (Name<'a>, MaybeRef<Object<'a>>)> + '_ {
          let mut sorted_keys = self.keys().collect::<Vec<_>>();
@@ -372,7 +395,7 @@ diff -ruN a/src/object/dict.rs b/src/object/dict.rs
  ) -> Option<&'a [u8]>
 diff -ruN a/src/object/stream.rs b/src/object/stream.rs
 --- a/src/object/stream.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/object/stream.rs	2026-11-27 15:34:28.371370437 +0000
++++ b/src/object/stream.rs	2026-11-28 09:09:56.112758656 +0000
 @@ -240,6 +240,10 @@
      Decryption,
      /// An unknown failure occurred.

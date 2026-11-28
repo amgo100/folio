@@ -22,14 +22,16 @@ a comment that starts with `Folio:`.
 - `src/color.rs`: CalGray and CalRGB gamma, the sRGB transfer function and
   the default range of indexed colour with `libm::powf`; the cubes of the
   L* decode in CalRGB's black-point compensation multiplied out instead of
-  `powi`. Lab and ICC-based colour go through `moxcms`, which this patch
-  does not change (#312).
+  `powi`. Lab and ICC-based colour, and DeviceCMYK, go through `moxcms`,
+  which Folio patches on its own (#312).
 - `src/shading.rs`: the Bernstein polynomials of patch meshes multiplied
   out, and the largest coordinate and component values of mesh data with
   `libm::ldexpf` (exact powers of two) instead of `powi`.
 - `src/x_object.rs`: the largest component value of image data with
   `libm::ldexpf` instead of `powi`.
-- `Cargo.toml`: depends on `libm`.
+- `Cargo.toml`: depends on `libm`, and on `moxcms` without its default
+  features, which build the SIMD paths moxcms picks by CPU at run time
+  (#312; Folio's own copy of moxcms refuses to build them).
 
 Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
 #333). These changes limit the work, nesting and image memory one

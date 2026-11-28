@@ -2,11 +2,12 @@
 //!
 //! SVG figures reach PDF through `usvg`, `svgtypes`, `kurbo`,
 //! `tiny-skia-path`, `resvg` and `tiny-skia`, and PDF figures converted to
-//! SVG through `hayro-interpret` and `hayro-syntax`, whose floating-point
-//! code called std's transcendental functions (`sin`, `atan2`, `powf`, …). Those
-//! come from the platform's maths library, so the same drawing could give
-//! other PDF bytes on another machine. Folio builds patched copies that call
-//! the `libm` crate instead (`scripts/patch-third-party.sh`,
+//! SVG through `hayro-interpret` and `hayro-syntax` (with `moxcms` for
+//! colour and `hayro-jpeg2000` for JPEG 2000 images), whose floating-point
+//! code called std's transcendental functions (`sin`, `atan2`, `powf`, …).
+//! Those come from the platform's maths library, so the same drawing could
+//! give other PDF bytes on another machine. Folio builds patched copies that
+//! call the `libm` crate instead (`scripts/patch-third-party.sh`,
 //! `third_party/README.md`). This test fails when:
 //!
 //! - a patched copy calls one of the functions `clippy.toml` disallows in
@@ -20,6 +21,11 @@
 //!   aarch64 before the patches (#300);
 //! - a calculator function's colour in the corpus's PDF figure is not the
 //!   one `libm` computes (#304).
+//!
+//! moxcms and hayro-jpeg2000 also fused multiply-adds on some targets only
+//! and picked SIMD paths by CPU at run time (#312). Their copies always
+//! round a product and a sum apart and refuse to build those paths, and
+//! `colour.rs` checks what they compute.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,8 +55,9 @@ const ALLOWED: &[(&str, &str, &str, usize, &str)] = &[(
 )];
 
 /// The patched crates whose patch needs no `libm`: `hayro-syntax` only
-/// multiplies out a `powi`.
-const WITHOUT_LIBM: &[&str] = &["hayro-syntax"];
+/// multiplies out a `powi`, and `hayro-jpeg2000` only unfuses a
+/// multiply-add and turns its SIMD paths off.
+const WITHOUT_LIBM: &[&str] = &["hayro-jpeg2000", "hayro-syntax"];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -304,6 +311,65 @@ fn every_build_uses_the_patched_crates() {
             );
         }
     }
+}
+
+/// What moxcms and hayro-jpeg2000 must not do outside their SIMD code,
+/// which their copies refuse to build (#312): fuse a multiply-add on some
+/// targets only, or take a run-time function from pxfm, which picks a path
+/// by CPU. `(crate, pattern, files allowed to have it)`.
+const UNFUSED: &[(&str, &str, &[&str])] = &[
+    ("moxcms", "target_feature = \"fma\"", &[]),
+    ("moxcms", "MulAdd::mul_add(", &[]),
+    ("moxcms", "f32::mul_add(", &[]),
+    ("moxcms", "f64::mul_add(", &[]),
+    // pxfm's `const fn`s, which the compiler evaluates, the same on every
+    // host.
+    ("moxcms", "pxfm::", &["src/defaults.rs"]),
+    ("hayro-jpeg2000", "target_feature = \"fma\"", &[]),
+    ("hayro-jpeg2000", "f32::mul_add(", &[]),
+    ("hayro-jpeg2000", "f64::mul_add(", &[]),
+];
+
+/// moxcms's SIMD code, which its copy refuses to build.
+const MOXCMS_SIMD: &[&str] = &[
+    "src/conversions/avx/",
+    "src/conversions/avx512/",
+    "src/conversions/neon/",
+    "src/conversions/sse/",
+];
+
+#[test]
+fn colour_crates_round_the_same_on_every_cpu() {
+    let mut failures = Vec::new();
+    for (name, pattern, allowed) in UNFUSED {
+        let dir = root().join("third_party").join(name);
+        let mut files = Vec::new();
+        rust_files(&dir.join("src"), &mut files);
+        for file in files {
+            let rel = file
+                .strip_prefix(&dir)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if allowed.contains(&rel.as_str()) || MOXCMS_SIMD.iter().any(|d| rel.starts_with(d)) {
+                continue;
+            }
+            let text = fs::read_to_string(&file).unwrap();
+            for (i, line) in code(&text).iter().enumerate() {
+                if line.contains(pattern) {
+                    failures.push(format!("third_party/{name}/{rel}:{}: `{pattern}`", i + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "moxcms or hayro-jpeg2000 fuses multiply-adds on some targets only, or \
+         takes a function from pxfm that picks its path by CPU, so colours \
+         would differ by machine (SPEC §2.4, #312); write `a * b + c` and use \
+         `libm` (third_party/moxcms/src/folio_libm.rs):\n{}",
+        failures.join("\n")
+    );
 }
 
 #[test]
