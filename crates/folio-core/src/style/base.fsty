@@ -51,6 +51,13 @@ figure[caption] { keep-together: true; }
 grid { space-before: 1em; space-after: 1em; border-top: 0.8pt solid; border-bottom: 0.8pt solid; header-rule: 0.4pt solid; }
 cell { padding: 0.25em 0.5em; }
 
+// The parts render templates make (SPEC §5.3): a header set apart from
+// the body, a badge a small framed label, and a rule a thin line with
+// space around it.
+header { space-after: 0.4em; }
+badge { font-size: 0.85em; padding: 0.1em 0.4em; border: 0.5pt solid; }
+rule { border-top: 0.5pt solid; space-before: 0.5em; space-after: 0.5em; }
+
 // `strong` and `emph` say what text is (SPEC §4.3); this is how it looks.
 strong { font-weight: bold; }
 emph { font-style: italic; }
