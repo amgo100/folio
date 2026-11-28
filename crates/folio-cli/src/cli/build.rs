@@ -710,7 +710,7 @@ impl Report {
         match &mut self.json {
             Some(document) => document
                 .diagnostics
-                .extend(diagnostics.iter().map(|d| diag::resolve(files, d))),
+                .extend(diagnostics.iter().map(|d| diag::resolve_in_file(files, d))),
             None => print(files, diagnostics, self.color),
         }
     }

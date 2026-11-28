@@ -834,6 +834,9 @@ impl Loader {
     }
 }
 
+/// The byte order mark, which the loader leaves out of a source's text.
+const BOM: &str = "\u{FEFF}";
+
 /// Whether a project path names a source: a `.fol` or `.fsty` file.
 fn is_source(path: &str) -> bool {
     matches!(
@@ -887,13 +890,22 @@ fn set(
         }
     };
     // Some editors start UTF-8 files with a byte-order mark, which is not
-    // part of the text.
-    let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
-    if world.source(&file.path).is_some_and(|s| s.text() == text) {
+    // part of the text. Diagnostics count bytes in the file, so the world
+    // records its length.
+    let (text, start) = match text.strip_prefix(BOM) {
+        Some(rest) => (rest, BOM.len()),
+        None => (&text[..], 0),
+    };
+    if let Some(source) = world.source(&file.path)
+        && source.text() == text
+    {
+        let id = source.id();
+        world.set_text_start(id, start);
         return Ok(());
     }
     match world.set_source(&file.path, text) {
-        Ok(_) => {
+        Ok(id) => {
+            world.set_text_start(id, start);
             changed.insert(file.path);
             Ok(())
         }

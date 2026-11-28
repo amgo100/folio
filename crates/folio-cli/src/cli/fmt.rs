@@ -16,7 +16,6 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::Read as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -164,19 +163,16 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
             )
             .with_code(UNFORMATTED)
             .with_hint("run `folio fmt` to format it");
-            // Byte ranges count from after a byte order mark, which the
-            // loader leaves out, so edits made by them on the file itself
-            // would land early: a file with one gets no fix.
-            if !starts_with_bom(&root.join(&path)) {
-                let mut fix = Fix::new("Format the file");
-                for edit in &edits {
-                    fix = fix.with_edit(
-                        DiagSpan::from_range(id, edit.range.clone()),
-                        edit.text.clone(),
-                    );
-                }
-                unformatted = unformatted.with_fix(fix);
+            // Byte ranges count in the file, past a byte order mark
+            // (`diag::resolve_in_file`), so the fix applies to it as it is.
+            let mut fix = Fix::new("Format the file");
+            for edit in &edits {
+                fix = fix.with_edit(
+                    DiagSpan::from_range(id, edit.range.clone()),
+                    edit.text.clone(),
+                );
             }
+            unformatted = unformatted.with_fix(fix);
             diagnostics.push(unformatted);
             continue;
         }
@@ -198,14 +194,6 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
 
 /// The byte order mark, which the loader leaves out of a source's text.
 const BOM: &str = "\u{FEFF}";
-
-/// Whether the file at `path` starts with a byte order mark.
-fn starts_with_bom(path: &Path) -> bool {
-    let mut start = [0; BOM.len()];
-    fs::File::open(path)
-        .and_then(|mut file| file.read_exact(&mut start))
-        .is_ok_and(|()| start == *BOM.as_bytes())
-}
 
 /// Replaces the file at `path`, or the file a link there leads to, with
 /// `text`, the formatted `old`, through a temporary file beside it that
