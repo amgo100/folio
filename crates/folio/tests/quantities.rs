@@ -402,7 +402,7 @@ fn stylesheets_choose_bold_or_arrowed_vectors() {
 #[test]
 fn commas_between_numbers() {
     assert_eq!(
-        formulas("$9,81$ $9, 81$ $1,2,3$ $1,5, 2,5$ $(0,5)$ $9,81^2$ $x,1$ $1.5,2$"),
+        formulas("$9,81$ $9, 81$ $1,2,3$ $1,5, 2,5$ $(0,5)$ $9,81^2$ $x,1$ $1.5,2$ $1,2^2,3$"),
         [
             "[num(9), num(,), num(81)]",
             "[num(9), punct(,), num(81)]",
@@ -413,6 +413,7 @@ fn commas_between_numbers() {
             "[num(9), num(,), attach([num(81)], sup: [num(2)])]",
             "[x, punct(,), num(1)]",
             "[num(1.5), punct(,), num(2)]",
+            "[num(1), punct(,), attach([num(2)], sup: [num(2)]), punct(,), num(3)]",
         ]
     );
 }

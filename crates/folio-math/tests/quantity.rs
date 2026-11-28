@@ -183,7 +183,8 @@ fn numbers_in_formulas_read_in_their_format() {
         "9, 81 + 12345.678901"
     );
     assert_eq!(formula.reading(&NumberFormat::COMMA), "9,81 + 12345,678901");
-    // A number with a decimal comma is one token as a script.
+    // A number with a decimal comma is in parentheses as a script, as
+    // native math needs it: `x^9,81` raises only the `9`.
     let power = Formula::row(
         Row::new([Node::attach(
             Row::new([Node::symbol('x', span)]),
@@ -198,6 +199,6 @@ fn numbers_in_formulas_read_in_their_format() {
         )]),
         span,
     );
-    assert_eq!(power.reading(&NumberFormat::COMMA), "x^9,81");
+    assert_eq!(power.reading(&NumberFormat::COMMA), "x^(9,81)");
     assert_eq!(power.reading(&NumberFormat::POINT), "x^(9, 81)");
 }

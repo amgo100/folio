@@ -1239,14 +1239,18 @@ fn is_math(expr: ast::Expr<'_>) -> bool {
 /// list, and none of the commas of `1,2,3` is a marker; `1,5, 2,5` is two
 /// numbers.
 fn decimal_comma_at(exprs: &[ast::Expr<'_>], k: usize) -> bool {
-    joins_integers(exprs, k)
-        && !k.checked_sub(2).is_some_and(|j| joins_integers(exprs, j))
-        && !joins_integers(exprs, k + 2)
+    // A run goes on past integers with scripts: `1,2^2,3` is a list too.
+    joins_integers(exprs, k, false)
+        && !k
+            .checked_sub(2)
+            .is_some_and(|j| joins_integers(exprs, j, true))
+        && !joins_integers(exprs, k + 2, true)
 }
 
 /// Whether the `k`th of a row's expressions is a comma between two integers
-/// without spaces, the second of which may carry scripts.
-fn joins_integers(exprs: &[ast::Expr<'_>], k: usize) -> bool {
+/// without spaces. The second may carry scripts, and the first too where
+/// `scripted`.
+fn joins_integers<'a>(exprs: &[ast::Expr<'a>], k: usize, scripted: bool) -> bool {
     fn integer(expr: ast::Expr<'_>) -> bool {
         matches!(
             expr,
@@ -1268,11 +1272,12 @@ fn joins_integers(exprs: &[ast::Expr<'_>], k: usize) -> bool {
     ) else {
         return false;
     };
-    let after = match after {
+    let base = |expr: ast::Expr<'a>| match expr {
         ast::Expr::MathAttach(attach) => attach.base(),
         other => other,
     };
-    exprs.get(k).is_some_and(|&c| comma(c)) && integer(before) && integer(after)
+    let before = if scripted { base(before) } else { before };
+    exprs.get(k).is_some_and(|&c| comma(c)) && integer(before) && integer(base(after))
 }
 
 /// A number, with a minus sign before it when it is negative.

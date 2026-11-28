@@ -170,7 +170,7 @@ impl Reader<'_> {
     fn part(&mut self, row: &Row) {
         self.space = false;
         self.operand = true;
-        if is_simple(row, self.format) {
+        if is_simple(row) {
             self.row(row);
         } else {
             self.token("(", false, false);
@@ -354,12 +354,8 @@ fn is_sign(text: &str) -> bool {
 
 /// Whether a row reads as one token, so that it needs no parentheses as a
 /// part of a fraction or an attachment.
-fn is_simple(row: &Row, format: &NumberFormat) -> bool {
+fn is_simple(row: &Row) -> bool {
     match row.nodes() {
-        // A number with a decimal comma, where the comma is the marker.
-        [Node::Number(_), Node::Number(comma), Node::Number(_)] if comma.text == "," => {
-            format.decimal_marker == ','
-        }
         [node] => match node {
             // A number's digit groups read as one number.
             Node::Number(_) => true,
