@@ -406,6 +406,10 @@ fn numbers_in_formulas_are_written_in_the_number_format_of_their_text() {
     assert!(pl.contains("9,81"), "{pl}");
     assert!(pl.contains("12\u{202F}345,5"), "{pl}");
     assert!(pl.contains("2026"), "{pl}");
+    // The digits after a decimal comma are grouped from it, with a script
+    // or without.
+    let pl = text(polish, "$1,23456$ i $1,23456^2$\n");
+    assert_eq!(pl.matches("234\u{202F}56").count(), 2, "{pl}");
     let en = text("", "$g = 9.81$ and $12345.5$\n");
     assert!(
         en.contains("9.81") && en.contains("12\u{202F}345.5"),

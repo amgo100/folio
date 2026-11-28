@@ -402,11 +402,13 @@ fn stylesheets_choose_bold_or_arrowed_vectors() {
 #[test]
 fn commas_between_numbers() {
     assert_eq!(
-        formulas("$9,81$ $9, 81$ $1,2,3$ $(0,5)$ $9,81^2$ $x,1$ $1.5,2$"),
+        formulas("$9,81$ $9, 81$ $1,2,3$ $1,5, 2,5$ $(0,5)$ $9,81^2$ $x,1$ $1.5,2$"),
         [
             "[num(9), num(,), num(81)]",
             "[num(9), punct(,), num(81)]",
-            "[num(1), num(,), num(2), punct(,), num(3)]",
+            // Three or more integers joined so are a list.
+            "[num(1), punct(,), num(2), punct(,), num(3)]",
+            "[num(1), num(,), num(5), punct(,), num(2), num(,), num(5)]",
             "[delim('(', [num(0), num(,), num(5)], ')')]",
             "[num(9), num(,), attach([num(81)], sup: [num(2)])]",
             "[x, punct(,), num(1)]",
@@ -438,6 +440,11 @@ fn digits_round_the_uncertainty_and_the_value_follows() {
             // Padded to the uncertainty's place.
             "[qty(5.000, pm: 0.020)]",
         ]
+    );
+    // A value that rounds to zero needs no power of ten.
+    assert_eq!(
+        formulas("$num(1.5e3, pm: 2e4, digits: 1)$"),
+        ["[qty(0, pm: 2e4)]"]
     );
     // Without an uncertainty, `digits` rounds the value as before.
     assert_eq!(formulas("$num(1.25, digits: 1)$"), ["[qty(1)]"]);

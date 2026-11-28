@@ -78,7 +78,6 @@ impl Vm<'_> {
         let mut label: Option<math::Label> = None;
         let mut start: Option<Span> = None;
         let exprs: Vec<ast::Expr<'_>> = body.exprs().collect();
-        let mut last_comma = None;
         for (k, &expr) in exprs.iter().enumerate() {
             match expr {
                 ast::Expr::Space(_) => continue,
@@ -107,7 +106,7 @@ impl Vm<'_> {
                 return Err(label_not_at_end(label.span).into());
             }
             start.get_or_insert(expr.span());
-            if decimal_comma_at(&exprs, k, &mut last_comma) {
+            if decimal_comma_at(&exprs, k) {
                 self.step(expr.span())?;
                 nodes.push(math::Node::decimal_comma(expr.span()));
                 continue;
@@ -238,9 +237,8 @@ impl Vm<'_> {
             // A group: what parentheses held, or a base and its arguments.
             ast::Expr::Math(group) => {
                 let children: Vec<ast::Expr<'_>> = group.exprs().collect();
-                let mut last = None;
                 for (k, &child) in children.iter().enumerate() {
-                    if decimal_comma_at(&children, k, &mut last) {
+                    if decimal_comma_at(&children, k) {
                         self.step(child.span())?;
                         out.push(math::Node::decimal_comma(child.span()));
                         continue;
@@ -1237,21 +1235,18 @@ fn is_math(expr: ast::Expr<'_>) -> bool {
 /// Whether the `k`th of a row's expressions is a comma written between two
 /// integers without spaces, `9,81`, which is the decimal marker where the
 /// formula's text writes a decimal comma (SPEC §8.1). The integer after it
-/// may carry scripts (`9,81^2`). `last` is the last such comma of the row,
-/// which this updates: in `1,2,3` the `2` belongs to the number before it,
-/// so the second comma is punctuation.
-fn decimal_comma_at(exprs: &[ast::Expr<'_>], k: usize, last: &mut Option<usize>) -> bool {
-    let chained = k >= 2 && *last == Some(k - 2);
-    let comma = !chained && is_decimal_comma(exprs, k);
-    if comma {
-        *last = Some(k);
-    }
-    comma
+/// may carry scripts (`9,81^2`). Three or more integers joined so are a
+/// list, and none of the commas of `1,2,3` is a marker; `1,5, 2,5` is two
+/// numbers.
+fn decimal_comma_at(exprs: &[ast::Expr<'_>], k: usize) -> bool {
+    joins_integers(exprs, k)
+        && !k.checked_sub(2).is_some_and(|j| joins_integers(exprs, j))
+        && !joins_integers(exprs, k + 2)
 }
 
 /// Whether the `k`th of a row's expressions is a comma between two integers
-/// without spaces (see [`decimal_comma_at`]).
-fn is_decimal_comma(exprs: &[ast::Expr<'_>], k: usize) -> bool {
+/// without spaces, the second of which may carry scripts.
+fn joins_integers(exprs: &[ast::Expr<'_>], k: usize) -> bool {
     fn integer(expr: ast::Expr<'_>) -> bool {
         matches!(
             expr,
@@ -1277,7 +1272,7 @@ fn is_decimal_comma(exprs: &[ast::Expr<'_>], k: usize) -> bool {
         ast::Expr::MathAttach(attach) => attach.base(),
         other => other,
     };
-    comma(exprs[k]) && integer(before) && integer(after)
+    exprs.get(k).is_some_and(|&c| comma(c)) && integer(before) && integer(after)
 }
 
 /// A number, with a minus sign before it when it is negative.

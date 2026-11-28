@@ -144,6 +144,9 @@ fn rounding_to_a_decimal_place() {
     assert_eq!(round("-0.04", -1), "0.0");
     assert_eq!(round("-1.25", -1), "-1.3");
     assert_eq!(round("12", 5), "0");
+    // Zero needs no power of ten, only the decimals that reach the place.
+    assert_eq!(round("1.5e3", 4), "0");
+    assert_eq!(round("1.5e-3", -2), "0.00");
     // However far the place, the number keeps within its digits.
     assert!(round("1", -1_000_000).len() <= folio_math::quantity::MAX_DIGITS + 1);
     assert_eq!(round("5", 1_000_000), "0");
@@ -180,4 +183,21 @@ fn numbers_in_formulas_read_in_their_format() {
         "9, 81 + 12345.678901"
     );
     assert_eq!(formula.reading(&NumberFormat::COMMA), "9,81 + 12345,678901");
+    // A number with a decimal comma is one token as a script.
+    let power = Formula::row(
+        Row::new([Node::attach(
+            Row::new([Node::symbol('x', span)]),
+            None,
+            Some(Row::new([
+                Node::number("9".into(), span),
+                Node::decimal_comma(span),
+                Node::number("81".into(), span),
+            ])),
+            0,
+            span,
+        )]),
+        span,
+    );
+    assert_eq!(power.reading(&NumberFormat::COMMA), "x^9,81");
+    assert_eq!(power.reading(&NumberFormat::POINT), "x^(9, 81)");
 }

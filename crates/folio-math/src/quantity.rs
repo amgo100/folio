@@ -205,30 +205,30 @@ pub fn format_numbers<'a>(
     let decimal_comma = format.decimal_marker == ',';
     let mut out: Option<Vec<Node>> = None;
     for (i, node) in nodes.iter().enumerate() {
-        let Node::Number(atom) = node else {
-            continue;
-        };
-        let new = if atom.text == "," {
+        // Whether the node holds the digits after a decimal comma.
+        let after_comma =
+            decimal_comma && i > 0 && matches!(&nodes[i - 1], Node::Number(c) if c.text == ",");
+        let new = match node {
             // A comma between two numbers.
-            (!decimal_comma).then(|| {
+            Node::Number(atom) if atom.text == "," => (!decimal_comma).then(|| {
                 Node::Symbol(Atom {
                     text: ",".into(),
                     class: MathClass::Punctuation,
                     span: atom.span,
                 })
-            })
-        } else {
-            let after_comma =
-                decimal_comma && i > 0 && matches!(&nodes[i - 1], Node::Number(c) if c.text == ",");
-            write_literal(&atom.text, format, after_comma)
-                .filter(|text| *text != atom.text)
-                .map(|text| {
-                    Node::Number(Atom {
-                        text,
-                        class: atom.class,
-                        span: atom.span,
-                    })
-                })
+            }),
+            Node::Number(atom) => written(atom, format, after_comma).map(Node::Number),
+            // The digits after a decimal comma may carry scripts: `9,81^2`.
+            Node::Attach(attach) if after_comma => match attach.base.nodes() {
+                [Node::Number(base)] => written(base, format, true).map(|base| {
+                    Node::Attach(Arc::new(Attach {
+                        base: Row::new([Node::Number(base)]),
+                        ..Attach::clone(attach)
+                    }))
+                }),
+                _ => None,
+            },
+            _ => None,
         };
         if let Some(new) = new {
             out.get_or_insert_with(|| nodes.to_vec())[i] = new;
@@ -238,6 +238,18 @@ pub fn format_numbers<'a>(
         Some(nodes) => std::borrow::Cow::Owned(nodes),
         None => std::borrow::Cow::Borrowed(nodes),
     }
+}
+
+/// A number's atom written in a format, or `None` where that leaves it as
+/// it is.
+fn written(atom: &Atom, format: &NumberFormat, fraction: bool) -> Option<Atom> {
+    write_literal(&atom.text, format, fraction)
+        .filter(|text| *text != atom.text)
+        .map(|text| Atom {
+            text,
+            class: atom.class,
+            span: atom.span,
+        })
 }
 
 /// A number literal (ASCII digits, with a point and more digits) written
@@ -588,6 +600,19 @@ impl Number {
             frac: text(frac),
             exponent,
         };
+        if number.is_zero() && number.exponent.is_some() {
+            // Zero needs no power of ten: `0`, not `0 × 10³`, with the
+            // decimals that reach the place (`1.5e-3` to `-2` is `0.00`).
+            let decimals = -(q + i64::from(self.exponent.unwrap_or(0)));
+            return Self {
+                negative: false,
+                int: "0".into(),
+                frac: "0"
+                    .repeat(usize::try_from(decimals).unwrap_or(0).min(MAX_DIGITS - 1))
+                    .into(),
+                exponent: None,
+            };
+        }
         Self {
             negative: number.negative && !number.is_zero(),
             ..number
