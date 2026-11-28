@@ -225,7 +225,6 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let (slots, display_widths, grids) = flow::slots_with(
         root,
         &text.notes,
-        &text.spaces,
         props,
         width,
         text.paragraphs.len(),
@@ -298,7 +297,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     // A grid whose tracks need more than its width is overfull (SPEC
     // §7.4, §7.9).
     for grid in &lines.grids {
-        if grid.overflow > Abs::zero() {
+        if grid.overflow > Abs::zero() && !measured_blocks.contains(&grid.location) {
             diag::report(
                 db,
                 Diagnostic::warning(
@@ -381,11 +380,12 @@ fn with_measured(block: &TextBlock, spaces: &[TextSpace]) -> TextBlock {
         .find(|s| s.location == block.location && s.part == block.part)
         .and_then(|s| s.measure.as_ref())
         .filter(|m| !std::ptr::eq(*m, block));
-    let children = match measure {
-        Some(measure) => &measure.children,
-        None => &block.children,
+    let (children, table) = match measure {
+        Some(measure) => (&measure.children, &measure.table),
+        None => (&block.children, &block.table),
     };
     TextBlock {
+        table: table.clone(),
         children: children
             .iter()
             .map(|child| match child {

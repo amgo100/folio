@@ -109,8 +109,10 @@ pub struct Pages {
     /// reader of the pages which numbers they show.
     pub page_refs: PageNumbers,
     /// The blocks whose content `hidden` or `answer-space` left out, with
-    /// the heights layout gave them (SPEC §6.3), in document order: what
-    /// the Office writers measure with Folio's layout (§2.1).
+    /// the heights layout gave them (SPEC §6.3): what the Office writers
+    /// measure with Folio's layout (§2.1). Each is found by its location
+    /// and part; they are in the order layout built them, a space inside
+    /// a cell or note with its cell's or note's flow, not document order.
     pub spaces: EcoVec<SpaceHeight>,
 }
 

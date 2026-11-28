@@ -458,3 +458,63 @@ fn hidden_cells_size_their_columns() {
         "After",
     );
 }
+
+#[test]
+fn hidden_content_breaks_where_shown_content_does() {
+    // Hidden content that the showing variant breaks across pages, and
+    // content taller than a page, keep both variants' pages alike.
+    for (before, hidden) in [(14, 6), (2, 30)] {
+        let mut text = String::new();
+        for i in 0..before {
+            text.push_str(&format!("Lead {i}. {}\n\n", prose(20)));
+        }
+        text.push_str("#figure(class: \"h\")[");
+        for i in 0..hidden {
+            text.push_str(&format!("SECRET {i}. {}\n\n", prose(30)));
+        }
+        text.push_str("]\n\nAfter.\n");
+        let world = world(
+            "figure.h { display: hidden; }\n",
+            "figure.h { display: block; }\n",
+            &text,
+        );
+        let exam = pages(&world, "exam");
+        let markscheme = pages(&world, "markscheme");
+        assert!(markscheme.pages.len() > 1);
+        assert!(!shown(&exam).contains("SECRET"));
+        assert_eq!(
+            exam.pages.len(),
+            markscheme.pages.len(),
+            "{before} {hidden}"
+        );
+        assert_same(find(&exam, "After"), find(&markscheme, "After"), "After");
+    }
+}
+
+#[test]
+fn answer_scale_leaves_min_height_unscaled() {
+    let world = world(
+        "figure.answer { display: answer-space; answer-scale: 1.5; min-height: 30mm; }\n",
+        SHOWN,
+        "#figure(class: \"answer\")[Short.]\n\nAfter.\n",
+    );
+    assert!(close(pages(&world, "exam").spaces[0].height, Abs::mm(30.0)));
+}
+
+#[test]
+fn deeply_nested_spaces_are_measured_once_each() {
+    // Each level measures the one inside it: the work grows with the
+    // depth, not with two to its power.
+    let mut text = String::from("Deep.");
+    for _ in 0..40 {
+        text = format!("#figure(class: \"h\")[{text}]");
+    }
+    let world = world(
+        "figure.h { display: hidden; }\n",
+        "",
+        &format!("{text}\n\nAfter.\n"),
+    );
+    let exam = pages(&world, "exam");
+    assert!(!shown(&exam).contains("Deep"));
+    assert!(shown(&exam).contains("After"));
+}

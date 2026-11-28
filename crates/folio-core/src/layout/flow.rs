@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::EcoVec;
 use folio_component::{
-    Abs, Color, Em, FragmentItem, Location, Paint, Point, Size, SourceRef, Stroke, Value,
+    Abs, Color, Em, FragmentItem, Location, Name, Paint, Point, Size, SourceRef, Stroke, Value,
 };
 
 use crate::span_map::source_ref;
@@ -62,9 +62,7 @@ use super::set::set_line;
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{
-    SpaceKind, TableRole, Text, TextBlock, TextFlow, TextImage, TextSource, TextSpace,
-};
+use crate::text::{SpaceKind, TableRole, Text, TextBlock, TextFlow, TextImage, TextSource};
 
 /// The cost of a break that leaves a widow or an orphan (TeX's
 /// `\widowpenalty` and `\clubpenalty`).
@@ -94,17 +92,15 @@ pub(super) fn slots(
     count: usize,
     maths: &[crate::text::TextMath],
 ) -> (Vec<LineSlot>, Vec<(usize, Abs)>) {
-    let (slots, widths, _) = slots_with(root, notes, &[], props, width, count, maths, None);
+    let (slots, widths, _) = slots_with(root, notes, props, width, count, maths, None);
     (slots, widths)
 }
 
 /// The slots of [`slots`], with grids laid out by `measurer` where it is
 /// given, and the grids laid out.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn slots_with(
     root: &TextBlock,
     notes: &[TextBlock],
-    spaces: &[TextSpace],
     props: &Properties,
     width: Abs,
     count: usize,
@@ -113,7 +109,6 @@ pub(super) fn slots_with(
 ) -> (Vec<LineSlot>, Vec<(usize, Abs)>, Vec<GridLayout>) {
     struct Walk<'a, 'm, 'p> {
         props: &'a Properties,
-        spaces: &'a [TextSpace],
         displays: HashMap<Location, usize>,
         slots: Vec<LineSlot>,
         widths: Vec<(usize, Abs)>,
@@ -159,30 +154,11 @@ pub(super) fn slots_with(
                 TextFlow::Block(b) => walk(b, &boxed.child(&b.style, w.props, b.span), w),
             }
         }
-        // The content a space measures is as wide as the space's block
-        // (SPEC §6.3); its displays are not shown, so their widths are not
-        // checked.
-        let measure = w
-            .spaces
-            .iter()
-            .find(|s| s.location == block.location && s.part == block.part)
-            .and_then(|s| s.measure.as_ref())
-            .filter(|m| !std::ptr::eq(*m, block));
-        if let Some(measure) = measure {
-            let widths = w.widths.len();
-            walk(
-                measure,
-                &BlockBox::of(&measure.style, w.props, measure.span, boxed.x, boxed.width),
-                w,
-            );
-            w.widths.truncate(widths);
-        }
     }
     let mut w = Walk {
         measurer,
         grids: Vec::new(),
         props,
-        spaces,
         displays: maths
             .iter()
             .enumerate()
@@ -834,6 +810,12 @@ impl Flow {
             .map(|(i, m)| (m.location, i))
             .collect();
         let spaces = RefCell::new(Vec::new());
+        let space_at: SpaceIndex = text
+            .spaces
+            .iter()
+            .enumerate()
+            .map(|(i, s)| ((s.location, s.part.clone()), i))
+            .collect();
         let builder = Builder {
             sizes,
             displays,
@@ -859,16 +841,20 @@ impl Flow {
             grids: &grids,
             cells: Vec::new(),
             spaces: &spaces,
+            space_at: &space_at,
         };
         let mut flow = builder.flow(&text.root);
         // A note or cell may be built more than once; each space counts
-        // once.
+        // once, as last built.
         let mut seen = HashSet::new();
-        flow.spaces = spaces
+        let mut kept: Vec<SpaceHeight> = spaces
             .into_inner()
             .into_iter()
+            .rev()
             .filter(|s| seen.insert((s.location, s.part.clone())))
             .collect();
+        kept.reverse();
+        flow.spaces = kept.into_iter().collect();
         flow
     }
 
@@ -1201,10 +1187,116 @@ fn extent(flow: &Flow) -> (Abs, Abs, Abs) {
     (before, height.max(Abs::zero()), after)
 }
 
+/// A blank leaf of a hidden block (SPEC §6.3): a line or leaf of the
+/// content it measures.
+pub(super) struct Blank {
+    /// Its height.
+    height: Abs,
+    /// The height before it, dropped at a page break; zero for the first.
+    gap: Abs,
+    /// What a page break before it costs.
+    penalty: f64,
+    /// Whether a page break before it is forced.
+    forced: bool,
+}
+
+/// The blank leaves that stand for a measured flow: one per line of each
+/// paragraph and one per other leaf, with the leading and spaces between
+/// them and what a page break between them costs; the first holds what
+/// lies above the first leaf inside the flow's box, the last what lies
+/// below the last, but for the spaces that collapse through its edges
+/// ([`extent`]).
+fn blanks_of(flow: &Flow) -> Blanks {
+    let (before, _, after) = extent(flow);
+    let mut out: Vec<Blank> = Vec::new();
+    for (i, item) in flow.items.iter().enumerate() {
+        let (gap, penalty, forced) = match i {
+            0 => (Abs::zero(), 0.0, false),
+            _ => (item.before.gap(), item.before.penalty, item.before.forced),
+        };
+        match &item.leaf {
+            Leaf::Paragraph(paragraph) => {
+                for (l, line) in paragraph.layout.lines.iter().enumerate() {
+                    let height = line.ascent + line.descent;
+                    if l == 0 {
+                        out.push(Blank {
+                            height,
+                            gap,
+                            penalty,
+                            forced,
+                        });
+                    } else {
+                        let between = item.between(paragraph, l);
+                        out.push(Blank {
+                            height,
+                            gap: between.gap(),
+                            penalty: between.penalty,
+                            forced: false,
+                        });
+                    }
+                }
+            }
+            leaf => out.push(Blank {
+                height: leaf_height(leaf),
+                gap,
+                penalty,
+                forced,
+            }),
+        }
+    }
+    if out.is_empty() {
+        out.push(Blank {
+            height: Abs::zero(),
+            gap: Abs::zero(),
+            penalty: 0.0,
+            forced: false,
+        });
+    }
+    // What lies inside the flow's box above its first leaf and below its
+    // last: the leading there, which a page break drops, and the rest.
+    let leads = |b: &Boundary| {
+        b.parts.iter().fold(Abs::zero(), |sum, part| match part {
+            Part::Lead(h) => sum + *h,
+            _ => sum,
+        })
+    };
+    let first = flow.boundary(0);
+    let (top, bottom) = (leads(first), leads(&flow.end));
+    out[0].height += (first.gap() - before - top).max(Abs::zero());
+    let last = out.len() - 1;
+    out[last].height += (flow.end.gap() - after - bottom).max(Abs::zero());
+    Blanks {
+        top,
+        leaves: out,
+        bottom,
+    }
+}
+
+/// The blank leaves of a hidden block (SPEC §6.3), with the leading above
+/// the first and below the last.
+#[derive(Default)]
+pub(super) struct Blanks {
+    top: Abs,
+    leaves: Vec<Blank>,
+    bottom: Abs,
+}
+
+impl Blanks {
+    /// How tall they are, with the leading between them.
+    fn height(&self) -> Abs {
+        self.leaves
+            .iter()
+            .fold(self.top + self.bottom, |sum, b| sum + b.gap + b.height)
+    }
+}
+
 /// What the boundary being built has seen since the last leaf.
 enum Event {
     Close(Arc<BlockBox>),
     Open(Arc<BlockBox>, Location),
+    /// Leading inside a hidden block, where its content had it (SPEC
+    /// §6.3).
+    Lead(Abs),
 }
 
 /// Test hooks that size objects (SPEC §7.2): until maths and images are
@@ -1263,7 +1355,13 @@ struct Builder<'a> {
     /// The spaces laid out so far, shared with the builders of notes and
     /// cells ([`Flow::spaces`]).
     spaces: &'a RefCell<Vec<SpaceHeight>>,
+    /// The spaces of the text, by element instance and part, as indices
+    /// into [`Text::spaces`].
+    space_at: &'a SpaceIndex,
 }
+
+/// The spaces of a text by element instance and part.
+type SpaceIndex = HashMap<(Location, Option<Name>), usize>;
 
 /// A block with a `min-height` (SPEC §6.3): the leaves it holds, and how
 /// deep it is in their stacks.
@@ -1281,17 +1379,14 @@ struct Fill {
 impl Builder<'_> {
     /// The flow of the blocks of `root`, the outermost a box as wide as the
     /// body.
-    fn flow(mut self, root: &TextBlock) -> Flow {
-        let root_box = self.shared.block(
-            Arc::new(BlockBox::of(
-                &root.style,
-                self.props,
-                root.span,
-                Abs::zero(),
-                self.width,
-            )),
-            self.now,
-        );
+    fn flow(self, root: &TextBlock) -> Flow {
+        let root_box = BlockBox::of(&root.style, self.props, root.span, Abs::zero(), self.width);
+        self.flow_in(root, root_box)
+    }
+
+    /// The flow of the blocks of `root`, the outermost the box `root_box`.
+    fn flow_in(mut self, root: &TextBlock, root_box: BlockBox) -> Flow {
+        let root_box = self.shared.block(Arc::new(root_box), self.now);
         self.block(root, root_box);
         let end = self.boundary(None);
         let mut flow = Flow {
@@ -1339,6 +1434,7 @@ impl Builder<'_> {
             grids: self.grids,
             cells: Vec::new(),
             spaces: self.spaces,
+            space_at: self.space_at,
         };
         let mark = continued.and_then(|i| builder.paragraph_info(i));
         let mut flow = builder.flow(block);
@@ -1360,7 +1456,7 @@ impl Builder<'_> {
         })
     }
     fn block(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) {
-        let boxed = self.space(block, boxed);
+        let (boxed, blanks) = self.space(block, boxed);
         self.stack.push((boxed.clone(), block.location));
         self.pending
             .push(Event::Open(boxed.clone(), block.location));
@@ -1381,6 +1477,9 @@ impl Builder<'_> {
                     self.block(b, child);
                 }
             }
+        }
+        if !blanks.leaves.is_empty() {
+            self.blanks(block, &boxed, &blanks);
         }
         if let Some(rules) = &boxed.rules {
             self.rules(block, &boxed, rules);
@@ -1587,6 +1686,7 @@ impl Builder<'_> {
             grids: self.grids,
             cells: Vec::new(),
             spaces: self.spaces,
+            space_at: self.space_at,
         };
         match child {
             TextFlow::Block(b) => {
@@ -1672,52 +1772,61 @@ impl Builder<'_> {
     }
 
     /// The box of a block whose content `hidden` or `answer-space` left out
-    /// (SPEC §6.3), which holds nothing, or `boxed` for any other block.
-    /// A hidden block keeps its spaces and how it breaks and is as tall as
-    /// the border box of the content it held, with nothing drawn: no
-    /// padding, border, background or ruled lines. Answer space keeps its
-    /// box and its ruled lines; without them, its content box is
-    /// `answer-height` tall, or, for `auto`, as tall as the content's
-    /// times `answer-scale`, and at least its `min-height`. The content is
+    /// (SPEC §6.3), which holds nothing, or `boxed` for any other block;
+    /// and for a hidden block, the blank leaves it holds. The content is
     /// measured in a discarded layout at the block's width.
-    fn space(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) -> Arc<BlockBox> {
-        if self.text.spaces.is_empty() {
-            return boxed;
-        }
-        let Some(space) = self
-            .text
-            .spaces
-            .iter()
-            .find(|s| s.location == block.location && s.part == block.part)
-        else {
-            return boxed;
+    ///
+    /// A hidden block draws nothing: no padding, border, background or
+    /// ruled lines. Its spaces are those that would collapse through the
+    /// content's edges, and it holds a blank leaf for each line and leaf of
+    /// the content, as tall and as far apart, where a page break costs
+    /// what it would there, so that it breaks where the content would. A
+    /// hidden cell, which its band sets whole, is a box as tall as the
+    /// content. Answer space keeps its box and its ruled lines; without
+    /// them, its content box is `answer-height` tall, or, for `auto`, as
+    /// tall as the content's times `answer-scale`, and at least its
+    /// `min-height`.
+    fn space(&mut self, block: &TextBlock, boxed: Arc<BlockBox>) -> (Arc<BlockBox>, Blanks) {
+        let Some(&index) = self.space_at.get(&(block.location, block.part.clone())) else {
+            return (boxed, Blanks::default());
         };
+        let space = &self.text.spaces[index];
         // The content measured is the space's block as it would be shown.
         if space
             .measure
             .as_ref()
             .is_some_and(|m| std::ptr::eq(m, block))
         {
-            return boxed;
+            return (boxed, Blanks::default());
         }
-        let measured = space.measure.as_ref().map(|m| self.measure(m, boxed.width));
         let mut sized = (*boxed).clone();
-        match space.kind {
-            // The spaces that would collapse through the content's edges
-            // are the hidden block's.
+        let mut blanks = Blanks::default();
+        let height = match space.kind {
             SpaceKind::Hidden => {
-                let (before, height, after) = measured.unwrap_or_default();
                 sized.padding = Sides::default();
                 sized.border = Sides::default();
                 sized.background = None;
                 sized.rules = None;
-                sized.min_height = height;
-                if measured.is_some() {
-                    sized.space_before = before;
-                    sized.space_after = after;
+                sized.min_height = Abs::zero();
+                if let Some(measure) = &space.measure {
+                    let flow = self.measure(measure, boxed.width, false);
+                    if matches!(measure.table, Some(TableRole::Cell(_))) {
+                        // As its band sets it: the spaces at its ends
+                        // dropped.
+                        sized.min_height = flow_height(&flow);
+                    } else {
+                        let (before, _, after) = extent(&flow);
+                        sized.space_before = before;
+                        sized.space_after = after;
+                        blanks = blanks_of(&flow);
+                    }
                 }
+                sized.min_height.min(self.height) + blanks.height()
             }
-            SpaceKind::Answer if sized.rules.is_some() => {}
+            SpaceKind::Answer if sized.rules.is_some() => {
+                let rules = sized.rules.as_ref().expect("checked");
+                rules.spacing * rules.count as f64
+            }
             SpaceKind::Answer => {
                 let value = |name: &str| block.style.value(self.props, self.props.builtin(name));
                 let height = match value("answer-height") {
@@ -1728,17 +1837,16 @@ impl Builder<'_> {
                             _ => 1.0,
                         };
                         let inset = sized.inset();
-                        let (_, height, _) = measured.unwrap_or_default();
-                        let content = height - inset.top - inset.bottom;
+                        let content = space.measure.as_ref().map_or(Abs::zero(), |m| {
+                            let (_, height, _) = extent(&self.measure(m, boxed.width, true));
+                            height - inset.top - inset.bottom
+                        });
                         content.max(Abs::zero()) * scale
                     }
                 };
                 sized.min_height = sized.min_height.max(height);
+                sized.min_height.min(self.height)
             }
-        }
-        let height = match &sized.rules {
-            Some(rules) => rules.spacing * rules.count as f64,
-            None => sized.min_height.min(self.height),
         };
         self.spaces.borrow_mut().push(SpaceHeight {
             location: block.location,
@@ -1746,13 +1854,13 @@ impl Builder<'_> {
             kind: space.kind,
             height,
         });
-        self.shared.block(Arc::new(sized), self.now)
+        (self.shared.block(Arc::new(sized), self.now), blanks)
     }
 
-    /// How tall `block` is as a block `width` wide, as [`extent`] gives
-    /// it, or for a cell, as its band sets it: its flow built on its own
-    /// and discarded (SPEC §6.3).
-    fn measure(&self, block: &TextBlock, width: Abs) -> (Abs, Abs, Abs) {
+    /// The flow of `block` as a block `width` wide, built on its own to be
+    /// measured and discarded (SPEC §6.3); `bare` leaves out the
+    /// `min-height` of `block` itself, so that only its content counts.
+    fn measure(&self, block: &TextBlock, width: Abs, bare: bool) -> Flow {
         let discarded = RefCell::new(Vec::new());
         let builder = Builder {
             sizes: self.sizes,
@@ -1779,14 +1887,43 @@ impl Builder<'_> {
             grids: self.grids,
             cells: Vec::new(),
             spaces: &discarded,
+            space_at: self.space_at,
         };
-        let flow = builder.flow(block);
-        // A cell is as tall as its flow with the spaces at its ends
-        // dropped, as its band sets it.
-        if matches!(block.table, Some(TableRole::Cell(_))) {
-            return (Abs::zero(), flow_height(&flow), Abs::zero());
+        let mut root = BlockBox::of(&block.style, self.props, block.span, Abs::zero(), width);
+        if bare {
+            root.min_height = Abs::zero();
         }
-        extent(&flow)
+        builder.flow_in(block, root)
+    }
+
+    /// The blank leaves of a hidden block (SPEC §6.3), each as wide as its
+    /// content and drawn as nothing, with what lies between them and what
+    /// a page break there costs.
+    fn blanks(&mut self, block: &TextBlock, boxed: &BlockBox, blanks: &Blanks) {
+        if blanks.top > Abs::zero() {
+            self.pending.push(Event::Lead(blanks.top));
+        }
+        for (i, blank) in blanks.leaves.iter().enumerate() {
+            let object = BlockObject {
+                size: Size::new(boxed.content().1, blank.height),
+                location: block.location,
+                content: Some(EcoVec::new()),
+                baselines: None,
+                display: None,
+                rule: None,
+            };
+            self.leaf(Leaf::Box(Arc::new(object)), Origin::Empty);
+            if i == 0 {
+                continue;
+            }
+            let before = &mut self.items.last_mut().expect("a leaf was added").before;
+            before.parts.push(Part::Lead(blank.gap));
+            before.penalty += blank.penalty;
+            before.forced |= blank.forced;
+        }
+        if blanks.bottom > Abs::zero() {
+            self.pending.push(Event::Lead(blanks.bottom));
+        }
     }
 
     /// The ruled lines of a block (SPEC §6.3), after its content: a leaf
@@ -2042,6 +2179,7 @@ impl Builder<'_> {
                         out.constraints.push(Constraint::KeepWithNext(b.span));
                     }
                 }
+                Event::Lead(h) => out.parts.push(Part::Lead(*h)),
                 Event::Open(b, location) => {
                     out.parts.push(Part::Space(b.space_before));
                     out.parts.push(Part::Open(b.clone(), *location));

@@ -97,8 +97,10 @@ pub struct Text {
     /// language of its first paragraph; `None` for a note without
     /// paragraphs. It is in no block either.
     pub continued: EcoVec<Option<usize>>,
-    /// The blocks whose content `hidden` or `answer-space` left out, in
-    /// document order, each with the content it measures (SPEC §6.3).
+    /// The blocks whose content `hidden` or `answer-space` left out, each
+    /// with the content it measures (SPEC §6.3), in the order their blocks
+    /// close: a space inside content that another measures, or a part's,
+    /// comes before its element's.
     pub spaces: EcoVec<TextSpace>,
 }
 

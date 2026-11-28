@@ -652,14 +652,14 @@ impl Select<'_> {
         let (mode, message, hint) = match kind {
             SpaceKind::Hidden => (
                 "hidden",
-                "`display: hidden` keeps the space of blocks only, so the content of this inline \
-                 element is left out and takes no space",
+                "`display: hidden` keeps the space of blocks only, so the content of this \
+                 element, which is not a block, is left out and takes no space",
                 "hide a block around it, or leave it out with `display: none`",
             ),
             SpaceKind::Answer => (
                 "answer-space",
                 "`display: answer-space` makes answer space of blocks only, so the content of \
-                 this inline element is left out and nothing takes its place",
+                 this element, which is not a block, is left out and nothing takes its place",
                 "give the answer space to a block, such as the one around it",
             ),
         };
