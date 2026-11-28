@@ -545,15 +545,7 @@ impl Engine {
     fn run(mut self) {
         loop {
             if self.deferred_since.is_some() && !self.lagging_behind() {
-                let paths = std::mem::take(&mut self.deferred);
-                if self.running.is_some() {
-                    // Cancels the check that took too long: the next one
-                    // gets the same grace before changes wait for it, and
-                    // twice as long to send pages.
-                    self.lagging = Some(Instant::now());
-                    self.defer_limit = self.defer_limit.saturating_mul(2);
-                }
-                self.deferred_since = None;
+                let paths = self.take_deferred();
                 self.apply(&paths);
             }
             if self.dirty {
@@ -590,8 +582,7 @@ impl Engine {
                         continue;
                     }
                     let mut paths = paths;
-                    paths.append(&mut self.deferred);
-                    self.deferred_since = None;
+                    paths.append(&mut self.take_deferred());
                     self.apply(&paths);
                 }
                 other => {
@@ -657,7 +648,7 @@ impl Engine {
         self.queue.extend(self.rx.try_iter());
         self.queue
             .iter()
-            .any(|input| matches!(input, Input::Paths(paths, change) if *change != Change::Closed && paths.iter().any(|p| p == path)))
+            .any(|input| matches!(input, Input::Paths(paths, change) if matches!(change, Change::Written | Change::Moved) && paths.iter().any(|p| p == path)))
     }
 
     /// Records which paths are open for writing after an event.
@@ -703,6 +694,18 @@ impl Engine {
                 .is_none_or(|since| since.elapsed() < self.defer_limit)
     }
 
+    /// Takes the changes that waited for the running check, to be applied
+    /// now. When their time ran out, they cancel a check that took too
+    /// long: the next one gets the same grace before changes wait for it,
+    /// and twice as long to send pages.
+    fn take_deferred(&mut self) -> Vec<PathBuf> {
+        if self.deferred_since.take().is_some() && self.running.is_some() {
+            self.lagging = Some(Instant::now());
+            self.defer_limit = self.defer_limit.saturating_mul(2);
+        }
+        std::mem::take(&mut self.deferred)
+    }
+
     /// Lets changes wait for the running check.
     fn defer(&mut self, paths: Vec<PathBuf>) {
         if paths.is_empty() {
@@ -730,7 +733,9 @@ impl Engine {
         if self.lagging_behind() {
             self.defer(due);
         } else {
-            self.apply(&due);
+            let mut paths = self.take_deferred();
+            paths.extend(due);
+            self.apply(&paths);
         }
     }
 
@@ -740,8 +745,13 @@ impl Engine {
     /// holds them until their writers close them, [`MAX_HOLD`] at most.
     /// Returns the sources left in `paths` with the world's text of each,
     /// which [`Self::recheck`] checks again once they are read.
-    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Vec<(PathBuf, String, Source)> {
-        let released = std::mem::take(&mut self.released);
+    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Vec<(PathBuf, String, Option<Source>)> {
+        // Released paths are read as they are, once.
+        let released: BTreeSet<PathBuf> = paths
+            .iter()
+            .filter(|path| self.released.remove(*path))
+            .cloned()
+            .collect();
         let mut left = Vec::new();
         if !self.closes {
             return left;
@@ -762,12 +772,14 @@ impl Engine {
                 return false;
             }
             // A file that is gone is removed at once.
-            let Some(((rel, source), meta)) = self
-                .loader_path(path)
-                .and_then(|rel| Some((rel.clone(), world.source(&rel)?)))
-                .zip(std::fs::metadata(path).ok())
-            else {
+            let Some((rel, meta)) = self.loader_path(path).zip(std::fs::metadata(path).ok()) else {
                 read.push(path.clone());
+                return true;
+            };
+            // A new file is checked once read.
+            let Some(source) = world.source(&rel) else {
+                read.push(path.clone());
+                left.push((path.clone(), rel, None));
                 return true;
             };
             let hold = torn(
@@ -779,7 +791,7 @@ impl Engine {
                 held.push(path.clone());
             } else {
                 read.push(path.clone());
-                left.push((path.clone(), rel, source));
+                left.push((path.clone(), rel, Some(source)));
             }
             !hold
         });
@@ -788,9 +800,9 @@ impl Engine {
         for dir in paths.iter().filter(|path| path.is_dir()) {
             for path in self.open.iter().filter(|path| path.starts_with(dir)) {
                 if let Some(rel) = self.loader_path(path)
-                    && let Some(source) = world.source(&rel)
                     && !left.iter().any(|(p, _, _)| p == path)
                 {
+                    let source = world.source(&rel);
                     left.push((path.clone(), rel, source));
                 }
             }
@@ -807,14 +819,14 @@ impl Engine {
     }
 
     /// Puts back the world's text of the sources that read torn
-    /// ([`torn`]) after the loader read them, as their truncate or
+    /// ([`torn`]) after the loader read them, or takes out a new one, as their truncate or
     /// write may have come between the check of [`Self::hold`] and the
     /// read, and holds them; takes them out of `changed`. Returns whether
     /// it put any back: the world changed twice, which cancelled the check
     /// running, so its revision must be checked again.
     fn recheck(
         &mut self,
-        sources: Vec<(PathBuf, String, Source)>,
+        sources: Vec<(PathBuf, String, Option<Source>)>,
         changed: &mut BTreeSet<String>,
         warned: usize,
     ) -> bool {
@@ -823,7 +835,7 @@ impl Engine {
             if !changed.contains(&rel) {
                 continue;
             }
-            let old_len = old.text().len() as u64;
+            let old_len = old.as_ref().map_or(0, |old| old.text().len() as u64);
             // Removed by the loader: gone, or not UTF-8, as when the read
             // ends inside a character that a write in chunks splits.
             let new = self.world.as_ref().and_then(|world| world.source(&rel));
@@ -833,16 +845,21 @@ impl Engine {
                     let writing = self.open.contains(&path) || self.waiting(&path);
                     torn(old_len, new_len, writing)
                 }
-                None => path.exists() && (self.open.contains(&path) || self.waiting(&path)),
+                None => {
+                    old.is_some()
+                        && path.exists()
+                        && (self.open.contains(&path) || self.waiting(&path))
+                }
             };
             if !torn {
                 continue;
             }
             // Read again on its close either way.
-            let put_back = self
-                .world
-                .as_mut()
-                .is_some_and(|world| world.set_source(&rel, old.text()).is_ok());
+            // A new file is taken out again.
+            let put_back = self.world.as_mut().is_some_and(|world| match &old {
+                Some(old) => world.set_source(&rel, old.text()).is_ok(),
+                None => world.remove_source(&rel),
+            });
             if put_back {
                 changed.remove(&rel);
                 held.push((path, rel));
@@ -1039,6 +1056,11 @@ impl Engine {
         let spawned = thread::Builder::new()
             .name("folio-preview-check".into())
             .spawn(move || {
+                // Tells the engine the check ended even if it panics.
+                let mut ended = Ended {
+                    tx: Some(tx.clone()),
+                    revision,
+                };
                 let project_errors = project.is_some();
                 let (files, mut diagnostics) = project_files(project, Some(Arc::new(snapshot)));
                 diagnostics.extend(warnings);
@@ -1061,6 +1083,7 @@ impl Engine {
                     let pages = frame.pages.clone()?;
                     Some((pages, frame.files.clone(), frame.diagnostics.clone()))
                 });
+                ended.tx = None;
                 let _ = tx.send(Input::Done(Box::new(Done { revision, frame })));
                 // The pages go first; source sync and overlays follow,
                 // unless an edit has made them stale.
@@ -1629,6 +1652,24 @@ impl Files for Layered {
         self.project
             .lines(id)
             .or_else(|| self.world.as_ref()?.lines(id))
+    }
+}
+
+/// Sends a check's end as cancelled when it is dropped before the check
+/// sends its own, as when the check panics.
+struct Ended {
+    tx: Option<Sender<Input>>,
+    revision: u64,
+}
+
+impl Drop for Ended {
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(Input::Done(Box::new(Done {
+                revision: self.revision,
+                frame: None,
+            })));
+        }
     }
 }
 
