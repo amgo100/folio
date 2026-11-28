@@ -21,11 +21,9 @@
 //! would, without writing. `folio check`, the language server and the
 //! preview stop there; [`compile_build`] goes on to [`emit`].
 
-use std::collections::{HashMap, HashSet};
-
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{FontId, Location, QualifiedName, SourceRef, Target};
-use folio_core::db::{Build, Bytes, Db, build_files, build_output, source_file};
+use folio_core::db::{Build, Bytes, Db, build_output, source_file};
 use folio_core::diag::{self, Diagnostic};
 use folio_core::eval::Value;
 use folio_core::fonts::{Fonts, fonts};
@@ -36,9 +34,9 @@ use folio_core::pipeline::step_styled;
 use folio_core::project::ProjectPath;
 use folio_core::resolve::Resolution;
 use folio_core::span_map::{source_ref, span};
-use folio_core::text::{Text, TextBlock, TextFlow, text};
+use folio_core::text::{Text, TextBlock, TextFlow, TextMath, text};
 use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Tag};
-use folio_syntax::{DiagSpan, LinkedNode, Span, SubRange};
+use folio_syntax::{DiagSpan, Span, SubRange};
 
 /// What compiling a build produces, without its diagnostics, which
 /// [`crate::compile`] collects.
@@ -175,10 +173,7 @@ pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let text = text(db, build).as_ref()?;
     let project = build.project(db);
     let doc = document(db, project, build.variant(db).clone()).as_ref()?;
-    let files = build_files(db, build);
-    let sources = formula_sources(db, files, text.maths.iter().map(|m| m.span));
-    let alt = |span: Span| sources.get(&span).cloned();
-    let structure = structure(&text.root, text, &alt);
+    let structure = structure(&text.root, text);
     let plain = |field: &str| match doc.root.field(field) {
         Some(Value::Content(content)) => Some(content.plain_text()),
         Some(Value::Str(text)) => Some(text.clone()),
@@ -314,14 +309,10 @@ fn navigation(resolution: &Resolution) -> Navigation {
 /// of the text stage, whose boxes the page builder's fragments are, with
 /// the role of its element or part (SPEC §11.1), and a node for every
 /// inline formula, whose chunks are boxes too, and every image. A formula's
-/// text is its alternate description: `alt` gives the source of the
-/// formula at a span. An image's is its `alt` text.
-pub(crate) fn structure(
-    block: &TextBlock,
-    text: &Text,
-    alt: &dyn Fn(Span) -> Option<EcoString>,
-) -> Tag {
-    structure_of(block, text, alt, false)
+/// text is its alternate description, a reading of its math tree
+/// ([`formula_alt`]). An image's is its `alt` text.
+pub(crate) fn structure(block: &TextBlock, text: &Text) -> Tag {
+    structure_of(block, text, false)
 }
 
 /// The location a structure node of the element at `span`, instance
@@ -337,32 +328,38 @@ fn located(span: Span, location: Location) -> Location {
 /// The structure of a block, as [`structure`] gives it; `in_note` for the
 /// blocks of a footnote, whose own footnotes are not placed, so they have
 /// no node (SPEC §7.8).
-fn structure_of(
-    block: &TextBlock,
-    text: &Text,
-    alt: &dyn Fn(Span) -> Option<EcoString>,
-    in_note: bool,
-) -> Tag {
+fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
     // The node of its span, as its boxes name it, with its instance.
     let mut tag = Tag::new(role, located(block.span, block.location));
     match role {
         Role::Heading => tag.text = block_text(block, text),
-        Role::Formula => tag.text = formula_alt(text, block.span, alt),
+        Role::Formula => {
+            // The display of this instance: each instance of a formula
+            // made in a loop or by a closure reads as evaluation made it.
+            let math = text
+                .maths
+                .iter()
+                .find(|m| m.span == block.span && m.location == block.location)
+                .or_else(|| text.maths.iter().find(|m| m.span == block.span));
+            tag.text = math.and_then(formula_alt);
+        }
         _ => {}
     }
     for child in &block.children {
         match child {
             TextFlow::Block(block) => {
-                tag.children.push(structure_of(block, text, alt, in_note));
+                tag.children.push(structure_of(block, text, in_note));
             }
             TextFlow::Paragraph(index) => {
                 let paragraph = &text.paragraphs[*index];
                 // A formula's first chunk, as the others continue it, and
                 // each image, with its alt text as its description.
                 let objects = paragraph.objects.iter().filter_map(|object| {
-                    let (role, description) = if object.math.is_some_and(|m| m.chunk == 0) {
-                        (Role::Formula, formula_alt(text, object.span, alt))
+                    let (role, description) = if let Some(m) = object.math.filter(|m| m.chunk == 0)
+                    {
+                        let math = text.maths.get(m.formula);
+                        (Role::Formula, math.and_then(formula_alt))
                     } else if let Some(image) = &object.image {
                         (Role::Figure, image.alt.clone().and_then(clean))
                     } else {
@@ -376,7 +373,7 @@ fn structure_of(
                 // inside the paragraph's on the page of its anchor
                 // (SPEC §7.8, §11.1).
                 let notes = paragraph.notes.iter().filter(|_| !in_note).map(|anchor| {
-                    let mut note = structure_of(&text.notes[anchor.note], text, alt, true);
+                    let mut note = structure_of(&text.notes[anchor.note], text, true);
                     // Drawn after its page's body (SPEC §7.8).
                     note.foot = true;
                     (anchor.range.start, note)
@@ -391,77 +388,13 @@ fn structure_of(
     tag
 }
 
-/// The alternate description of the formula of the `math` element at
-/// `span`: its source, or, where that cannot be read, a description of
-/// its tree.
-fn formula_alt(
-    text: &Text,
-    span: Span,
-    alt: &dyn Fn(Span) -> Option<EcoString>,
-) -> Option<EcoString> {
-    alt(span).or_else(|| {
-        let math = text.maths.iter().find(|math| math.span == span)?;
-        clean(math.formula.repr().into())
-    })
-}
-
-/// The sources of the nodes at `spans` among a build's files, as
-/// alternate descriptions: without the dollar signs around a formula
-/// written in markup or the `:tex` that marks LaTeX, and with runs of
-/// spaces as one space. One walk of each file's tree finds them all.
-fn formula_sources(
-    db: &dyn Db,
-    files: &[folio_core::db::SourceFile],
-    spans: impl Iterator<Item = Span>,
-) -> HashMap<Span, EcoString> {
-    fn walk(
-        node: &LinkedNode<'_>,
-        text: &str,
-        wanted: &HashSet<Span>,
-        out: &mut HashMap<Span, EcoString>,
-    ) {
-        if wanted.contains(&node.span()) {
-            if let Some(alt) = text.get(node.range()).and_then(alt_text) {
-                out.insert(node.span(), alt);
-            }
-            return;
-        }
-        for child in node.children() {
-            walk(&child, text, wanted, out);
-        }
-    }
-    let wanted: HashSet<Span> = spans.collect();
-    let mut out = HashMap::new();
-    if wanted.is_empty() {
-        return out;
-    }
-    let ids: HashSet<_> = wanted.iter().filter_map(|span| span.id()).collect();
-    for file in files {
-        let source = file.source(db);
-        if ids.contains(&source.id()) {
-            walk(
-                &LinkedNode::new(source.root()),
-                source.text(),
-                &wanted,
-                &mut out,
-            );
-        }
-    }
-    out
-}
-
-/// A formula's source as its alternate description.
-fn alt_text(written: &str) -> Option<EcoString> {
-    let inner = written
-        .strip_prefix('$')
-        .and_then(|w| w.strip_suffix('$'))
-        .unwrap_or(written);
-    let inner = inner
-        .trim_start()
-        .strip_prefix(":tex")
-        .filter(|rest| rest.starts_with(char::is_whitespace))
-        .unwrap_or(inner);
-    clean(inner.into())
+/// The alternate description of a formula: a reading of its evaluated
+/// math tree, with its quantities in the number format of its text
+/// ([`folio_math::Formula::reading`]). It is never read from the source,
+/// so that comments, script code and what another variant shows do not
+/// reach it (SPEC §6.4, §11.1).
+fn formula_alt(math: &TextMath) -> Option<EcoString> {
+    clean(math.formula.reading(&math.settings.number).into())
 }
 
 /// The text of the paragraphs a block holds directly, as [`clean`] gives
