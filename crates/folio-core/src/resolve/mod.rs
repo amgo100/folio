@@ -616,6 +616,7 @@ struct Ids {
     ref_format: PropId,
     lang: PropId,
     decimal_marker: PropId,
+    title_stop: PropId,
 }
 
 impl Ids {
@@ -627,6 +628,7 @@ impl Ids {
             ref_format: props.builtin("ref-format"),
             lang: props.builtin("lang"),
             decimal_marker: props.builtin("decimal-marker"),
+            title_stop: props.builtin("title-stop"),
         }
     }
 }
@@ -1044,7 +1046,11 @@ impl Walk<'_> {
                 marker,
             }
         } else {
-            query::Kind::List
+            let keep = matches!(
+                style.value(self.props, self.ids.title_stop),
+                Some(StyleValue::Keyword(k)) if k.as_str() == "keep"
+            );
+            query::Kind::List { drop_stop: !keep }
         };
         self.pending_queries.push(query::Pending {
             location: element.location,
@@ -1095,7 +1101,10 @@ impl Walk<'_> {
         // Only the instances the build styled are shown, so only they are
         // listed.
         let mut shown = HashSet::new();
-        if pending.iter().any(|q| matches!(q.kind, query::Kind::List)) {
+        if pending
+            .iter()
+            .any(|q| matches!(q.kind, query::Kind::List { .. }))
+        {
             fn collect(node: &StyledNode, out: &mut HashSet<Location>) {
                 out.insert(node.location);
                 for child in &node.children {
@@ -1107,7 +1116,7 @@ impl Walk<'_> {
         let mut out = Vec::with_capacity(pending.len());
         for q in pending {
             let result = match &q.kind {
-                query::Kind::List => {
+                query::Kind::List { drop_stop } => {
                     let resolution = &self.out;
                     // A reference in a title shows the text Resolve gave it.
                     let text = |element: &Element| {
@@ -1129,6 +1138,11 @@ impl Walk<'_> {
                                 .then(|| m.text.clone())
                             });
                             let title = query::title(element, &text);
+                            let title = if *drop_stop {
+                                query::drop_stop(title)
+                            } else {
+                                title
+                            };
                             // An instance with neither, such as a figure
                             // without a caption, has nothing to list.
                             if marker.is_none() && title.is_empty() {

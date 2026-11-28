@@ -509,6 +509,10 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
         Value::Auto,
         Layout,
     );
+    // Outlines and figure lists (SPEC §4.5, D-65-2): `drop` leaves out a
+    // single full stop that ends an entry's title (a caption's), so the
+    // page follows it cleanly; `keep` shows the title as written.
+    prop("title-stop", kw(&["drop", "keep"]), word("drop"), Layout);
 
     group = GroupId::VISIBILITY;
     let mut prop =
