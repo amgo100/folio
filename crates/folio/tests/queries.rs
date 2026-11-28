@@ -182,7 +182,7 @@ fn outlines_and_figure_lists_list_what_the_variant_shows() {
         results(&world, "exam"),
         [
             vec!["1 1.~|Forces", "2 1.1.~|Friction", "1 2.~|Energy"],
-            vec!["1 Figure~1: |Free-body diagram."],
+            vec!["1 Figure~1: |Free-body diagram"],
         ]
     );
     assert_eq!(
@@ -195,8 +195,8 @@ fn outlines_and_figure_lists_list_what_the_variant_shows() {
                 "1 3.~|Energy"
             ],
             vec![
-                "1 Figure~1: |Free-body diagram.",
-                "1 Figure~2: |Worked answer."
+                "1 Figure~1: |Free-body diagram",
+                "1 Figure~2: |Worked answer"
             ],
         ]
     );
@@ -306,5 +306,41 @@ fn titles_read_as_shown_and_empty_entries_are_left_out() {
     assert_eq!(
         results(&world, "exam"),
         [vec!["1 Figure~1: |Path of Figure~2", "1 Figure~2: |Second"]]
+    );
+}
+
+/// D-65-2: an entry drops the full stop that ends its title, unless a
+/// stylesheet keeps it with `title-stop: keep`; an ellipsis keeps its
+/// stops.
+#[test]
+fn entries_drop_a_final_full_stop_unless_styled_to_keep_it() {
+    let text = "#list-of(figure)\n\n#figure(caption: [Path of the ball.])[A.]\n\n\
+                #figure(caption: [And so on...])[B.]\n";
+    let world = world(false, text);
+    assert_eq!(
+        results(&world, "exam"),
+        [vec![
+            "1 Figure~1: |Path of the ball",
+            "1 Figure~2: |And so on…"
+        ]]
+    );
+    let mut kept = World::new(&manifest(false)).unwrap();
+    kept.set_source(
+        "styles/main.fsty",
+        &format!("{STYLE}list-of {{ title-stop: keep; }}\n"),
+    )
+    .unwrap();
+    kept.set_source("main.fol", text).unwrap();
+    assert_eq!(
+        results(&kept, "exam"),
+        [vec![
+            "1 Figure~1: |Path of the ball.",
+            "1 Figure~2: |And so on…"
+        ]]
+    );
+    assert!(
+        diagnostics(&kept, "exam").is_empty(),
+        "{:?}",
+        diagnostics(&kept, "exam")
     );
 }

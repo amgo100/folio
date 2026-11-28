@@ -50,6 +50,14 @@ pub trait Files {
     fn lines(&self, id: FileId) -> Option<Lines<String>> {
         self.source(id).map(|source| source.lines().clone())
     }
+
+    /// How many bytes come before the text in the file on disk, which the
+    /// text leaves out: the three of a byte order mark, which the loader
+    /// strips (SPEC §12.1). By default none.
+    fn text_start(&self, id: FileId) -> usize {
+        let _ = id;
+        0
+    }
 }
 
 /// Files given by their text, which spans can point into only by byte range.
@@ -95,7 +103,9 @@ pub struct Location {
     pub id: FileId,
     /// The file's path, relative to the project directory.
     pub path: EcoString,
-    /// The byte range in the file's text.
+    /// The byte range in the file's text, as [`locate`] and [`resolve`]
+    /// give it, or in the file on disk, byte order mark included, as
+    /// [`resolve_in_file`] gives it.
     pub bytes: Range<usize>,
     /// Where the range starts.
     pub start: Position,
@@ -204,7 +214,31 @@ pub struct ResolvedEdit {
     pub replacement: EcoString,
 }
 
-/// Resolves the spans of a diagnostic.
+/// Resolves the spans of a diagnostic, with byte ranges in the file on disk:
+/// those of [`resolve`] moved past the bytes before the text
+/// ([`Files::text_start`], a byte order mark), so that a program can apply
+/// a fix to the file (`docs/diagnostics-json.md`). Lines and columns count
+/// in the text, as an editor shows it.
+pub fn resolve_in_file(files: &dyn Files, diagnostic: &Diagnostic) -> Resolved {
+    let shift = |location: &mut Location| {
+        let start = files.text_start(location.id);
+        location.bytes = location.bytes.start + start..location.bytes.end + start;
+    };
+    let mut resolved = resolve(files, diagnostic);
+    if let Some(location) = &mut resolved.location {
+        shift(location);
+    }
+    for related in &mut resolved.related {
+        shift(&mut related.location);
+    }
+    for edit in resolved.fixes.iter_mut().flat_map(|fix| &mut fix.edits) {
+        shift(&mut edit.location);
+    }
+    resolved
+}
+
+/// Resolves the spans of a diagnostic, with byte ranges in the text of
+/// each file, as the language server and the preview use them.
 pub fn resolve(files: &dyn Files, diagnostic: &Diagnostic) -> Resolved {
     Resolved {
         severity: diagnostic.severity.name(),
@@ -245,10 +279,14 @@ pub fn resolve(files: &dyn Files, diagnostic: &Diagnostic) -> Resolved {
     }
 }
 
-/// Serialises diagnostics, with their spans resolved, to a pretty-printed
-/// JSON array of [`Resolved`] objects.
+/// Serialises diagnostics, with their spans resolved to byte ranges in the
+/// files on disk ([`resolve_in_file`]), to a pretty-printed JSON array of
+/// [`Resolved`] objects.
 pub fn to_json(files: &dyn Files, diagnostics: &[Diagnostic]) -> String {
-    let resolved: Vec<Resolved> = diagnostics.iter().map(|d| resolve(files, d)).collect();
+    let resolved: Vec<Resolved> = diagnostics
+        .iter()
+        .map(|d| resolve_in_file(files, d))
+        .collect();
     serde_json::to_string_pretty(&resolved).expect("diagnostics serialise to JSON")
 }
 

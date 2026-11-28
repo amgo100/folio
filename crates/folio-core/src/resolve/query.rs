@@ -87,8 +87,9 @@ pub(super) struct Pending {
 
 #[derive(Debug, Clone)]
 pub(super) enum Kind {
-    /// An outline or a figure list.
-    List,
+    /// An outline or a figure list, and whether its titles drop a final
+    /// full stop (`title-stop`, D-65-2).
+    List { drop_stop: bool },
     /// A total of a field, shown with a decimal marker.
     Total { field: EcoString, marker: char },
     /// A component's aggregate (D-72-1), shown with a decimal marker.
@@ -180,6 +181,15 @@ pub(super) fn title(element: &Element, shown: &dyn Fn(&Element) -> Option<EcoStr
         write(content, shown, &mut out);
     }
     out.trim().into()
+}
+
+/// A title without the single full stop that ends it, as `title-stop:
+/// drop` shows it (D-65-2): an ellipsis keeps its stops.
+pub(super) fn drop_stop(title: EcoString) -> EcoString {
+    match title.strip_suffix('.') {
+        Some(rest) if !rest.ends_with('.') => rest.trim_end().into(),
+        _ => title,
+    }
 }
 
 /// The level of an entry: a heading's level, and 1 for every other

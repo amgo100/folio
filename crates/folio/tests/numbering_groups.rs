@@ -292,3 +292,68 @@ fn variants_restarting_a_shared_counter_differently_warn() {
         "{found:?}"
     );
 }
+
+/// #448: instances that each variant of a group shows alone at the same
+/// place are numbered in the order they are written, not by variant.
+#[test]
+fn instances_shown_by_one_variant_each_keep_source_order() {
+    let world = world(
+        "\"figure\"",
+        "Text.\n\n\
+         #figure(class: \"exam-only\", caption: [Space one])[]\n\n\
+         #figure(class: \"scheme-only\", caption: [Answer one])[A.]\n\n\
+         Between.\n\n\
+         #figure(class: \"exam-only\", caption: [Space two])[]\n\n\
+         #figure(class: \"scheme-only\", caption: [Answer two])[B.]\n",
+    );
+    assert_eq!(numbers(&world, "exam"), ["figure: 1", "figure: 3"]);
+    assert_eq!(numbers(&world, "markscheme"), ["figure: 2", "figure: 4"]);
+}
+
+/// #448 in loops and calls: the instances of each iteration, and an
+/// instance a closure makes, are numbered where they are made.
+#[test]
+fn source_order_holds_in_loops_and_calls() {
+    let world = world(
+        "\"figure\"",
+        "#let answer(x) = figure(class: \"scheme-only\", caption: [Answer])[#x]\n\n\
+         #for i in range(3) [\n\
+           #figure(class: \"exam-only\", caption: [Space])[]\n\n\
+           #figure(class: \"scheme-only\", caption: [Answer])[A.]\n\
+         ]\n\n\
+         #figure(class: \"exam-only\", caption: [Last space])[]\n\n\
+         #answer[Last answer.]\n",
+    );
+    assert_eq!(
+        numbers(&world, "exam"),
+        ["figure: 1", "figure: 3", "figure: 5", "figure: 7"]
+    );
+    assert_eq!(
+        numbers(&world, "markscheme"),
+        ["figure: 2", "figure: 4", "figure: 6", "figure: 8"]
+    );
+}
+
+/// #448 across an included file: instances in it are numbered where the
+/// file is included.
+#[test]
+fn source_order_holds_across_included_files() {
+    let mut world = World::new(&manifest("\"figure\"", "")).unwrap();
+    world.set_source("styles/main.fsty", STYLE).unwrap();
+    world
+        .set_source(
+            "main.fol",
+            "#figure(class: \"exam-only\", caption: [Space])[]\n\n\
+             #include \"answers.fol\"\n\n\
+             #figure(class: \"exam-only\", caption: [Space two])[]\n",
+        )
+        .unwrap();
+    world
+        .set_source(
+            "answers.fol",
+            "#figure(class: \"scheme-only\", caption: [Answer])[A.]\n",
+        )
+        .unwrap();
+    assert_eq!(numbers(&world, "exam"), ["figure: 1", "figure: 3"]);
+    assert_eq!(numbers(&world, "markscheme"), ["figure: 2"]);
+}

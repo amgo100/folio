@@ -317,3 +317,75 @@ proptest! {
         prop_assert!(break_lines(&p, &widths, &params, Some(far)).optimal);
     }
 }
+
+/// How full each line but the last is, as a fraction of its width.
+fn fills(p: &Breakable, ends: &[usize], widths: &[f64], params: &Params) -> Vec<f64> {
+    let mut start = &p.start;
+    let mut out = Vec::new();
+    for (line, &e) in ends.iter().enumerate().take(ends.len() - 1) {
+        let end = &p.candidates[e];
+        let m = p.measure(start, end, line, widths, params);
+        out.push(m.natural / m.width);
+        start = end;
+    }
+    out
+}
+
+/// A justified paragraph of a hyphenated word and wide unbreakable objects
+/// (inline quantities), few to a line, is not broken after a lone
+/// fragment of the word to keep its other lines fuller (#351).
+#[test]
+fn wide_objects_do_not_leave_a_lone_fragment() {
+    let params = Params {
+        justify: true,
+        indent: 0.0,
+        ragged_stretch: 20.0,
+        protrusion: false,
+    };
+    // "Quanti-ties" and the quantities after it, each with its comma.
+    let mut pieces = vec![Piece::Word(vec![35.0, 18.0])];
+    for w in [70.0, 62.0, 75.0, 66.0, 48.0, 46.0, 58.0, 82.0, 55.0] {
+        pieces.push(Piece::Word(vec![w]));
+    }
+    let p = paragraph(&pieces, 2.6, 3.5);
+    let widths = [328.8];
+    let broken = break_lines(&p, &widths, &params, None);
+    assert_well_formed(&p, &broken.ends);
+    let fills = fills(&p, &broken.ends, &widths, &params);
+    assert!(fills.iter().all(|f| *f > 0.5), "{fills:?}");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Of breaks that leave lines no glue can fill, the final pass takes
+    /// the fuller: a paragraph of pieces at most half a line wide never
+    /// has a line but the last that is less than a quarter full while a
+    /// piece that would fit waits on the next line.
+    #[test]
+    fn hopeless_lines_are_as_full_as_they_can_be(
+        widths in prop::collection::vec(0.15..0.5f64, 2..12),
+        justify in any::<bool>(),
+    ) {
+        let width = 100.0;
+        let pieces: Vec<Piece> = widths.iter().map(|w| Piece::Word(vec![w * width])).collect();
+        let p = paragraph(&pieces, 2.0, 1.0);
+        let params = Params { justify, indent: 0.0, ragged_stretch: 20.0, protrusion: false };
+        let broken = break_lines(&p, &[width], &params, None);
+        assert_well_formed(&p, &broken.ends);
+        let mut start = &p.start;
+        for (line, &e) in broken.ends.iter().enumerate() {
+            let end = &p.candidates[e];
+            let m = p.measure(start, end, line, &[width], &params);
+            if e + 1 < p.candidates.len() {
+                let next = &p.candidates[e + 1];
+                let longer = p.measure(start, next, line, &[width], &params);
+                prop_assert!(
+                    m.natural >= 0.25 * width || longer.is_overfull(),
+                    "line {line} is {} of {width}, and could take more", m.natural
+                );
+            }
+            start = end;
+        }
+    }
+}
