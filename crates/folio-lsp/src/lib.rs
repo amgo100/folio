@@ -4,8 +4,9 @@
 //! [`Connection`](lsp_server::Connection), synchronously, without an async
 //! runtime. It loads the project with the library's loader
 //! ([`folio::loader`]), applies the client's unsaved buffers on top of it as
-//! source edits, and checks every build the manifest declares
-//! ([`folio::check_builds`]) on a thread of its own after each edit. It
+//! source edits, and checks every build the manifest declares, in each
+//! version of a shuffled paper ([`folio::check_versioned_builds`]), on a
+//! thread of its own after each edit. It
 //! publishes their diagnostics, resolved against the snapshot taken with the
 //! check ([`folio::World::snapshot`]), for every file they are in.
 //!

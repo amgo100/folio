@@ -537,3 +537,30 @@ fn does_not_read_a_file_that_now_leads_outside_the_project() {
     );
     assert!(world.file("notes.txt").is_none());
 }
+
+/// The files each version of a shuffled paper writes are outputs, and are
+/// not read as the project's files (SPEC §6.4).
+#[test]
+fn the_outputs_of_versions_are_not_read() {
+    let (dir, mut loader, mut world, _) = project(&[
+        ("main.fol", "= Forces\n"),
+        ("out/main-exam-A.pdf", "%PDF-"),
+        ("out/main-exam-B.pdf", "%PDF-"),
+        ("out/main-exam.pdf", "%PDF-"),
+    ]);
+    let root = dir.path();
+    write(
+        root,
+        "folio.toml",
+        &format!("{MANIFEST}versions = [\"A\", \"B\"]\n[variants.exam]\ntargets = [\"pdf\"]\n"),
+    );
+    let update = loader
+        .update(&mut world, [root.join("folio.toml")], &mut Vec::new())
+        .unwrap();
+    assert!(update.errors.is_none(), "{:?}", update.errors);
+    assert!(world.file("out/main-exam-A.pdf").is_none());
+    assert!(world.file("out/main-exam-B.pdf").is_none());
+    // The paper in source order is not written, so a file at its path is
+    // the project's.
+    assert!(world.file("out/main-exam.pdf").is_some());
+}

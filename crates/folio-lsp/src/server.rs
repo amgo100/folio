@@ -802,10 +802,15 @@ impl Server<'_> {
         // one stays unless it is dropped here.
         let hidden = path.split('/').any(|part| part.starts_with('.'));
         if let Some(world) = self.world_mut() {
-            let output = world.builds().iter().any(|(variant, target)| {
+            // The files every build writes, each version's among them.
+            let output = world.versioned_builds().iter().any(|build| {
                 world
                     .manifest()
-                    .output_path(variant.as_ref(), *target)
+                    .versioned_output_path(
+                        build.variant.as_ref(),
+                        build.version.as_ref(),
+                        build.target,
+                    )
                     .is_some_and(|out| out.as_str() == path)
             });
             if (hidden || output) && world.remove_source(&path) {
@@ -921,7 +926,10 @@ impl Server<'_> {
         };
         let handle = world.clone();
         let snapshot = world.snapshot();
-        let builds = world.builds();
+        // Every build, in each version of a shuffled paper, as `folio
+        // check` checks them: a diagnostic one version gives reaches the
+        // editor too.
+        let builds = world.versioned_builds();
         let root = project.root.clone();
         let open: HashMap<String, Uri> = self
             .docs
@@ -936,7 +944,7 @@ impl Server<'_> {
         let spawned = thread::Builder::new()
             .name("folio-lsp-check".into())
             .spawn(move || {
-                let outputs = folio::check_builds(&handle, builds);
+                let outputs = folio::check_versioned_builds(&handle, builds);
                 // The next edit waits for every handle to go.
                 drop(handle);
                 let mut diagnostics = Vec::new();

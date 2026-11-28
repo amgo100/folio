@@ -880,3 +880,44 @@ fn text_data_files_have_ids() {
     assert!(world.id("data/bank.yaml").is_none());
     assert_eq!(world.path(id), None);
 }
+
+/// `compile_all` builds every variant in every version of a shuffled
+/// paper, each as `compile_versioned` builds it (SPEC §6.4).
+#[test]
+fn compile_all_builds_every_version() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/versions");
+    let mut loader = folio::loader::Loader::new(&root).unwrap();
+    let mut world = loader.world(World::builder()).unwrap();
+    loader.load(&mut world, &mut Vec::new()).unwrap();
+    let outputs = folio::compile_all(&world);
+    let builds: Vec<(Option<&str>, Option<&str>)> = outputs
+        .iter()
+        .map(|o| {
+            (
+                o.variant.as_ref().map(Name::as_str),
+                o.version.as_ref().map(Name::as_str),
+            )
+        })
+        .collect();
+    assert_eq!(
+        builds,
+        [
+            (Some("exam"), Some("A")),
+            (Some("markscheme"), Some("A")),
+            (Some("exam"), Some("B")),
+            (Some("markscheme"), Some("B")),
+        ]
+    );
+    for output in outputs {
+        let compiled = output.result.unwrap();
+        assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
+        let alone = folio::compile_versioned(
+            &world,
+            output.target,
+            output.variant.as_ref(),
+            output.version.as_ref(),
+        )
+        .unwrap();
+        assert_eq!(compiled.output, alone.output);
+    }
+}

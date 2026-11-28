@@ -696,3 +696,24 @@ fn preview_round_trip(prefix: &str, at: usize, line: u32, character: u32) {
     drop(ws);
     client.shut_down();
 }
+
+/// Every version of a shuffled paper is checked (SPEC §6.4): an error that
+/// only one version gives reaches the editor.
+#[test]
+fn every_version_is_checked() {
+    let manifest = format!("{}versions = [\"A\", \"B\"]\n", manifest(folio::VERSION));
+    let dir = project(&manifest, "= Forces\n\n#if version == \"B\" [#nope]\n");
+    let main = uri(&dir.path().join("main.fol"));
+    let mut client = Client::start(dir.path(), |_| {});
+    client.settle();
+    let found = client
+        .diagnostics(&main)
+        .expect("diagnostics are published");
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0]["severity"], 1);
+    assert_eq!(
+        found[0]["range"]["start"],
+        json!({ "line": 2, "character": 21 })
+    );
+    client.shut_down();
+}
