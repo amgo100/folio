@@ -242,7 +242,7 @@ impl Properties {
 /// is where the text stage sets every marker. Each entry goes with the work
 /// that reads the property: hanging markers with layout, `template` with render
 /// templates (§5.3), and the others with pages and running elements
-/// (§7.1, §7.8), the baseline grid (§7.3), tables (§7.4), floats (§7.5),
+/// (§7.1, §7.8), the baseline grid (§7.3), floats (§7.5),
 /// margin notes (§7.6) and text wrap (§7.7). Properties of other targets
 /// (slides, animation, export) and of drawings are not listed: a static or
 /// PDF build ignores them by design. Nor is `width`: images read it, and
@@ -265,7 +265,6 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
         // Markers are set inside the first line until layout hangs them.
         "marker-position" => "hanging markers",
         "trailer" => "block trailers",
-        "column-tracks" => "tables",
         "grid-snap" | "baseline-grid" => "the baseline grid",
         "header" | "footer" | "content" => "page headers, footers and content",
         "margin-column" => "margin columns",
@@ -557,6 +556,16 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     prop("wrap-gap", Length, pt(6.0), Layout);
     prop("wrap-shape", Any, Value::Auto, Layout);
     prop("column-tracks", Any, Value::Auto, Layout);
+    // SPEC §7.4: tables. The heights of a grid's rows, as `column-tracks`
+    // gives the widths of its columns: lengths are the least height of a
+    // row, `auto`, `fr` and the rest grow with its content. A row breaks
+    // across pages only with `row-breakable: true` on its grid.
+    prop("row-tracks", Any, Value::Auto, Layout);
+    prop("row-breakable", Bool, Value::Bool(false), Layout);
+    // The rule under a grid's header rows, drawn at the foot of the last
+    // of them across the grid's content, wherever they are set again: a
+    // border such as `0.5pt solid black`, or `none` (D-62-2).
+    prop("header-rule", Any, Value::None, Layout);
 
     group = GroupId::PAGE;
     let mut prop =

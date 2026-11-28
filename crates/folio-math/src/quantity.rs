@@ -190,6 +190,90 @@ impl Default for NumberFormat {
     }
 }
 
+/// The nodes of a row with its numbers written in a format (SPEC §8.1):
+/// a number literal (`9.81`, `12345`) with the format's decimal marker and
+/// digit groups, and a comma written between two numbers without spaces
+/// ([`Node::decimal_comma`]) as the decimal marker where the format's is a
+/// comma, and as punctuation elsewhere: `9,81` is `9,81` in Polish and
+/// `9, 81` in English. Node for node, so that the row keeps its length;
+/// a node that is not a literal (a quantity's own digits, already
+/// written) stays as it is.
+pub fn format_numbers<'a>(
+    nodes: &'a [Node],
+    format: &NumberFormat,
+) -> std::borrow::Cow<'a, [Node]> {
+    let decimal_comma = format.decimal_marker == ',';
+    let mut out: Option<Vec<Node>> = None;
+    for (i, node) in nodes.iter().enumerate() {
+        // Whether the node holds the digits after a decimal comma.
+        let after_comma =
+            decimal_comma && i > 0 && matches!(&nodes[i - 1], Node::Number(c) if c.text == ",");
+        let new = match node {
+            // A comma between two numbers.
+            Node::Number(atom) if atom.text == "," => (!decimal_comma).then(|| {
+                Node::Symbol(Atom {
+                    text: ",".into(),
+                    class: MathClass::Punctuation,
+                    span: atom.span,
+                })
+            }),
+            Node::Number(atom) => written(atom, format, after_comma).map(Node::Number),
+            // The digits after a decimal comma may carry scripts: `9,81^2`.
+            Node::Attach(attach) if after_comma => match attach.base.nodes() {
+                [Node::Number(base)] => written(base, format, true).map(|base| {
+                    Node::Attach(Arc::new(Attach {
+                        base: Row::new([Node::Number(base)]),
+                        ..Attach::clone(attach)
+                    }))
+                }),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(new) = new {
+            out.get_or_insert_with(|| nodes.to_vec())[i] = new;
+        }
+    }
+    match out {
+        Some(nodes) => std::borrow::Cow::Owned(nodes),
+        None => std::borrow::Cow::Borrowed(nodes),
+    }
+}
+
+/// A number's atom written in a format, or `None` where that leaves it as
+/// it is.
+fn written(atom: &Atom, format: &NumberFormat, fraction: bool) -> Option<Atom> {
+    write_literal(&atom.text, format, fraction)
+        .filter(|text| *text != atom.text)
+        .map(|text| Atom {
+            text,
+            class: atom.class,
+            span: atom.span,
+        })
+}
+
+/// A number literal (ASCII digits, with a point and more digits) written
+/// in a format, or `None` for text that is no literal. `fraction` writes
+/// the digits as those after a decimal marker, grouped from their start.
+fn write_literal(text: &str, format: &NumberFormat, fraction: bool) -> Option<EcoString> {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (int, frac) = text.split_once('.').unwrap_or((text, ""));
+    if !digits(int) || !(frac.is_empty() || digits(frac)) || (fraction && text.contains('.')) {
+        return None;
+    }
+    let mut out = EcoString::new();
+    if fraction {
+        group_frac(int, format, &mut out);
+        return Some(out);
+    }
+    group_int(int, format, &mut out);
+    if !frac.is_empty() {
+        out.push(format.decimal_marker);
+        group_frac(frac, format, &mut out);
+    }
+    Some(out)
+}
+
 /// A decimal number: a sign, the digits before and after the decimal
 /// marker, and a power of ten. It keeps the digits as written, so that
 /// `9.80` keeps its last zero, a significant figure.
@@ -425,27 +509,153 @@ impl Number {
         }
     }
 
+    /// The power of ten of its `figure`th significant figure, counted from
+    /// its first digit that is not zero: `-2` for the third of `9.81`, `1`
+    /// for the first of `60`, `4` for the second of `2.6e5`, `-3` for the
+    /// second of `0.020`. Zero has no significant figures: its place is
+    /// that of its last digit (`-2` for `0.00`).
+    pub fn figure_place(&self, figure: u32) -> i64 {
+        let exponent = i64::from(self.exponent.unwrap_or(0));
+        let digits = self.int.bytes().chain(self.frac.bytes());
+        match digits.clone().position(|b| b != b'0') {
+            // The first figure stands at the place `int.len() - 1 - first`.
+            Some(first) => {
+                exponent + self.int.len() as i64 - 1 - first as i64 - i64::from(figure.max(1) - 1)
+            }
+            None => exponent - self.frac.len() as i64,
+        }
+    }
+
+    /// The number rounded, half away from zero, to the decimal place of
+    /// the power of ten `place`, with the power of ten it is written with
+    /// counted in: `12.3456` to `-3` is `12.346`, `1.5` to `-1` stays
+    /// `1.5`, `0.2` to `-3` is `0.200`, `1234` to `2` is `1200`, `3.004e8`
+    /// to `6` is `3.00e8`, and `0.4` to `0` is `0`. A number with a power
+    /// of ten stays in that form, and one whose mantissa a carry made one
+    /// digit longer moves the marker and the power with it, as
+    /// [`round`](Self::round) does: `9.996e3` to `1` is `1.000e4`.
+    pub fn round_to_place(&self, place: i64) -> Self {
+        // The place within the mantissa, bounded so that the number of
+        // digits stays within what a number may have.
+        let max = MAX_DIGITS as i64;
+        let q = (place - i64::from(self.exponent.unwrap_or(0)))
+            .clamp(self.int.len() as i64 - max, max - 1);
+        // Leading zeros so that a digit stands at the place itself, and
+        // the cut is never before the first digit.
+        let pad = usize::try_from(q + 1 - self.int.len() as i64).unwrap_or(0);
+        let mut all: Vec<u8> = std::iter::repeat_n(b'0', pad)
+            .chain(self.int.bytes())
+            .chain(self.frac.bytes())
+            .collect();
+        let mut int_len = pad + self.int.len();
+        // The digits before `cut` stay.
+        let cut = usize::try_from(int_len as i64 - q).expect("the padding keeps it positive");
+        let up = all.get(cut).is_some_and(|&b| b >= b'5');
+        all.resize(cut, b'0');
+        if up {
+            let mut i = all.len();
+            loop {
+                if i == 0 {
+                    all.insert(0, b'1');
+                    int_len += 1;
+                    break;
+                }
+                i -= 1;
+                if all[i] == b'9' {
+                    all[i] = b'0';
+                } else {
+                    all[i] += 1;
+                    break;
+                }
+            }
+        }
+        // Digits before the marker that were cut off become zeros.
+        if all.len() < int_len {
+            all.resize(int_len, b'0');
+        }
+        let mut frac = all.split_off(int_len);
+        let lead = all.iter().take_while(|&&b| b == b'0').count();
+        all.drain(..lead.min(all.len().saturating_sub(1)));
+        if all.is_empty() {
+            all.push(b'0');
+        }
+        let mut exponent = self.exponent;
+        if let Some(power) = exponent
+            && all.len() > self.int.len()
+            && power < MAX_EXPONENT
+        {
+            // A carry made the mantissa longer: `10.0e3` is `1.00e4`, and
+            // the last digit stays at the same place. A zero that only
+            // holds a place before the marker is dropped.
+            let last = all.pop().expect("a longer mantissa has digits");
+            if !(frac.is_empty() && last == b'0' && q > 0) {
+                frac.insert(0, last);
+            }
+            exponent = Some(power + 1);
+        }
+        let text = |digits: Vec<u8>| EcoString::from(String::from_utf8(digits).expect("digits"));
+        let number = Self {
+            negative: self.negative,
+            int: text(all),
+            frac: text(frac),
+            exponent,
+        };
+        if number.is_zero() && number.exponent.is_some() {
+            // Zero needs no power of ten: `0`, not `0 × 10³`, with the
+            // decimals that reach the place (`1.5e-3` to `-2` is `0.00`).
+            let decimals = -(q + i64::from(self.exponent.unwrap_or(0)));
+            return Self {
+                negative: false,
+                int: "0".into(),
+                frac: "0"
+                    .repeat(usize::try_from(decimals).unwrap_or(0).min(MAX_DIGITS - 1))
+                    .into(),
+                exponent: None,
+            };
+        }
+        Self {
+            negative: number.negative && !number.is_zero(),
+            ..number
+        }
+    }
+
+    /// The same number written with a lower power of ten, its marker moved
+    /// to the right: `1.00e4` with `3` is `10.0e3`. A number with a power
+    /// no higher than `exponent`, or none, stays as it is.
+    pub fn with_exponent(&self, exponent: i32) -> Self {
+        let Some(own) = self.exponent.filter(|&own| own > exponent) else {
+            return self.clone();
+        };
+        let shift = usize::try_from(i64::from(own) - i64::from(exponent))
+            .unwrap_or(usize::MAX)
+            .min(MAX_DIGITS);
+        let mut int: String = self.int.to_string();
+        let mut frac: String = self.frac.to_string();
+        let moved = shift.min(frac.len());
+        int.push_str(&frac[..moved]);
+        frac.drain(..moved);
+        int.push_str(&"0".repeat(shift - moved));
+        let int = int.trim_start_matches('0');
+        Self {
+            negative: self.negative,
+            int: if int.is_empty() {
+                "0".into()
+            } else {
+                int.into()
+            },
+            frac: frac.into(),
+            exponent: Some(exponent),
+        }
+    }
+
     /// The mantissa as it is written in a format: `12 345.678`, `9,81`,
     /// without the sign and the power of ten.
     pub fn format_mantissa(&self, format: &NumberFormat) -> EcoString {
         let mut out = EcoString::new();
-        let min = format.group_min_digits.max(1) as usize;
-        let group = self.int.len() >= min;
-        for (i, c) in self.int.chars().enumerate() {
-            if group && i > 0 && (self.int.len() - i).is_multiple_of(3) {
-                out.push(format.group_separator);
-            }
-            out.push(c);
-        }
+        group_int(&self.int, format, &mut out);
         if !self.frac.is_empty() {
             out.push(format.decimal_marker);
-            let group = self.frac.len() >= min;
-            for (i, c) in self.frac.chars().enumerate() {
-                if group && i > 0 && i.is_multiple_of(3) {
-                    out.push(format.group_separator);
-                }
-                out.push(c);
-            }
+            group_frac(&self.frac, format, &mut out);
         }
         out
     }
@@ -484,6 +694,32 @@ impl Display for Number {
 impl Debug for Number {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "Number({self})")
+    }
+}
+
+/// The digits before a decimal marker, grouped in threes from the marker
+/// when there are at least [`NumberFormat::group_min_digits`] of them.
+pub(crate) fn group_int(digits: &str, format: &NumberFormat, out: &mut EcoString) {
+    let min = format.group_min_digits.max(1) as usize;
+    let group = digits.len() >= min;
+    for (i, c) in digits.chars().enumerate() {
+        if group && i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(format.group_separator);
+        }
+        out.push(c);
+    }
+}
+
+/// The digits after a decimal marker, grouped in threes from the marker
+/// when there are at least [`NumberFormat::group_min_digits`] of them.
+pub(crate) fn group_frac(digits: &str, format: &NumberFormat, out: &mut EcoString) {
+    let min = format.group_min_digits.max(1) as usize;
+    let group = digits.len() >= min;
+    for (i, c) in digits.chars().enumerate() {
+        if group && i > 0 && i.is_multiple_of(3) {
+            out.push(format.group_separator);
+        }
+        out.push(c);
     }
 }
 

@@ -19,8 +19,9 @@
 //!   `bold(x)`, `mat(1, 2; 3, 4)` (with `delim: "|"; ` first for other
 //!   delimiters), `cases(..)`, and an accent without a name of its own as
 //!   `accent(x, ^)` or `accent(x, U+20E1)`;
-//! - quantities as they are set in the formula's number format, without
-//!   the separators of digit groups: `9.81 m s^(−2)`;
+//! - numbers and quantities as they are set in the formula's number
+//!   format, without the separators of digit groups: `9.81 m s^(−2)`, and
+//!   `9,81` where the decimal marker is a comma;
 //! - lines separated by `; `, without their labels or alignment points.
 //!
 //! The reading is at most [`MAX_LEN`] bytes long, so that a formula built
@@ -156,7 +157,7 @@ impl Reader<'_> {
 
     /// The nodes of a row, in order.
     fn row(&mut self, row: &Row) {
-        for node in row.nodes() {
+        for node in crate::quantity::format_numbers(row.nodes(), self.format).iter() {
             if self.full {
                 return;
             }
@@ -186,6 +187,8 @@ impl Reader<'_> {
     fn node(&mut self, node: &Node) {
         match node {
             Node::Ident(atom) | Node::Text(atom) => self.word(&atom.text),
+            // A comma between numbers that is their decimal marker.
+            Node::Number(atom) if atom.text == "," => self.glue(","),
             Node::Number(atom) => {
                 // Digit groups read as one number.
                 let digits: String = atom.text.chars().filter(|c| !c.is_whitespace()).collect();
