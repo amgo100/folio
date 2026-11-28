@@ -110,6 +110,12 @@ fn a_body_reorders_its_elements() {
         "#shuffle(seed: \"A\")[\n= One\n\nRead *carefully*.\n\n= Two\n\n= Three\n]\n",
     );
     assert_eq!(text(&w, None), "Three Read carefully. Two One");
+    // A figure is a float, and moves like the blocks.
+    let w = world(
+        PLAIN,
+        "#shuffle(seed: \"A\")[\n#figure[F.]\n\n= Two\n\n= Three\n]\n",
+    );
+    assert_eq!(text(&w, None), "Three Two F.");
 }
 
 /// SPEC §6.4: questions shuffled with one seed are numbered in printed

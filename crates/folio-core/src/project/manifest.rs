@@ -405,7 +405,7 @@ impl Manifest {
         // With the default output path, outputs can still meet in one file
         // through the names of variants and versions; it is reported at
         // the version that brings the second.
-        if root.get("output").is_none()
+        if output.path.span.is_detached()
             && let Some(project) = &project
             && !project.versions.is_empty()
         {
@@ -415,9 +415,11 @@ impl Manifest {
                 &project.versions,
                 &project.entry.v,
             );
-            if let Some((file, Some(version))) = same_file(&files)
-                && let DiagSpanKind::Range { range, .. } = version.span.get()
-            {
+            if let Some((file, version)) = same_file(&files) {
+                let range = match version.map(|v| v.span.get()) {
+                    Some(DiagSpanKind::Range { range, .. }) => range,
+                    _ => 0..0,
+                };
                 cx.error(
                     range,
                     eco_format!("two outputs would be written to `{file}`"),

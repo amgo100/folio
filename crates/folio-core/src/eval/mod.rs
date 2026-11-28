@@ -350,7 +350,9 @@ pub(crate) fn call_function(
             span,
             "a stylesheet value cannot depend on the variant or the version",
         )
-        .with_hint("put rules for one variant in `@variant name { .. }`")),
+        .with_hint(
+            "put rules for one variant in `@variant name { .. }`; read `version` in content",
+        )),
         Err(Stop::Reported) => Err(EvalError::new(span, "this function cannot be evaluated")),
     }
 }

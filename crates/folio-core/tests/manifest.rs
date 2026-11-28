@@ -362,6 +362,14 @@ fn versions() {
         "two outputs would be written to `out/main-exam-x-y.pdf` @ \"y\"\n  \
          hint: rename a variant or version, or set `[output] path`\n"
     );
+    // An `[output]` table without a path keeps the default, and its check.
+    assert!(
+        errors(
+            "versions = [\"x-y\", \"y\"]\n\n[variants.exam]\ntargets = [\"pdf\"]\n\n\
+             [variants.exam-x]\ntargets = [\"pdf\"]\n\n[output]\n"
+        )
+        .starts_with("two outputs would be written to `out/main-exam-x-y.pdf`")
+    );
     // Only the versions write files, never the paper in source order.
     let m = parse(&format!("{PROJECT}versions = [\"A\"]\n"));
     assert_eq!(m.output_path(None, Target::Pdf), None);
