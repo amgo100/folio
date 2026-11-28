@@ -7,11 +7,11 @@ use std::collections::BTreeMap;
 
 use ecow::{EcoString, eco_format};
 use folio_component::{Color, QualifiedName, Scalar};
-use folio_syntax::{Span, ast};
+use folio_syntax::{DiagSpan, FileId, Span, ast};
 
 use super::MAX_NESTING;
 use super::content::Content;
-use super::error::{At, EvalError, EvalResult, StrResult, bail};
+use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::ops::{self, a_type};
 use super::value::{
     Applied, Arg, Args, Array, Dict, Func, ITEM, Module, NODE, NativeFunc, Scope, Value,
@@ -440,7 +440,9 @@ fn parse_hex(hex: &str) -> StrResult<Color> {
 
 /// Reads a file of the project by a path relative to the file being
 /// evaluated. This is the only way scripts read files (SPEC §4.4).
-fn load(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(Bytes, Span)> {
+/// Returns the file's contents, the span of the path, and the file id that
+/// errors in the file can point into, if it has one.
+fn load(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(Bytes, Span, Option<FileId>)> {
     let arg = args
         .eat()
         .ok_or_else(|| EvalError::new(args.span, "missing argument: path"))?;
@@ -454,36 +456,85 @@ fn load(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(Bytes, Span)> {
         );
     };
     report_read(vm.db, path.clone(), FileKind::Data);
-    let bytes = if let Some(file) = data_file(vm.db, vm.project, path.clone()) {
-        file.bytes(vm.db).clone()
+    let (bytes, id) = if let Some(file) = data_file(vm.db, vm.project, path.clone()) {
+        (file.bytes(vm.db).clone(), file.id(vm.db))
     } else if let Some(file) = source_file(vm.db, vm.project, path.clone()) {
-        Bytes::from(file.source(vm.db).text().as_bytes())
+        let source = file.source(vm.db);
+        (Bytes::from(source.text().as_bytes()), Some(source.id()))
     } else {
         bail!(span, "file `{}` not found", path.as_str());
     };
     vm.alloc(bytes.len() as u64, span)?;
-    Ok((bytes, span))
+    Ok((bytes, span, id))
 }
 
-fn load_text(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(EcoString, Span)> {
-    let (bytes, span) = load(vm, args)?;
+fn load_text(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(EcoString, Span, Option<FileId>)> {
+    let (bytes, span, id) = load(vm, args)?;
     match std::str::from_utf8(&bytes) {
-        Ok(text) => Ok((text.into(), span)),
-        Err(_) => bail!(span, "the file is not valid UTF-8 text"),
+        Ok(text) => Ok((text.into(), span, id)),
+        Err(err) => Err(DataError {
+            message: "the file is not valid UTF-8 text".into(),
+            range: Some(err.valid_up_to()..err.valid_up_to() + 1),
+        }
+        .at(span, id)),
+    }
+}
+
+/// An error in a data file, with the bytes of the file it is about.
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct DataError {
+    /// What is wrong, and where by line and column.
+    message: EcoString,
+    /// The bytes it is about, if it knows.
+    range: Option<std::ops::Range<usize>>,
+}
+
+impl DataError {
+    /// An error at a byte range of `text`, whose line and column the
+    /// message ends with.
+    fn new(text: &str, message: impl Into<EcoString>, range: std::ops::Range<usize>) -> Self {
+        let (line, column) = line_column(text, range.start);
+        Self {
+            message: eco_format!("{} (line {line}, column {column})", message.into()),
+            range: Some(range),
+        }
+    }
+
+    /// The error of a call at `span` that read a file with the id, which
+    /// shows the place in the file too when it has an id.
+    fn at(self, span: Span, id: Option<FileId>) -> Stop {
+        let mut error = EvalError::new(span, self.message);
+        if let (Some(id), Some(range)) = (id, self.range) {
+            error = error.with_related(DiagSpan::from_range(id, range), "here in the file");
+        }
+        error.into()
     }
 }
 
 /// `read(path)`: a file's text.
 fn read(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    load_text(vm, args).map(|(text, _)| Value::Str(text))
+    load_text(vm, args).map(|(text, ..)| Value::Str(text))
 }
 
 /// `json(path)`: the data in a JSON file.
 fn json(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    let (bytes, span) = load(vm, args)?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|err| eco_format!("the file is not valid JSON: {err}"))
-        .at(span)?;
+    let (bytes, span, id) = load(vm, args)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| {
+        // serde_json counts columns in bytes, from 1.
+        let text = String::from_utf8_lossy(&bytes);
+        let start = text
+            .split_inclusive('\n')
+            .take(err.line().saturating_sub(1))
+            .map(str::len)
+            .sum::<usize>()
+            + err.column().saturating_sub(1);
+        let start = text.floor_char_boundary(start.min(text.len()));
+        DataError {
+            message: eco_format!("the file is not valid JSON: {err}"),
+            range: Some(start..text.ceil_char_boundary((start + 1).min(text.len()))),
+        }
+        .at(span, id)
+    })?;
     Ok(from_json(value))
 }
 
@@ -507,21 +558,18 @@ fn from_json(value: serde_json::Value) -> Value {
 
 /// `toml(path)`: the data in a TOML file.
 fn toml(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    let (text, span) = load_text(vm, args)?;
-    let table = ::toml::de::DeTable::parse(&text)
-        .map_err(|err| {
-            let message = err.message().trim_end();
-            match err.span() {
-                Some(range) => {
-                    let (line, column) = line_column(&text, range.start);
-                    eco_format!(
-                        "the file is not valid TOML: {message} (line {line}, column {column})"
-                    )
-                }
-                None => eco_format!("the file is not valid TOML: {message}"),
-            }
-        })
-        .at(span)?;
+    let (text, span, id) = load_text(vm, args)?;
+    let table = ::toml::de::DeTable::parse(&text).map_err(|err| {
+        let message = eco_format!("the file is not valid TOML: {}", err.message().trim_end());
+        match err.span() {
+            Some(range) => DataError::new(&text, message, range),
+            None => DataError {
+                message,
+                range: None,
+            },
+        }
+        .at(span, id)
+    })?;
     Ok(from_toml_table(table.into_inner()))
 }
 
@@ -581,7 +629,7 @@ fn from_toml(value: ::toml::de::DeValue<'_>) -> Value {
 /// quotes (RFC 4180).
 fn csv(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let delimiter: Option<EcoString> = args.named("delimiter")?;
-    let (text, span) = load_text(vm, args)?;
+    let (text, span, id) = load_text(vm, args)?;
     let delimiter = match delimiter.as_deref().map(|d| {
         let mut chars = d.chars();
         (chars.next(), chars.next())
@@ -590,41 +638,42 @@ fn csv(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
         Some((Some(c), None)) => c,
         Some(_) => bail!(span, "the delimiter must be one character"),
     };
-    parse_csv(&text, delimiter).at(span)
+    parse_csv(&text, delimiter).map_err(|err| err.at(span, id))
 }
 
-fn parse_csv(text: &str, delimiter: char) -> StrResult<Value> {
+fn parse_csv(text: &str, delimiter: char) -> Result<Value, DataError> {
     let mut rows = Array::new();
     let mut row = Array::new();
     let mut field = EcoString::new();
-    let mut chars = text.chars().peekable();
-    let mut quoted = false;
-    let mut line = 1;
+    let mut chars = text.char_indices().peekable();
+    // Where the quoted field being read starts.
+    let mut quoted = None;
     let mut any = false;
-    while let Some(c) = chars.next() {
+    while let Some((i, c)) = chars.next() {
         any = true;
-        if quoted {
+        if quoted.is_some() {
             match c {
-                '"' if chars.peek() == Some(&'"') => {
+                '"' if chars.peek().is_some_and(|&(_, c)| c == '"') => {
                     chars.next();
                     field.push('"');
                 }
-                '"' => quoted = false,
-                '\n' => {
-                    line += 1;
-                    field.push(c);
-                }
+                '"' => quoted = None,
                 _ => field.push(c),
             }
             continue;
         }
         match c {
-            '"' if field.is_empty() => quoted = true,
-            '"' => return Err(eco_format!("a quote in an unquoted field in line {line}")),
+            '"' if field.is_empty() => quoted = Some(i),
+            '"' => {
+                return Err(DataError::new(
+                    text,
+                    "a quote in an unquoted field",
+                    i..i + 1,
+                ));
+            }
             c if c == delimiter => row.push(Value::Str(std::mem::take(&mut field))),
-            '\r' if chars.peek() == Some(&'\n') => {}
+            '\r' if chars.peek().is_some_and(|&(_, c)| c == '\n') => {}
             '\n' => {
-                line += 1;
                 row.push(Value::Str(std::mem::take(&mut field)));
                 rows.push(Value::Array(std::mem::take(&mut row)));
                 any = false;
@@ -632,8 +681,12 @@ fn parse_csv(text: &str, delimiter: char) -> StrResult<Value> {
             _ => field.push(c),
         }
     }
-    if quoted {
-        return Err("a quoted field does not end".into());
+    if let Some(start) = quoted {
+        return Err(DataError::new(
+            text,
+            "a quoted field does not end",
+            start..start + 1,
+        ));
     }
     if any {
         row.push(Value::Str(field));
@@ -649,8 +702,8 @@ fn parse_csv(text: &str, delimiter: char) -> StrResult<Value> {
 /// and floats; quoted ones are strings. An alias is the value of its
 /// anchor.
 fn yaml(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    let (text, span) = load_text(vm, args)?;
-    parse_yaml(&text).at(span)
+    let (text, span, id) = load_text(vm, args)?;
+    parse_yaml(&text).map_err(|err| err.at(span, id))
 }
 
 /// A mapping or sequence that is being read, with the anchor it sets.
@@ -660,21 +713,31 @@ enum YamlNode {
     Mapping(Dict, Option<EcoString>, usize),
 }
 
-fn parse_yaml(text: &str) -> StrResult<Value> {
+fn parse_yaml(text: &str) -> Result<Value, DataError> {
     use saphyr_parser::{Event, Parser, ScalarStyle};
 
-    let at = |marker: saphyr_parser::Marker| {
-        eco_format!("line {}, column {}", marker.line(), marker.col() + 1)
+    // The parser counts characters; diagnostics count bytes.
+    let byte = |chars: usize| {
+        text.char_indices()
+            .nth(chars)
+            .map_or(text.len(), |(i, _)| i)
+    };
+    let error = |message: EcoString, span: saphyr_parser::Span| {
+        let start = byte(span.start.index());
+        let end = byte(span.end.index().max(span.start.index() + 1));
+        DataError::new(text, message, start..end)
+    };
+    let error_at = |message: EcoString, marker: saphyr_parser::Marker| {
+        error(message, saphyr_parser::Span::new(marker, marker))
     };
     let mut stack: Vec<YamlNode> = Vec::new();
     let mut anchors: BTreeMap<usize, Value> = BTreeMap::new();
     let mut documents = Vec::new();
     for event in Parser::new_from_str(text) {
         let (event, place) = event.map_err(|err| {
-            eco_format!(
-                "the file is not valid YAML: {} ({})",
-                err.info(),
-                at(*err.marker())
+            error_at(
+                eco_format!("the file is not valid YAML: {}", err.info()),
+                *err.marker(),
             )
         })?;
         // A value that is complete, with the anchor it sets.
@@ -683,7 +746,7 @@ fn parse_yaml(text: &str) -> StrResult<Value> {
                 let tag = tag.as_deref().filter(|tag| tag.is_yaml_core_schema());
                 let value =
                     yaml_scalar(&text, style == ScalarStyle::Plain, tag.map(|t| &*t.suffix))
-                        .map_err(|err| eco_format!("{err} ({})", at(place.start)))?;
+                        .map_err(|err| error(err, place))?;
                 // A key keeps the text it is written as.
                 if let Some(YamlNode::Mapping(_, key @ None, _)) = stack.last_mut() {
                     if anchor > 0 {
@@ -698,7 +761,7 @@ fn parse_yaml(text: &str) -> StrResult<Value> {
                 let value = anchors
                     .get(&id)
                     .cloned()
-                    .ok_or_else(|| eco_format!("an alias names no anchor ({})", at(place.start)))?;
+                    .ok_or_else(|| error("an alias names no anchor".into(), place))?;
                 if let Some(YamlNode::Mapping(_, key @ None, _)) = stack.last_mut() {
                     *key = Some(match value {
                         Value::Str(s) => s,
@@ -706,10 +769,7 @@ fn parse_yaml(text: &str) -> StrResult<Value> {
                         Value::Bool(b) => eco_format!("{b}"),
                         Value::None => "null".into(),
                         _ => {
-                            return Err(eco_format!(
-                                "a key must be a scalar ({})",
-                                at(place.start)
-                            ));
+                            return Err(error("a key must be a scalar".into(), place));
                         }
                     });
                     continue;
@@ -718,12 +778,12 @@ fn parse_yaml(text: &str) -> StrResult<Value> {
             }
             Event::SequenceStart(anchor, _) | Event::MappingStart(anchor, _) => {
                 if let Some(YamlNode::Mapping(_, None, _)) = stack.last() {
-                    return Err(eco_format!("a key must be a scalar ({})", at(place.start)));
+                    return Err(error("a key must be a scalar".into(), place));
                 }
                 if stack.len() >= MAX_NESTING as usize {
-                    return Err(eco_format!(
-                        "the data is nested more than {MAX_NESTING} deep ({})",
-                        at(place.start)
+                    return Err(error(
+                        eco_format!("the data is nested more than {MAX_NESTING} deep"),
+                        place,
                     ));
                 }
                 stack.push(if matches!(event, Event::SequenceStart(..)) {
@@ -752,10 +812,7 @@ fn parse_yaml(text: &str) -> StrResult<Value> {
             Some(YamlNode::Mapping(map, key, _)) => {
                 let key = key.take().expect("a value follows its key");
                 if map.get(&key).is_some() {
-                    return Err(eco_format!(
-                        "the key `{key}` is given twice ({})",
-                        at(place.start)
-                    ));
+                    return Err(error(eco_format!("the key `{key}` is given twice"), place));
                 }
                 map.insert(key, value);
             }
@@ -769,9 +826,10 @@ fn parse_yaml(text: &str) -> StrResult<Value> {
     match documents.len() {
         0 => Ok(Value::None),
         1 => Ok(documents.pop().expect("there is one")),
-        n => Err(eco_format!(
-            "the file holds {n} YAML documents, and `yaml` reads one"
-        )),
+        n => Err(DataError {
+            message: eco_format!("the file holds {n} YAML documents, and `yaml` reads one"),
+            range: None,
+        }),
     }
 }
 
@@ -1721,29 +1779,30 @@ mod tests {
         assert_eq!(parse_yaml("").unwrap().repr(), "none");
         assert_eq!(parse_yaml("--- 3\n").unwrap().repr(), "3");
         assert_eq!(
-            parse_yaml("--- 1\n--- 2\n").unwrap_err(),
+            parse_yaml("--- 1\n--- 2\n").unwrap_err().message,
             "the file holds 2 YAML documents, and `yaml` reads one"
         );
         // Errors say where.
         assert_eq!(
-            parse_yaml("a: 1\na: 2\n").unwrap_err(),
+            parse_yaml("a: 1\na: 2\n").unwrap_err().message,
             "the key `a` is given twice (line 2, column 4)"
         );
         assert!(
             parse_yaml("a: [1, 2\n")
                 .unwrap_err()
+                .message
                 .starts_with("the file is not valid YAML: ")
         );
         assert_eq!(
-            parse_yaml("? [1]\n: x\n").unwrap_err(),
+            parse_yaml("? [1]\n: x\n").unwrap_err().message,
             "a key must be a scalar (line 1, column 3)"
         );
         assert_eq!(
-            parse_yaml("x: .nan\n").unwrap_err(),
+            parse_yaml("x: .nan\n").unwrap_err().message,
             "`.nan` is not a number Folio can hold (line 1, column 4)"
         );
         assert_eq!(
-            parse_yaml("x: !!int abc\n").unwrap_err(),
+            parse_yaml("x: !!int abc\n").unwrap_err().message,
             "`abc` is not an integer (line 1, column 4)"
         );
         // Nesting stops at the limit, however deep the file goes.
@@ -1752,6 +1811,7 @@ mod tests {
         assert!(
             parse_yaml(&block)
                 .unwrap_err()
+                .message
                 .starts_with("the data is nested more than 100 deep")
         );
         let ok = format!("{}{}", "[".repeat(100), "]".repeat(100));

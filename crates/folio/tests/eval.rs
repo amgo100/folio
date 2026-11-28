@@ -1020,6 +1020,23 @@ fn data_files() {
             && errors[1].contains("(line 3, column "),
         "{errors:?}"
     );
+    // Each points into its data file too, which the terminal shows, and so
+    // does a snapshot taken after the build.
+    let errors: Vec<_> = compiled
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .cloned()
+        .collect();
+    for (error, path) in errors.iter().zip(["d.toml", "d.yaml"]) {
+        let place = diag::locate(&logged.world, error.related[0].span).unwrap();
+        assert_eq!(place.path, path);
+    }
+    let text = diag::render(&logged.world, &errors, false);
+    assert!(text.contains("b = "), "{text}");
+    assert!(text.contains("here in the file"), "{text}");
+    let snapshot = logged.world.snapshot();
+    assert_eq!(diag::render(&snapshot, &errors, false), text);
 }
 
 /// A question bank in a data file drives generated content; an edit to
