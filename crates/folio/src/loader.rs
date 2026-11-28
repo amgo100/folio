@@ -484,7 +484,7 @@ impl Loader {
                     update.changed.insert(path);
                 }
             }
-            let file = ProjectFile::refused(rel.to_owned(), target, Unreadable::LinkOutOfProject);
+            let file = ProjectFile::not_taken(rel.to_owned(), target, Unreadable::LinkOutOfProject);
             set(world, file, &mut update.changed)?;
             return Ok(());
         }
@@ -575,7 +575,7 @@ impl Loader {
                     bytes: Some(bytes),
                     refused: None,
                 },
-                Err(e) => ProjectFile::refused(
+                Err(e) => ProjectFile::not_taken(
                     rel.to_owned(),
                     canonical,
                     Unreadable::Io(e.to_string().into()),
@@ -751,7 +751,7 @@ impl Loader {
                     match entry.path().canonicalize() {
                         Ok(target) if target.starts_with(&self.canonical) => Some(target),
                         Ok(target) if is_source(&path) && target.is_file() => {
-                            files.push(ProjectFile::refused(
+                            files.push(ProjectFile::not_taken(
                                 path,
                                 target,
                                 Unreadable::LinkOutOfProject,
@@ -822,9 +822,11 @@ impl Loader {
                         bytes: Some(bytes),
                         refused: None,
                     },
-                    Err(e) => {
-                        ProjectFile::refused(path, canonical, Unreadable::Io(e.to_string().into()))
-                    }
+                    Err(e) => ProjectFile::not_taken(
+                        path,
+                        canonical,
+                        Unreadable::Io(e.to_string().into()),
+                    ),
                 });
             }
         }
@@ -1012,7 +1014,7 @@ fn unreadable(path: &str, why: &str) -> Diagnostic {
 
 impl ProjectFile {
     /// A source that was not taken, and why.
-    fn refused(path: String, disk: PathBuf, why: Unreadable) -> Self {
+    fn not_taken(path: String, disk: PathBuf, why: Unreadable) -> Self {
         Self {
             path,
             disk,
