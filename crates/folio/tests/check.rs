@@ -257,7 +257,8 @@ fn layout_diagnostics_have_codes_and_spans() {
         at("overfull-line"),
         "Pneumonoultramicroscopicsilicovolcanoconiosis"
     );
-    assert_eq!(at("underfull-line"), "Stretched spaces");
+    // The final pass sets the fuller of the lines it cannot fill (#351).
+    assert_eq!(at("underfull-line"), "Stretched spaces in");
     assert!(at("widow").starts_with("The widow paragraph"));
     assert!(at("orphan").starts_with("The orphan paragraph"));
     assert_eq!(at("broken-keep-together"), "heading(class: \"kept\")[Kept]");

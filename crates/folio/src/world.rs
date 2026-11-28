@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use ecow::{EcoString, EcoVec};
 use folio_component::{Name, Registry, Target};
 use folio_core::db::{
-    BuildMode, Bytes, DataFile, Durability, FileContent, FileRead, Project, SourceFile,
+    BuildMode, Bytes, DataFile, Durability, FileContent, FileRead, Project, SourceFile, Unreadable,
 };
 use folio_core::eval::Limits;
 use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
@@ -59,6 +59,10 @@ pub struct World {
     /// point into.
     manifest_text: Lines<String>,
     lockfile_text: Option<Lines<String>>,
+    /// The bytes before the text of each source read from disk that start
+    /// with some: a byte order mark, which the loader leaves out of the
+    /// text ([`Files::text_start`]).
+    text_starts: Arc<BTreeMap<FileId, usize>>,
     /// In a long-lived world, what the last compilation of each build that
     /// did not panic gave, shared by every handle.
     kept: Option<Arc<Kept>>,
@@ -254,6 +258,7 @@ impl WorldBuilder {
             lockfile,
             BTreeMap::new(),
             BTreeMap::new(),
+            BTreeMap::new(),
             self.bundled_fonts,
             EcoVec::new(),
             EcoVec::new(),
@@ -266,6 +271,7 @@ impl WorldBuilder {
         .lockfile_durability(Durability::MEDIUM)
         .sources_durability(Durability::LOW)
         .files_durability(Durability::LOW)
+        .unreadable_durability(Durability::LOW)
         .bundled_fonts_durability(Durability::HIGH)
         .fonts_durability(Durability::MEDIUM)
         .system_fonts_durability(Durability::MEDIUM)
@@ -281,6 +287,7 @@ impl WorldBuilder {
             nodes: Arc::default(),
             manifest_text: Lines::new(manifest_text.to_owned()),
             lockfile_text: lockfile_text.map(|text| Lines::new(text.to_owned())),
+            text_starts: Arc::default(),
             kept: self.long_lived.then(Arc::default),
         })
     }
@@ -452,7 +459,12 @@ impl World {
     }
 
     /// Sets the text of a `.fol` or `.fsty` file, adding the file if it is
-    /// new. A file that exists is reparsed only where its text changed.
+    /// new. A file that exists is reparsed only where its text changed. The
+    /// text replaces a file at the path that the loader could not take
+    /// ([`Self::unreadable_sources`]), as an editor's buffer does. New text
+    /// no longer follows a byte order mark of the file on disk, so byte
+    /// ranges in the file ([`Files::text_start`]) count from its start
+    /// until the loader reads the file again.
     pub fn set_source(&mut self, path: &str, text: &str) -> Result<FileId, WorldError> {
         let path = project_path(path)?;
         let stylesheet = match path.extension() {
@@ -460,6 +472,7 @@ impl World {
             Some("fsty") => true,
             _ => return Err(WorldError::NotSource(path)),
         };
+        self.set_unreadable(path.as_str(), None);
         if let Some(file) = self.project.sources(&self.db).get(&path).copied() {
             let old = file.source(&self.db).clone();
             if old.text() != text {
@@ -467,6 +480,7 @@ impl World {
                 source.replace(text);
                 set_source(&mut self.db, file, source.clone());
                 Arc::make_mut(&mut self.nodes).update(old.root(), source.root());
+                self.set_text_start(old.id(), 0);
             }
             return Ok(old.id());
         }
@@ -484,6 +498,37 @@ impl World {
             .new(&self.db);
         self.edit_sources(|sources| sources.insert(path, file));
         Ok(id)
+    }
+
+    /// The `.fol` and `.fsty` files that the loader found but could not
+    /// take as sources, in path order, with why. A build that names one
+    /// reports why; a host that runs no build, such as `folio fmt`, can
+    /// report them itself.
+    pub fn unreadable_sources(&self) -> impl Iterator<Item = (&ProjectPath, &Unreadable)> {
+        self.project.unreadable(&self.db).iter()
+    }
+
+    /// Records that the host found a `.fol` or `.fsty` file at `path` but
+    /// could not take it as a source, and why, or with `None` that it no
+    /// longer has such a file there; a build that names it then says why it
+    /// was not taken. Returns whether this changed the world.
+    pub(crate) fn set_unreadable(&mut self, path: &str, why: Option<Unreadable>) -> bool {
+        let Some(path) = ProjectPath::new(path) else {
+            return false;
+        };
+        if self.project.unreadable(&self.db).get(&path) == why.as_ref() {
+            return false;
+        }
+        let mut unreadable = self.project.unreadable(&self.db).clone();
+        match why {
+            Some(why) => unreadable.insert(path, why),
+            None => unreadable.remove(&path),
+        };
+        self.project
+            .set_unreadable(&mut self.db)
+            .with_durability(Durability::LOW)
+            .to(unreadable);
+        true
     }
 
     /// Replaces a byte range of a source's text, reparsing only the smallest
@@ -516,6 +561,8 @@ impl World {
         let reparsed = source.edit(range, with);
         set_source(&mut self.db, file, source.clone());
         Arc::make_mut(&mut self.nodes).update(old.root(), source.root());
+        // The text is no longer the file's, as in `set_source`.
+        self.set_text_start(old.id(), 0);
         Ok(reparsed)
     }
 
@@ -534,7 +581,23 @@ impl World {
         let id = file.source(&self.db).id();
         Arc::make_mut(&mut self.nodes).remove(id);
         Arc::make_mut(&mut self.ids).release(&path);
+        self.set_text_start(id, 0);
         true
+    }
+
+    /// Records how many bytes come before the text of a source in its file
+    /// on disk: a byte order mark's three, which the loader leaves out of
+    /// the text, or none.
+    pub(crate) fn set_text_start(&mut self, id: FileId, bytes: usize) {
+        if self.text_starts.get(&id).copied().unwrap_or(0) == bytes {
+            return;
+        }
+        let starts = Arc::make_mut(&mut self.text_starts);
+        if bytes == 0 {
+            starts.remove(&id);
+        } else {
+            starts.insert(id, bytes);
+        }
     }
 
     /// The paths of the world's sources, in path order.
@@ -547,7 +610,8 @@ impl World {
         self.project.files(&self.db).keys()
     }
 
-    /// The paths of the world's sources and image and data files that are
+    /// The paths of the world's sources, image and data files and
+    /// unreadable sources ([`Self::set_unreadable`]) that are
     /// `dir` or under it, every one when it is empty, without walking the
     /// others.
     pub(crate) fn paths_under(&self, dir: &str) -> Vec<String> {
@@ -576,6 +640,7 @@ impl World {
         let mut out = Vec::new();
         under(self.project.sources(&self.db), dir, &mut out);
         under(self.project.files(&self.db), dir, &mut out);
+        under(self.project.unreadable(&self.db), dir, &mut out);
         out
     }
 
@@ -620,6 +685,7 @@ impl World {
             data: Arc::new(data),
             manifest_text: self.manifest_text.clone(),
             lockfile_text: self.lockfile_text.clone(),
+            text_starts: self.text_starts.clone(),
         }
     }
 
@@ -873,6 +939,10 @@ impl Files for World {
                 .or_else(|| self.data_lines(id)),
         }
     }
+
+    fn text_start(&self, id: FileId) -> usize {
+        self.text_starts.get(&id).copied().unwrap_or(0)
+    }
 }
 
 impl Debug for World {
@@ -968,6 +1038,7 @@ pub struct Snapshot {
     data: Arc<BTreeMap<FileId, FileContent>>,
     manifest_text: Lines<String>,
     lockfile_text: Option<Lines<String>>,
+    text_starts: Arc<BTreeMap<FileId, usize>>,
 }
 
 impl Snapshot {
@@ -1004,6 +1075,10 @@ impl Files for Snapshot {
                 .map(|source| source.lines().clone())
                 .or_else(|| content_lines(self.data.get(&id)?)),
         }
+    }
+
+    fn text_start(&self, id: FileId) -> usize {
+        self.text_starts.get(&id).copied().unwrap_or(0)
     }
 }
 

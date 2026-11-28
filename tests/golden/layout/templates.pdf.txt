@@ -1,0 +1,163 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 419.53 × 595.28, 2 page(s)
+page 1 419.53 × 595.28, 18 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 19.83..501.00
+    box (0.00, 0.00) 334.49 × 504.35 main.fol:1:2 baselines 19.83..501.00
+      box (0.00, 0.00) 334.49 × 28.44 main.fol:1:2 baselines 19.83..19.83 keep penalty 10000
+        text (0.00, 19.83) SourceSerif4-Bold 16.00 w 216.16 28 glyph(s) "Projectiles: worked examples"
+      box (0.00, 44.44) 334.49 × 459.92 main.fol:25:1 baselines 16.72..456.57
+        box (0.00, 0.00) 334.49 × 24.32 main.fol:25:1 baselines 16.72..16.72 keep penalty 10000
+          text (0.00, 16.72) SourceSerif4-Bold 13.00 w 64.08 11 glyph(s) "Projectiles"
+        box (0.00, 29.32) 334.49 × 60.63 main.fol:27:1 baselines 13.61..54.03
+          text (0.00, 13.61) SourceSerif4-Regular 10.00 w 334.49 78 glyph(s) "A projectile moves under gravity alone, so its horizontal velocity is constant"
+          text (0.00, 33.82) SourceSerif4-Regular 10.00 w 131.36 33 glyph(s) "and its vertical acceleration is "
+          box (131.36, 29.40) 5.02 × 6.47 main.fol:27:122
+            text (0.00, 4.42) NewCMMath-Regular 10.00 w 5.02 1 glyph(s) "𝑔"
+          text (136.38, 33.82) SourceSerif4-Bold 10.00 w 54.69 10 glyph(s) " downwards"
+          text (191.08, 33.82) SourceSerif4-Regular 10.00 w 143.41 33 glyph(s) ". Resolve every motion into these"
+          text (0.00, 54.03) SourceSerif4-Regular 10.00 w 252.80 54 glyph(s) "two components before you use the equations of motion."
+        box (0.00, 97.95) 334.49 × 138.64 main.fol:29:2 baselines 22.11..119.00
+          shape (0.00, 0.00) M(0.00, 0.00) L(334.49, 0.00) L(334.49, 138.64) L(0.00, 138.64) Z fill #e8eef7ff NonZero main.fol:29:2
+          shape (0.00, 0.00) M(0.75, 0.00) L(0.75, 138.64) stroke #1f5fa8ff 1.50 Butt Miter main.fol:29:2
+          box (12.84, 8.50) 310.31 × 20.85 main.fol:29:2 baselines 13.61..13.41
+            box (0.00, 0.00) 310.31 × 20.85 main.fol:29:2 baselines 13.61..13.41
+              box (0.00, 0.00) 265.42 × 20.85 main.fol:29:2 baselines 13.61..13.61
+                text (0.00, 13.61) SourceSerif4-Bold 10.00 w 154.13 34 glyph(s) "Example 1.1: Projectile on a slope"
+              box (265.42, 0.00) 44.89 × 20.85 main.fol:29:2 baselines 13.41..13.41
+                shape (0.00, 0.00) M(0.00, 0.25) L(44.89, 0.25) stroke #1f5fa8ff 0.50 Butt Miter main.fol:29:2
+                shape (0.00, 0.00) M(0.00, 20.60) L(44.89, 20.60) stroke #1f5fa8ff 0.50 Butt Miter main.fol:29:2
+                shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 20.85) stroke #1f5fa8ff 0.50 Butt Miter main.fol:29:2
+                shape (0.00, 0.00) M(44.64, 0.00) L(44.64, 20.85) stroke #1f5fa8ff 0.50 Butt Miter main.fol:29:2
+                text (3.90, 13.41) SourceSerif4-Regular 8.50 w 37.09 9 glyph(s) fill #1f5fa8ff "extension"
+          box (12.84, 34.36) 310.31 × 40.42 main.fol:29:2 baselines 13.61..33.82
+            box (0.00, 0.00) 310.31 × 40.42 main.fol:30:14 baselines 13.61..33.82
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 201.11 47 glyph(s) "A particle is projected up a plane inclined at "
+              box (201.11, 9.19) 6.40 × 4.53 main.fol:30:61
+                text (0.00, 4.42) NewCMMath-Regular 10.00 w 6.40 1 glyph(s) "𝛼"
+              text (207.51, 13.61) SourceSerif4-Regular 10.00 w 102.81 24 glyph(s) " to the horizontal, with"
+              text (0.00, 33.82) SourceSerif4-Regular 10.00 w 28.27 6 glyph(s) "speed "
+              box (28.27, 29.40) 5.72 × 4.53 main.fol:30:99
+                text (0.00, 4.42) NewCMMath-Regular 10.00 w 5.72 1 glyph(s) "𝑢"
+              text (33.99, 33.82) SourceSerif4-Regular 10.00 w 53.02 13 glyph(s) " at an angle "
+              box (87.01, 26.77) 4.83 × 7.16 main.fol:30:115
+                text (0.00, 7.05) NewCMMath-Regular 10.00 w 4.83 1 glyph(s) "𝜃"
+              text (91.84, 33.82) SourceSerif4-Regular 10.00 w 159.86 38 glyph(s) " to the plane. Find the time of flight."
+          box (12.84, 79.78) 310.31 × 0.40 main.fol:29:2
+            shape (0.00, 0.00) M(0.00, 0.20) L(310.31, 0.20) stroke #000000ff 0.40 Butt Miter main.fol:29:2
+          box (12.84, 85.18) 310.31 × 41.96 main.fol:29:2 baselines 13.61..33.82
+            box (0.00, 0.00) 310.31 × 41.96 main.fol:31:13 baselines 13.61..33.82
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 310.31 69 glyph(s) "Resolve along and perpendicular to the plane. Perpendicular to it the"
+              text (0.00, 33.82) SourceSerif4-Regular 10.00 w 66.90 16 glyph(s) "acceleration is "
+              box (66.90, 29.34) 28.13 × 6.53 main.fol:31:99
+                text (0.00, 4.48) NewCMMath-Regular 10.00 w 5.02 1 glyph(s) "𝑔"
+                text (6.69, 4.48) NewCMMath-Regular 10.00 w 13.38 3 glyph(s) "cos"
+                text (21.73, 4.48) NewCMMath-Regular 10.00 w 6.40 1 glyph(s) "𝛼"
+              text (95.03, 33.82) SourceSerif4-Regular 10.00 w 120.39 29 glyph(s) ", so the particle lands after "
+              box (215.42, 27.56) 16.95 × 6.37 main.fol:31:142
+                text (0.00, 6.26) NewCMMath-Regular 10.00 w 3.61 1 glyph(s) "𝑡"
+                text (6.39, 6.26) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+              box (232.37, 24.95) 23.86 × 13.76 main.fol:31:142
+                text (1.00, 4.93) NewCMMath-Regular 7.00 w 3.50 1 glyph(s) "2"
+                text (4.50, 4.93) NewCMMath-Regular 7.00 w 4.00 1 glyph(s) "𝑢"
+                text (9.67, 4.93) NewCMMath-Regular 7.00 w 8.65 3 glyph(s) "sin"
+                text (19.48, 4.93) NewCMMath-Regular 7.00 w 3.38 1 glyph(s) "𝜃"
+                text (2.08, 12.32) NewCMMath-Regular 7.00 w 3.51 1 glyph(s) "𝑔"
+                text (6.77, 12.32) NewCMMath-Regular 7.00 w 9.37 3 glyph(s) "cos"
+                text (17.30, 12.32) NewCMMath-Regular 7.00 w 4.48 1 glyph(s) "𝛼"
+                shape (1.00, 6.17) M(0.00, 0.00) L(21.86, 0.00) L(21.86, 0.40) L(0.00, 0.40) Z fill #000000ff NonZero main.fol:31:147
+              text (256.23, 33.82) SourceSerif4-Regular 10.00 w 3.00 1 glyph(s) "."
+        box (0.00, 244.59) 334.49 × 116.94 main.fol:34:2 baselines 22.11..98.17
+          shape (0.00, 0.00) M(0.00, 0.00) L(334.49, 0.00) L(334.49, 116.94) L(0.00, 116.94) Z fill #e8eef7ff NonZero main.fol:34:2
+          shape (0.00, 0.00) M(0.75, 0.00) L(0.75, 116.94) stroke #1f5fa8ff 1.50 Butt Miter main.fol:34:2
+          box (12.84, 8.50) 310.31 × 20.21 main.fol:34:2 baselines 13.61..13.61
+            box (0.00, 0.00) 310.31 × 20.21 main.fol:34:2 baselines 13.61..13.61
+              box (0.00, 0.00) 310.31 × 20.21 main.fol:34:2 baselines 13.61..13.61
+                text (0.00, 13.61) SourceSerif4-Bold 10.00 w 144.42 30 glyph(s) "Example 1.2: Horizontal launch"
+          box (12.84, 33.71) 310.31 × 40.42 main.fol:34:2 baselines 13.61..33.82
+            box (0.00, 0.00) 310.31 × 40.42 main.fol:35:14 baselines 13.61..33.82
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 137.22 33 glyph(s) "A ball is thrown horizontally at "
+              box (137.22, 6.11) 30.60 × 10.00 main.fol:35:47
+                text (0.00, 7.50) NewCMMath-Regular 10.00 w 10.00 2 glyph(s) "12"
+                text (13.33, 7.50) NewCMMath-Regular 10.00 w 17.27 3 glyph(s) "m/s"
+              text (167.82, 13.61) SourceSerif4-Regular 10.00 w 95.76 24 glyph(s) " from the top of a cliff "
+              box (263.58, 6.84) 21.74 × 6.99 main.fol:35:82
+                text (0.00, 6.77) NewCMMath-Regular 10.00 w 10.00 2 glyph(s) "45"
+                text (13.33, 6.77) NewCMMath-Regular 10.00 w 8.41 1 glyph(s) "m"
+              text (285.33, 13.61) SourceSerif4-Regular 10.00 w 24.98 6 glyph(s) " high."
+              text (0.00, 33.82) SourceSerif4-Regular 10.00 w 202.31 47 glyph(s) "How far from the foot of the cliff does it land?"
+          box (12.84, 79.13) 310.31 × 0.40 main.fol:34:2
+            shape (0.00, 0.00) M(0.00, 0.20) L(310.31, 0.20) stroke #000000ff 0.40 Butt Miter main.fol:34:2
+          box (12.84, 84.53) 310.31 × 20.90 main.fol:34:2 baselines 13.64..13.64
+            box (0.00, 0.00) 310.31 × 20.90 main.fol:36:13 baselines 13.64..13.64
+              text (0.00, 13.64) SourceSerif4-Regular 10.00 w 30.45 9 glyph(s) "It falls "
+              box (30.45, 6.87) 21.74 × 6.99 main.fol:36:22
+                text (0.00, 6.77) NewCMMath-Regular 10.00 w 10.00 2 glyph(s) "45"
+                text (13.33, 6.77) NewCMMath-Regular 10.00 w 8.41 1 glyph(s) "m"
+              text (52.19, 13.64) SourceSerif4-Regular 10.00 w 13.70 4 glyph(s) " in "
+              box (65.89, 7.38) 16.95 × 6.37 main.fol:36:34
+                text (0.00, 6.26) NewCMMath-Regular 10.00 w 3.61 1 glyph(s) "𝑡"
+                text (6.39, 6.26) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+              box (82.84, 3.25) 46.51 × 14.40 main.fol:36:34
+                text (0.00, 9.90) NewCMMath-Regular 10.00 w 10.00 1 glyph(s) "√"
+                shape (10.00, 0.40) M(0.00, 0.00) L(23.17, 0.00) L(23.17, 0.40) L(0.00, 0.40) Z fill #000000ff NonZero main.fol:36:39
+                text (10.00, 10.39) NewCMMath-Regular 10.00 w 5.00 1 glyph(s) "2"
+                text (17.22, 10.39) NewCMMath-Regular 10.00 w 2.78 1 glyph(s) "⋅"
+                text (24.20, 6.45) NewCMMath-Regular 7.00 w 7.00 2 glyph(s) "45"
+                text (23.22, 13.84) NewCMMath-Regular 7.00 w 8.95 3 glyph(s) "9.8"
+                shape (23.22, 7.69) M(0.00, 0.00) L(8.95, 0.00) L(8.95, 0.40) L(0.00, 0.40) Z fill #000000ff NonZero main.fol:36:50
+                text (35.95, 10.39) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+              box (129.34, 6.98) 25.05 × 6.88 main.fol:36:34
+                text (0.00, 6.66) NewCMMath-Regular 10.00 w 17.78 4 glyph(s) "3.03"
+                text (21.11, 6.66) NewCMMath-Regular 10.00 w 3.94 1 glyph(s) "s"
+              text (154.40, 13.64) SourceSerif4-Regular 10.00 w 52.37 14 glyph(s) ", so it lands "
+              box (206.77, 6.87) 29.52 × 6.99 main.fol:36:85
+                text (0.00, 6.77) NewCMMath-Regular 10.00 w 17.78 4 glyph(s) "36.4"
+                text (21.11, 6.77) NewCMMath-Regular 10.00 w 8.41 1 glyph(s) "m"
+              text (236.29, 13.64) SourceSerif4-Regular 10.00 w 64.04 15 glyph(s) " from the foot."
+        box (0.00, 369.53) 334.49 × 65.43 main.fol:39:2 baselines 27.11..47.32
+          shape (0.00, 0.00) M(0.00, 0.00) L(334.49, 0.00) L(334.49, 65.43) L(0.00, 65.43) Z fill #e8eef7ff NonZero main.fol:39:2
+          shape (0.00, 0.00) M(0.75, 0.00) L(0.75, 65.43) stroke #1f5fa8ff 1.50 Butt Miter main.fol:39:2
+          box (12.84, 13.50) 310.31 × 40.42 main.fol:39:2 baselines 13.61..33.82
+            box (0.00, 0.00) 310.31 × 40.42 main.fol:40:14 baselines 13.61..33.82
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 307.19 70 glyph(s) "A stone is dropped from rest. How far does it fall in the first two sec"
+              text (307.19, 13.61) SourceSerif4-Regular 10.00 w 3.12 1 glyph(s) "-"
+              text (0.00, 33.82) SourceSerif4-Regular 10.00 w 25.72 5 glyph(s) "onds?"
+        box (0.00, 442.96) 334.49 × 16.96 main.fol:44:1 baselines 13.61..13.61
+          text (0.00, 13.61) SourceSerif4-Regular 10.00 w 67.70 14 glyph(s) "The method of "
+          text (67.70, 13.61) SourceSerif4-Regular 10.00 w 54.19 11 glyph(s) "Example\u{a0}1.1"
+          text (121.89, 13.61) SourceSerif4-Regular 10.00 w 131.65 30 glyph(s) " works for any inclined plane."
+page 2 419.53 × 595.28, 2 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 16.11..50.53
+    box (0.00, 0.00) 334.49 × 61.94 main.fol:1:2 baselines 16.11..50.53
+      box (0.00, 0.00) 334.49 × 61.94 main.fol:25:1 baselines 16.11..50.53
+        box (0.00, 0.00) 334.49 × 28.97 main.fol:46:2 baselines 16.11..17.56
+          box (0.00, 0.00) 334.49 × 28.97 main.fol:46:2 baselines 16.11..17.56
+            box (0.00, 0.00) 113.39 × 28.97 main.fol:46:2 baselines 16.11..16.11
+              text (5.00, 16.11) SourceSerif4-It 10.00 w 92.10 21 glyph(s) "Range on level ground"
+            box (113.39, 0.00) 221.10 × 28.97 main.fol:46:2 baselines 17.56..17.56
+              box (5.00, 2.50) 211.10 × 23.97 main.fol:47:3 baselines 15.06..15.06
+                text (76.32, 15.06) NewCMMath-Regular 10.00 w 7.83 1 glyph(s) "𝑅"
+                text (86.93, 15.06) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                text (98.49, 8.29) NewCMMath-Regular 10.00 w 5.72 1 glyph(s) "𝑢"
+                text (104.21, 4.66) NewCMMath-Regular 7.00 w 3.50 1 glyph(s) "2"
+                text (109.93, 8.29) NewCMMath-Regular 10.00 w 12.35 3 glyph(s) "sin"
+                text (123.95, 8.29) NewCMMath-Regular 10.00 w 5.00 1 glyph(s) "2"
+                text (128.95, 8.29) NewCMMath-Regular 10.00 w 4.83 1 glyph(s) "𝜃"
+                text (113.62, 21.92) NewCMMath-Regular 10.00 w 5.02 1 glyph(s) "𝑔"
+                shape (98.49, 12.36) M(0.00, 0.00) L(35.29, 0.00) L(35.29, 0.40) L(0.00, 0.40) Z fill #000000ff NonZero main.fol:47:9
+        box (0.00, 32.97) 334.49 × 28.97 main.fol:50:2 baselines 16.11..17.56
+          box (0.00, 0.00) 334.49 × 28.97 main.fol:50:2 baselines 16.11..17.56
+            box (0.00, 0.00) 113.39 × 28.97 main.fol:50:2 baselines 16.11..16.11
+              text (5.00, 16.11) SourceSerif4-It 10.00 w 62.08 15 glyph(s) "Greatest height"
+            box (113.39, 0.00) 221.10 × 28.97 main.fol:50:2 baselines 17.56..17.56
+              box (5.00, 2.50) 211.10 × 23.97 main.fol:51:3 baselines 15.06..15.06
+                text (76.16, 15.06) NewCMMath-Regular 10.00 w 9.09 1 glyph(s) "𝐻"
+                text (88.03, 15.06) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                text (99.59, 8.29) NewCMMath-Regular 10.00 w 5.72 1 glyph(s) "𝑢"
+                text (105.31, 4.66) NewCMMath-Regular 7.00 w 3.50 1 glyph(s) "2"
+                text (111.03, 8.29) NewCMMath-Regular 10.00 w 12.35 3 glyph(s) "sin"
+                text (123.38, 4.66) NewCMMath-Regular 7.00 w 3.50 1 glyph(s) "2"
+                text (129.11, 8.29) NewCMMath-Regular 10.00 w 4.83 1 glyph(s) "𝜃"
+                text (111.75, 21.92) NewCMMath-Regular 10.00 w 5.00 1 glyph(s) "2"
+                text (116.75, 21.92) NewCMMath-Regular 10.00 w 5.02 1 glyph(s) "𝑔"
+                shape (99.59, 12.36) M(0.00, 0.00) L(34.35, 0.00) L(34.35, 0.40) L(0.00, 0.40) Z fill #000000ff NonZero main.fol:51:9

@@ -5,7 +5,10 @@
 //! the common tree merges the selected trees by location: an instance that
 //! several variants show is one node, holding the union of what each shows
 //! inside it, and an instance that only some show stands where they show
-//! it, after the instance they show before it. The common tree is counted
+//! it, after the instance they show before it. Instances that different
+//! variants show alone at one place go in document order: their order in
+//! a variant's document before Select, which holds what its stylesheets
+//! hide too (#448). The common tree is counted
 //! once per group and target, like a variant's own tree but without
 //! reporting anything ([`crate::resolve::count_common`]), and each variant
 //! of the group takes the values of its shared counters from it, so that
@@ -19,15 +22,17 @@
 //! them, a target overlay that changes what a group counts is a warning
 //! ([`check_target_overlays`]).
 
+use std::collections::{HashMap, HashSet};
+
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{BODY, Location, Name};
 use folio_syntax::Span;
-use std::collections::{HashMap, HashSet};
 
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Content, Element, Node, Value};
 use crate::locate::StyledChildren;
+use crate::model::document;
 use crate::pipeline::{select, selected_root};
 use crate::resolve::{Target, count_common};
 use crate::style::{NodeName, PropId, Properties, StyledNode};
@@ -97,10 +102,21 @@ pub fn common_tree(db: &dyn Db, build: Build<'_>) -> Option<CommonTree> {
         trees.push((root, &selected.styled.root));
     }
     let props = props?;
+    // Each variant's document before Select, in document order: it holds
+    // what the variant's stylesheets hide too, so it orders instances that
+    // different variants show (#448).
+    let mut orders = Vec::new();
+    for name in &group.variants {
+        let doc = document(db, project, Some(name.v.clone()), build.version(db).clone());
+        if let Some(doc) = doc.as_ref() {
+            orders.push(document_order(&doc.root));
+        }
+    }
     let mut merger = Merger {
         props,
         counter_reset: props.builtin("counter-reset"),
         differ: Vec::new(),
+        orders,
     };
     let (root, styled) = merger.merge(&trees);
     Some(CommonTree {
@@ -216,9 +232,24 @@ struct Merger<'a> {
     counter_reset: PropId,
     /// The instances whose versions differ in `counter-reset`.
     differ: Vec<Span>,
+    /// The position of each instance in each variant's document before
+    /// Select, in document order.
+    orders: Vec<HashMap<Location, usize>>,
 }
 
 impl Merger<'_> {
+    /// Whether an instance comes before another in the document: in the
+    /// first variant's document before Select that holds both, which
+    /// orders the instances of loops and calls as they were made. `false`
+    /// when no document holds both, as when each variant makes one by
+    /// script.
+    fn precedes(&self, a: Location, b: Location) -> bool {
+        self.orders
+            .iter()
+            .find_map(|order| Some(*order.get(&a)? < *order.get(&b)?))
+            .unwrap_or(false)
+    }
+
     /// Merges the versions of one instance into one element and styled
     /// node: the fullest version's, the one with the most fields that
     /// are not content (a placeholder has fewer), holding in each field of
@@ -324,7 +355,9 @@ impl Merger<'_> {
 
     /// Merges lists of instances by location: the first list's order, with
     /// each instance of a later list that the merged list lacks put after
-    /// the instance that list has before it. Each instance is merged from
+    /// the instance that list has before it, and after the instances only
+    /// earlier lists have there that come before it in a variant's document
+    /// before Select. Each instance is merged from
     /// the versions of every list that has it. Linear in the lengths of
     /// the lists.
     fn merge_lists(&mut self, lists: &[Versions<'_>]) -> (Content, Vec<StyledNode>) {
@@ -333,6 +366,7 @@ impl Merger<'_> {
         for list in lists {
             let at: HashMap<Location, usize> =
                 order.iter().enumerate().map(|(i, l)| (*l, i)).collect();
+            let here: HashSet<Location> = list.iter().map(|(e, _)| e.location).collect();
             let mut merged = Vec::with_capacity(order.len() + list.len());
             // The first instance of `order` not yet in `merged`.
             let mut next = 0;
@@ -344,7 +378,29 @@ impl Merger<'_> {
                         next = i + 1;
                     }
                     Some(_) => {}
-                    None if !versions.contains_key(&location) => merged.push(location),
+                    None if !versions.contains_key(&location) => {
+                        // Instances that only the lists before show, at
+                        // the same place, stand before it if they come
+                        // before it in the document (#448): ties go by
+                        // document order, not by which variant shows them.
+                        // The waiting run: the instances from `next` on that
+                        // this list does not have. Up to the last of them
+                        // that comes before this one, they all go first, in
+                        // their order, so that one whose place no document
+                        // tells does not hold back those after it.
+                        let run = order[next..]
+                            .iter()
+                            .take_while(|waiting| !here.contains(waiting))
+                            .count();
+                        if let Some(last) = order[next..next + run]
+                            .iter()
+                            .rposition(|&waiting| self.precedes(waiting, location))
+                        {
+                            merged.extend_from_slice(&order[next..=next + last]);
+                            next += last + 1;
+                        }
+                        merged.push(location);
+                    }
                     None => {}
                 }
                 versions.entry(location).or_default().push((element, node));
@@ -374,4 +430,25 @@ fn paired<'a>(content: &'a Content, kids: &mut StyledChildren<'a>) -> Versions<'
             _ => None,
         })
         .collect()
+}
+
+/// The position of every element instance of a tree in document order: an
+/// instance before the instances in its fields, in their order.
+fn document_order(root: &Element) -> HashMap<Location, usize> {
+    fn walk(element: &Element, out: &mut HashMap<Location, usize>) {
+        let next = out.len();
+        out.entry(element.location).or_insert(next);
+        for (_, value) in element.fields.iter() {
+            if let Value::Content(content) = value {
+                for node in content.nodes() {
+                    if let Node::Element(child) = node {
+                        walk(child, out);
+                    }
+                }
+            }
+        }
+    }
+    let mut out = HashMap::new();
+    walk(root, &mut out);
+    out
 }
