@@ -126,15 +126,18 @@ fn xml_text(data: &[u8]) -> String {
             }
             '>' => in_tag = false,
             '&' if !in_tag => {
-                let mut entity = String::new();
-                while let Some(&next) = chars.peek() {
-                    chars.next();
-                    if next == ';' {
-                        break;
+                // An entity ends at `;` within a few characters; an `&`
+                // that starts none is text.
+                let rest: String = chars.clone().take(ENTITY).collect();
+                match rest.find(';') {
+                    Some(end) => {
+                        out.extend(entity_char(&rest[..end]));
+                        for _ in rest[..=end].chars() {
+                            chars.next();
+                        }
                     }
-                    entity.push(next);
+                    None => out.push('&'),
                 }
-                out.extend(entity_char(&entity));
             }
             _ if !in_tag => out.push(c),
             _ => {}
@@ -142,6 +145,9 @@ fn xml_text(data: &[u8]) -> String {
     }
     out
 }
+
+/// The longest XML entity or character reference read, with its `;`.
+const ENTITY: usize = 12;
 
 /// The character an XML entity or character reference stands for.
 fn entity_char(entity: &str) -> Option<char> {
@@ -163,10 +169,14 @@ fn entity_char(entity: &str) -> Option<char> {
 }
 
 /// A device that keeps the Unicode text of the glyphs drawn and nothing
-/// else.
+/// else, with a space where a glyph starts a new line (it is lower or
+/// higher than the last, or left of it), so that words of two lines do not
+/// run together.
 #[derive(Default)]
 struct TextDevice {
     text: String,
+    /// Where the last glyph was drawn.
+    last: Option<kurbo::Point>,
 }
 
 impl<'a> Device<'a> for TextDevice {
@@ -178,11 +188,18 @@ impl<'a> Device<'a> for TextDevice {
     fn draw_glyph(
         &mut self,
         glyph: &Glyph<'a>,
-        _: Affine,
-        _: Affine,
+        transform: Affine,
+        glyph_transform: Affine,
         _: &Paint<'a>,
         _: &GlyphDrawMode,
     ) {
+        let at = (transform * glyph_transform) * kurbo::Point::ZERO;
+        if let Some(last) = self.last
+            && ((at.y - last.y).abs() > 0.5 || at.x < last.x)
+        {
+            self.text.push(' ');
+        }
+        self.last = Some(at);
         match glyph.as_unicode() {
             Some(BfString::Char(c)) => self.text.push(c),
             Some(BfString::String(s)) => self.text.push_str(&s),
@@ -192,4 +209,27 @@ impl<'a> Device<'a> for TextDevice {
     fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
     fn pop_clip_path(&mut self) {}
     fn pop_transparency_group(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xml_text_decodes_entities_and_keeps_stray_ampersands() {
+        assert_eq!(
+            xml_text(b"<a x='1'>AT&amp;T &#x41;&#66;</a><b>R&D notes and more</b>").trim(),
+            "AT&T AB  R&D notes and more"
+        );
+    }
+
+    #[test]
+    fn text_strings_are_read_by_their_encoding() {
+        assert_eq!(
+            text_string(&[0xFE, 0xFF, 0x00, 0x41, 0x01, 0x41]),
+            "A\u{141}"
+        );
+        assert_eq!(text_string(b"Forces"), "Forces");
+        assert_eq!(text_string(&[0xEF, 0xBB, 0xBF, 0xC5, 0x81]), "\u{141}");
+    }
 }

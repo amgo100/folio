@@ -118,3 +118,60 @@ fn only_pdf_is_checked_for_now() {
     }
     let _ = LEAK;
 }
+
+/// A world of a paper whose subject repeats the hidden answer, in strict
+/// mode, in a build mode.
+fn strict(mode: folio::BuildMode) -> World {
+    let manifest = format!("{MANIFEST}\n[formatting]\nmode = \"strict\"\n");
+    let mut world = World::builder().mode(mode).build(&manifest, None).unwrap();
+    world.set_source("paper.fsty", STYLE).unwrap();
+    world
+        .set_source(
+            "main.fol",
+            &format!(
+                "#doc(title: [Forces], subject: \"{ANSWER}\")\n\n#figure(class: \"answer\")[{ANSWER}.]\n"
+            ),
+        )
+        .unwrap();
+    world
+}
+
+fn leak_codes(diagnostics: &[Diagnostic]) -> Vec<&str> {
+    codes(diagnostics)
+        .into_iter()
+        .filter(|c| [LEAK, LEAK_TEXT].contains(c))
+        .collect()
+}
+
+#[test]
+fn strict_and_ci_builds_are_checked_without_asking() {
+    let exam = Name::new("exam").unwrap();
+    for mode in [folio::BuildMode::Build, folio::BuildMode::Ci] {
+        let world = strict(mode);
+        assert!(folio::checks_leaks_by_default(&world));
+        let compiled = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+        assert_eq!(leak_codes(&compiled.diagnostics), [LEAK_TEXT], "{mode:?}");
+        assert!(compiled.has_errors());
+        let checked = folio::check(&world, Target::Pdf, Some(&exam)).unwrap();
+        assert_eq!(leak_codes(&checked.diagnostics), [LEAK_TEXT], "{mode:?}");
+    }
+    // A build in local mode is checked only when asked.
+    let world = world(&format!(
+        "#doc(title: [Forces], subject: \"{ANSWER}\")\n\n#figure(class: \"answer\")[{ANSWER}.]\n"
+    ));
+    assert!(!folio::checks_leaks_by_default(&world));
+    let compiled = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(leak_codes(&compiled.diagnostics), Vec::<&str>::new());
+}
+
+#[test]
+fn watch_mode_checks_what_it_writes_but_not_every_edit() {
+    let world = strict(folio::BuildMode::Watch);
+    let exam = Name::new("exam").unwrap();
+    // The outputs `folio watch` writes are compiled, and checked.
+    let compiled = folio::compile(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(leak_codes(&compiled.diagnostics), [LEAK_TEXT]);
+    // The check after each edit does not write the PDF to search it.
+    let checked = folio::check(&world, Target::Pdf, Some(&exam)).unwrap();
+    assert_eq!(leak_codes(&checked.diagnostics), Vec::<&str>::new());
+}

@@ -129,7 +129,7 @@ pub(crate) struct PdfInput {
     pub(crate) structure: Tag,
     pub(crate) info: folio_pdf::Info,
     navigation: Navigation,
-    whole: DiagSpan,
+    pub(crate) whole: DiagSpan,
 }
 
 impl PdfInput {

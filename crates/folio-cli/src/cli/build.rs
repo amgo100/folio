@@ -3,10 +3,10 @@
 //! check` runs the same command without emitting or writing anything
 //! ([`Mode::Check`]).
 //!
-//! Both check each build for leaks (SPEC §6.4, [`folio::check_leaks`]) when
-//! `folio check --leaks` asks, and every build of a project in strict mode
-//! ([`folio::checks_leaks_by_default`]). A leak is an error, so a build
-//! that leaks writes no output.
+//! `folio check --leaks` checks each build for leaks (SPEC §6.4,
+//! [`folio::check_leaks`]); in a project in strict mode, compiling and
+//! checking do so without asking ([`folio::checks_leaks_by_default`]). A
+//! leak is an error, so a build that leaks writes no output.
 
 use std::collections::HashSet;
 use std::fs;
@@ -175,7 +175,8 @@ fn run(
     };
 
     let mut outputs = outputs;
-    if leaks || checks_leaks_by_default(&world) {
+    // In strict mode compiling and checking already did.
+    if leaks && !checks_leaks_by_default(&world) {
         check_for_leaks(&world, &mut outputs);
     }
 

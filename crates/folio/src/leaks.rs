@@ -83,10 +83,20 @@ fn pdf_leaks(db: &dyn Db, build: Build<'_>) -> Option<EcoVec<Diagnostic>> {
     let fonts = FontTable(fonts(db, build.project(db)));
     let document = input.document(pages, &fonts);
     provenance(&hidden, &document, &mut found);
-    if let Some(bytes) = emit(db, build)
-        && let Some(extracted) = folio_pdf::extract_text(bytes)
+    match emit(db, build)
+        .as_ref()
+        .and_then(|bytes| folio_pdf::extract_text(bytes))
     {
-        search(&hidden, &extracted, &[], &mut found);
+        Some(extracted) => search(&hidden, &extracted, &[], &mut found),
+        // The build reports why it cannot be written; say that its text
+        // was not searched.
+        None => found.diagnostics.push(Diagnostic::warning(
+            input.whole,
+            eco_format!(
+                "the PDF of {} was not searched for leaked text, as it could not be written",
+                found.variant
+            ),
+        )),
     }
     Some(found.diagnostics)
 }
@@ -104,9 +114,14 @@ pub(crate) struct Hidden {
     /// hidden element instance whole, and each run of hidden text in
     /// content shown, with the node it starts at.
     passages: Vec<(Span, EcoString)>,
-    /// What the variant shows, normalised ([`normalise`]).
+    /// The text of what the variant shows.
     shown: String,
 }
+
+/// The hidden passages already noted, which another variant's tree may
+/// hold again: an element instance, or a run of text by its first node and
+/// its text.
+type Seen = HashSet<(Location, Span, EcoString)>;
 
 /// What a variant shows: the element instances and the nodes of its
 /// selected tree.
@@ -126,7 +141,7 @@ impl Hidden {
         let mut text = String::new();
         keep(shown, &mut kept, &mut text);
         let mut hidden = Hidden {
-            shown: normalise(&text),
+            shown: text,
             ..Hidden::default()
         };
         let mut seen = HashSet::new();
@@ -171,9 +186,9 @@ impl Hidden {
     /// Notes what of an element the variant does not show; `seen` holds the
     /// hidden nodes already noted, which another variant's tree may hold
     /// again.
-    fn element(&mut self, element: &Element, kept: &Kept, seen: &mut HashSet<(Location, Span)>) {
+    fn element(&mut self, element: &Element, kept: &Kept, seen: &mut Seen) {
         if element.location != Location::DETACHED && !kept.locations.contains(&element.location) {
-            if seen.insert((element.location, element.span)) {
+            if seen.insert((element.location, element.span, EcoString::new())) {
                 self.locations.insert(element.location);
                 let mut text = String::new();
                 self.all(element, kept, &mut text);
@@ -192,18 +207,17 @@ impl Hidden {
 
     /// Notes the hidden nodes of content of a shown element: hidden
     /// elements as passages of their own, and runs of hidden text.
-    fn content(&mut self, content: &Content, kept: &Kept, seen: &mut HashSet<(Location, Span)>) {
+    fn content(&mut self, content: &Content, kept: &Kept, seen: &mut Seen) {
         let mut run: Option<(Span, String)> = None;
-        fn flush(
-            run: &mut Option<(Span, String)>,
-            hidden: &mut Hidden,
-            seen: &mut HashSet<(Location, Span)>,
-        ) {
+        fn flush(run: &mut Option<(Span, String)>, hidden: &mut Hidden, seen: &mut Seen) {
             if let Some((at, text)) = run.take()
                 && !text.trim().is_empty()
-                && seen.insert((Location::DETACHED, at))
             {
-                hidden.passages.push((at, text.into()));
+                // Runs that start at one node, as in a loop, differ by text.
+                let text: EcoString = text.into();
+                if seen.insert((Location::DETACHED, at, text.clone())) {
+                    hidden.passages.push((at, text));
+                }
             }
         }
         for node in content.nodes() {
@@ -304,8 +318,8 @@ fn keep_content(content: &Content, kept: &mut Kept, text: &mut String) {
 }
 
 /// Writes the text of the fields a built-in element shows other than as
-/// content: a code block's text, a formula's reading, an image's
-/// description.
+/// content: a code block's text, a formula's reading and LaTeX source, an
+/// image's description, a link's address.
 fn shown_fields(element: &Element, text: &mut String) {
     if element.name.namespace.is_some() {
         return;
@@ -323,10 +337,15 @@ fn shown_fields(element: &Element, text: &mut String) {
         }
         _ => {}
     };
+    // As Select replaces them ([`folio_core::variants::select`]).
     match element.name.name.as_str() {
         "raw" => push(element.field("text")),
-        "math" => push(element.field("tree")),
+        "math" => {
+            push(element.field("tree"));
+            push(element.field("tex"));
+        }
         "image" => push(element.field("alt")),
+        "link" => push(element.field("dest")),
         _ => {}
     }
 }
@@ -470,31 +489,40 @@ fn tag(tag: &Tag, instance: &impl Fn(Location) -> Option<Span>, found: &mut Foun
 }
 
 /// Searches the text of a PDF for the text the variant does not show.
-/// `allow` holds text that may appear, normalised.
+/// `allow` holds text that may appear, normalised ([`normalise`]).
 fn search(hidden: &Hidden, extracted: &Extracted, allow: &[String], found: &mut Found) {
-    let mut text = String::new();
+    // The output's text: its characters, with text of different pages and
+    // strings kept apart, and its runs of six words.
+    let mut chars: Vec<char> = Vec::new();
+    let mut grams: HashSet<String> = HashSet::new();
     for part in extracted.pages.iter().chain(&extracted.strings) {
-        // Text of different pages and strings never runs together.
-        text.push_str(&normalise(part));
-        text.push('\u{0}');
+        chars.extend(normalise(part).chars());
+        chars.push('\u{0}');
+        grams.extend(six_words(&words(part)));
     }
-    let chars: Vec<char> = text.chars().collect();
     let windows: HashSet<&[char]> = chars.windows(CHARS).collect();
-    let leaked =
-        |window: &str| !hidden.shown.contains(window) && !allow.iter().any(|a| a.contains(window));
+    // What the variant shows, which is no leak wherever it appears.
+    let shown_chars: Vec<char> = normalise(&hidden.shown).chars().collect();
+    let shown_windows: HashSet<&[char]> = shown_chars.windows(CHARS).collect();
+    let shown_grams: HashSet<String> = six_words(&words(&hidden.shown)).collect();
+    let allowed = |text: &str| allow.iter().any(|a| a.contains(text));
+
     for (at, passage) in &hidden.passages {
-        // The words of the passage as written, and as compared.
-        let written: Vec<&str> = passage.split_whitespace().collect();
-        let words: Vec<String> = written.iter().map(|w| normalise(w)).collect();
+        // The words of the passage as written, and as compared; words with
+        // no letter or digit are left out.
+        let written: Vec<&str> = passage
+            .split_whitespace()
+            .filter(|w| w.chars().any(char::is_alphanumeric))
+            .collect();
+        let compared: Vec<String> = written.iter().map(|w| normalise(w)).collect();
         // Where each word starts in the passage's compared characters.
-        let mut starts = Vec::with_capacity(words.len());
+        let mut starts = Vec::with_capacity(compared.len());
         let mut all: Vec<char> = Vec::new();
-        for word in &words {
+        for word in &compared {
             starts.push(all.len());
             all.extend(word.chars());
         }
-        // The written words from the one that holds character `from` to
-        // the one that holds character `to - 1`.
+        // The written words that hold the characters `from..to`.
         let quote = |from: usize, to: usize| -> String {
             let first = starts.partition_point(|&s| s <= from).saturating_sub(1);
             let last = starts.partition_point(|&s| s < to).saturating_sub(1);
@@ -504,38 +532,42 @@ fn search(hidden: &Hidden, extracted: &Extracted, allow: &[String], found: &mut 
         let mut hit = all
             .windows(CHARS)
             .enumerate()
-            .filter(|(_, w)| windows.contains(w))
-            .find(|(_, w)| leaked(&w.iter().collect::<String>()))
+            .find(|(_, w)| {
+                windows.contains(w)
+                    && !shown_windows.contains(w)
+                    && !allowed(&w.iter().collect::<String>())
+            })
             .map(|(i, _)| quote(i, i + CHARS));
-        // Any six words in a row with a letter or digit each; those of 30
-        // characters or more were looked for above.
+        // Any six whole words in a row.
         if hit.is_none() {
-            let mut i = 0;
-            while hit.is_none() && i + WORDS <= words.len() {
-                let mut run = Vec::new();
-                let mut j = i;
-                while run.len() < WORDS && j < words.len() {
-                    if !words[j].is_empty() {
-                        run.push(j);
-                    }
-                    j += 1;
-                }
-                if run.len() == WORDS {
-                    let joined: String = run.iter().map(|&k| words[k].as_str()).collect();
-                    if joined.chars().count() < CHARS
-                        && text.contains(joined.as_str())
-                        && leaked(&joined)
-                    {
-                        hit = Some(written[run[0]..=run[WORDS - 1]].join(" "));
-                    }
-                }
-                i += 1;
-            }
+            hit = compared
+                .windows(WORDS)
+                .enumerate()
+                .find(|(_, w)| {
+                    let gram = w.join(" ");
+                    grams.contains(&gram) && !shown_grams.contains(&gram) && !allowed(&w.concat())
+                })
+                .map(|(i, _)| written[i..i + WORDS].join(" "));
         }
         if let Some(words) = hit {
             found.text(*at, &words);
         }
     }
+}
+
+/// The words of a text as the text search compares them: split at
+/// whitespace, each [`normalise`]d, and those with no letter or digit left
+/// out.
+fn words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(normalise)
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// The runs of six words in a row of words, each joined by spaces.
+fn six_words(words: &[String]) -> impl Iterator<Item = String> + '_ {
+    words.windows(WORDS).map(|w| w.join(" "))
 }
 
 /// Text as the text search compares it: its letters and digits, in lower
@@ -751,6 +783,11 @@ mod tests {
         let extracted = folio_pdf::extract_text(bytes).unwrap();
         let pages = normalise(&extracted.pages.concat());
         assert!(pages.contains(&normalise(ANSWER)), "{:?}", extracted.pages);
+        // Whole words, with a space between lines.
+        let page_words = words(&extracted.pages.concat());
+        let answer: Vec<String> = six_words(&words(ANSWER)).collect();
+        let grams: Vec<String> = six_words(&page_words).collect();
+        assert!(answer.iter().all(|g| grams.contains(g)), "{page_words:?}");
         // The title is a string of the file: in the Info dictionary.
         assert!(extracted.strings.iter().any(|s| s == "Forces"));
         assert!(!pages.is_empty() && !leaks(db, build).iter().any(|d| d.is_error()));
@@ -775,6 +812,93 @@ mod tests {
             assert!(found.diagnostics[0].message.contains("a box on a page"));
             assert_eq!(found.diagnostics[0].code.as_deref(), Some(LEAK));
         });
+    }
+
+    /// A hidden passage as [`search`] reads it, against output text.
+    fn searched(passages: &[&str], shown: &str, output: &str) -> Vec<EcoString> {
+        let hidden = Hidden {
+            passages: passages
+                .iter()
+                .map(|p| (Span::detached(), EcoString::from(*p)))
+                .collect(),
+            shown: shown.into(),
+            ..Hidden::default()
+        };
+        let extracted = Extracted {
+            pages: vec![output.into()],
+            strings: Vec::new(),
+        };
+        let mut found = Found::new(Some("exam"));
+        search(&hidden, &extracted, &[], &mut found);
+        found
+            .diagnostics
+            .iter()
+            .map(|d| d.message.clone())
+            .collect()
+    }
+
+    #[test]
+    fn six_words_match_as_whole_words() {
+        // Six short words whose letters run together elsewhere are no
+        // leak; the same six words are.
+        assert!(searched(&["1 B 2 D 3 A"], "", "Q 21 B2 D3 A4 options").is_empty());
+        let found = searched(&["1 B 2 D 3 A"], "", "Key: 1 b 2 d 3 a.");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("\u{201c}1 B 2 D 3 A\u{201d}"),
+            "{found:?}"
+        );
+        // Five words are not enough.
+        assert!(searched(&["one two three four five"], "", "one two three four five").is_empty());
+        // Nor are six that the variant shows.
+        assert!(searched(&["a b c d e f"], "x a b c d e f", "a b c d e f").is_empty());
+    }
+
+    #[test]
+    fn thirty_letters_match_across_lines_and_hyphens() {
+        let answer = "Acceleration is proportional to resultant force";
+        let found = searched(
+            &[answer],
+            "",
+            "accelera-\ntion is proportional to resultant forces",
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            searched(
+                &[answer],
+                answer,
+                "acceleration is proportional to resultant force"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn hidden_runs_of_a_loop_are_each_searched() {
+        // Two iterations make hidden runs that start at one node.
+        let world = {
+            let mut world = World::new(MANIFEST).unwrap();
+            world.set_source("paper.fsty", "").unwrap();
+            world
+                .set_source(
+                    "main.fol",
+                    "#for a in (\"alpha beta gamma delta epsilon zeta\", \"one two three four five six\") {\n\
+                     if variant == \"markscheme\" [Answer: #a]\n}\n",
+                )
+                .unwrap();
+            world
+        };
+        let db = world.db();
+        let build = Build::new(
+            db,
+            world.project(),
+            Target::Pdf,
+            Some(Name::new("exam").unwrap()),
+        );
+        let hidden = Hidden::of(db, build).unwrap();
+        let text: Vec<&str> = hidden.passages.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(text.iter().any(|t| t.contains("alpha")), "{text:?}");
+        assert!(text.iter().any(|t| t.contains("one two")), "{text:?}");
     }
 
     #[test]

@@ -147,6 +147,7 @@ fn compile_now(world: &World, target: Target, variant: Option<&Name>) -> Compile
         collect(pipeline::compile_build::accumulated::<Reported>(db, build)),
     );
     diagnostics.extend(pairing(world, variant));
+    diagnostics.extend(default_leaks(world, build, true));
     let mut read = pipeline::compile_build::accumulated::<Read>(db, build);
     read.extend(pairing_reads(world, variant));
     let files = files(read);
@@ -271,6 +272,7 @@ fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
         collect(pipeline::check_build::accumulated::<Reported>(db, build)),
     );
     diagnostics.extend(pairing(world, variant));
+    diagnostics.extend(default_leaks(world, build, false));
     Checked {
         sources: checked.sources.clone(),
         files: files({
@@ -813,6 +815,7 @@ pub fn compile_versioned(
             collect(pipeline::compile_build::accumulated::<Reported>(db, build)),
         );
         diagnostics.extend(version_pairing(world, variant, version));
+        diagnostics.extend(default_leaks(world, build, true));
         let mut read = pipeline::compile_build::accumulated::<Read>(db, build);
         read.extend(version_pairing_reads(world, variant, version));
         Compiled {
@@ -864,6 +867,7 @@ pub fn check_versioned(
             collect(pipeline::check_build::accumulated::<Reported>(db, build)),
         );
         diagnostics.extend(version_pairing(world, variant, version));
+        diagnostics.extend(default_leaks(world, build, false));
         let mut read = pipeline::check_build::accumulated::<Read>(db, build);
         read.extend(version_pairing_reads(world, variant, version));
         Checked {
@@ -946,9 +950,9 @@ fn run_versioned_builds<T: Send>(
 /// [`compile_versioned`] report. A build whose document cannot be styled
 /// or written, and a target without a writer yet, has nothing to check.
 ///
-/// `folio check --leaks` runs it after checking each build, and `folio
-/// build` and `folio check` run it on every build of a project in strict
-/// mode or a CI build ([`checks_leaks_by_default`]). Fails only when an edit to the world
+/// `folio check --leaks` runs it after checking each build, and compiling
+/// and checking run it on every build of a project in strict mode or of a
+/// CI build ([`checks_leaks_by_default`]). Fails only when an edit to the world
 /// cancels the check; in a long-lived world a panic in a query is an
 /// `internal-error`, as [`compile`] says.
 pub fn check_leaks(
@@ -986,19 +990,34 @@ pub fn check_leaks_builds(
 
 /// Whether every build of the world's project is checked for leaks
 /// without being asked (SPEC §6.4): in a CI build ([`BuildMode::Ci`]) and
-/// in strict mode (`[formatting] mode = "strict"`, SPEC §5.5), but not in
-/// watch mode, which keeps no output. Other builds are checked when `folio
+/// in strict mode (`[formatting] mode = "strict"`, SPEC §5.5). Then
+/// [`compile`] and its kin add the leaks of each build ([`check_leaks`])
+/// to its diagnostics, so a build that leaks has errors and its output is
+/// not written; [`check`] and its kin do too, except in watch mode, where
+/// checks run on every edit and the outputs that `folio watch` writes are
+/// checked when they are compiled. Other builds are checked when `folio
 /// check --leaks` asks.
 pub fn checks_leaks_by_default(world: &World) -> bool {
     let db = world.db();
     let project = world.project();
-    let strict =
-        project.manifest(db).formatting.mode.v == folio_core::project::FormattingMode::Strict;
-    match *project.mode(db) {
-        BuildMode::Watch => false,
-        BuildMode::Ci => true,
-        BuildMode::Build => strict,
+    *project.mode(db) == BuildMode::Ci
+        || project.manifest(db).formatting.mode.v == folio_core::project::FormattingMode::Strict
+}
+
+/// The leaks of a build that is checked for leaks without being asked
+/// ([`checks_leaks_by_default`]); `emitting` for a build that is compiled
+/// rather than checked.
+fn default_leaks(
+    world: &World,
+    build: folio_core::db::Build<'_>,
+    emitting: bool,
+) -> EcoVec<Diagnostic> {
+    let db = world.db();
+    let watch = *world.project().mode(db) == BuildMode::Watch;
+    if !checks_leaks_by_default(world) || (watch && !emitting) {
+        return EcoVec::new();
     }
+    leaks::leaks(db, build).clone()
 }
 
 /// The pages of a version of a variant of the world's document for a
