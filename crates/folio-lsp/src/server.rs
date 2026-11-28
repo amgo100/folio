@@ -402,7 +402,7 @@ impl Server<'_> {
         let file = path
             .split('/')
             .fold(project.root.clone(), |dir, part| dir.join(part));
-        let Ok(text) = std::fs::read_to_string(file) else {
+        let Some(text) = disk_text(&file) else {
             return;
         };
         let at = LineIndex::new(&text).offset(params.position, self.encoding);
@@ -431,8 +431,8 @@ impl Server<'_> {
         let Some(uri) = convert::path_to_uri(&file) else {
             return;
         };
-        // The preview's places are in the file on disk.
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        // The preview's places are in the text of the file on disk.
+        let Some(text) = disk_text(&file) else {
             return;
         };
         let range = LineIndex::new(&text).range(location.bytes.clone(), self.encoding);
@@ -1075,4 +1075,16 @@ fn messages(warnings: &[Diagnostic]) -> Messages {
             (typ, format!("Folio: {}", warning.message))
         })
         .collect()
+}
+
+/// The text of a source as the preview counts its bytes: the file on disk
+/// without the byte order mark the loader leaves out of a source's text,
+/// which an editor does not show either. With the mark, every place on the
+/// first line would be off by it.
+fn disk_text(file: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(file).ok()?;
+    Some(match text.strip_prefix('\u{FEFF}') {
+        Some(rest) => rest.to_owned(),
+        None => text,
+    })
 }

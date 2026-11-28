@@ -77,7 +77,10 @@
 //!    `banner` why the pages shown are not of this revision, if they are
 //!    not, and `diagnostics` the diagnostics of the previewed build,
 //!    resolved as `folio check --diagnostics json` writes them
-//!    (`docs/diagnostics-json.md`), and `overlays` where on the pages the
+//!    (`docs/diagnostics-json.md`) except that byte ranges count in the
+//!    source's text, without the byte order mark that a `.fol` or `.fsty`
+//!    file may start with (`folio::diag::resolve`), as an editor counts
+//!    them, and `overlays` where on the pages the
 //!    diagnostics point, as `{"diagnostic": i, "page": n, "rects": [[x, y,
 //!    w, h], ..]}` with `i` an index into `diagnostics` and the rectangles
 //!    in points from the page's top-left corner, for the first hundred
@@ -112,7 +115,8 @@
 //! points from its top-left corner, and the server answers that client
 //! with `{"type": "source", "revision": r, "location": l | null}`, where
 //! `l` is a location as in `docs/diagnostics-json.md` (`path`, `bytes`,
-//! `start`, `end`): the characters of the topmost glyph at the point, or
+//! `start`, `end`), its bytes counted in the text, without a byte order
+//! mark, as those of the diagnostics are: the characters of the topmost glyph at the point, or
 //! the whole node of the topmost other item, such as an element's box.
 //! The click is also an [`Event::Clicked`], which the language server
 //! turns into a jump in the editor. `null` answers a point that shows no
