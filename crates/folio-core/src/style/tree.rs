@@ -21,7 +21,7 @@ use folio_text::Lang;
 use super::computed::{ComputedStyle, Styler};
 use super::props::Properties;
 use super::rules::{Cascade, Compiler, Decl, DeclValue, Origin, Rule, StepRule, cascade};
-use super::selector::{Attr, Need, Needs, NodeName, NodeView, Position, Subject};
+use super::selector::{Attr, Needs, NodeName, NodeView, Position, Role, Subject};
 use super::value::{Declared, Values, check};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
@@ -403,7 +403,7 @@ impl<'a> Walker<'a> {
             Child::Element(element) => (element.span, element.location),
             Child::Part(..) => owner,
         };
-        let view = self.view(siblings, i, &needs.subject, needs);
+        let view = self.view(siblings, i, Role::Subject, needs);
         let key = MatchKey::new(self.db, self.build, view, context);
         let matched = match_node(self.db, key).clone();
 
@@ -419,7 +419,7 @@ impl<'a> Walker<'a> {
 
         let mut local = EcoVec::new();
         if !self.scoped.is_empty() {
-            let view = self.view(siblings, i, &self.scoped_needs.subject, &self.scoped_needs);
+            let view = self.view(siblings, i, Role::Subject, &self.scoped_needs);
             let mut chain: Vec<&NodeView> = vec![&view];
             chain.extend(self.scoped_chain.iter().rev());
             let mut hits: Vec<&Rule> = self
@@ -467,16 +467,19 @@ impl<'a> Walker<'a> {
         };
         let inherited = note.as_ref().unwrap_or(&style);
 
-        // The children, with this node as their context.
-        let context_view = self.view(siblings, i, &needs.context, needs);
-        let child_context = Some(ContextKey::new(self.db, context_view, context));
-        let scoped_view = self
-            .has_scoped
-            .then(|| self.view(siblings, i, &self.scoped_needs.context, &self.scoped_needs));
+        // The children, with this node as their context. A leaf has none,
+        // so its context is neither seen nor interned.
+        let grandchildren = child.children();
+        let has_children = !grandchildren.is_empty();
+        let child_context = has_children.then(|| {
+            let view = self.view(siblings, i, Role::Context, needs);
+            ContextKey::new(self.db, view, context)
+        });
+        let scoped_view = (self.has_scoped && has_children)
+            .then(|| self.view(siblings, i, Role::Context, &self.scoped_needs));
         if let Some(view) = &scoped_view {
             self.scoped_chain.push(view.clone());
         }
-        let grandchildren = child.children();
         let mut children: EcoVec<StyledNode> = (0..grandchildren.len())
             .map(|j| {
                 let owner = (span, location);
@@ -534,13 +537,12 @@ impl<'a> Walker<'a> {
             view
         };
         let needs = &self.cascade.needs;
-        let view = vector(self.view(siblings, i, &needs.subject, needs));
+        let view = vector(self.view(siblings, i, Role::Subject, needs));
         let key = MatchKey::new(self.db, self.build, view, context);
         let matched = match_node(self.db, key).clone();
         let mut local = EcoVec::new();
         if !self.scoped.is_empty() {
-            let view =
-                vector(self.view(siblings, i, &self.scoped_needs.subject, &self.scoped_needs));
+            let view = vector(self.view(siblings, i, Role::Subject, &self.scoped_needs));
             let mut chain: Vec<&NodeView> = vec![&view];
             chain.extend(self.scoped_chain.iter().rev());
             let mut hits: Vec<&Rule> = self
@@ -730,15 +732,31 @@ impl<'a> Walker<'a> {
         resolve_tokens(&values, value, span)
     }
 
-    /// The view of child `i` of `siblings` with a need of a set of rules:
-    /// its previous siblings are seen as the rules' context, and its fields
-    /// as their attribute tests name them.
+    /// The view of child `i` of `siblings` in a role, as a set of rules
+    /// needs to see it: its previous siblings are seen in the rules'
+    /// context, and each node's fields as the attribute tests for its name
+    /// name them.
     ///
     /// Positions and previous siblings count the elements of the body
     /// only (SPEC §5.1): a part has no position and no previous siblings,
     /// and the elements around it skip it.
-    fn view(&self, siblings: &[Child<'_>], i: usize, need: &Need, needs: &Needs) -> NodeView {
-        let fields = &needs.fields;
+    fn view(&self, siblings: &[Child<'_>], i: usize, role: Role, needs: &Needs) -> NodeView {
+        self.view_with(siblings, i, role, needs, true)
+    }
+
+    /// [`view`](Self::view), with previous siblings only if `prev`: those
+    /// of a previous sibling are not seen.
+    fn view_with(
+        &self,
+        siblings: &[Child<'_>],
+        i: usize,
+        role: Role,
+        needs: &Needs,
+        prev: bool,
+    ) -> NodeView {
+        let name = name_of(siblings[i]);
+        let own = needs.of(&name);
+        let need = own.need(role);
         let body = body_range(siblings);
         let (full, prev) = if body.contains(&i) {
             let full = Position {
@@ -747,13 +765,10 @@ impl<'a> Walker<'a> {
                 index: u32::try_from(i - body.start + 1).unwrap_or(u32::MAX),
                 column: 0,
             };
-            let context = Need {
-                prev: 0,
-                ..needs.context
-            };
-            let prev = (1..=need.prev)
+            let count = if prev { need.prev } else { 0 };
+            let prev = (1..=count)
                 .filter_map(|k| i.checked_sub(k).filter(|&j| j >= body.start))
-                .map(|j| self.view(siblings, j, &context, needs))
+                .map(|j| self.view_with(siblings, j, Role::Context, needs, false))
                 .collect();
             (full, prev)
         } else {
@@ -763,16 +778,20 @@ impl<'a> Walker<'a> {
             siblings[i]
                 .children()
                 .iter()
-                .map(|c| subject(*c, fields))
+                .map(|&c| {
+                    let name = name_of(c);
+                    let fields = &needs.of(&name).fields;
+                    subject(c, name, fields)
+                })
                 .collect()
         } else {
             EcoVec::new()
         };
         NodeView {
-            subject: subject(siblings[i], fields),
             pos: need.position(full),
             prev,
             children,
+            subject: subject(siblings[i], name, &own.fields),
         }
     }
 }
@@ -865,11 +884,15 @@ fn name_of(child: Child<'_>) -> NodeName {
     }
 }
 
-/// What selectors see of a node itself.
-fn subject(child: Child<'_>, fields: &std::collections::BTreeSet<EcoString>) -> Subject {
+/// What selectors see of a node itself, whose name is `name`.
+fn subject(
+    child: Child<'_>,
+    name: NodeName,
+    fields: &std::collections::BTreeSet<EcoString>,
+) -> Subject {
     let Child::Element(element) = child else {
         return Subject {
-            name: name_of(child),
+            name,
             classes: EcoVec::new(),
             label: None,
             fields: EcoVec::new(),
@@ -886,7 +909,7 @@ fn subject(child: Child<'_>, fields: &std::collections::BTreeSet<EcoString>) -> 
         _ => EcoVec::new(),
     };
     Subject {
-        name: name_of(child),
+        name,
         classes,
         label: element.label.clone(),
         fields: fields

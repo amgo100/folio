@@ -32,7 +32,10 @@
 //!   top-level rules from what is around them, above the comments on the
 //!   lines just over a rule. A comment on the line of a token stays there.
 //! - Within a line, a run of spaces becomes one space, before comments
-//!   too: columns are not aligned. In code and stylesheets a space follows
+//!   too: columns are not aligned. In markup, the spaces before the last
+//!   list, enum or term marker of a line and those after the comments that
+//!   start a line stay as written: they set a column that the lines below,
+//!   whose indentation stays, nest by. In code and stylesheets a space follows
 //!   `,` (in the step lists of selectors, `:step(1,3-4)`, it stays as
 //!   written), `;` and the `:` of a named argument, declaration, field or
 //!   import, surrounds `=` in a binding, `=>`, and the combinators `>` and
@@ -426,6 +429,9 @@ struct Walk {
     items: Vec<usize>,
     /// For each token, [`Self::opens_markup`].
     opens_markup: Vec<bool>,
+    /// For each gap, whether a list, enum or term marker follows it on its
+    /// line.
+    marker_ahead: Vec<bool>,
 }
 
 impl Walk {
@@ -438,9 +444,11 @@ impl Walk {
             depth: 0,
             items: Vec::new(),
             opens_markup: Vec::new(),
+            marker_ahead: Vec::new(),
         };
         this.walk(root, root.kind(), 0);
         this.find_markup_lines();
+        this.find_markers_ahead();
         this
     }
 
@@ -633,6 +641,21 @@ impl Walk {
         self.opens_markup = out;
     }
 
+    /// [`Self::marker_ahead`] for every gap, in one pass from the end.
+    fn find_markers_ahead(&mut self) {
+        let mut out = vec![false; self.gaps.len()];
+        let mut ahead = false;
+        for (j, token) in self.tokens.iter().enumerate().rev() {
+            let gap = &self.gaps[j + 1];
+            if count_newlines(&self.text[gap.range.0..gap.range.1]) > 0 {
+                ahead = false;
+            }
+            ahead |= is_marker(token.kind);
+            out[j] = ahead;
+        }
+        self.marker_ahead = out;
+    }
+
     /// Decides every gap.
     fn run(self) -> Edits {
         let mut edits = Edits::new();
@@ -647,6 +670,8 @@ impl Walk {
         // Whether the current line opens markup that goes on below it, and
         // so stays as written.
         let mut frozen = false;
+        // Whether every token so far on the current line is a comment.
+        let mut comments_only = true;
         // The line breaks each gap must hold: 1 for a line break, 2 for a
         // blank line.
         let mut need = self.breaks();
@@ -690,6 +715,7 @@ impl Walk {
             }
             if i == 0 || newlines > 0 {
                 frozen = next.is_some() && self.opens_markup(i);
+                comments_only = true;
             }
 
             let new: Option<EcoString> = match (prev, next) {
@@ -768,9 +794,16 @@ impl Walk {
                     Some(new)
                 }
                 // Tokens that touch in markup stay touching: a space there
-                // would be a space in the text.
+                // would be a space in the text. The inside of a content
+                // block is markup, even where code ends at its `]`.
                 (Some(prev), Some(next))
-                    if text.is_empty() && (is_markup(prev.parent) || is_markup(next.parent)) =>
+                    if text.is_empty()
+                        && (is_markup(prev.parent)
+                            || is_markup(next.parent)
+                            || prev.kind == SyntaxKind::LeftBracket
+                                && prev.parent == SyntaxKind::ContentBlock
+                            || next.kind == SyntaxKind::RightBracket
+                                && next.parent == SyntaxKind::ContentBlock) =>
                 {
                     None
                 }
@@ -778,11 +811,13 @@ impl Walk {
                 // spacing: moving its list markers would change how the
                 // items below nest.
                 (Some(_), Some(_)) if frozen => None,
-                (Some(prev), Some(next)) => Some(if gap.markup {
-                    inline_markup(text, next)
-                } else {
-                    inline_code(text, prev, next)
-                }),
+                // Spaces that set the column of a marker later on the line,
+                // or of what follows a comment that starts a line, stay as
+                // written: the lines below nest by that column, and their
+                // indentation stays.
+                (Some(_), Some(_)) if gap.markup && (comments_only || self.marker_ahead[i]) => None,
+                (Some(_), Some(_)) if gap.markup => Some(inline_markup(text)),
+                (Some(prev), Some(next)) => Some(inline_code(text, prev, next)),
             };
 
             if let Some(new) = new
@@ -793,6 +828,7 @@ impl Walk {
 
             // The brackets the next token opens or closes.
             if let Some(next) = next {
+                comments_only &= next.is_comment();
                 // A line comment holds the spaces at the end of its line.
                 if next.kind == SyntaxKind::LineComment {
                     let comment = &self.text[next.range.0..next.range.1];
@@ -825,8 +861,16 @@ impl Walk {
     }
 }
 
+/// The markers of list, enum and term items.
+fn is_marker(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::ListMarker | SyntaxKind::EnumMarker | SyntaxKind::TermMarker
+    )
+}
+
 /// The whitespace between two tokens of markup on one line.
-fn inline_markup(text: &str, _next: Token) -> EcoString {
+fn inline_markup(text: &str) -> EcoString {
     if text.is_empty() {
         text.into()
     } else {
@@ -1157,6 +1201,11 @@ mod tests {
         markup("#{}\n#{ }\n#let f() = {}\n", "#{}\n#{ }\n#let f() = {}\n");
         markup("#{\n}\n", "#{\n}\n");
         markup("#import \"a.fol\"  :x\n", "#import \"a.fol\": x\n");
+        // An import without items that ends at a content block's `]`: a
+        // space after its colon would be text.
+        for touching in ["#[#import\"\":][]", "#[#import\"a\":]\n"] {
+            markup(touching, touching);
+        }
         markup("#if a [b]else[c]\n", "#if a [b] else [c]\n");
         markup("= Hi  \n/* the rest", "= Hi\n/* the rest");
         style("a { b: c; } /* x", "a {\n  b: c;\n} /* x");
@@ -1218,6 +1267,35 @@ mod tests {
             "#{\n[\n  - a\n  - b\n]\n}\n",
             "#{\n  [\n  - a\n  - b\n  ]\n}\n",
         );
+    }
+
+    #[test]
+    fn markup_marker_columns() {
+        // The spaces before a marker on its line set the marker's column,
+        // which the lines below nest by.
+        for minimal in [
+            "-  -\n   a",
+            "+  / :\n   e",
+            "-  1.\n   b",
+            "/**/  +\n/* */ __**",
+            "#[ ][-\n/**/  d]",
+        ] {
+            markup(minimal, minimal);
+        }
+        markup(
+            "1.  - Award one mark.\n    Accept any rearrangement.\n2.  Second point.\n",
+            "1.  - Award one mark.\n    Accept any rearrangement.\n2. Second point.\n",
+        );
+        // A comment between markers, or after a term's colon.
+        for minimal in [
+            "-   /**/ - a\n        c\n",
+            "/ T:  /**/ - a\n           b\n",
+        ] {
+            markup(minimal, minimal);
+        }
+        // Spaces after the last marker of a line still collapse.
+        markup("-   a\n    b\n", "- a\n    b\n");
+        markup("/ Term:   x\n", "/ Term: x\n");
     }
 
     #[test]

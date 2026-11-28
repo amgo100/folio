@@ -7,10 +7,11 @@ use std::collections::BTreeMap;
 
 use ecow::{EcoString, eco_format};
 use folio_component::{Color, QualifiedName, Scalar};
-use folio_syntax::{Span, ast};
+use folio_syntax::{DiagSpan, FileId, Span, ast};
 
+use super::MAX_NESTING;
 use super::content::Content;
-use super::error::{At, EvalError, EvalResult, StrResult, bail};
+use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::ops::{self, a_type};
 use super::value::{
     Applied, Arg, Args, Array, Dict, Func, ITEM, Module, NODE, NativeFunc, Scope, Value,
@@ -56,6 +57,11 @@ pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
     };
     let mut names = Vec::new();
     for component in host.components() {
+        // The project's own elements are variables where they are declared
+        // and imported, not everywhere (SPEC §4.3).
+        if super::is_project(component) {
+            continue;
+        }
         let namespace = component.manifest.namespace();
         let elements: BTreeMap<EcoString, Value> = component
             .declarations
@@ -115,6 +121,7 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("toml", toml),
     ("type", type_),
     ("unit", unit_func),
+    ("yaml", yaml),
 ];
 
 /// `qty(9.81, "m s^-2", pm: 0.02, digits: 3)` in text: an inline formula
@@ -433,7 +440,9 @@ fn parse_hex(hex: &str) -> StrResult<Color> {
 
 /// Reads a file of the project by a path relative to the file being
 /// evaluated. This is the only way scripts read files (SPEC §4.4).
-fn load(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(Bytes, Span)> {
+/// Returns the file's contents, the span of the path, and the file id that
+/// errors in the file can point into, if it has one.
+fn load(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(Bytes, Span, Option<FileId>)> {
     let arg = args
         .eat()
         .ok_or_else(|| EvalError::new(args.span, "missing argument: path"))?;
@@ -447,36 +456,110 @@ fn load(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(Bytes, Span)> {
         );
     };
     report_read(vm.db, path.clone(), FileKind::Data);
-    let bytes = if let Some(file) = data_file(vm.db, vm.project, path.clone()) {
-        file.bytes(vm.db).clone()
+    let (bytes, id) = if let Some(file) = data_file(vm.db, vm.project, path.clone()) {
+        (file.bytes(vm.db).clone(), file.id(vm.db))
     } else if let Some(file) = source_file(vm.db, vm.project, path.clone()) {
-        Bytes::from(file.source(vm.db).text().as_bytes())
+        let source = file.source(vm.db);
+        (Bytes::from(source.text().as_bytes()), Some(source.id()))
     } else {
         bail!(span, "file `{}` not found", path.as_str());
     };
     vm.alloc(bytes.len() as u64, span)?;
-    Ok((bytes, span))
+    Ok((bytes, span, id))
 }
 
-fn load_text(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(EcoString, Span)> {
-    let (bytes, span) = load(vm, args)?;
+fn load_text(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(EcoString, Span, Option<FileId>)> {
+    let (bytes, span, id) = load(vm, args)?;
     match std::str::from_utf8(&bytes) {
-        Ok(text) => Ok((text.into(), span)),
-        Err(_) => bail!(span, "the file is not valid UTF-8 text"),
+        Ok(text) => Ok((text.into(), span, id)),
+        Err(err) => {
+            // What comes before the first invalid byte is text.
+            let valid = std::str::from_utf8(&bytes[..err.valid_up_to()]).unwrap_or_default();
+            let (line, column) = line_column(valid, valid.len());
+            let message =
+                eco_format!("the file is not valid UTF-8 text (line {line}, column {column})");
+            // A file that is not text has no lines to show.
+            Err(DataError {
+                message,
+                range: None,
+            }
+            .at(span, id))
+        }
+    }
+}
+
+/// An error in a data file, with the bytes of the file it is about.
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct DataError {
+    /// What is wrong, and where by line and column.
+    message: EcoString,
+    /// The bytes it is about, if it knows.
+    range: Option<std::ops::Range<usize>>,
+}
+
+impl DataError {
+    /// An error at a byte range of `text`, whose line and column the
+    /// message ends with.
+    fn new(text: &str, message: impl Into<EcoString>, range: std::ops::Range<usize>) -> Self {
+        let (line, column) = line_column(text, range.start);
+        Self {
+            message: eco_format!("{} (line {line}, column {column})", message.into()),
+            range: Some(range),
+        }
+    }
+
+    /// The error of a call at `span` that read a file with the id, which
+    /// shows the place in the file too when it has an id.
+    fn at(self, span: Span, id: Option<FileId>) -> Stop {
+        let mut error = EvalError::new(span, self.message);
+        if let (Some(id), Some(range)) = (id, self.range) {
+            error = error.with_related(DiagSpan::from_range(id, range), "here in the file");
+        }
+        error.into()
     }
 }
 
 /// `read(path)`: a file's text.
 fn read(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    load_text(vm, args).map(|(text, _)| Value::Str(text))
+    load_text(vm, args).map(|(text, ..)| Value::Str(text))
 }
 
 /// `json(path)`: the data in a JSON file.
 fn json(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    let (bytes, span) = load(vm, args)?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|err| eco_format!("the file is not valid JSON: {err}"))
-        .at(span)?;
+    let (bytes, span, id) = load(vm, args)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| {
+        // An error without a place, or in a file that is not text, has no
+        // lines to show.
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(text) if err.line() > 0 => text,
+            _ => {
+                return DataError {
+                    message: eco_format!("the file is not valid JSON: {err}"),
+                    range: None,
+                }
+                .at(span, id);
+            }
+        };
+        // serde_json counts columns in bytes, from 1, and ends its message
+        // with them; the other readers count characters.
+        let start = text
+            .split_inclusive('\n')
+            .take(err.line().saturating_sub(1))
+            .map(str::len)
+            .sum::<usize>()
+            + err.column().saturating_sub(1);
+        let start = text.floor_char_boundary(start.min(text.len()));
+        let end = text.ceil_char_boundary((start + 1).min(text.len()));
+        let message = err.to_string();
+        let suffix = format!(" at line {} column {}", err.line(), err.column());
+        let message = message.strip_suffix(&suffix).unwrap_or(&message);
+        DataError::new(
+            text,
+            eco_format!("the file is not valid JSON: {message}"),
+            start..end,
+        )
+        .at(span, id)
+    })?;
     Ok(from_json(value))
 }
 
@@ -500,11 +583,30 @@ fn from_json(value: serde_json::Value) -> Value {
 
 /// `toml(path)`: the data in a TOML file.
 fn toml(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    let (text, span) = load_text(vm, args)?;
-    let table = ::toml::de::DeTable::parse(&text)
-        .map_err(|err| eco_format!("the file is not valid TOML: {}", err.message().trim_end()))
-        .at(span)?;
+    let (text, span, id) = load_text(vm, args)?;
+    let table = ::toml::de::DeTable::parse(&text).map_err(|err| {
+        let message = eco_format!("the file is not valid TOML: {}", err.message().trim_end());
+        match err.span() {
+            Some(range) => DataError::new(&text, message, range),
+            None => DataError {
+                message,
+                range: None,
+            },
+        }
+        .at(span, id)
+    })?;
     Ok(from_toml_table(table.into_inner()))
+}
+
+/// The line and column, both from 1, of a byte offset in a text; the
+/// column counts characters.
+fn line_column(text: &str, offset: usize) -> (usize, usize) {
+    let before = &text[..text.floor_char_boundary(offset.min(text.len()))];
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    (
+        before.matches('\n').count() + 1,
+        before[line_start..].chars().count() + 1,
+    )
 }
 
 fn from_toml_table(table: ::toml::de::DeTable<'_>) -> Value {
@@ -552,7 +654,7 @@ fn from_toml(value: ::toml::de::DeValue<'_>) -> Value {
 /// quotes (RFC 4180).
 fn csv(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let delimiter: Option<EcoString> = args.named("delimiter")?;
-    let (text, span) = load_text(vm, args)?;
+    let (text, span, id) = load_text(vm, args)?;
     let delimiter = match delimiter.as_deref().map(|d| {
         let mut chars = d.chars();
         (chars.next(), chars.next())
@@ -561,41 +663,42 @@ fn csv(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
         Some((Some(c), None)) => c,
         Some(_) => bail!(span, "the delimiter must be one character"),
     };
-    parse_csv(&text, delimiter).at(span)
+    parse_csv(&text, delimiter).map_err(|err| err.at(span, id))
 }
 
-fn parse_csv(text: &str, delimiter: char) -> StrResult<Value> {
+fn parse_csv(text: &str, delimiter: char) -> Result<Value, DataError> {
     let mut rows = Array::new();
     let mut row = Array::new();
     let mut field = EcoString::new();
-    let mut chars = text.chars().peekable();
-    let mut quoted = false;
-    let mut line = 1;
+    let mut chars = text.char_indices().peekable();
+    // Where the quoted field being read starts.
+    let mut quoted = None;
     let mut any = false;
-    while let Some(c) = chars.next() {
+    while let Some((i, c)) = chars.next() {
         any = true;
-        if quoted {
+        if quoted.is_some() {
             match c {
-                '"' if chars.peek() == Some(&'"') => {
+                '"' if chars.peek().is_some_and(|&(_, c)| c == '"') => {
                     chars.next();
                     field.push('"');
                 }
-                '"' => quoted = false,
-                '\n' => {
-                    line += 1;
-                    field.push(c);
-                }
+                '"' => quoted = None,
                 _ => field.push(c),
             }
             continue;
         }
         match c {
-            '"' if field.is_empty() => quoted = true,
-            '"' => return Err(eco_format!("a quote in an unquoted field in line {line}")),
+            '"' if field.is_empty() => quoted = Some(i),
+            '"' => {
+                return Err(DataError::new(
+                    text,
+                    "a quote in an unquoted field",
+                    i..i + 1,
+                ));
+            }
             c if c == delimiter => row.push(Value::Str(std::mem::take(&mut field))),
-            '\r' if chars.peek() == Some(&'\n') => {}
+            '\r' if chars.peek().is_some_and(|&(_, c)| c == '\n') => {}
             '\n' => {
-                line += 1;
                 row.push(Value::Str(std::mem::take(&mut field)));
                 rows.push(Value::Array(std::mem::take(&mut row)));
                 any = false;
@@ -603,14 +706,306 @@ fn parse_csv(text: &str, delimiter: char) -> StrResult<Value> {
             _ => field.push(c),
         }
     }
-    if quoted {
-        return Err("a quoted field does not end".into());
+    if let Some(start) = quoted {
+        return Err(DataError::new(
+            text,
+            "a quoted field does not end",
+            start..start + 1,
+        ));
     }
     if any {
         row.push(Value::Str(field));
         rows.push(Value::Array(row));
     }
     Ok(Value::Array(rows))
+}
+
+/// `yaml(path)`: the data in a YAML file: the value of its one document,
+/// or `none` when it has none. Mappings keep the order of their keys, and a
+/// key that is not a string becomes the string it is written as. Plain
+/// scalars are read by the YAML 1.2 core schema: `null`, `true`, integers
+/// and floats; quoted ones are strings. An alias is the value of its
+/// anchor.
+fn yaml(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    let (text, span, id) = load_text(vm, args)?;
+    let (value, repeated) = parse_yaml(&text).map_err(|err| err.at(span, id))?;
+    // The file's bytes are counted already; what its aliases repeat is not.
+    vm.alloc(repeated.saturating_mul(ITEM), span)?;
+    Ok(value)
+}
+
+/// A mapping or sequence that is being read, with the anchor it sets and
+/// the size of what it holds so far.
+enum YamlNode {
+    Sequence(Array, usize, u64),
+    /// A mapping, with the key whose value comes next, if one came.
+    Mapping(Dict, Option<EcoString>, usize, u64),
+}
+
+/// What an anchor names: its value, or why a scalar could not be read as
+/// one, which is an error only where an alias uses it as a value; its
+/// size; and for a scalar the text it is written as, which an alias used
+/// as a key takes.
+struct YamlAnchor {
+    value: Result<Value, EcoString>,
+    size: u64,
+    text: Option<EcoString>,
+}
+
+/// Reads a YAML file's one document. Returns its value and the items its
+/// aliases repeat, each alias counting the items of the value it names, so
+/// that a file whose aliases repeat each other cannot stand for more items
+/// than the memory limit allows.
+fn parse_yaml(text: &str) -> Result<(Value, u64), DataError> {
+    use saphyr_parser::{Event, Parser, ScalarStyle};
+
+    // The parser counts characters; diagnostics count bytes.
+    let byte = |chars: usize| {
+        text.char_indices()
+            .nth(chars)
+            .map_or(text.len(), |(i, _)| i)
+    };
+    let error = |message: EcoString, span: saphyr_parser::Span| {
+        let start = byte(span.start.index());
+        let end = byte(span.end.index().max(span.start.index() + 1));
+        DataError::new(text, message, start..end)
+    };
+    let nested = || eco_format!("the data is nested more than {MAX_NESTING} deep");
+    let mut stack: Vec<YamlNode> = Vec::new();
+    let mut anchors: BTreeMap<usize, YamlAnchor> = BTreeMap::new();
+    // The documents' values, and where the second one starts.
+    let mut documents: Vec<Value> = Vec::new();
+    let mut second = None;
+    let mut repeated: u64 = 0;
+    for event in Parser::new_from_str(text) {
+        let (event, place) = event.map_err(|err| {
+            let marker = *err.marker();
+            error(
+                eco_format!("the file is not valid YAML: {}", err.info()),
+                saphyr_parser::Span::new(marker, marker),
+            )
+        })?;
+        let key_next = matches!(stack.last(), Some(YamlNode::Mapping(_, None, ..)));
+        // A value that is complete, with the anchor it sets and its size.
+        let (value, anchor, size) = match event {
+            Event::Scalar(scalar, style, anchor, tag) => {
+                let tag = tag.as_deref().filter(|tag| tag.is_yaml_core_schema());
+                let value = yaml_scalar(
+                    &scalar,
+                    style == ScalarStyle::Plain,
+                    tag.map(|t| &*t.suffix),
+                );
+                let written: EcoString = scalar.as_ref().into();
+                if anchor > 0 {
+                    anchors.insert(
+                        anchor,
+                        YamlAnchor {
+                            value: value.clone(),
+                            size: 1,
+                            text: Some(written.clone()),
+                        },
+                    );
+                }
+                // A key keeps the text it is written as.
+                if key_next {
+                    if let Some(YamlNode::Mapping(_, key, ..)) = stack.last_mut() {
+                        *key = Some(written);
+                    }
+                    continue;
+                }
+                (value.map_err(|err| error(err, place))?, 0, 1)
+            }
+            Event::Alias(id) => {
+                let named = anchors
+                    .get(&id)
+                    .ok_or_else(|| error("an alias names no anchor".into(), place))?;
+                if key_next {
+                    let key = named
+                        .text
+                        .clone()
+                        .ok_or_else(|| error("a key must be a scalar".into(), place))?;
+                    if let Some(YamlNode::Mapping(_, slot, ..)) = stack.last_mut() {
+                        *slot = Some(key);
+                    }
+                    continue;
+                }
+                let value = named.value.clone().map_err(|err| error(err, place))?;
+                if stack.len() as u64 + u64::from(value.depth()) > u64::from(MAX_NESTING) {
+                    return Err(error(nested(), place));
+                }
+                repeated = repeated.saturating_add(named.size);
+                (value, 0, named.size)
+            }
+            Event::SequenceStart(anchor, _) | Event::MappingStart(anchor, _) => {
+                if key_next {
+                    return Err(error("a key must be a scalar".into(), place));
+                }
+                if stack.len() >= MAX_NESTING as usize {
+                    return Err(error(nested(), place));
+                }
+                stack.push(if matches!(event, Event::SequenceStart(..)) {
+                    YamlNode::Sequence(Array::new(), anchor, 1)
+                } else {
+                    YamlNode::Mapping(Dict::new(), None, anchor, 1)
+                });
+                continue;
+            }
+            Event::SequenceEnd | Event::MappingEnd => match stack.pop() {
+                Some(YamlNode::Sequence(items, anchor, size)) => {
+                    (Value::Array(items), anchor, size)
+                }
+                Some(YamlNode::Mapping(map, _, anchor, size)) => (Value::Dict(map), anchor, size),
+                None => continue,
+            },
+            Event::DocumentStart(_) => {
+                if documents.len() == 1 {
+                    second = Some(place);
+                }
+                documents.push(Value::None);
+                continue;
+            }
+            Event::Nothing | Event::StreamStart | Event::StreamEnd | Event::DocumentEnd => continue,
+        };
+        if anchor > 0 {
+            anchors.insert(
+                anchor,
+                YamlAnchor {
+                    value: Ok(value.clone()),
+                    size,
+                    text: None,
+                },
+            );
+        }
+        match stack.last_mut() {
+            Some(YamlNode::Sequence(items, _, total)) => {
+                items.push(value);
+                *total = total.saturating_add(size);
+            }
+            Some(YamlNode::Mapping(map, key, _, total)) => {
+                let key = key.take().expect("a value follows its key");
+                if map.get(&key).is_some() {
+                    return Err(error(eco_format!("the key `{key}` is given twice"), place));
+                }
+                map.insert(key, value);
+                *total = total.saturating_add(size);
+            }
+            None => {
+                if let Some(document) = documents.last_mut() {
+                    *document = value;
+                }
+            }
+        }
+    }
+    match documents.len() {
+        0 => Ok((Value::None, 0)),
+        1 => Ok((documents.pop().expect("there is one"), repeated)),
+        n => {
+            let message = eco_format!("the file holds {n} YAML documents, and `yaml` reads one");
+            Err(match second {
+                Some(place) => error(message, place),
+                None => DataError {
+                    message,
+                    range: None,
+                },
+            })
+        }
+    }
+}
+
+/// A YAML scalar by the core schema: a plain one by its text or its tag
+/// (`!!int`), a quoted one as a string unless a tag says otherwise.
+fn yaml_scalar(text: &str, plain: bool, tag: Option<&str>) -> StrResult<Value> {
+    let int = |text: &str| -> Option<Value> {
+        let digits = text.strip_prefix(['-', '+']).unwrap_or(text);
+        let (radix, digits) = if let Some(hex) = text.strip_prefix("0x") {
+            (16, hex)
+        } else if let Some(oct) = text.strip_prefix("0o") {
+            (8, oct)
+        } else {
+            (10, digits)
+        };
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+            return None;
+        }
+        // A decimal integer is parsed with its sign, so that the smallest
+        // one fits.
+        let parsed = if radix == 10 {
+            text.parse::<i64>()
+        } else {
+            i64::from_str_radix(digits, radix)
+        };
+        Some(match parsed {
+            Ok(v) => Value::Int(v),
+            // Too large for an integer: a float, as in JSON.
+            Err(_) if radix == 10 => float_value(text.parse().ok()?),
+            Err(_) => return None,
+        })
+    };
+    let float = |text: &str| -> StrResult<Option<Value>> {
+        let unsigned = text.trim_start_matches(['-', '+']);
+        let negative = text.starts_with('-');
+        if matches!(unsigned, ".inf" | ".Inf" | ".INF") && unsigned.len() + 1 >= text.len() {
+            let inf = if negative {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+            return Ok(Some(float_value(inf)));
+        }
+        if matches!(text, ".nan" | ".NaN" | ".NAN") {
+            return Err("`.nan` is not a number Folio can hold".into());
+        }
+        // [-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ( [eE] [-+]? [0-9]+ )?
+        let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
+            Some(i) => (&unsigned[..i], Some(&unsigned[i + 1..])),
+            None => (unsigned, None),
+        };
+        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+        let digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+        let valid = unsigned.len() + 1 >= text.len()
+            && digits(whole)
+            && digits(fraction)
+            && (!whole.is_empty() || !fraction.is_empty())
+            && (!whole.is_empty() || mantissa.starts_with('.'))
+            && exponent.is_none_or(|e| {
+                let e = e.strip_prefix(['-', '+']).unwrap_or(e);
+                !e.is_empty() && digits(e)
+            });
+        Ok(valid
+            .then(|| text.parse::<f64>().ok())
+            .flatten()
+            .map(float_value))
+    };
+    let null = matches!(text, "" | "~" | "null" | "Null" | "NULL");
+    let bool = match text {
+        "true" | "True" | "TRUE" => Some(true),
+        "false" | "False" | "FALSE" => Some(false),
+        _ => None,
+    };
+    let wrong = |what: &str| eco_format!("`{text}` is not {what}");
+    match tag {
+        Some("str") => Ok(Value::Str(text.into())),
+        Some("null") if null => Ok(Value::None),
+        Some("null") => Err(wrong("null")),
+        Some("bool") => bool.map(Value::Bool).ok_or_else(|| wrong("a boolean")),
+        Some("int") => int(text).ok_or_else(|| wrong("an integer")),
+        Some("float") => match int(text) {
+            Some(Value::Int(i)) => Ok(float_value(i as f64)),
+            Some(v) => Ok(v),
+            None => float(text)?.ok_or_else(|| wrong("a float")),
+        },
+        _ if !plain => Ok(Value::Str(text.into())),
+        _ if null => Ok(Value::None),
+        _ => {
+            if let Some(b) = bool {
+                return Ok(Value::Bool(b));
+            }
+            if let Some(v) = int(text) {
+                return Ok(v);
+            }
+            Ok(float(text)?.unwrap_or_else(|| Value::Str(text.into())))
+        }
+    }
 }
 
 // ---- calc ----
@@ -1445,6 +1840,141 @@ mod tests {
         assert!(parse_csv("a,\"b\n", ',').is_err());
         assert!(parse_csv("a\"b\n", ',').is_err());
         assert_eq!(parse_csv("", ',').unwrap().repr(), "()");
+    }
+
+    #[test]
+    fn yaml_values() {
+        let value = parse_yaml(
+            "z: 1\na: [true, ~, 0x1f, -2.5e3, .inf, 'quoted 1', \"x\"]\n\
+             m:\n  y: !!str 12\n  2: plain text\n  b: !!float 3\n",
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            value.repr(),
+            r#"(z: 1, a: (true, none, 31, -2500.0, inf, "quoted 1", "x"), m: (y: "12", "2": "plain text", b: 3.0))"#
+        );
+        // Anchors and aliases.
+        let value = parse_yaml("base: &b {k: 1}\ncopy: *b\n").unwrap().0;
+        assert_eq!(value.repr(), "(base: (k: 1), copy: (k: 1))");
+        // Documents.
+        assert_eq!(parse_yaml("").unwrap().0.repr(), "none");
+        assert_eq!(parse_yaml("--- 3\n").unwrap().0.repr(), "3");
+        assert_eq!(
+            parse_yaml("--- 1\n--- 2\n").unwrap_err().message,
+            "the file holds 2 YAML documents, and `yaml` reads one (line 2, column 1)"
+        );
+        // Errors say where.
+        assert_eq!(
+            parse_yaml("a: 1\na: 2\n").unwrap_err().message,
+            "the key `a` is given twice (line 2, column 4)"
+        );
+        assert!(
+            parse_yaml("a: [1, 2\n")
+                .unwrap_err()
+                .message
+                .starts_with("the file is not valid YAML: ")
+        );
+        assert_eq!(
+            parse_yaml("? [1]\n: x\n").unwrap_err().message,
+            "a key must be a scalar (line 1, column 3)"
+        );
+        assert_eq!(
+            parse_yaml("x: .nan\n").unwrap_err().message,
+            "`.nan` is not a number Folio can hold (line 1, column 4)"
+        );
+        assert_eq!(
+            parse_yaml("x: !!int abc\n").unwrap_err().message,
+            "`abc` is not an integer (line 1, column 4)"
+        );
+        // Keys keep the text they are written as, aliases included.
+        let value = parse_yaml("&h 0x1f: a\n.nan: b\n*h : c\n")
+            .unwrap_err()
+            .message;
+        assert_eq!(value, "the key `0x1f` is given twice (line 3, column 6)");
+        let value = parse_yaml("k: &f 1.5\n*f : y\n&n ~: z\n.nan: w\n")
+            .unwrap()
+            .0;
+        assert_eq!(
+            value.repr(),
+            r#"(k: 1.5, "1.5": "y", "~": "z", ".nan": "w")"#
+        );
+        // An alias counts as the items it repeats.
+        let mut laughs = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for i in 1..9 {
+            let refs = vec![format!("*a{}", i - 1); 10].join(", ");
+            laughs.push_str(&format!("a{i}: &a{i} [{refs}]\n"));
+        }
+        let (_, repeated) = parse_yaml(&laughs).unwrap();
+        assert!(repeated > 1_000_000_000, "{repeated}");
+        // A file without aliases repeats nothing.
+        assert_eq!(parse_yaml("[1, [2, 3], {a: 4}]").unwrap().1, 0);
+        // An alias cannot nest a value beyond the limit.
+        let deep = |name: &str, inner: &str| {
+            format!(
+                "{name}: &{name} {}{inner}{}\n",
+                "[".repeat(60),
+                "]".repeat(60)
+            )
+        };
+        let file = deep("a", "1") + &deep("b", "*a");
+        assert!(
+            parse_yaml(&file)
+                .unwrap_err()
+                .message
+                .starts_with("the data is nested more than 100 deep")
+        );
+        // The second document is where a file holding two goes wrong.
+        assert_eq!(parse_yaml("1\n---\n2\n").unwrap_err().range, Some(2..5));
+        // Nesting stops at the limit, however deep the file goes.
+        assert!(parse_yaml(&"[".repeat(100_000)).is_err());
+        let block: String = (0..150).map(|i| format!("{}-\n", "  ".repeat(i))).collect();
+        assert!(
+            parse_yaml(&block)
+                .unwrap_err()
+                .message
+                .starts_with("the data is nested more than 100 deep")
+        );
+        let ok = format!("{}{}", "[".repeat(100), "]".repeat(100));
+        assert!(parse_yaml(&ok).is_ok());
+    }
+
+    proptest::proptest! {
+        /// Any text, however malformed, gives a value or an error.
+        #[test]
+        fn yaml_never_panics(text in r"([-:?,&*!#'\x22\[\]{}|>~. \n\t0-9a-z]|\x22\\u00e9\x22|---|\.\.\.){0,200}") {
+            let _ = parse_yaml(&text);
+        }
+    }
+
+    #[test]
+    fn yaml_scalars_by_the_core_schema() {
+        let repr = |text: &str| yaml_scalar(text, true, None).unwrap().repr();
+        assert_eq!(repr("12"), "12");
+        assert_eq!(repr("+12"), "12");
+        assert_eq!(repr("-0o17"), r#""-0o17""#);
+        assert_eq!(repr("0o17"), "15");
+        assert_eq!(repr("1.5"), "1.5");
+        assert_eq!(repr(".5"), "0.5");
+        assert_eq!(repr("5."), "5.0");
+        assert_eq!(repr("1e3"), "1000.0");
+        assert_eq!(repr("99999999999999999999"), "1e20");
+        assert_eq!(repr("-.INF"), "-inf");
+        assert_eq!(repr("1_000"), r#""1_000""#);
+        assert_eq!(repr("-9223372036854775808"), "-9223372036854775808");
+        assert_eq!(repr("yes"), r#""yes""#);
+        assert_eq!(repr("."), r#"".""#);
+        assert_eq!(repr("e3"), r#""e3""#);
+        assert_eq!(repr("Null"), "none");
+        assert_eq!(yaml_scalar("12", false, None).unwrap().repr(), r#""12""#);
+    }
+
+    #[test]
+    fn line_columns() {
+        assert_eq!(line_column("ab\nčd", 0), (1, 1));
+        assert_eq!(line_column("ab\nčd", 3), (2, 1));
+        assert_eq!(line_column("ab\nčd", 5), (2, 2));
+        assert_eq!(line_column("ab", 99), (1, 3));
     }
 
     #[test]
