@@ -433,7 +433,7 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         defer_limit: MAX_DEFER,
         running: None,
         lagging: None,
-        deferred: Vec::new(),
+        deferred: BTreeSet::new(),
         deferred_since: None,
         released: BTreeSet::new(),
         rx,
@@ -531,7 +531,7 @@ struct Engine {
     /// revision after the last one whose pages were sent.
     lagging: Option<Instant>,
     /// The changes that wait for the running check ([`MAX_LAG`]).
-    deferred: Vec<PathBuf>,
+    deferred: BTreeSet<PathBuf>,
     /// Since when changes have waited ([`MAX_DEFER`]).
     deferred_since: Option<Instant>,
     /// The held sources whose time ran out, read as they are when next
@@ -547,6 +547,10 @@ struct Engine {
 impl Engine {
     fn run(mut self) {
         loop {
+            // Due before any input already queued is handled.
+            if self.held.values().any(|at| *at <= Instant::now()) {
+                self.release();
+            }
             if self.deferred_since.is_some() && !self.lagging_behind() {
                 let paths = self.take_deferred();
                 self.apply(&paths);
@@ -677,9 +681,10 @@ impl Engine {
             // Removed, renamed or created: whatever writes it now has
             // opened it again.
             Change::Moved => {
+                // With everything under a directory moved.
                 for path in paths {
-                    self.open.remove(path);
-                    self.released.remove(path);
+                    self.open.retain(|open| !open.starts_with(path));
+                    self.released.retain(|released| !released.starts_with(path));
                 }
             }
             Change::Other => {}
@@ -710,7 +715,7 @@ impl Engine {
             self.lagging = Some(Instant::now());
             self.defer_limit = (self.defer_limit * 2).min(MAX_DEFER_LIMIT);
         }
-        std::mem::take(&mut self.deferred)
+        std::mem::take(&mut self.deferred).into_iter().collect()
     }
 
     /// Lets changes wait for the running check.
@@ -879,10 +884,11 @@ impl Engine {
         for (path, rel) in held {
             // The loader's warning that the file is not UTF-8 is about a
             // read that is put back.
+            let message = format!("cannot read `{rel}`: it is not UTF-8 text");
             let mut index = 0;
             self.warnings.retain(|warning| {
                 index += 1;
-                index <= warned || !warning.message.contains(&format!("`{rel}`"))
+                index <= warned || warning.message != message
             });
             self.held.entry(path).or_insert(until);
         }

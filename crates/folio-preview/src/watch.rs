@@ -19,6 +19,12 @@ impl Watcher {
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 match event {
+                    // Events were lost, as when the system's queue overflowed:
+                    // read everything again.
+                    // The closes lost with them leave no file open.
+                    Ok(event) if event.need_rescan() => {
+                        engine.event(vec![everything.clone()], Change::Moved)
+                    }
                     Ok(event) => {
                         if let Some(change) = change(&event.kind)
                             && !event.paths.is_empty()
@@ -27,7 +33,7 @@ impl Watcher {
                         }
                     }
                     // Events were lost: read everything again.
-                    Err(_) => engine.changed(vec![everything.clone()]),
+                    Err(_) => engine.event(vec![everything.clone()], Change::Moved),
                 }
             })
             .map_err(|e| Error(format!("cannot watch the project: {e}")))?;
