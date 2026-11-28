@@ -18,6 +18,10 @@ a comment that starts with `Folio:`.
 - `src/math.rs`: `powi_f64` always multiplies by squaring, as it already
   did without the `std` feature, instead of calling `powi`, whose result
   the language leaves unspecified.
+- `Cargo.toml`: the `unsafe` feature no longer turns on `hayro-jpeg2000`'s
+  `simd` feature, whose paths fearless_simd picks by CPU at run time and
+  which fuse multiply-adds on some CPUs only (#312; Folio's own copy of
+  hayro-jpeg2000 refuses to build them).
 
 Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
 #333). These changes bound what reading one may take:
