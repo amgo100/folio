@@ -174,19 +174,42 @@ struct Items {
 
 impl Items {
     fn push(&mut self, node: Node) {
-        // Scripts on an empty base before a nucleus are its pre-scripts:
-        // `{}^{14}_{6}\mathrm{C}`.
         if matches!(
             node,
-            Node::Ident(_) | Node::Number(_) | Node::Text(_) | Node::Styled(_)
-        ) && let Some(Item::Node(Node::Attach(attach))) = self.items.last()
+            Node::Ident(_)
+                | Node::Number(_)
+                | Node::Text(_)
+                | Node::Styled(_)
+                | Node::Accent(_)
+                | Node::Vector(_)
+        ) {
+            self.push_nucleus(Row::new([node]), |row| Item::Node(row.nodes()[0].clone()));
+        } else {
+            self.items.push(Item::Node(node));
+        }
+    }
+
+    /// A group, which is a nucleus when it is not empty: `{}^{4}_{2}{He}`.
+    fn push_group(&mut self, row: Row) {
+        if row.nodes().is_empty() {
+            self.items.push(Item::Group(row));
+        } else {
+            self.push_nucleus(row, Item::Group);
+        }
+    }
+
+    /// Pushes what may be a nucleus: scripts on an empty base before it
+    /// are its pre-scripts, `{}^{14}_{6}\mathrm{C}`; otherwise it is
+    /// pushed as `item` makes it.
+    fn push_nucleus(&mut self, base: Row, item: impl FnOnce(Row) -> Item) {
+        if let Some(Item::Node(Node::Attach(attach))) = self.items.last()
             && attach.base.nodes().is_empty()
             && attach.primes == 0
             && attach.pre_sub.is_none()
             && attach.pre_sup.is_none()
         {
             let attach = Attach {
-                base: Row::new([node]),
+                base,
                 sub: None,
                 sup: None,
                 primes: 0,
@@ -197,7 +220,7 @@ impl Items {
             *self.items.last_mut().expect("an item") = Item::Node(Node::Attach(Arc::new(attach)));
             return;
         }
-        self.items.push(Item::Node(node));
+        self.items.push(item(base));
     }
 
     fn into_nodes(self) -> Vec<Node> {
@@ -766,7 +789,7 @@ impl<'s> Parser<'s> {
             Tok::Eof | Tok::Close => unreachable!("rows end there"),
             Tok::Open => {
                 let row = self.group(range)?;
-                items.items.push(Item::Group(row));
+                items.push_group(row);
             }
             Tok::Sup | Tok::Sub => self.script(tok == Tok::Sup, range, items)?,
             Tok::Primes(count) => self.primes(count, range, items)?,
@@ -2081,6 +2104,15 @@ mod tests {
         assert_eq!(
             repr("{}^{238}U^{2+}"),
             "[attach([U], sup: [num(2), vary(+)], pre-sup: [num(238)])]"
+        );
+        // A group, an accent or a vector is a nucleus too.
+        assert_eq!(
+            repr("{}^{4}_{2}{He}"),
+            "[attach([H, e], pre-sub: [num(2)], pre-sup: [num(4)])]"
+        );
+        assert_eq!(
+            repr("{}^{0}_{0}\\bar{\\nu}"),
+            "[attach([accent(\u{304}, [ν])], pre-sub: [num(0)], pre-sup: [num(0)])]"
         );
         // Before an operator or a relation, an empty base stays a base.
         assert_eq!(repr("{}^2 = x"), "[attach([], sup: [num(2)]), rel(=), x]");

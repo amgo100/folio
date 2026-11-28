@@ -193,16 +193,19 @@ fn layout_scripted(
     let c = |constant: Constant| ctx.font.constant(constant) * size;
 
     // From the base's baseline to the scripts' and the limits' baselines.
-    let (tr_shift, br_shift) = if tr.is_none() && br.is_none() {
-        (0.0, 0.0)
-    } else {
-        script_shifts(ctx, size, style.cramped, &base, tr.as_ref(), br.as_ref())
+    // The scripts on both sides share their baselines, so that the mass
+    // number of ²³⁸₉₂U²⁺ and its charge stand level.
+    let shifts = |sup: Option<&MathFragment>, sub: Option<&MathFragment>| {
+        if sup.is_none() && sub.is_none() {
+            (0.0, 0.0)
+        } else {
+            script_shifts(ctx, size, style.cramped, &base, sup, sub)
+        }
     };
-    let (tl_shift, bl_shift) = if tl.is_none() && bl.is_none() {
-        (0.0, 0.0)
-    } else {
-        script_shifts(ctx, size, style.cramped, &base, tl.as_ref(), bl.as_ref())
-    };
+    let (post_up, post_down) = shifts(tr.as_ref(), br.as_ref());
+    let (pre_up, pre_down) = shifts(tl.as_ref(), bl.as_ref());
+    let (up, down) = (post_up.max(pre_up), post_down.max(pre_down));
+    let (tr_shift, br_shift, tl_shift, bl_shift) = (up, down, up, down);
     let t_shift = t.as_ref().map_or(0.0, |t| {
         base.ascent()
             + c(Constant::UpperLimitBaselineRiseMin)

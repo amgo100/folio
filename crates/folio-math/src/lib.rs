@@ -862,13 +862,6 @@ pub struct Matrix {
     pub span: Span,
 }
 
-impl Matrix {
-    /// How a column aligns its cells.
-    pub fn column_align(&self, column: usize) -> ColumnAlign {
-        self.align.get(column).copied().unwrap_or_default()
-    }
-}
-
 /// How the cells of a matrix's column align: the `l`, `c` and `r` of
 /// LaTeX's `array`.
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]

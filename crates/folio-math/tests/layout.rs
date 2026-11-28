@@ -240,3 +240,12 @@ fn array_columns_align_as_their_specification_says() {
     let (start, end) = narrow("c");
     assert!((start - end).abs() < 0.01 && start > 1.0, "{start} {end}");
 }
+
+#[test]
+fn scripts_on_both_sides_share_their_baselines() {
+    // ²³⁸₉₂U²⁺: the mass number and the charge stand level (#352).
+    let runs = display_runs(r"{}^{238}_{92}\mathrm{U}^{2+}");
+    let find = |text: &str| runs.iter().find(|r| r.0 == text).unwrap().clone();
+    let (mass, charge) = (find("238"), find("2"));
+    assert!((mass.3 - charge.3).abs() < 0.01, "{runs:?}");
+}
