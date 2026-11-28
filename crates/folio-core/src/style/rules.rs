@@ -1262,8 +1262,6 @@ impl<'a> Compiler<'a> {
     }
 }
 
-/// Whether a declaration's value is a single `none` or `auto`, which a
-/// template property takes as a value rather than a template.
 /// Why a value of `display` is not a placeholder of one text (SPEC §6.3):
 /// `placeholder(..)` takes exactly one string. `None` for any other
 /// property or value.
@@ -1285,6 +1283,8 @@ fn check_placeholder(property: &Property, value: &Declared) -> Option<&'static s
     }
 }
 
+/// Whether a declaration's value is a single `none` or `auto`, which a
+/// template property takes as a value rather than a template.
 fn is_keyword_value(decl: ast::Declaration<'_>) -> bool {
     let mut values = decl.values();
     matches!(

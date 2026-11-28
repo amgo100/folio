@@ -420,3 +420,51 @@ fn the_lint_suggests_mechanisms_one_and_two() {
         "{hints:?}"
     );
 }
+
+/// A placeholder on a formula replaces the formula: neither it nor its
+/// source is set (SPEC §6.4).
+#[test]
+fn a_placeholder_replaces_a_formula() {
+    let world = world(
+        "math { display: placeholder(\"(answer)\"); }\n\
+         @variant markscheme { math { display: auto; } }\n",
+        "",
+        "The speed is $v = 7.2$.\n",
+    );
+    let text = folio::text(&world, Target::Pdf, Some(&name("exam")))
+        .unwrap()
+        .unwrap();
+    assert_eq!(paragraphs(&world, "exam"), ["The speed is (answer)."]);
+    assert!(text.maths.is_empty(), "no formula is laid out");
+    assert!(!selected(&world, "exam").contains("7.2"));
+}
+
+/// A variant that hides the whole document shows an empty one, not all
+/// of it.
+#[test]
+fn hiding_the_document_leaves_it_empty() {
+    let world = world(
+        "@variant exam { doc { display: none; } }\n",
+        "",
+        "= Forces\n\nSECRET.\n",
+    );
+    assert!(paragraphs(&world, "exam").is_empty());
+    assert!(!selected(&world, "exam").contains("SECRET"));
+    assert_eq!(paragraphs(&world, "markscheme"), ["Forces", "SECRET."]);
+}
+
+/// `in` a string tests for a substring, which the lint does not read as
+/// a list of variants.
+#[test]
+fn the_lint_reads_only_names_and_lists() {
+    let world = world(
+        "",
+        "",
+        "#if variant in \"markscheme\" [Sub.]\n\n#if variant == (\"exam\",) [Odd.]\n",
+    );
+    assert!(
+        diagnostics(&world, "exam")
+            .iter()
+            .all(|(_, code, _)| code != "variant-condition")
+    );
+}

@@ -79,10 +79,32 @@ pub fn select(
         warned: HashSet::new(),
     };
     match select.element(root, node, None) {
-        Out::Same | Out::Removed => Selection {
+        Out::Same => Selection {
             root: None,
             styled: node.clone(),
         },
+        // A variant that hides the whole document shows an empty one.
+        Out::Removed => {
+            let mut root = root.clone();
+            let content: Vec<EcoString> = root
+                .fields
+                .iter()
+                .filter(|(_, value)| matches!(value, Value::Content(_)))
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in content {
+                root.fields.remove(&key);
+            }
+            root.fields
+                .insert(BODY.into(), Value::Content(Content::new()));
+            Selection {
+                root: Some(root),
+                styled: StyledNode {
+                    children: Default::default(),
+                    ..node.clone()
+                },
+            }
+        }
         Out::Changed(changed) => {
             let (root, styled) = *changed;
             Selection {
@@ -230,6 +252,16 @@ impl Select<'_> {
                     continue;
                 };
                 let Some(part) = part_kids.part(&name) else {
+                    // A part without a styled node is shown as it is, but
+                    // `show-only` still decides whether it is kept.
+                    match only {
+                        Some(only) if !only.part(key) && !only.within(content) => {
+                            fields
+                                .get_or_insert_with(|| element.fields.clone())
+                                .remove(key);
+                        }
+                        _ => {}
+                    }
                     continue;
                 };
                 self.part(key, content, part, only, &mut edits)
@@ -320,9 +352,12 @@ impl Select<'_> {
         for node in content.nodes() {
             let kept = match node {
                 Node::Element(child) => match kids.element(child) {
-                    // An element that the style stage gave no node is left
-                    // as it is: no later stage reads it either.
-                    None => Some((node.clone(), false)),
+                    // An element that the style stage gave no node is
+                    // shown as it is, if its condition and `show-only`
+                    // keep it.
+                    None => self
+                        .keeps_unstyled(child, only)
+                        .then(|| (node.clone(), false)),
                     Some(child_node) => self.child(child, child_node, only, edits),
                 },
                 Node::Rule(_) => Some((node.clone(), false)),
@@ -378,6 +413,14 @@ impl Select<'_> {
                 Some((Node::Element(element), true))
             }
         }
+    }
+
+    /// Whether an element without a styled node is kept: its variant
+    /// condition shows it, and `show-only`, if any, names it or something
+    /// in it.
+    fn keeps_unstyled(&mut self, element: &Element, only: Option<&Only>) -> bool {
+        self.condition(element)
+            && only.is_none_or(|only| only.element(&element.name) || only.holds(element))
     }
 
     /// What Select does with an element (`None` for a part) whose styled
@@ -558,7 +601,8 @@ fn text_content(text: EcoString) -> Content {
 }
 
 /// An element with its content replaced by a text: every field of content
-/// left out, and a code block's text, and the text as its body.
+/// left out, and every other field a built-in element shows, and the text
+/// as its body.
 fn placeholder(element: &Element, text: EcoString) -> Element {
     let mut element = element.clone();
     let content: Vec<EcoString> = element
@@ -570,8 +614,20 @@ fn placeholder(element: &Element, text: EcoString) -> Element {
     for key in content {
         element.fields.remove(&key);
     }
-    if element.name.namespace.is_none() && element.name.name.as_str() == "raw" {
-        element.fields.remove("text");
+    // The fields that built-in elements show other than as content: a code
+    // block's text, a formula and its LaTeX source, an image and its
+    // description, a link's address.
+    if element.name.namespace.is_none() {
+        let shown: &[&str] = match element.name.name.as_str() {
+            "raw" => &["text"],
+            "math" => &["tree", "tex"],
+            "image" => &["path", "alt"],
+            "link" => &["dest"],
+            _ => &[],
+        };
+        for key in shown {
+            element.fields.remove(key);
+        }
     }
     element
         .fields

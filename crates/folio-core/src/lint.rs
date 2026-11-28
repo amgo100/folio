@@ -98,9 +98,12 @@ fn variant_condition(conditional: ast::Conditional<'_>) -> Option<Diagnostic> {
     };
     let is_variant =
         |expr: Expr<'_>| matches!(expr, Expr::Ident(ident) if ident.as_str() == "variant");
+    let name = |expr: Expr<'_>| match expr {
+        Expr::Str(text) => Some(vec![text.get()]),
+        _ => None,
+    };
     let names = |expr: Expr<'_>| -> Option<Vec<EcoString>> {
         match expr {
-            Expr::Str(text) => Some(vec![text.get()]),
             Expr::Array(array) => array
                 .items()
                 .map(|item| match item {
@@ -114,8 +117,10 @@ fn variant_condition(conditional: ast::Conditional<'_>) -> Option<Diagnostic> {
     let (lhs, rhs) = (binary.lhs(), binary.rhs());
     let op = binary.op();
     let listed = match op {
-        BinOp::Eq | BinOp::Neq if is_variant(lhs) => names(rhs)?,
-        BinOp::Eq | BinOp::Neq if is_variant(rhs) => names(lhs)?,
+        // `in` a string tests for a substring, so only a list names
+        // variants.
+        BinOp::Eq | BinOp::Neq if is_variant(lhs) => name(rhs)?,
+        BinOp::Eq | BinOp::Neq if is_variant(rhs) => name(lhs)?,
         BinOp::In | BinOp::NotIn if is_variant(lhs) => names(rhs)?,
         _ => return None,
     };
