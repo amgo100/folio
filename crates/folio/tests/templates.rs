@@ -653,8 +653,7 @@ fn a_part_shown_as_a_space_is_kept_but_conditions_read_it_unset() {
     // exam the solution is a space, so the condition fails and the heading
     // does not tell that a solution exists (SPEC §6.4). Select still keeps
     // the part's block, so the variant counts what it counts without a
-    // template, and answer space stands after the body; a `hidden` part
-    // keeps no block where the template does not place it.
+    // template, and its space stands after the body.
     let content = r#"#element example() {
   kind: block
   body: slots(statement: blocks, solution: blocks)
@@ -702,7 +701,7 @@ fn a_part_shown_as_a_space_is_kept_but_conditions_read_it_unset() {
             .spaces
             .iter()
             .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution"));
-        assert_eq!(spaced, display == "answer-space", "{display}: {outline}");
+        assert!(spaced, "{display}: {outline}");
     }
 }
 

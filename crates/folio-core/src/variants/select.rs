@@ -376,17 +376,22 @@ impl Select<'_> {
             // line: the blocks in content it places are left out, and
             // content with nothing inline left is not placed at all.
             let inline_owner = placed.is_some() && element.kind == ElementKind::Inline;
+            let mut dropped = Edits::default();
             let filtered = if inline_owner {
-                without_blocks(original, key == BODY, &mut edits)
+                without_blocks(original, &mut dropped)
             } else {
                 None
             };
+            if key == BODY {
+                edits.removed.extend(dropped.removed.iter().copied());
+            }
             let content = filtered.as_ref().unwrap_or(original);
             let blocks_in_line =
                 inline_owner && !original.is_empty() && !crate::text::is_inline(content);
             // A part of a block shown as a space keeps its block whether
             // or not the template places it (SPEC §6.3), as `part` keeps it.
-            let space = key != BODY
+            let space = placed.is_some()
+                && key != BODY
                 && is_block(element)
                 && Name::new(key)
                     .and_then(|name| part_kids.part(&name))
@@ -459,8 +464,25 @@ impl Select<'_> {
                 self.part(element, key, content, part, only, &mut edits)
             };
             // Content whose blocks an inline template left out changed
-            // even where nothing else did.
+            // even where nothing else did, and a part's node leaves out
+            // their nodes.
             let new = new.or_else(|| filtered.clone().map(Some));
+            if filtered.is_some()
+                && key != BODY
+                && let Some(part) = Name::new(key).and_then(|name| part_kids.part(&name))
+            {
+                let current = match edits.parts.get(key.as_str()) {
+                    Some(Some(node)) => Some(node.clone()),
+                    // The part is left out anyway.
+                    Some(None) => None,
+                    None => Some(part.clone()),
+                };
+                if let Some(current) = current {
+                    edits
+                        .parts
+                        .insert(key.clone(), Some(dropped.apply(&current)));
+                }
+            }
             if let Some(new) = new {
                 let fields = fields.get_or_insert_with(|| element.fields.clone());
                 match new {
@@ -819,10 +841,9 @@ pub(crate) fn is_block(element: &Element) -> bool {
 }
 
 /// Content with the block elements left out, as an inline element's
-/// template sets it in its line: `None` if it holds none. For the body,
-/// the elements left out are recorded in `edits`; a part's are in its own
-/// node, which keeps them, unpaired.
-fn without_blocks(content: &Content, body: bool, edits: &mut Edits) -> Option<Content> {
+/// template sets it in its line, recording them in `dropped`: `None` if it
+/// holds none.
+fn without_blocks(content: &Content, dropped: &mut Edits) -> Option<Content> {
     let is_line =
         |element: &Element| matches!(element.kind, ElementKind::Inline | ElementKind::Note);
     if !content
@@ -836,9 +857,7 @@ fn without_blocks(content: &Content, body: bool, edits: &mut Edits) -> Option<Co
     for node in content.nodes() {
         match node {
             Node::Element(element) if !is_line(element) => {
-                if body {
-                    edits.removed.insert(element.location);
-                }
+                dropped.removed.insert(element.location);
             }
             other => kept.push(other.clone()),
         }

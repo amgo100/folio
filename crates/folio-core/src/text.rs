@@ -851,12 +851,11 @@ impl Collector<'_> {
         match &expansion.body {
             Some(body) => {
                 self.pieces(element, node, body, &node.style);
-                // A part shown as answer space that the template does not
-                // place as blocks (it shows it only in a line, with `field`,
-                // or a condition leaves it out) keeps its space after the
-                // body, so that no answer space is lost (SPEC §6.3). A
-                // `hidden` part keeps no block there: in the variants that
-                // show it, it is not there either.
+                // A part shown as a space that the template does not place
+                // as blocks (it shows it only in a line, with `field`, or a
+                // condition leaves it out) keeps its block after the body,
+                // so that no answer space is lost and a hidden part takes
+                // its room (SPEC §6.3).
                 // In the order of the element's fields.
                 let unplaced: Vec<Name> = if self.spaces.is_empty() {
                     Vec::new()
@@ -868,7 +867,7 @@ impl Collector<'_> {
                         .filter(|name| {
                             self.spaces
                                 .get(&(element.location, Some(name.clone())))
-                                .is_some_and(|space| space.kind == SpaceKind::Answer)
+                                .is_some()
                         })
                         .filter(|name| !self.placed.contains(name))
                         .collect()
