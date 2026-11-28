@@ -1,0 +1,23 @@
+[project]
+entry = "main.fol"
+edition = "2027"
+compiler = "0.0.0"
+lang = "en-GB"
+styles = ["styles/paper.fsty"]
+
+# SPEC §6.1, §13.1: a question paper and its mark scheme from one source,
+# written with the exam component, numbered alike and with the same total.
+[variants.exam]
+targets = ["pdf"]
+
+[variants.markscheme]
+targets = ["pdf"]
+
+# The mark scheme again, as a table.
+[variants.table]
+targets = ["pdf"]
+styles = ["styles/table.fsty"]
+
+[numbering-groups.paper]
+variants = ["exam", "markscheme", "table"]
+shared-counters = ["question", "part"]

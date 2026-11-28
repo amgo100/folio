@@ -2,7 +2,7 @@
 //! tree, and `#outline` and `#list-of` over the variant's own tree, which
 //! never list what the variant hides.
 
-use folio::{Name, QueryResult, Resolution, Severity, Target, World};
+use folio::{Name, QueryResult, Registry, Resolution, Severity, Target, World};
 
 const STYLE: &str = "heading { numbering: \"1.\"; }\n\
                      figure { numbering: \"1\"; }\n\
@@ -23,8 +23,18 @@ fn manifest(group: bool) -> String {
     )
 }
 
+/// A world without the first-party components: these projects declare
+/// their own `question` and `part`, which the exam component also
+/// provides.
+fn bare(manifest: &str) -> World {
+    World::builder()
+        .components(Registry::new())
+        .build(manifest, None)
+        .unwrap()
+}
+
 fn world(group: bool, text: &str) -> World {
-    let mut world = World::new(&manifest(group)).unwrap();
+    let mut world = bare(&manifest(group));
     world.set_source("styles/main.fsty", STYLE).unwrap();
     world.set_source("main.fol", text).unwrap();
     world
@@ -139,7 +149,7 @@ fn totals_of_numbers_and_of_values_that_are_not() {
 
 fn world_pl(text: &str) -> World {
     let manifest = manifest(false).replace("lang = \"en\"", "lang = \"pl\"");
-    let mut world = World::new(&manifest).unwrap();
+    let mut world = bare(&manifest);
     world.set_source("styles/main.fsty", STYLE).unwrap();
     world.set_source("main.fol", text).unwrap();
     world

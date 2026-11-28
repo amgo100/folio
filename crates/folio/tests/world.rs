@@ -87,9 +87,10 @@ impl Logged {
 /// their text, in its two queries, the collection of the paragraphs and
 /// their shaping (memoised apart per paragraph); the check of the fonts the
 /// collected text is set in; line and page breaking, which read the text;
-/// and Emit, which reads the pages.
-const EVAL: &str = "eval_file evaluate document styles select sequence resolve_counters resolve step_style \
-                    check_fonts collect_text text lines pages pdf_input pdf_check emit";
+/// and Emit, which reads the pages; and the view of the first-party
+/// components' instances that their lints read.
+const EVAL: &str = "eval_file evaluate document styles select lint_variant sequence resolve_counters resolve \
+                    step_style check_fonts collect_text text lines pages pdf_input pdf_check emit";
 
 /// A set of query names; an item may hold several, separated by spaces.
 fn set(names: &[&str]) -> BTreeSet<String> {

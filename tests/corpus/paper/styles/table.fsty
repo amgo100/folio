@@ -1,0 +1,7 @@
+// The mark scheme as a table (SPEC §13.1): a row for each question and
+// part that holds answers, its stem left out.
+question, part { template: markscheme-table; show-only: answer mark markscheme-note part; }
+question:has(part), part:has(part) { template: none; }
+answer { display: block; rule-lines: none; }
+mark { display: inline; template: badge; }
+markscheme-note { display: block; font-style: italic; }
