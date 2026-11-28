@@ -869,11 +869,12 @@ impl Engine {
         for rel in sources {
             let path = self.root.join(&rel);
             let file = resolved(&path);
-            // Read as it is, once, its hold over.
-            if self.released.remove(&file) || before.released.contains(&file) {
+            let writing = written.contains(&file);
+            // Read as it is, once, its hold over, unless a new save of it
+            // has begun.
+            if !writing && (self.released.remove(&file) || before.released.contains(&file)) {
                 continue;
             }
-            let writing = written.contains(&file);
             let old = self.texts.get(&rel).cloned();
             let old_len = old.as_ref().map_or(0, |old| old.text().len() as u64);
             // Removed by the loader: gone, or not UTF-8, as when the read
@@ -1021,8 +1022,12 @@ impl Engine {
             Ok(update) => update,
             Err(e) => {
                 self.warnings.push(error(e.to_string()));
-                // What it changed before the error is not known.
+                // What it changed before the error is not known; the files
+                // released for this batch are still to be read as they are.
                 self.record_all();
+                if let Some(before) = before {
+                    self.released.extend(before.released);
+                }
                 self.edited();
                 return;
             }
