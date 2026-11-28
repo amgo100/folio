@@ -112,7 +112,9 @@ impl Vm<'_> {
                 nodes.push(math::Node::decimal_comma(expr.span()));
                 continue;
             }
+            let before = nodes.len();
             self.math_expr(expr, Level::Line, &mut nodes)?;
+            fold_pre_scripts(&mut nodes, before);
         }
         if !nodes.is_empty() || label.is_some() {
             let row = self.row_of(nodes, span)?;
@@ -245,7 +247,9 @@ impl Vm<'_> {
                         out.push(math::Node::decimal_comma(child.span()));
                         continue;
                     }
+                    let before = out.len();
                     self.nest(|vm| vm.math_expr(child, level, out))?;
+                    fold_pre_scripts(out, before);
                 }
             }
             ast::Expr::MathText(text) => out.push(match text.get() {
@@ -306,7 +310,12 @@ impl Vm<'_> {
                 })));
             }
             ast::Expr::MathAttach(attach) => {
-                let base = self.math_row(attach.base(), Level::Nested)?;
+                // An empty text is an empty base, whose scripts are the
+                // pre-scripts of what follows: `""_92^235 "U"` (D-352-1).
+                let base = match attach.base() {
+                    ast::Expr::Str(text) if text.get().is_empty() => Row::default(),
+                    base => self.math_row(base, Level::Nested)?,
+                };
                 let sub = match attach.bottom() {
                     Some(sub) => Some(self.math_row(sub, Level::Nested)?),
                     None => None,
@@ -1457,6 +1466,62 @@ fn misplaced_align_point(span: Span) -> EvalError {
         span,
         "an alignment point can only be at the top level of a line or a case",
     )
+}
+
+/// Makes the scripts of an empty base the pre-scripts of the one node
+/// that `out` gained from `before` on, when that node can carry them: a
+/// letter, a number, text, an accent, a vector, a body in an alphabet, or
+/// one of these with scripts of its own (`""_92^238 "U"^(2+)`; D-352-1).
+fn fold_pre_scripts(out: &mut Vec<math::Node>, before: usize) {
+    if before == 0 || out.len() != before + 1 {
+        return;
+    }
+    let math::Node::Attach(pre) = &out[before - 1] else {
+        return;
+    };
+    if !pre.base.nodes().is_empty()
+        || pre.primes > 0
+        || pre.pre_sub.is_some()
+        || pre.pre_sup.is_some()
+    {
+        return;
+    }
+    let nucleus = |node: &math::Node| {
+        matches!(
+            node,
+            math::Node::Ident(_)
+                | math::Node::Number(_)
+                | math::Node::Text(_)
+                | math::Node::Styled(_)
+                | math::Node::Accent(_)
+                | math::Node::Vector(_)
+        )
+    };
+    let attach = match &out[before] {
+        node if nucleus(node) => math::Attach {
+            base: Row::new([node.clone()]),
+            sub: None,
+            sup: None,
+            primes: 0,
+            pre_sub: pre.sub.clone(),
+            pre_sup: pre.sup.clone(),
+            span: pre.span,
+        },
+        math::Node::Attach(post)
+            if post.pre_sub.is_none()
+                && post.pre_sup.is_none()
+                && matches!(post.base.nodes(), [node] if nucleus(node)) =>
+        {
+            math::Attach {
+                pre_sub: pre.sub.clone(),
+                pre_sup: pre.sup.clone(),
+                ..math::Attach::clone(post)
+            }
+        }
+        _ => return,
+    };
+    out.truncate(before - 1);
+    out.push(math::Node::Attach(Arc::new(attach)));
 }
 
 /// A float as it is set: in the shorter of its decimal and scientific

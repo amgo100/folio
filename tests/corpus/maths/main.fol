@@ -36,6 +36,8 @@ A wavelength of $5.0 times 10^-7$ m is $500$ nm, and a capacitor discharging thr
 
 $:tex {}^{235}_{92}\mathrm{U} + {}^{1}_{0}\mathrm{n} \to {}^{141}_{56}\mathrm{Ba} + {}^{92}_{36}\mathrm{Kr} + 3\,{}^{1}_{0}\mathrm{n} $
 
+and a nucleus of uranium-238 decays by emitting an alpha particle: $""_92^238 "U" -> ""_90^234 "Th" + ""_2^4 alpha$.
+
 = Data
 
 #let c = 3.00e8

@@ -188,9 +188,9 @@ page 1 419.53 × 595.28, 15 line(s)
             shape (9.22, 6.48) M(0.00, 0.00) L(13.66, 0.00) L(13.66, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:19:117
           text (141.08, 35.70) SourceSerif4-Regular 10.50 w 187.74 41 glyph(s) ". For a set of point masses the potential"
           text (0.00, 57.11) SourceSerif4-Regular 10.50 w 39.54 8 glyph(s) "adds up:"
-page 2 419.53 × 595.28, 12 line(s)
-  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 15.40..436.55
-    box (0.00, 0.00) 328.82 × 439.47 main.fol:1:2 baselines 15.40..436.55
+page 2 419.53 × 595.28, 14 line(s)
+  box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 15.40..480.98
+    box (0.00, 0.00) 328.82 × 484.50 main.fol:1:2 baselines 15.40..480.98
       box (0.00, 0.00) 328.82 × 231.17 main.fol:17:1 baselines 15.40..222.81
         box (0.00, 0.00) 328.82 × 26.86 main.fol:21:1 baselines 15.40..15.40
           text (118.76, 15.40) NewCMMath-Regular 10.50 w 8.37 1 glyph(s) "𝑉"
@@ -331,7 +331,7 @@ page 2 419.53 × 595.28, 12 line(s)
           text (190.14, 14.73) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
           text (201.22, 14.73) NewCMMath-Regular 10.50 w 4.89 1 glyph(s) "𝑒"
           text (315.40, 14.73) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "(8)"
-      box (0.00, 241.17) 328.82 × 198.30 main.fol:33:1 baselines 18.41..195.38
+      box (0.00, 241.17) 328.82 × 243.33 main.fol:33:1 baselines 18.41..239.81
         box (0.00, 0.00) 328.82 × 26.72 main.fol:33:1 baselines 18.41..18.41 keep penalty 10000
           text (0.00, 18.41) SourceSans3-Bold 15.00 w 160.98 23 glyph(s) "Standard form and signs"
         box (0.00, 31.97) 328.82 × 148.54 main.fol:35:1 baselines 14.29..141.61
@@ -414,16 +414,33 @@ page 2 419.53 × 595.28, 12 line(s)
           text (227.98, 4.98) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "1"
           text (227.98, 11.55) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "0"
           text (315.40, 8.87) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "(9)"
+        box (0.00, 204.30) 328.82 × 39.03 main.fol:39:1 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 328.82 66 glyph(s) "and a nucleus of uranium-238 decays by emitting an alpha particle:"
+          box (0.00, 26.64) 35.82 × 11.79 main.fol:39:68
+            text (11.61, 8.87) NewCMMath-Regular 10.50 w 7.88 1 glyph(s) "U"
+            text (0.59, 4.90) NewCMMath-Regular 7.35 w 11.02 3 glyph(s) "238"
+            text (4.26, 11.63) NewCMMath-Regular 7.35 w 7.35 2 glyph(s) "92"
+            text (22.40, 8.87) NewCMMath-Regular 10.50 w 10.50 1 glyph(s) "→"
+          box (35.82, 26.56) 37.94 × 11.87 main.fol:39:68
+            text (11.61, 8.95) NewCMMath-Regular 10.50 w 13.49 2 glyph(s) "Th"
+            text (0.59, 4.98) NewCMMath-Regular 7.35 w 11.02 3 glyph(s) "234"
+            text (4.26, 11.71) NewCMMath-Regular 7.35 w 7.35 2 glyph(s) "90"
+            text (27.44, 8.95) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "+"
+          box (73.76, 26.64) 10.98 × 11.55 main.fol:39:68
+            text (4.26, 8.87) NewCMMath-Regular 10.50 w 6.72 1 glyph(s) "𝛼"
+            text (0.59, 4.98) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "4"
+            text (0.59, 11.55) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
+          text (84.75, 35.51) SourceSerif4-Regular 10.50 w 3.15 1 glyph(s) "."
 page 3 419.53 × 595.28, 9 line(s)
   box (45.35, 51.02) 328.82 × 493.23 main.fol:1:2 baselines 15.00..191.39
     box (0.00, 0.00) 328.82 × 194.90 main.fol:1:2 baselines 15.00..191.39
-      box (0.00, 0.00) 328.82 × 194.90 main.fol:39:1 baselines 15.00..191.39
-        box (0.00, 0.00) 328.82 × 23.30 main.fol:39:1 baselines 15.00..15.00 keep penalty 10000
+      box (0.00, 0.00) 328.82 × 194.90 main.fol:41:1 baselines 15.00..191.39
+        box (0.00, 0.00) 328.82 × 23.30 main.fol:41:1 baselines 15.00..15.00 keep penalty 10000
           text (0.00, 15.00) SourceSans3-Bold 15.00 w 30.51 4 glyph(s) "Data"
-        box (0.00, 28.55) 328.82 × 166.35 main.fol:43:1 baselines 14.29..162.83
+        box (0.00, 28.55) 328.82 × 166.35 main.fol:45:1 baselines 14.29..162.83
           text (0.00, 14.29) SourceSerif4-Regular 10.50 w 328.82 69 glyph(s) "The constants of a data section are written as the author gives them:"
           text (0.00, 35.51) SourceSerif4-Regular 10.50 w 145.19 32 glyph(s) "the speed of light in vacuum is "
-          box (145.19, 26.80) 72.72 × 8.94 main.fol:43:104
+          box (145.19, 26.80) 72.72 × 8.94 main.fol:45:104
             text (0.00, 8.71) NewCMMath-Regular 10.50 w 18.67 4 glyph(s) "3.00"
             text (21.00, 8.71) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "×"
             text (31.50, 8.71) NewCMMath-Regular 10.50 w 10.50 2 glyph(s) "10"
@@ -433,7 +450,7 @@ page 3 419.53 × 595.28, 9 line(s)
             text (62.74, 4.90) NewCMMath-Regular 7.35 w 5.72 1 glyph(s) "−"
             text (68.45, 4.90) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "1"
           text (217.91, 35.51) SourceSerif4-Regular 10.50 w 110.91 23 glyph(s) ", the elementary charge"
-          box (0.00, 48.02) 64.99 × 8.94 main.fol:43:150
+          box (0.00, 48.02) 64.99 × 8.94 main.fol:45:150
             text (0.00, 8.71) NewCMMath-Regular 10.50 w 18.67 4 glyph(s) "1.60"
             text (21.00, 8.71) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "×"
             text (31.50, 8.71) NewCMMath-Regular 10.50 w 10.50 2 glyph(s) "10"
@@ -441,7 +458,7 @@ page 3 419.53 × 595.28, 9 line(s)
             text (47.72, 4.90) NewCMMath-Regular 7.35 w 7.35 2 glyph(s) "19"
             text (57.41, 8.71) NewCMMath-Regular 10.50 w 7.58 1 glyph(s) "C"
           text (64.99, 56.73) SourceSerif4-Regular 10.50 w 122.46 25 glyph(s) " and the Planck constant "
-          box (187.45, 47.94) 68.69 × 9.02 main.fol:43:194
+          box (187.45, 47.94) 68.69 × 9.02 main.fol:45:194
             text (0.00, 8.79) NewCMMath-Regular 10.50 w 18.67 4 glyph(s) "6.63"
             text (21.00, 8.79) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "×"
             text (31.50, 8.79) NewCMMath-Regular 10.50 w 10.50 2 glyph(s) "10"
@@ -451,12 +468,12 @@ page 3 419.53 × 595.28, 9 line(s)
             text (64.56, 8.79) NewCMMath-Regular 10.50 w 4.14 1 glyph(s) "s"
           text (256.15, 56.73) SourceSerif4-Regular 10.50 w 72.67 15 glyph(s) ", and a reading"
           text (0.00, 77.95) SourceSerif4-Regular 10.50 w 12.02 3 glyph(s) "of "
-          box (12.02, 70.78) 23.13 × 7.40 main.fol:43:234
+          box (12.02, 70.78) 23.13 × 7.40 main.fol:45:234
             text (0.00, 7.17) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "2.0"
             text (15.17, 7.17) NewCMMath-Regular 10.50 w 7.96 1 glyph(s) "V"
           text (35.14, 77.95) SourceSerif4-Regular 10.50 w 293.67 66 glyph(s) " keeps its last figure. A value a script computes is written in the"
           text (0.00, 99.17) SourceSerif4-Regular 10.50 w 255.38 59 glyph(s) "shorter of its plain and power-of-ten forms: light travels "
-          box (255.38, 90.47) 43.43 × 8.94 main.fol:43:375
+          box (255.38, 90.47) 43.43 × 8.94 main.fol:45:375
             text (0.00, 8.71) NewCMMath-Regular 10.50 w 5.25 1 glyph(s) "6"
             text (7.58, 8.71) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "×"
             text (18.09, 8.71) NewCMMath-Regular 10.50 w 10.50 2 glyph(s) "10"
@@ -464,28 +481,28 @@ page 3 419.53 × 595.28, 9 line(s)
             text (34.60, 8.71) NewCMMath-Regular 10.50 w 8.83 1 glyph(s) "m"
           text (298.81, 99.17) SourceSerif4-Regular 10.50 w 30.01 7 glyph(s) " in two"
           text (0.00, 120.39) SourceSerif4-Regular 10.50 w 60.75 12 glyph(s) "seconds and "
-          box (60.75, 113.40) 31.58 × 7.22 main.fol:43:413
+          box (60.75, 113.40) 31.58 × 7.22 main.fol:45:413
             text (0.00, 6.99) NewCMMath-Regular 10.50 w 21.00 4 glyph(s) "1500"
             text (22.75, 6.99) NewCMMath-Regular 10.50 w 8.83 1 glyph(s) "m"
           text (92.33, 120.39) SourceSerif4-Regular 10.50 w 165.71 36 glyph(s) " in five microseconds. A resistor of "
-          box (258.04, 112.99) 28.43 × 7.63 main.fol:43:473
+          box (258.04, 112.99) 28.43 × 7.63 main.fol:45:473
             text (0.00, 7.40) NewCMMath-Regular 10.50 w 13.56 3 glyph(s) "4.7"
             text (15.31, 7.40) NewCMMath-Regular 10.50 w 13.12 2 glyph(s) "kΩ"
           text (286.47, 120.39) SourceSerif4-Regular 10.50 w 42.35 10 glyph(s) " in series"
           text (0.00, 141.61) SourceSerif4-Regular 10.50 w 55.01 12 glyph(s) "with one of "
-          box (55.01, 134.21) 32.38 × 7.40 main.fol:43:513
+          box (55.01, 134.21) 32.38 × 7.40 main.fol:45:513
             text (0.00, 7.40) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "2.2"
             text (15.17, 7.40) NewCMMath-Regular 10.50 w 17.21 2 glyph(s) "MΩ"
           text (87.39, 141.61) SourceSerif4-Regular 10.50 w 113.82 27 glyph(s) " has a total resistance of "
-          box (201.20, 134.44) 22.22 × 7.40 main.fol:43:556
+          box (201.20, 134.44) 22.22 × 7.40 main.fol:45:556
             text (0.00, 7.17) NewCMMath-Regular 10.50 w 8.22 1 glyph(s) "𝑅"
             text (11.14, 7.17) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
-          box (223.43, 134.21) 37.63 × 7.63 main.fol:43:556
+          box (223.43, 134.21) 37.63 × 7.63 main.fol:45:556
             text (0.00, 7.40) NewCMMath-Regular 10.50 w 18.67 4 glyph(s) "2.20"
             text (20.42, 7.40) NewCMMath-Regular 10.50 w 17.21 2 glyph(s) "MΩ"
           text (261.05, 141.61) SourceSerif4-Regular 10.50 w 67.76 15 glyph(s) ", and a contact"
           text (0.00, 162.83) SourceSerif4-Regular 10.50 w 61.86 14 glyph(s) "resistance of "
-          box (61.86, 155.43) 28.58 × 7.63 main.fol:43:623
+          box (61.86, 155.43) 28.58 × 7.63 main.fol:45:623
             text (0.00, 7.40) NewCMMath-Regular 10.50 w 10.50 2 glyph(s) "15"
             text (12.25, 7.40) NewCMMath-Regular 10.50 w 16.33 2 glyph(s) "mΩ"
           text (90.43, 162.83) SourceSerif4-Regular 10.50 w 61.83 15 glyph(s) " is negligible."
