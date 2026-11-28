@@ -722,6 +722,13 @@ function drawPath(ctx, shape, scale) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
+// Draws a page again from nothing: its glyphs may be of other fonts now,
+// so its last frame is not kept either.
+function forget(page) {
+  page.drawn = 0;
+  page.shown = null;
+}
+
 function redrawVisible() {
   const dpr = window.devicePixelRatio || 1;
   for (const i of visible) {
@@ -833,6 +840,8 @@ function setZoom(value) {
 // renders it.
 function showImage(page, i, revision) {
   if (page.list) page.size = { width: page.list.width, height: page.list.height };
+  // The canvas, hidden behind the image, no longer holds a frame to keep.
+  page.shown = null;
   page.list = null;
   if (!page.img) {
     page.img = document.createElement("img");
@@ -1011,7 +1020,7 @@ function connect() {
     // The server may come back as another process, with other fonts.
     fontGeneration = null;
     dropGlyphs();
-    for (const page of pages) if (page) page.drawn = 0;
+    for (const page of pages) if (page) forget(page);
     statusLine.textContent = "Disconnected: is `folio watch` still running?";
     setTimeout(connect, 1000);
   };
@@ -1023,7 +1032,7 @@ function apply({ update, frames }) {
   if (update.fonts !== undefined && update.fonts !== fontGeneration) {
     if (fontGeneration !== null) {
       dropGlyphs();
-      for (const page of pages) if (page) page.drawn = 0;
+      for (const page of pages) if (page) forget(page);
     }
     fontGeneration = update.fonts;
   }

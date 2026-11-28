@@ -107,8 +107,8 @@ struct Painting {
     painter: Painter,
     _preview: Preview,
     _dir: tempfile::TempDir,
-    /// The revision the viewer shows.
-    revision: u64,
+    /// The revisions the preview starts, which tie a paint to the edit.
+    edited_revisions: std::sync::mpsc::Receiver<u64>,
     /// The file to edit, and its text after the edit.
     file: PathBuf,
     edited: String,
@@ -280,10 +280,25 @@ fn watching() -> Prepared {
 fn painting() -> Prepared {
     let dir = tempfile::tempdir().expect("a temporary directory");
     copy_dir(&corpus::dir().join(WATCHED), dir.path());
-    let options = folio_preview::Options::new(dir.path()).system_fonts(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (edits, edited_revisions) = std::sync::mpsc::channel();
+    let options = folio_preview::Options::new(dir.path())
+        .system_fonts(false)
+        .on_event(move |event| match event {
+            Event::Updated(_) => {
+                let _ = tx.send(());
+            }
+            Event::Edited { revision } => {
+                let _ = edits.send(*revision);
+            }
+            _ => {}
+        });
     let preview = Preview::start(options).expect("the preview starts");
+    rx.recv().expect("the first revision");
     // The question under the figure of the sledge, on the second page.
-    let (painter, revision) = Painter::start(&preview.url(), 1);
+    let (painter, _) = Painter::start(&preview.url(), 1);
+    // The revisions so far are not the edit's.
+    while edited_revisions.try_recv().is_ok() {}
     let file = dir.path().join("main.fol");
     let text = std::fs::read_to_string(&file).expect("the entry file");
     assert!(
@@ -295,7 +310,7 @@ fn painting() -> Prepared {
         painter,
         _preview: preview,
         _dir: dir,
-        revision,
+        edited_revisions,
         file,
         edited,
     }))
@@ -310,7 +325,11 @@ fn paint_after_edit(prepared: Prepared) -> usize {
         unreachable!("set up as a painted project")
     };
     std::fs::write(&painting.file, &painting.edited).expect("the edit is written");
-    let (_, holes) = painting.painter.until("painted", painting.revision);
+    let edit = painting
+        .edited_revisions
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the edit starts a revision");
+    let (_, holes) = painting.painter.until("painted", edit - 1);
     assert_eq!(holes, 0, "the viewer showed text with holes");
     defer_drop(painting);
     1

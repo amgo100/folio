@@ -1363,6 +1363,16 @@ impl Painter {
     }
 }
 
+impl Painter {
+    /// Closes its standard input and checks that it exits cleanly, as it
+    /// does unless the viewer threw.
+    fn finish(mut self) {
+        drop(self.child.stdin.take());
+        let status = self.child.wait().unwrap();
+        assert!(status.success(), "paint.cjs failed: {status}");
+    }
+}
+
 impl Drop for Painter {
     fn drop(&mut self) {
         drop(self.child.stdin.take());
@@ -1404,6 +1414,6 @@ fn edits_never_paint_text_with_holes() {
         revision = painted;
     }
     eprintln!("edit to the completed canvas: {times:?}");
-    drop(painter);
+    painter.finish();
     preview.stop();
 }
