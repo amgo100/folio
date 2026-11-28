@@ -1087,7 +1087,10 @@ fn text_width(text: &str) -> usize {
                 | 0xFF00..=0xFF60
                 | 0xFFE0..=0xFFE6
                 | 0x1F300..=0x1F64F
+                | 0x1F680..=0x1F6FF
+                | 0x1F7E0..=0x1F7EB
                 | 0x1F900..=0x1F9FF
+                | 0x1FA70..=0x1FAFF
                 | 0x20000..=0x3FFFD);
             if wide { 2 } else { 1 }
         })

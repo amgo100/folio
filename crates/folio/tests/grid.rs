@@ -697,7 +697,7 @@ fn pipe_row_errors() {
     // Data rows.
     assert_eq!(
         errors("#grid(rows: ((cell(column: 2)[x],),))\n"),
-        ["a cell of `rows` gives its place by both `row` and `column`, or by neither"]
+        ["a cell of a row gives its place by both `row` and `column`, or by neither"]
     );
     assert_eq!(
         errors("#grid(rows: (1, 2))\n"),
@@ -734,5 +734,50 @@ fn a_data_cell_at_its_own_place_is_not_covered() {
         "#grid(column-tracks: 2)[\n  #cell[a] #cell[x]\n  #cell[b] #cell[c]\n]\n",
         "#grid(rows: ((cell(row: 1, column: 2)[x], [a]), ([b], [c])))\n",
         &[],
+    );
+}
+
+#[test]
+fn a_body_of_pipe_rows_gives_the_grid_its_columns() {
+    // Without `column-tracks`, each line is a row, as wide as the widest;
+    // a short row ends with empty cells, and `|---|` marks the lines above.
+    same_pages(
+        "#grid(column-tracks: 3, header-rows: 1)[\n\
+         \x20 #cell[A] #cell[B] #cell[]\n  #cell[1] #cell[2] #cell[3]\n]\n",
+        "#grid[\n  | A | B |\n  |---|---|\n  | 1 | 2 | 3 |\n]\n",
+        &[],
+    );
+    // Data rows and then the body's rows, with wider tracks.
+    same_pages(
+        "#grid(column-tracks: 3)[\n\
+         \x20 #cell[1] #cell[2] #cell[]\n  #cell[3] #cell[4] #cell[]\n  #cell[a] #cell[b] #cell[c]\n]\n",
+        "#grid(column-tracks: 3, rows: ((1, 2), (3, 4)))[\n  | a | b | c |\n]\n",
+        &[],
+    );
+}
+
+#[test]
+fn more_pipe_row_errors() {
+    let errors = |text: &str| -> Vec<String> {
+        diagnostics(&world("", text))
+            .iter()
+            .filter(|d| d.severity == folio::Severity::Error)
+            .map(|d| d.message.to_string())
+            .collect()
+    };
+    assert_eq!(
+        errors("#grid(rows: ((1,),))[\n  #cell[a]\n]\n"),
+        ["the body of a grid with `rows` or `header` holds pipe rows only"]
+    );
+    assert_eq!(
+        errors("#grid(column-tracks: 2)[\n  | #cell[a] #cell[b] |\n]\n"),
+        ["a cell of a pipe row holds one `#cell(..)[..]` at most"]
+    );
+    // Strong text in a cell keeps a pipe inside brackets.
+    assert!(errors("#grid(column-tracks: 2)[\n  | *a [x | y]* | b |\n]\n").is_empty());
+    // A `break` ends the row and the loop.
+    assert!(
+        errors("#for i in (1, 2) {\n  grid[\n| #if i == 1 { break } | #undefined |\n]\n}\n")
+            .is_empty()
     );
 }

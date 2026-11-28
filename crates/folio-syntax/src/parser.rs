@@ -78,8 +78,13 @@ fn markup_exprs(p: &mut Parser<'_>, mut at_start: bool, stop_set: SyntaxSet) {
 
     at_start |= p.had_newline();
     let mut nesting: usize = 0;
-    // Keep going if we're at a nested right-bracket regardless of the stop set.
-    while !p.at_set(stop_set) || (nesting > 0 && p.at(SyntaxKind::RightBracket)) {
+    // Keep going at a nested right-bracket regardless of the stop set, and
+    // in a cell of a table row at a pipe inside brackets, which the cell
+    // keeps too.
+    while !p.at_set(stop_set)
+        || (nesting > 0 && p.at(SyntaxKind::RightBracket))
+        || (nesting > 0 && p.in_cell && p.at(SyntaxKind::TablePipe))
+    {
         markup_expr(p, at_start, &mut nesting);
         at_start = p.had_newline();
     }
@@ -2288,7 +2293,6 @@ impl<'s> Parser<'s> {
         self.token.n_trivia > 0
     }
 
-    /// Whether `token` had a newline among any of its preceding trivia.
     /// Whether only spaces and tabs stand before the current token on its
     /// line: a table row starts only there, not after a list marker or the
     /// `[` of a content block.
@@ -2300,6 +2304,7 @@ impl<'s> Parser<'s> {
             .all(|c| c == ' ' || c == '\t')
     }
 
+    /// Whether `token` had a newline among any of its preceding trivia.
     fn had_newline(&self) -> bool {
         self.token.newline.is_some()
     }

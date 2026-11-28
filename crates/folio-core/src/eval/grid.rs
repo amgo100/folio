@@ -12,7 +12,7 @@ use super::content::{Content, Node};
 use super::element::canonical_fields;
 use super::error::{EvalError, EvalResult, bail};
 use super::ops::a_type;
-use super::value::{Arg, Args, Value};
+use super::value::{Arg, Args, Array, Value};
 use super::vm::Vm;
 use crate::model::schema;
 use crate::text::MAX_TRACKS;
@@ -27,6 +27,40 @@ const SEPARATOR: &str = "|---|";
 /// Whether an element function is the built-in `grid`.
 pub(super) fn is_grid(name: &QualifiedName) -> bool {
     name.namespace.is_none() && name.name.as_str() == "grid"
+}
+
+/// What a grid's body evaluates to ([`Vm::grid_body`]).
+pub(super) struct GridBody {
+    /// The body's content: empty when it holds only pipe rows.
+    pub(super) body: Content,
+    /// The header rows a `|---|` line marks, with the line's span.
+    pub(super) header: Option<(i64, Span)>,
+    /// The cells of a body of pipe rows only, row by row.
+    pub(super) rows: Option<Value>,
+}
+
+/// The bytes a node of content counts against the memory limit here.
+const NODE_BYTES: u64 = 64;
+
+/// The name of the argument that carries the cells of a body of pipe rows
+/// to instantiation ([`pipe_rows_arg`]).
+const PIPE_ROWS: &str = "|rows|";
+
+/// Whether a node is a `cell` element.
+fn is_cell_node(node: &Node) -> bool {
+    matches!(node, Node::Element(element)
+        if element.name.namespace.is_none() && element.name.name.as_str() == "cell")
+}
+
+/// The argument that carries a body of pipe rows to instantiation.
+pub(super) fn pipe_rows_arg(rows: Value, span: Span) -> Arg {
+    Arg {
+        span,
+        name: Some(PIPE_ROWS.into()),
+        scope: None,
+        value: rows,
+        spelling: None,
+    }
 }
 
 /// Whether content is a single `cell` element, with spaces around it.
@@ -50,19 +84,70 @@ fn lone_cell(content: &Content) -> Option<usize> {
 
 impl Vm<'_> {
     /// Evaluates the content block of a grid call, its body: the one
-    /// markup where pipe rows make cells. Returns the body, and the number
-    /// of header rows a `|---|` line in it marks, with the line's span.
-    pub(super) fn grid_body(
-        &mut self,
-        block: ast::ContentBlock<'_>,
-    ) -> EvalResult<(Content, Option<(i64, Span)>)> {
+    /// markup where pipe rows make cells. Returns the body, the number of
+    /// header rows a `|---|` line in it marks, with the line's span, and,
+    /// when the body holds nothing but pipe rows, those rows' cells instead
+    /// of a body: they are placed as data rows are, each line a row of the
+    /// grid ([`Vm::grid_rows`]).
+    pub(super) fn grid_body(&mut self, block: ast::ContentBlock<'_>) -> EvalResult<GridBody> {
         let header = separator(block.body())?;
+        let only_rows = block.body().items().all(|item| {
+            matches!(
+                item,
+                ast::MarkupItem::Expr(
+                    ast::Expr::Space(_) | ast::Expr::Parbreak(_) | ast::Expr::TableRow(_)
+                )
+            )
+        }) && block
+            .body()
+            .items()
+            .any(|item| matches!(item, ast::MarkupItem::Expr(ast::Expr::TableRow(_))));
         self.enter();
-        self.rows = true;
-        let result = self.markup(block.body());
-        self.rows = false;
+        let result = if only_rows {
+            self.pipe_rows(block.body()).map(|rows| GridBody {
+                body: Content::new(),
+                header,
+                rows: Some(rows),
+            })
+        } else {
+            self.rows = true;
+            let body = self.markup(block.body());
+            self.rows = false;
+            body.map(|body| GridBody {
+                body,
+                header,
+                rows: None,
+            })
+        };
         self.exit();
-        Ok((result?, header))
+        result
+    }
+
+    /// The cells of a body of pipe rows, row by row, separator lines left
+    /// out.
+    fn pipe_rows(&mut self, body: ast::Markup<'_>) -> EvalResult<Value> {
+        let mut rows = Array::new();
+        for item in body.items() {
+            let ast::MarkupItem::Expr(ast::Expr::TableRow(row)) = item else {
+                continue;
+            };
+            if row.is_separator() {
+                continue;
+            }
+            let cells = self.nest(|vm| vm.table_row(row))?;
+            self.alloc(NODE_BYTES * cells.len() as u64, row.span())?;
+            rows.push(Value::Array(
+                cells
+                    .nodes()
+                    .iter()
+                    .map(|node| Value::Content(Content::node(node.clone())))
+                    .collect(),
+            ));
+            if self.flow_is_set() {
+                break;
+            }
+        }
+        Ok(Value::Array(rows))
     }
 
     /// The cells of a pipe row in a grid's body: each cell's markup in a
@@ -77,11 +162,28 @@ impl Vm<'_> {
         for cell in row.cells() {
             self.step(cell.span())?;
             let (content, label) = self.markup_labelled(cell)?;
+            let cells = content
+                .nodes()
+                .iter()
+                .filter(|node| is_cell_node(node))
+                .count();
+            if cells > 1 {
+                return Err(EvalError::new(
+                    cell.span(),
+                    "a cell of a pipe row holds one `#cell(..)[..]` at most",
+                )
+                .with_hint("separate the cells with `|`")
+                .into());
+            }
             let content = match lone_cell(&content) {
                 Some(i) => Content::node(content.nodes()[i].clone()),
                 None => self.builtin("cell", [("body", content.into())], cell.span())?,
             };
             out.extend(super::vm::labelled(content, label));
+            // A `break`, `continue` or `return` ends the row.
+            if self.flow_is_set() {
+                break;
+            }
         }
         Ok(out)
     }
@@ -97,11 +199,12 @@ impl Vm<'_> {
         let args_span = args.span;
         let named =
             |arg: &Arg, name: &str| arg.name.as_deref() == Some(name) && arg.scope.is_none();
-        if !args
-            .items
-            .iter()
-            .any(|arg| named(arg, "rows") || named(arg, "header") || named(arg, SEPARATOR))
-        {
+        if !args.items.iter().any(|arg| {
+            named(arg, "rows")
+                || named(arg, "header")
+                || named(arg, SEPARATOR)
+                || named(arg, PIPE_ROWS)
+        }) {
             return Ok(args);
         }
         // A `|---|` line's header rows, checked against all the arguments.
@@ -116,9 +219,12 @@ impl Vm<'_> {
         }
         let mut rows_arg = None;
         let mut header_arg = None;
+        let mut pipe_arg = None;
         let all = std::mem::take(&mut items);
         for arg in all {
-            if named(&arg, "rows") {
+            if named(&arg, PIPE_ROWS) {
+                pipe_arg = Some(arg);
+            } else if named(&arg, "rows") {
                 rows_arg = Some(arg);
             } else if named(&arg, "header") {
                 header_arg = Some(arg);
@@ -199,6 +305,42 @@ impl Vm<'_> {
             }
         }
 
+        // With data rows, the body is pipe rows only, so that each of its
+        // lines is a row of the grid after them.
+        let data_given = [&rows_arg, &header_arg]
+            .iter()
+            .any(|arg| arg.as_ref().is_some_and(|arg| arg.value != Value::None));
+        if data_given && pipe_arg.is_none() {
+            let body = items
+                .iter()
+                .find(|arg| arg.name.is_none() || arg.name.as_deref() == Some("body"));
+            if let Some(body) = body
+                && match &body.value {
+                    Value::Content(content) => content
+                        .nodes()
+                        .iter()
+                        .any(|node| !matches!(node, Node::Space(_) | Node::Parbreak(_))),
+                    Value::None => false,
+                    _ => true,
+                }
+            {
+                return Err(EvalError::new(
+                    body.span,
+                    "the body of a grid with `rows` or `header` holds pipe rows only",
+                )
+                .with_hint("write its cells as pipe rows, `| a | b |`, or as rows of `rows`")
+                .into());
+            }
+        }
+        if let Some(arg) = &pipe_arg
+            && let Value::Array(rows) = &arg.value
+        {
+            for row in rows.iter() {
+                if let Value::Array(cells) = row {
+                    data.push((cells.iter().cloned().collect(), arg.span));
+                }
+            }
+        }
         let cells = self.data_cells(data)?;
         if !cells.is_empty() {
             prepend_to_body(&mut items, cells, span);
@@ -253,7 +395,7 @@ impl Vm<'_> {
                         (None, None) => {}
                         _ => bail!(
                             span,
-                            "a cell of `rows` gives its place by both `row` and `column`, or by \
+                            "a cell of a row gives its place by both `row` and `column`, or by \
                              neither"
                         ),
                     }

@@ -451,6 +451,11 @@ impl<'a> Vm<'a> {
         Ok((out, None))
     }
 
+    /// Whether a `break`, `continue` or `return` was reached.
+    pub(super) fn flow_is_set(&self) -> bool {
+        self.flow.is_some()
+    }
+
     /// Records an error in markup that need not stop it: a file's own
     /// markup reports it and goes on, and markup inside code fails.
     fn tolerate(&mut self, error: EvalError) -> EvalResult<()> {
@@ -1454,18 +1459,22 @@ impl<'a> Vm<'a> {
         // cells; the calls nested in its arguments are not grid calls.
         let grid = std::mem::replace(&mut self.grid_call, false);
         let mut header = None;
+        let mut pipe_rows = None;
         let mut items = EcoVec::new();
         for arg in args.items() {
             match arg {
                 ast::Arg::Pos(ast::Expr::ContentBlock(block)) if grid => {
                     self.step(block.span())?;
-                    let (body, rows) = self.nest(|vm| vm.grid_body(block))?;
-                    header = header.or(rows);
+                    let body = self.nest(|vm| vm.grid_body(block))?;
+                    header = header.or(body.header);
+                    if let Some(rows) = body.rows {
+                        pipe_rows = Some(grid::pipe_rows_arg(rows, block.span()));
+                    }
                     items.push(Arg {
                         span: block.span(),
                         name: None,
                         scope: None,
-                        value: Value::Content(body),
+                        value: Value::Content(body.body),
                         spelling: None,
                     });
                 }
@@ -1493,9 +1502,12 @@ impl<'a> Vm<'a> {
                             if grid && name == "body" && named.scope().is_none() =>
                         {
                             self.step(block.span())?;
-                            let (body, rows) = self.nest(|vm| vm.grid_body(block))?;
-                            header = header.or(rows);
-                            Value::Content(body)
+                            let body = self.nest(|vm| vm.grid_body(block))?;
+                            header = header.or(body.header);
+                            if let Some(rows) = body.rows {
+                                pipe_rows = Some(grid::pipe_rows_arg(rows, block.span()));
+                            }
+                            Value::Content(body.body)
                         }
                         expr => self.expr(expr)?,
                     };
@@ -1546,6 +1558,7 @@ impl<'a> Vm<'a> {
         if let Some((rows, at)) = header {
             items.push(grid::separator_arg(rows, at));
         }
+        items.extend(pipe_rows);
         Ok(Args::new(span, items))
     }
 
