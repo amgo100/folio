@@ -471,6 +471,9 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     // discarded layout measures it, times `answer-scale`.
     prop("answer-height", any_of([Auto, Length]), Value::Auto, Layout);
     prop("answer-scale", Number, Value::Number(1.0.into()), Layout);
+    // SPEC §6.3, D-340-2: answer space stays whole unless it fits on no
+    // page; `answer-breakable: true` lets a page break divide it.
+    prop("answer-breakable", Bool, Value::Bool(false), Layout);
 
     group = GroupId::NUMBERING;
     let mut prop =

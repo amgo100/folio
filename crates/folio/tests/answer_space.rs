@@ -567,3 +567,47 @@ fn a_hidden_caption_is_measured_with_its_marker() {
         );
     }
 }
+
+#[test]
+fn answer_space_breaks_across_pages_only_when_asked() {
+    // A 120mm box after about 85mm of text on a 180mm body: whole, it moves to
+    // the next page; with `answer-breakable: true` it starts on this one.
+    let text = format!(
+        "{}\n\n#figure(class: \"answer\")[Answer.]\n\nAfter.\n",
+        (0..4).map(|_| prose(25)).collect::<Vec<_>>().join("\n\n")
+    );
+    let style = "figure.answer { display: answer-space; answer-height: 120mm; \
+                 border: 0.5pt; space-before: 0pt; }\n";
+    let whole = pages(&world(style, SHOWN, &text), "exam");
+    let broken = pages(
+        &world(
+            &format!("{style}figure.answer {{ answer-breakable: true; }}\n"),
+            SHOWN,
+            &text,
+        ),
+        "exam",
+    );
+    assert!(close(whole.spaces[0].height, Abs::mm(120.0)));
+    assert!(close(broken.spaces[0].height, Abs::mm(120.0)));
+    // Its border is drawn on both pages it is broken across.
+    let borders = |pages: &Pages, page: usize| {
+        let mut out = 0;
+        fn walk(fragment: &Fragment, out: &mut usize) {
+            for (_, item) in &fragment.items {
+                match item {
+                    FragmentItem::Group(group) => walk(group, out),
+                    FragmentItem::Shape { .. } => *out += 1,
+                    _ => {}
+                }
+            }
+        }
+        walk(&pages.pages[page].fragment, &mut out);
+        out
+    };
+    assert_eq!(borders(&whole, 0), 0);
+    assert!(borders(&whole, 1) > 0);
+    assert!(borders(&broken, 0) > 0 && borders(&broken, 1) > 0);
+    // What follows comes sooner when the space is broken.
+    assert_eq!(find(&whole, "After").0, find(&broken, "After").0);
+    assert!(find(&broken, "After").1 < find(&whole, "After").1);
+}
