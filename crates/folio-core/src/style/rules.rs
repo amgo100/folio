@@ -13,6 +13,7 @@ use folio_syntax::{Source, Span, SyntaxNode};
 
 use super::props::{PropId, Properties, Property, confusable, not_implemented};
 use super::selector::{AttrTest, Compound, Needs, NodeName, Pseudo, Selector, Specificity};
+use super::template::{Compile, TEMPLATE_PARTS, Template};
 use super::value::{Declared, TokenDef, Tokens, Values, ValuesCx, check, coerce, compute};
 use crate::component::{ComponentHost, Reason};
 use crate::db::{Build, Db, Project, component_host, source_file};
@@ -127,6 +128,10 @@ pub struct Cascade {
     index: BTreeMap<IndexKey, Vec<u32>>,
     /// The names of slots and content fields, which selectors can name.
     parts: BTreeSet<Name>,
+    /// The render templates of the build's stylesheets and components
+    /// (SPEC §5.3), compiled, in no particular order: `template::choose`
+    /// picks by element, name and priority.
+    pub(super) templates: EcoVec<Arc<Template>>,
 }
 
 /// What a subject compound requires most selectively.
@@ -245,6 +250,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
         component: None,
         seen: HashSet::new(),
         rules: Vec::new(),
+        renders: Vec::new(),
         tokens: Vec::new(),
         office: BTreeSet::new(),
         order: 0,
@@ -301,6 +307,46 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
     }
     rules.sort_by_key(|r| r.priority);
 
+    let mut templates = EcoVec::new();
+    for pending in &gather.renders {
+        let render = pending
+            .node
+            .cast::<ast::RenderBlock<'_>>()
+            .expect("a render block");
+        let values = Values::new(cx.values, pending.file.clone());
+        cx.applies.set(pending.applies);
+        *cx.own.borrow_mut() = pending.component.clone();
+        let compiled = cx.compile_template(
+            &values,
+            render,
+            (pending.origin, pending.order),
+            pending.applies,
+        );
+        if pending.applies {
+            templates.extend(compiled.map(Arc::new));
+        }
+    }
+    // The default templates of the components in use, through the
+    // Templates extension point (SPEC §3.2): below every stylesheet, at
+    // the components' origin.
+    for component_template in host.into_iter().flat_map(|h| h.templates()) {
+        let render = component_template.render_block();
+        // `render <namespace>.<element>`: the host qualifies the element.
+        let namespace = render.element().next().and_then(|n| Name::new(n.get()));
+        let path = ProjectPath::new(&format!(
+            "folio-component-{}.fsty",
+            namespace.as_ref().map_or("component", |n| n.as_str())
+        ))
+        .expect("a valid project path");
+        let values = Values::new(cx.values, path);
+        cx.applies.set(true);
+        *cx.own.borrow_mut() = namespace;
+        let compiled = cx.compile_template(&values, render, (Origin::ComponentDefault, 0), true);
+        templates.extend(compiled.map(Arc::new));
+    }
+    *cx.own.borrow_mut() = None;
+    cx.applies.set(true);
+
     let mut needs = Needs::default();
     let mut index: BTreeMap<IndexKey, Vec<u32>> = BTreeMap::new();
     for (i, rule) in rules.iter().enumerate() {
@@ -319,6 +365,7 @@ pub fn cascade(db: &dyn Db, build: Build<'_>) -> Cascade {
         tokens: gather.tokens.into_iter().collect(),
         index,
         parts,
+        templates,
     }
 }
 
@@ -348,6 +395,8 @@ struct Gather<'a> {
     component: Option<Name>,
     seen: HashSet<ProjectPath>,
     rules: Vec<Pending>,
+    /// The `render` blocks, as rules are gathered.
+    renders: Vec<Pending>,
     tokens: Vec<(EcoString, TokenDef)>,
     office: BTreeSet<Name>,
     order: u32,
@@ -509,18 +558,16 @@ impl Gather<'_> {
                     let inner_items: Vec<_> = overlay.items().collect();
                     self.items(path, &inner_items, inner, applies && matches);
                 }
-                // No stage reads render templates yet (SPEC §5.3, §7.9).
                 StyleItem::Render(render) => {
-                    if applies && matches!(self.target, Target::Pdf | Target::Live) {
-                        diag::report(
-                            self.db,
-                            Diagnostic::warning(
-                                render.to_untyped().span(),
-                                "render templates are not implemented yet, so this `render` \
-                                 block has no effect",
-                            ),
-                        );
-                    }
+                    self.order += 1;
+                    self.renders.push(Pending {
+                        node: render.to_untyped().clone(),
+                        file: path.clone(),
+                        origin,
+                        order: self.order,
+                        applies,
+                        component: self.component.clone(),
+                    });
                 }
                 // Read by the stages they belong to: Office export
                 // (SPEC §11.2) and slide masters (§11.3).
@@ -647,6 +694,8 @@ fn part_names(host: Option<&ComponentHost>) -> BTreeSet<Name> {
             out.extend(slots.iter().map(|s| s.name.clone()));
         }
     }
+    // The parts render templates make (SPEC §5.3).
+    out.extend(TEMPLATE_PARTS.iter().filter_map(|name| Name::new(name)));
     out
 }
 
@@ -1224,6 +1273,58 @@ impl<'a> Compiler<'a> {
             );
         }
         Some(NodeName::Part(name))
+    }
+
+    /// Compiles a `render` block (SPEC §5.3): resolves the element it
+    /// renders as a selector's element name, and compiles its parts against
+    /// the element's schema. `None` after an error, which is reported.
+    fn compile_template(
+        &self,
+        values: &Values<'_>,
+        render: ast::RenderBlock<'_>,
+        priority: (Origin, u32),
+        applies: bool,
+    ) -> Option<Template> {
+        if render.to_untyped().diagnosis().errors {
+            return None;
+        }
+        let idents: Vec<ast::Ident<'_>> = render.element().collect();
+        let (ident, qualified) = match idents[..] {
+            [ident] => (ident, None),
+            [namespace, ident] => {
+                let qualified = QualifiedName {
+                    namespace: Some(Name::new(namespace.get())?),
+                    name: Name::new(ident.get())?,
+                };
+                (ident, Some(qualified))
+            }
+            _ => return None,
+        };
+        let element = match self.name(ident, qualified)? {
+            NodeName::Element(element) => element,
+            NodeName::Part(name) => {
+                // An unknown name was reported as one that matches nothing.
+                if self.parts.contains(&name) {
+                    self.error(
+                        ident.span(),
+                        eco_format!("`{name}` is a part, not an element, so it has no template"),
+                    );
+                }
+                return None;
+            }
+            NodeName::Page => {
+                self.error(ident.span(), "pages have no render templates");
+                return None;
+            }
+        };
+        let schema = crate::model::schema(self.db, self.values.project, &element);
+        Compile {
+            db: self.db,
+            values,
+            schema,
+            applies,
+        }
+        .template(render, element, priority)
     }
 
     fn attr(&self, values: &Values<'_>, attr: ast::AttrSelector<'_>) -> Option<AttrTest> {

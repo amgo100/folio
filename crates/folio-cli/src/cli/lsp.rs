@@ -39,11 +39,11 @@ pub(crate) fn lsp(args: &LspArgs) -> ExitCode {
     match (result, joined) {
         (Ok(()), Ok(())) => ExitCode::SUCCESS,
         (Err(e), _) => {
-            eprintln!("error: the language server stopped: {e}");
+            errln!("error: the language server stopped: {e}");
             ExitCode::from(FAILURE)
         }
         (_, Err(e)) => {
-            eprintln!("error: the language server lost its connection: {e}");
+            errln!("error: the language server lost its connection: {e}");
             ExitCode::from(FAILURE)
         }
     }

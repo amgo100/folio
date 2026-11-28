@@ -6,7 +6,9 @@
 //! changes, through a temporary file that takes the file's permissions and
 //! keeps its byte order mark; a read-only file is an error. Like `folio
 //! build`, it runs the compiler version that `folio.toml` pins (SPEC §2.4).
-//! A file with syntax errors is left as it is and its errors are reported.
+//! A file with syntax errors is left as it is and its errors are reported;
+//! one that is not UTF-8, cannot be read or is a link out of the project
+//! is left as it is with a warning.
 //! With `--check`, no file changes: each file that is not formatted is
 //! reported as an error with the code `unformatted` and a fix whose edits
 //! format it. The exit status is 1 when there are errors, and with
@@ -79,6 +81,19 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
     }
     if let Err(e) = loader.load(&mut world, &mut diagnostics) {
         return fail(e.to_string());
+    }
+    // A source the loader could not take is not formatted. A build that
+    // names it reports why; this command runs none, so it says so itself.
+    for (path, why) in world.unreadable_sources() {
+        let mut warning = Diagnostic::warning(
+            DiagSpan::detached(),
+            format!("cannot read `{}`: {why}", path.as_str()),
+        )
+        .with_hint("`folio fmt` leaves it as it is");
+        if let Some(hint) = why.hint() {
+            warning = warning.with_hint(hint);
+        }
+        diagnostics.push(warning);
     }
     let canonical = match root.canonicalize() {
         Ok(path) => path,
@@ -175,7 +190,7 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
     report.diagnostics(&world, &diagnostics);
     if !report.is_json() {
         for path in &formatted {
-            eprintln!("formatted {path}");
+            errln!("formatted {path}");
         }
     }
     diagnostics.iter().any(Diagnostic::is_error)

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use ecow::{EcoString, EcoVec};
 use folio_component::{Name, Registry, Target};
 use folio_core::db::{
-    BuildMode, Bytes, DataFile, Durability, FileContent, FileRead, Project, SourceFile,
+    BuildMode, Bytes, DataFile, Durability, FileContent, FileRead, Project, SourceFile, Unreadable,
 };
 use folio_core::eval::Limits;
 use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
@@ -254,6 +254,7 @@ impl WorldBuilder {
             lockfile,
             BTreeMap::new(),
             BTreeMap::new(),
+            BTreeMap::new(),
             self.bundled_fonts,
             EcoVec::new(),
             EcoVec::new(),
@@ -266,6 +267,7 @@ impl WorldBuilder {
         .lockfile_durability(Durability::MEDIUM)
         .sources_durability(Durability::LOW)
         .files_durability(Durability::LOW)
+        .unreadable_durability(Durability::LOW)
         .bundled_fonts_durability(Durability::HIGH)
         .fonts_durability(Durability::MEDIUM)
         .system_fonts_durability(Durability::MEDIUM)
@@ -452,7 +454,9 @@ impl World {
     }
 
     /// Sets the text of a `.fol` or `.fsty` file, adding the file if it is
-    /// new. A file that exists is reparsed only where its text changed.
+    /// new. A file that exists is reparsed only where its text changed. The
+    /// text replaces a file at the path that the loader could not take
+    /// ([`Self::unreadable_sources`]), as an editor's buffer does.
     pub fn set_source(&mut self, path: &str, text: &str) -> Result<FileId, WorldError> {
         let path = project_path(path)?;
         let stylesheet = match path.extension() {
@@ -460,6 +464,7 @@ impl World {
             Some("fsty") => true,
             _ => return Err(WorldError::NotSource(path)),
         };
+        self.set_unreadable(path.as_str(), None);
         if let Some(file) = self.project.sources(&self.db).get(&path).copied() {
             let old = file.source(&self.db).clone();
             if old.text() != text {
@@ -484,6 +489,37 @@ impl World {
             .new(&self.db);
         self.edit_sources(|sources| sources.insert(path, file));
         Ok(id)
+    }
+
+    /// The `.fol` and `.fsty` files that the loader found but could not
+    /// take as sources, in path order, with why. A build that names one
+    /// reports why; a host that runs no build, such as `folio fmt`, can
+    /// report them itself.
+    pub fn unreadable_sources(&self) -> impl Iterator<Item = (&ProjectPath, &Unreadable)> {
+        self.project.unreadable(&self.db).iter()
+    }
+
+    /// Records that the host found a `.fol` or `.fsty` file at `path` but
+    /// could not take it as a source, and why, or with `None` that it no
+    /// longer has such a file there; a build that names it then says why it
+    /// was not taken. Returns whether this changed the world.
+    pub(crate) fn set_unreadable(&mut self, path: &str, why: Option<Unreadable>) -> bool {
+        let Some(path) = ProjectPath::new(path) else {
+            return false;
+        };
+        if self.project.unreadable(&self.db).get(&path) == why.as_ref() {
+            return false;
+        }
+        let mut unreadable = self.project.unreadable(&self.db).clone();
+        match why {
+            Some(why) => unreadable.insert(path, why),
+            None => unreadable.remove(&path),
+        };
+        self.project
+            .set_unreadable(&mut self.db)
+            .with_durability(Durability::LOW)
+            .to(unreadable);
+        true
     }
 
     /// Replaces a byte range of a source's text, reparsing only the smallest
@@ -547,7 +583,8 @@ impl World {
         self.project.files(&self.db).keys()
     }
 
-    /// The paths of the world's sources and image and data files that are
+    /// The paths of the world's sources, image and data files and
+    /// unreadable sources ([`Self::set_unreadable`]) that are
     /// `dir` or under it, every one when it is empty, without walking the
     /// others.
     pub(crate) fn paths_under(&self, dir: &str) -> Vec<String> {
@@ -576,6 +613,7 @@ impl World {
         let mut out = Vec::new();
         under(self.project.sources(&self.db), dir, &mut out);
         under(self.project.files(&self.db), dir, &mut out);
+        under(self.project.unreadable(&self.db), dir, &mut out);
         out
     }
 

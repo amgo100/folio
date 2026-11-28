@@ -724,9 +724,9 @@ impl Report {
                 build.target,
             );
             match (build.status, &build.path) {
-                (Status::Written, Some(path)) => eprintln!("wrote {path}"),
+                (Status::Written, Some(path)) => errln!("wrote {path}"),
                 (Status::Skipped, Some(path)) => {
-                    eprintln!("did not write {path}: the build of {name} has errors");
+                    errln!("did not write {path}: the build of {name} has errors");
                 }
                 _ => {}
             }
@@ -739,7 +739,7 @@ impl Report {
     pub(super) fn finish(self) {
         if let Some(document) = self.json {
             let json = serde_json::to_string_pretty(&document).expect("the report serialises");
-            eprintln!("{json}");
+            errln!("{json}");
         }
     }
 }
@@ -751,7 +751,7 @@ pub(super) fn error(message: String) -> Diagnostic {
 
 /// Prints diagnostics to standard error.
 pub(super) fn print(files: &dyn Files, diagnostics: &[Diagnostic], color: bool) {
-    eprint!("{}", diag::render(files, diagnostics, color));
+    super::out::stderr(format_args!("{}", diag::render(files, diagnostics, color)));
 }
 
 #[cfg(test)]

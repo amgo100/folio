@@ -1,0 +1,52 @@
+#doc(title: [Projectiles: worked examples], subject: "Year 12 physics")
+
+#element example(
+  title: content = none,
+  numbered: bool = true,
+  difficulty: choice("core", "extension") = "core",
+) {
+  kind: block
+  body: slots(statement: blocks, solution: blocks)
+  counter: within heading(level: 1)
+  ref-key: "example"
+  words: (en: "Example", pl: "przykł.")
+}
+
+#element formula(name: str) {
+  kind: block
+  body: blocks
+}
+
+#element keyword() {
+  kind: inline
+  body: inline
+}
+
+= Projectiles
+
+A projectile moves under gravity alone, so its horizontal velocity is constant and its vertical acceleration is #keyword[$g$ downwards]. Resolve every motion into these two components before you use the equations of motion.
+
+#example(title: [Projectile on a slope], difficulty: "extension")[
+  #statement[A particle is projected up a plane inclined at $alpha$ to the horizontal, with speed $u$ at an angle $theta$ to the plane. Find the time of flight.]
+  #solution[Resolve along and perpendicular to the plane. Perpendicular to it the acceleration is $g cos alpha$, so the particle lands after $t = (2 u sin theta) / (g cos alpha)$.]
+] <ex:slope>
+
+#example(title: [Horizontal launch])[
+  #statement[A ball is thrown horizontally at $12 "m/s"$ from the top of a cliff $45 "m"$ high. How far from the foot of the cliff does it land?]
+  #solution[It falls $45 "m"$ in $t = sqrt(2 dot 45 / 9.8) = 3.03 "s"$, so it lands $36.4 "m"$ from the foot.]
+]
+
+#example(class: "short")[
+  #statement[A stone is dropped from rest. How far does it fall in the first two seconds?]
+  #solution[$s = 1/2 g t^2 = 19.6 "m"$.]
+]
+
+The method of @ex:slope works for any inclined plane.
+
+#formula(name: "Range on level ground")[
+  $ R = (u^2 sin 2 theta) / g $
+]
+
+#formula(name: "Greatest height")[
+  $ H = (u^2 sin^2 theta) / (2 g) $
+]

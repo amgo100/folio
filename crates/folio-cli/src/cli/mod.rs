@@ -4,6 +4,9 @@
 //! build` and `folio check` for later features, are parsed and rejected as
 //! not yet supported.
 
+#[macro_use]
+mod out;
+
 mod build;
 mod check;
 mod fmt;
@@ -304,7 +307,7 @@ pub(crate) fn run() -> ExitCode {
         command => command.later().map(|name| format!("`folio {name}`")),
     };
     if let Some(what) = later {
-        eprintln!("error: {what} is not yet supported");
+        errln!("error: {what} is not yet supported");
         return ExitCode::from(USAGE);
     }
     match cli.command {

@@ -70,6 +70,9 @@ const SYMBOLS: &[(&str, char)] = &[
     // Letter-like symbols.
     ("planck", 'ℎ'),
     ("planck.reduce", 'ℏ'),
+    ("hbar", 'ℏ'),
+    ("dotless.i", 'ı'),
+    ("dotless.j", 'ȷ'),
     ("ell", 'ℓ'),
     ("aleph", 'ℵ'),
     ("partial", '∂'),

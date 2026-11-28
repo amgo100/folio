@@ -91,7 +91,7 @@ fn builds_the_corpus() {
         assert_eq!(actual, digest, "{built} of {project}");
         checked += 1;
     }
-    assert_eq!(checked, 18);
+    assert_eq!(checked, 19);
 }
 
 #[test]
@@ -117,6 +117,105 @@ fn reports_a_missing_entry_file() {
     let text = stderr(&output);
     assert!(text.contains("error: file `main.fol` not found"), "{text}");
     assert!(text.contains("folio.toml:2:9"), "{text}");
+}
+
+/// SPEC §12.1: a reader that stops early, as `head` does, closes the pipe
+/// that standard error writes to. The command stops writing and exits with
+/// the status of the check, 1 for errors, not 101 for a crash (#343).
+#[test]
+fn a_closed_pipe_ends_the_report_quietly() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let entry: Vec<String> = (0..3000).map(|i| format!("#nothing{i}")).collect();
+    let dir = project(&[("folio.toml", MANIFEST), ("main.fol", &entry.join("\n\n"))]);
+    for format in ["human", "json"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_folio"))
+            .args(["check", "--diagnostics", format])
+            .current_dir(dir.path())
+            .env_remove("FOLIO_CACHE_DIR")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut reader = BufReader::new(child.stderr.take().unwrap());
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        assert!(!first.is_empty(), "{format}");
+        // The report is far larger than a pipe holds, so writing the rest
+        // finds the pipe closed.
+        drop(reader);
+        let status = child.wait().unwrap();
+        assert_eq!(status.code(), Some(1), "{format}");
+    }
+}
+
+/// A source that is not UTF-8 is an error where it is used, which says
+/// why it was not read, not that it is missing (#343).
+#[test]
+fn reports_why_a_source_was_not_read() {
+    let dir = project(&[("folio.toml", MANIFEST)]);
+    // Latin-1, as an old editor might save it.
+    fs::write(dir.path().join("main.fol"), b"= Si\xb3y\n").unwrap();
+    let output = folio(dir.path(), &["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains("error: cannot read `main.fol`: it is not UTF-8 text"),
+        "{text}"
+    );
+    assert!(text.contains("folio.toml:2:9"), "{text}");
+    assert!(!text.contains("not found"), "{text}");
+
+    let output = folio(dir.path(), &["check", "--diagnostics", "json"]);
+    let document = json(&output);
+    let diagnostics = document["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{document}");
+    assert_eq!(
+        diagnostics[0]["message"],
+        "cannot read `main.fol`: it is not UTF-8 text"
+    );
+    assert_eq!(diagnostics[0]["location"]["path"], "folio.toml");
+
+    // `folio fmt` builds nothing, so it says itself why it left the file.
+    let output = folio(dir.path(), &["fmt", "--check"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stderr(&output);
+    assert!(
+        text.contains("warning: cannot read `main.fol`: it is not UTF-8 text"),
+        "{text}"
+    );
+}
+
+/// A `.fol` link that leads out of the project is an error where it is
+/// imported, which says so (#343).
+#[cfg(unix)]
+#[test]
+fn reports_a_source_link_out_of_the_project() {
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("q1.fol"), "= Question\n").unwrap();
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "#include \"q1.fol\"\n"),
+    ]);
+    std::os::unix::fs::symlink(outside.path().join("q1.fol"), dir.path().join("q1.fol")).unwrap();
+    let output = folio(dir.path(), &["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains("error: cannot read `q1.fol`: it is a link that leads out of the project"),
+        "{text}"
+    );
+    assert!(text.contains("main.fol:1:10"), "{text}");
+
+    // So is reading it as text.
+    fs::write(dir.path().join("main.fol"), "#read(\"q1.fol\")\n").unwrap();
+    let text = stderr(&folio(dir.path(), &["check"]));
+    assert!(
+        text.contains("error: cannot read `q1.fol`: it is a link that leads out of the project"),
+        "{text}"
+    );
+    assert!(text.contains("main.fol:1:7"), "{text}");
 }
 
 #[test]

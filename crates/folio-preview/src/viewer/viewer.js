@@ -32,6 +32,10 @@ const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
 // How long a glyph that could not be fetched waits before it is asked for
 // again, in milliseconds.
 const RETRY_AFTER = 2000;
+// How long a page keeps showing its last frame without holes while its new
+// frame waits for glyphs or images, in milliseconds; after that the new
+// frame is shown with what it has.
+const SHOW_AFTER = 1000;
 
 // ---------------------------------------------------------------------
 // The wire format (`folio_render::wire`, version 2).
@@ -537,7 +541,24 @@ let zoom = 0; // CSS pixels per point; 0 until the first fit.
 let fitting = true;
 const visible = new Set();
 
-// Draws a page at the current zoom; returns whether every glyph was there.
+// The canvas every page is drawn on first, and copied from to the page's
+// own canvas once the frame is fit to show.
+const scratch = document.createElement("canvas");
+// When a page that kept its last frame is drawn again to show what it has,
+// and the time it is due.
+let lateTimer = 0;
+let lateAt = 0;
+// How many frames with holes were shown before SHOW_AFTER since the last
+// report (`painted`).
+let earlyHoles = 0;
+
+// Draws a page at the current zoom. A frame with holes (glyphs or images
+// not here yet) does not replace the last frame shown without holes at
+// the same size: the old pixels stay until what is missing arrives, or for
+// SHOW_AFTER at most (SPEC §12.2). A glyph at a quarter-pixel offset not
+// here yet is drawn from another offset of it that is, which is no hole,
+// and drawn again exactly when it comes. Returns whether the frame shown
+// is exact.
 function draw(page) {
   const { list, canvas } = page;
   if (!list || !canvas) return true;
@@ -546,13 +567,19 @@ function draw(page) {
   const scale = Math.min(zoom * dpr, Math.sqrt(MAX_CANVAS_PIXELS / Math.max(1, area)));
   const width = Math.max(1, Math.round(list.width * scale));
   const height = Math.max(1, Math.round(list.height * scale));
-  if (canvas.width !== width) canvas.width = width;
-  if (canvas.height !== height) canvas.height = height;
-  const ctx = canvas.getContext("2d");
+  if (scratch.width !== width) scratch.width = width;
+  if (scratch.height !== height) scratch.height = height;
+  const ctx = scratch.getContext("2d");
+  // The state the page before left, which a page drawn first would not
+  // see.
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "low";
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, width, height);
-  let complete = true;
+  const state = { missing: 0, approximate: 0 };
   let waiting = false;
   page.images = false;
   for (const item of list.items) {
@@ -573,7 +600,7 @@ function draw(page) {
         }
       }
     } else if (item.kind === "glyphs") {
-      complete = drawGlyphs(ctx, item, scale) && complete;
+      drawGlyphs(ctx, item, scale, state);
     } else if (item.kind === "path") {
       drawPath(ctx, item, scale);
     } else if (item.kind === "frame") {
@@ -587,18 +614,50 @@ function draw(page) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
   }
-  complete = complete && !waiting;
-  page.drawn = complete ? zoom * dpr : 0;
-  return complete;
+  const holes = state.missing > 0 || waiting;
+  const exact = !holes && state.approximate === 0;
+  const now = Date.now();
+  const size = `${width}x${height}`;
+  // The page's canvas holds a frame without holes at this size.
+  const kept = page.shown === size;
+  if (holes && kept && !page.waitingSince) page.waitingSince = now;
+  const late = holes && kept && now - page.waitingSince >= SHOW_AFTER;
+  if (!holes || !kept || late) {
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    const out = canvas.getContext("2d");
+    out.setTransform(1, 0, 0, 1, 0, 0);
+    out.drawImage(scratch, 0, 0);
+    page.shown = holes ? null : size;
+    page.shownList = list;
+    page.holes = holes;
+    // Holes shown before SHOW_AFTER, for whatever reason: not those shown
+    // because what was missing took too long. Reported once.
+    if (holes && !late) earlyHoles++;
+    page.waitingSince = 0;
+  } else {
+    const due = page.waitingSince + SHOW_AFTER;
+    if (!lateTimer || due < lateAt) {
+      clearTimeout(lateTimer);
+      lateAt = due;
+      lateTimer = setTimeout(() => {
+        lateTimer = 0;
+        redrawVisible();
+      }, Math.max(0, due - now));
+    }
+  }
+  page.drawn = exact ? zoom * dpr : 0;
+  return exact;
 }
 
-function drawGlyphs(ctx, run, scale) {
+// Draws a run's glyphs; counts in `state` those not drawn (`missing`) and
+// those drawn from another quarter-pixel offset (`approximate`).
+function drawGlyphs(ctx, run, scale, state) {
   const want = Math.round(run.size * scale * 4) / 4;
-  if (!(want > 0)) return true;
+  if (!(want > 0)) return;
   // Glyphs larger than the server rasterises are scaled up.
   const size = Math.min(want, MAX_GLYPH_SIZE);
   const stretch = want / size;
-  let complete = true;
   let pen = run.origin.x;
   const now = Date.now();
   for (const g of run.glyphs) {
@@ -608,22 +667,40 @@ function drawGlyphs(ctx, run, scale) {
     const ix = Math.floor(x);
     const sub = stretch > 1 ? 0 : Math.min(3, Math.floor((x - ix) * 4));
     const key = `${run.font}|${size}|${g.id}|${sub}`;
-    const glyph = glyphCache.get(key);
+    let glyph = glyphCache.get(key);
+    // Where the mask is drawn, past `ix`, in pixels.
+    let shift = 0;
     if (glyph === undefined) {
       const waiting = glyphCache.has(key) || (failed.get(key) || 0) > now;
       if (!waiting) {
         failed.delete(key);
         wantGlyph(run.font, size, g.id, sub);
       }
-      complete = false;
-    } else if (glyph && stretch > 1) {
+      // The nearest offset here stands in, a quarter pixel or so off;
+      // stretched glyphs have only the one.
+      for (const d of stretch > 1 ? [] : [1, -1, 2, -2, 3, -3]) {
+        const other = sub + d;
+        if (other < 0 || other > 3) continue;
+        const near = glyphCache.get(`${run.font}|${size}|${g.id}|${other}`);
+        if (near !== undefined) {
+          glyph = near;
+          shift = -d / 4;
+          break;
+        }
+      }
+      if (glyph === undefined) {
+        state.missing++;
+        continue;
+      }
+      state.approximate++;
+    }
+    if (glyph && stretch > 1) {
       ctx.drawImage(inColour(glyph, run.fill), x + glyph.left * stretch, y + glyph.top * stretch,
         glyph.width * stretch, glyph.height * stretch);
     } else if (glyph) {
-      ctx.drawImage(inColour(glyph, run.fill), ix + glyph.left, y + glyph.top);
+      ctx.drawImage(inColour(glyph, run.fill), ix + glyph.left + shift, y + glyph.top);
     }
   }
-  return complete;
 }
 
 function drawPath(ctx, shape, scale) {
@@ -653,12 +730,46 @@ function drawPath(ctx, shape, scale) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
+// Draws a page again from nothing: its glyphs may be of other fonts now,
+// so its last frame is not kept either.
+function forget(page) {
+  page.drawn = 0;
+  page.shown = null;
+}
+
 function redrawVisible() {
   const dpr = window.devicePixelRatio || 1;
   for (const i of visible) {
     const page = pages[i];
     if (page && page.drawn !== zoom * dpr) draw(page);
   }
+  painted();
+}
+
+// Tells a test or benchmark that drives the viewer (`folioPainted`, which
+// Playwright defines) what the visible pages show: the revision, whether
+// every one shows its current list (`current`), whether any shows a frame
+// with holes (`holes`), how many frames with holes were shown before
+// SHOW_AFTER ran out since the last report (`early`: on a page that had
+// no frame without holes to keep, or a fault), and whether every one is
+// exact, with no glyph drawn from another quarter-pixel offset.
+function painted() {
+  if (typeof window.folioPainted !== "function") return;
+  const dpr = window.devicePixelRatio || 1;
+  let current = true;
+  let holes = false;
+  const early = earlyHoles;
+  earlyHoles = 0;
+  let exact = true;
+  for (const i of visible) {
+    const page = pages[i];
+    if (!page || !page.list) continue;
+    if (page.shownList !== page.list) current = false;
+    if (page.holes) holes = true;
+    if (page.drawn !== zoom * dpr) exact = false;
+  }
+  const shown = [...visible].sort((a, b) => a - b);
+  window.folioPainted({ revision, current, holes, early, exact, visible: shown });
 }
 
 // ---------------------------------------------------------------------
@@ -668,7 +779,11 @@ const observer = new IntersectionObserver((entries) => {
   for (const entry of entries) {
     const i = Number(entry.target.dataset.index);
     if (entry.isIntersecting) visible.add(i);
-    else visible.delete(i);
+    else {
+      visible.delete(i);
+      // Shown again, it waits afresh for what it lacks.
+      if (pages[i]) pages[i].waitingSince = 0;
+    }
   }
   redrawVisible();
   sendVisible();
@@ -698,7 +813,13 @@ function pageElement(i) {
   el.addEventListener("click", (event) => click(i, event));
   pagesEl.appendChild(el);
   observer.observe(el);
-  page = { list: null, el, canvas, img: null, size: null, marks: [], drawn: 0, images: false };
+  page = {
+    list: null, el, canvas, img: null, size: null, marks: [], drawn: 0, images: false,
+    // The size of the frame without holes the canvas shows, the list it
+    // shows, whether that has holes, and since when a frame with holes
+    // has waited to replace it (`draw`).
+    shown: null, shownList: null, holes: false, waitingSince: 0,
+  };
   pages[i] = page;
   return page;
 }
@@ -728,6 +849,8 @@ function setZoom(value) {
 // renders it.
 function showImage(page, i, revision) {
   if (page.list) page.size = { width: page.list.width, height: page.list.height };
+  // The canvas, hidden behind the image, no longer holds a frame to keep.
+  page.shown = null;
   page.list = null;
   if (!page.img) {
     page.img = document.createElement("img");
@@ -906,7 +1029,7 @@ function connect() {
     // The server may come back as another process, with other fonts.
     fontGeneration = null;
     dropGlyphs();
-    for (const page of pages) if (page) page.drawn = 0;
+    for (const page of pages) if (page) forget(page);
     statusLine.textContent = "Disconnected: is `folio watch` still running?";
     setTimeout(connect, 1000);
   };
@@ -918,7 +1041,7 @@ function apply({ update, frames }) {
   if (update.fonts !== undefined && update.fonts !== fontGeneration) {
     if (fontGeneration !== null) {
       dropGlyphs();
-      for (const page of pages) if (page) page.drawn = 0;
+      for (const page of pages) if (page) forget(page);
     }
     fontGeneration = update.fonts;
   }
