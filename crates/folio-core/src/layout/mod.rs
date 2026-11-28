@@ -216,6 +216,27 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         Some(&mut measurer),
     );
     let slots: EcoVec<LineSlot> = slots.into();
+    // Images were sized before grids were laid out, in lines as wide as a
+    // grid: those in cells are sized again in their cells' widths, as the
+    // page builder draws them (SPEC §7.4).
+    let mut inputs = inputs;
+    for ((paragraph, input), slot) in text.paragraphs.iter().zip(&mut inputs).zip(&slots) {
+        if !paragraph.objects.iter().any(|o| o.image.is_some())
+            || input.objects.len() != paragraph.objects.len()
+        {
+            continue;
+        }
+        let indent = input.style.indent;
+        input.objects = paragraph
+            .objects
+            .iter()
+            .zip(input.objects.iter())
+            .map(|(object, metrics)| match &object.image {
+                Some(image) => math::laid_image(image, object.location, slot.width, indent).metrics,
+                None => *metrics,
+            })
+            .collect();
+    }
     // The paragraph builder places lines relative to their slots.
     let widths: Vec<[LineSlot; 1]> = slots
         .iter()

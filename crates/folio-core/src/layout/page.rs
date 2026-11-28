@@ -1024,6 +1024,8 @@ pub(super) struct Piece {
     starts: EcoVec<CellAt>,
     /// Whether the read starts at the band's top.
     fresh: bool,
+    /// Whether the part is the read's last, which ends the band.
+    ends: bool,
     /// Which read of the run it is part of: the index of its first part.
     read: usize,
     /// Where the part starts and ends, from the top of the read.
@@ -1252,6 +1254,7 @@ impl<'a> Run<'a> {
                     band: band.clone(),
                     starts: starts.clone(),
                     fresh,
+                    ends: last,
                     read,
                     from,
                     to: cut,
@@ -1998,10 +2001,39 @@ fn draw_band(run: &Run<'_>, piece: &Piece, top: Abs, asm: &mut Assembler) {
     let height = piece.to;
     for (c, cell) in piece.band.cells.iter().enumerate() {
         let kept = piece.kept[c];
+        let start = &piece.starts[c];
         if kept == 0 {
+            // A cell with nothing on this part of a band that it spans
+            // still shows its box: one that finished on an earlier page in
+            // the band's last row, or one whose next leaf does not fit.
+            let finished = piece.total[c] == 0;
+            let started = start.state != State::START;
+            if !piece.fresh && started && (cell.last || !finished) {
+                if let Some((block, location)) =
+                    cell.flow.items.first().and_then(|i| i.stack.first())
+                {
+                    let mut sub = Assembler {
+                        open: vec![OpenBox {
+                            block: block.clone(),
+                            location: *location,
+                            top: top + start.wait,
+                            continued: true,
+                            items: Vec::new(),
+                            baselines: None,
+                        }],
+                        items: Vec::new(),
+                        baselines: None,
+                        widen: Abs::zero(),
+                        floor: top + height,
+                    };
+                    sub.close(top + height, !(finished && piece.ends));
+                    for (pos, item) in sub.items {
+                        asm.add(pos, item);
+                    }
+                }
+            }
             continue;
         }
-        let start = &piece.starts[c];
         let mut cell_run = Run::new(&page, &cell.flow, start.state.clone(), false);
         cell_run.get(kept - 1);
         let complete = kept == piece.total[c];

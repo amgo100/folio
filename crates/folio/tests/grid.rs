@@ -420,3 +420,53 @@ fn blocks_stand_for_cells() {
     let pdf = folio::compile(&world, Target::Pdf, None).unwrap();
     assert!(pdf.diagnostics.is_empty(), "{:?}", pdf.diagnostics);
 }
+
+#[test]
+fn a_finished_cell_keeps_its_box_where_its_row_continues() {
+    let world = world(
+        "grid { row-breakable: true; }\ncell { background: #eeeeee; }\n",
+        &format!(
+            "#grid(column-tracks: (1fr, 1fr))[\n  #cell[Short] #cell[{}]\n]\n",
+            "Long words in a very tall cell. ".repeat(150)
+        ),
+    );
+    let pages = pages(&world);
+    assert!(pages.pages.len() >= 2);
+    // Two cell boxes, each with its background, on every page.
+    fn filled(fragment: &Fragment, out: &mut usize) {
+        for (_, item) in &fragment.items {
+            if let FragmentItem::Group(group) = item {
+                if group
+                    .items
+                    .iter()
+                    .any(|(_, i)| matches!(i, FragmentItem::Shape { .. }))
+                {
+                    *out += 1;
+                }
+                filled(group, out);
+            }
+        }
+    }
+    for page in &pages.pages {
+        let mut n = 0;
+        filled(&page.fragment, &mut n);
+        assert_eq!(n, 2);
+    }
+}
+
+#[test]
+fn ratio_tracks_of_a_nested_grid_need_no_width() {
+    let world = world(
+        "",
+        "#grid(column-tracks: (auto, auto))[\n  #cell[#grid(column-tracks: (50%, 50%))[#cell[a] \
+         #cell[b]]] #cell[Some words in the second column]\n]\n",
+    );
+    let lines = folio::lines(&world, Target::Pdf, None).unwrap().unwrap();
+    let outer = lines
+        .grids
+        .iter()
+        .find(|g| g.columns.len() == 2 && g.places.len() == 2);
+    let outer = outer.unwrap();
+    assert_eq!(outer.overflow, Abs::zero());
+    assert!(outer.columns[0] < Abs::mm(60.0), "{:?}", outer.columns);
+}

@@ -229,7 +229,7 @@ pub fn place(cells: &[CellSpec], columns: usize) -> (Vec<Place>, usize) {
     let mut cursor = (0usize, 0usize);
     let mut out = Vec::with_capacity(cells.len());
     for spec in cells {
-        let column = spec.column.map(|c| (c - 1).min(columns - 1));
+        let column = spec.column.map(|c| c.saturating_sub(1).min(columns - 1));
         let colspan = spec.colspan.clamp(1, columns - column.unwrap_or(0));
         let mut place = Place {
             column: 0,
@@ -237,7 +237,9 @@ pub fn place(cells: &[CellSpec], columns: usize) -> (Vec<Place>, usize) {
             colspan,
             rowspan: spec.rowspan.max(1),
         };
-        match (column, spec.row.map(|r| r - 1)) {
+        let row = spec.row.map(|r| r.saturating_sub(1).min(MAX_TRACKS));
+        place.rowspan = place.rowspan.min(MAX_TRACKS);
+        match (column, row) {
             (Some(c), Some(r)) => {
                 place.column = c;
                 place.row = r;
@@ -595,7 +597,8 @@ impl Measurer<'_> {
             let tracks = block
                 .style
                 .value(self.props, self.props.builtin("column-tracks"))
-                .and_then(|v| parse_tracks(v, font_size, inner))
+                // A ratio of the cell's width needs no width of its own.
+                .and_then(|v| parse_tracks(v, font_size, Abs::zero()))
                 .unwrap_or_default();
             let mut min = vec![Abs::zero(); layout.columns.len()];
             let mut max = vec![Abs::zero(); layout.columns.len()];
@@ -764,6 +767,27 @@ mod tests {
             }
         );
         assert_eq!(rows, 3);
+    }
+
+    #[test]
+    fn placement_is_total() {
+        let spec = CellSpec {
+            colspan: 0,
+            rowspan: 0,
+            column: Some(0),
+            row: Some(0),
+        };
+        let (places, rows) = place(&[spec], 3);
+        assert_eq!(
+            places[0],
+            Place {
+                column: 0,
+                row: 0,
+                colspan: 1,
+                rowspan: 1
+            }
+        );
+        assert_eq!(rows, 1);
     }
 
     #[test]

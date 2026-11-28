@@ -279,10 +279,14 @@ impl<'a> Tagger<'a> {
             .iter()
             .position(|cell| is_box_of(cell, location))
         {
-            if let Some(entered) = out.entered[index] {
-                return entered;
-            }
-            return self.open(row, index, true, y);
+            let entered = match out.entered[index] {
+                Some(entered) => entered,
+                None => self.open(row, index, true, y),
+            };
+            // The top of a cell's part of a row is the top of a page for
+            // the boxes in it: a block broken across pages continues there.
+            self.leading = true;
+            return entered;
         }
         self.enter(row, location, y)
     }
