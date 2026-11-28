@@ -12,9 +12,9 @@
 // - `exact <revision>` each time a later revision has every visible page
 //   drawn exactly, after glyphs drawn from another quarter-pixel offset
 //   were replaced (often with `painted`, when none was needed);
-// - `holes <revision>` each time, after `ready`, a visible page's frame
-//   with glyphs or images missing replaced one without them, before the
-//   viewer's limit on how long it keeps the old frame;
+// - `holes <revision>` each time, after `ready`, a visible page shows a
+//   frame with glyphs or images missing before the viewer's limit on how
+//   long it keeps the old frame ran out;
 // - `error <message>` when the viewer throws, at once.
 //
 // The viewer reports what it shows through `folioPainted`, which this
@@ -52,12 +52,13 @@ async function main() {
         if (settled) {
           ready = true;
           last = state.revision;
+          lastExact = state.revision;
           console.log(`ready ${state.revision}`);
           readyAt();
         }
         return;
       }
-      if (state.replaced) console.log(`holes ${state.revision}`);
+      if (state.early) console.log(`holes ${state.revision}`);
       if (settled && state.revision > last) {
         last = state.revision;
         console.log(`painted ${state.revision}`);

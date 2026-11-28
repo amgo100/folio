@@ -622,10 +622,9 @@ function draw(page) {
     page.shown = holes ? null : size;
     page.shownList = list;
     page.holes = holes;
-    // Holes that replaced a frame without them before SHOW_AFTER, which
-    // keeping the old frame is for; not those shown because what was
-    // missing took too long, or on a canvas with no frame of this size.
-    page.replaced = holes && kept && !late;
+    // Holes shown before SHOW_AFTER, for whatever reason: not those shown
+    // because what was missing took too long.
+    page.early = holes && !late;
     page.waitingSince = 0;
   } else {
     const due = page.waitingSince + SHOW_AFTER;
@@ -741,26 +740,27 @@ function redrawVisible() {
 // Tells a test or benchmark that drives the viewer (`folioPainted`, which
 // Playwright defines) what the visible pages show: the revision, whether
 // every one shows its current list (`current`), whether any shows a frame
-// with holes (`holes`), and one that replaced a frame without them before
-// SHOW_AFTER (`replaced`, which `draw` never does), and whether every one
-// is exact, with no glyph drawn from another quarter-pixel offset.
+// with holes (`holes`), and one shown before SHOW_AFTER ran out (`early`:
+// on a page that had no frame without holes to keep, or a fault), and
+// whether every one is exact, with no glyph drawn from another
+// quarter-pixel offset.
 function painted() {
   if (typeof window.folioPainted !== "function") return;
   const dpr = window.devicePixelRatio || 1;
   let current = true;
   let holes = false;
-  let replaced = false;
+  let early = false;
   let exact = true;
   for (const i of visible) {
     const page = pages[i];
     if (!page || !page.list) continue;
     if (page.shownList !== page.list) current = false;
     if (page.holes) holes = true;
-    if (page.replaced) replaced = true;
+    if (page.early) early = true;
     if (page.drawn !== zoom * dpr) exact = false;
   }
   const shown = [...visible].sort((a, b) => a - b);
-  window.folioPainted({ revision, current, holes, replaced, exact, visible: shown });
+  window.folioPainted({ revision, current, holes, early, exact, visible: shown });
 }
 
 // ---------------------------------------------------------------------
@@ -809,7 +809,7 @@ function pageElement(i) {
     // The size of the frame without holes the canvas shows, the list it
     // shows, whether that has holes, and since when a frame with holes
     // has waited to replace it (`draw`).
-    shown: null, shownList: null, holes: false, replaced: false, waitingSince: 0,
+    shown: null, shownList: null, holes: false, early: false, waitingSince: 0,
   };
   pages[i] = page;
   return page;
