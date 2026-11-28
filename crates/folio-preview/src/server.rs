@@ -481,9 +481,15 @@ async fn websocket(mut stream: TcpStream, request: &Request, shared: Arc<Shared>
     client(ws, shared).await;
 }
 
-/// What a client has of each page: its content and entry numbers
-/// ([`PageEntry`](crate::engine::PageEntry)).
-type Known = Vec<(u64, u64)>;
+/// What a client has: of each page, its content and entry numbers
+/// ([`PageEntry`](crate::engine::PageEntry)); and the content hashes of
+/// the images it was sent whole, which the lists sent after name alone
+/// (`folio_render::wire::encode_with`).
+#[derive(Default)]
+struct Known {
+    pages: Vec<(u64, u64)>,
+    images: std::collections::HashSet<u64>,
+}
 
 /// Serves a websocket client: every revision it has not seen, until it
 /// goes or the server stops.
@@ -491,7 +497,7 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
     let mut published = shared.published.clone();
     let mut stop = shared.stop.clone();
     let mut broadcast = shared.broadcast.subscribe();
-    let mut known = Known::new();
+    let mut known = Known::default();
     let mut visible: Vec<usize> = Vec::new();
     // Forgets what the client shows however its task ends.
     let seen = Seen {
@@ -684,7 +690,7 @@ async fn send(
     let mut spans = Vec::new();
     for i in order {
         let entry = &published.pages[i];
-        match known.get(i) {
+        match known.pages.get(i) {
             Some(&(content, id)) if content == entry.content => {
                 if id != entry.id {
                     spans.push(i);
@@ -718,8 +724,12 @@ async fn send(
         let entry = &published.pages[i];
         let body = if spans_only {
             &entry.spans
-        } else {
+        } else if entry.images.iter().all(|hash| known.images.contains(hash)) {
             &entry.bytes
+        } else {
+            // Every image of the page whole, once per connection.
+            known.images.extend(entry.images.iter().copied());
+            entry.whole()
         };
         let index = u32::try_from(i).expect("fewer pages than u32::MAX");
         let mut frame = Vec::with_capacity(4 + body.len());
@@ -730,7 +740,7 @@ async fn send(
     let done = format!(r#"{{"type":"done","revision":{}}}"#, published.revision);
     ws.feed(Message::text(done)).await?;
     ws.flush().await?;
-    *known = published
+    known.pages = published
         .pages
         .iter()
         .map(|entry| (entry.content, entry.id))

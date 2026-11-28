@@ -30,13 +30,19 @@
 //! that it does not read. A later version of the format may therefore add
 //! commands, and fields at the end of an item, without a new version: the
 //! image command (tag 4: its box, a format byte and the file's bytes) came
-//! that way.
+//! that way, and so did its two last fields, the image's content hash
+//! (`Image::content_hash`, eight bytes, little-endian) and a byte that says
+//! whether the bytes were left out (`1`) because the receiver already has
+//! the image ([`Images`]). A sender leaves them out only for an image it
+//! sent whole on the same channel before ([`encode_with`]); a decoder of a
+//! version before them reads such an item as an empty image.
 //! Every other change raises [`VERSION`], and a decoder rejects a version
 //! it does not know. Version 2 widened a span's instance from 32 to 64
 //! bits, a key of the instance's origin (SPEC §2.3).
 //!
 //! [`Command::Unknown`]: crate::Command::Unknown
 
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::ops::Range;
 use std::sync::Arc;
@@ -98,11 +104,18 @@ pub enum Message {
     Spans(SpanMap),
 }
 
-/// Encodes a whole display list.
+/// Encodes a whole display list, with the bytes of every image.
 ///
 /// Its lengths must be finite, as those of a list made from a fragment
 /// are: [`decode`] refuses a message with one that is not.
 pub fn encode(list: &DisplayList) -> Vec<u8> {
+    encode_with(list, |_| false)
+}
+
+/// Encodes a whole display list, leaving out the bytes of the images that
+/// `known` says the receiver has: images this channel carried whole
+/// before, which the receiver's [`Images`] holds.
+pub fn encode_with(list: &DisplayList, known: impl Fn(&Image) -> bool) -> Vec<u8> {
     let mut w = Writer::header(KIND_LIST);
     w.f32(list.width);
     w.f32(list.height);
@@ -132,9 +145,13 @@ pub fn encode(list: &DisplayList) -> Vec<u8> {
             Command::Image(image) => {
                 body.rect(image.rect);
                 body.buf.push(format_byte(image.image.format()));
-                let bytes: &[u8] = image.image.bytes();
+                let left_out = known(&image.image);
+                let bytes: &[u8] = if left_out { &[] } else { image.image.bytes() };
                 body.uint(bytes.len() as u64);
                 body.buf.extend_from_slice(bytes);
+                body.buf
+                    .extend_from_slice(&image.image.content_hash().to_le_bytes());
+                body.buf.push(u8::from(left_out));
                 TAG_IMAGE
             }
             Command::Unknown(unknown) => unknown.tag,
@@ -162,16 +179,58 @@ pub fn encode_spans(spans: &SpanMap) -> Vec<u8> {
     w.buf
 }
 
-/// Decodes a message.
+/// The images a receiver has been sent whole, by content hash, which the
+/// lists sent after them on the same channel name without their bytes
+/// ([`decode_with`], [`encode_with`]).
+#[derive(Debug, Clone, Default)]
+pub struct Images(HashMap<u64, Image>);
+
+impl Images {
+    /// No images.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The image with the content hash, if it was received.
+    pub fn get(&self, hash: u64) -> Option<&Image> {
+        self.0.get(&hash)
+    }
+
+    /// How many images there are.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether there are none.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Decodes a message that holds every image's bytes.
+///
+/// # Errors
+///
+/// As [`decode_with`], and [`DecodeError::UnknownImage`] for a list that
+/// leaves out an image's bytes.
+pub fn decode(bytes: &[u8]) -> Result<Message, DecodeError> {
+    decode_with(bytes, &mut Images::new())
+}
+
+/// Decodes a message of a channel whose images are kept in `images`: the
+/// images it holds whole are added, and those it names by content hash
+/// alone are taken from there.
 ///
 /// # Errors
 ///
 /// When the bytes are not a message of this version of the format, or are
 /// cut short, or hold a length that is not finite or text that is not
-/// UTF-8. Decoding never panics, whatever the bytes, and allocates memory
-/// in proportion to the elements it has read, which the input's size
-/// bounds, never to a count the input claims.
-pub fn decode(bytes: &[u8]) -> Result<Message, DecodeError> {
+/// UTF-8, or name an image by a content hash that `images` does not hold,
+/// or one that is not that of the bytes they hold. Decoding never panics,
+/// whatever the bytes, and allocates memory in proportion to the elements
+/// it has read, which the input's size bounds, never to a count the input
+/// claims. On an error, `images` may have gained images the message held.
+pub fn decode_with(bytes: &[u8], images: &mut Images) -> Result<Message, DecodeError> {
     let mut r = Reader { bytes, pos: 0 };
     if r.take(3)? != MAGIC {
         return Err(DecodeError::Magic);
@@ -181,7 +240,7 @@ pub fn decode(bytes: &[u8]) -> Result<Message, DecodeError> {
         return Err(DecodeError::Version(version));
     }
     let message = match r.u8()? {
-        KIND_LIST => Message::List(r.list()?),
+        KIND_LIST => Message::List(r.list(images)?),
         KIND_SPANS => Message::Spans(r.spans()?),
         kind => return Err(DecodeError::Kind(kind)),
     };
@@ -214,6 +273,9 @@ pub enum DecodeError {
     Invalid,
     /// Bytes follow the message.
     Trailing,
+    /// A list names an image by its content hash alone, and the receiver
+    /// was not sent it whole before.
+    UnknownImage,
 }
 
 impl Display for DecodeError {
@@ -231,6 +293,9 @@ impl Display for DecodeError {
             Self::Text => f.write_str("text in the display list is not valid"),
             Self::Invalid => f.write_str("an unknown value in the display list"),
             Self::Trailing => f.write_str("bytes follow the display list"),
+            Self::UnknownImage => {
+                f.write_str("the display list names an image that was not sent before")
+            }
         }
     }
 }
@@ -504,7 +569,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn image(&mut self) -> Result<ImageItem, DecodeError> {
+    fn image(&mut self, images: &mut Images) -> Result<ImageItem, DecodeError> {
         let rect = self.rect()?;
         let format = match self.u8()? {
             0 => ImageFormat::Jpeg,
@@ -517,10 +582,37 @@ impl<'a> Reader<'a> {
         };
         let len = self.count(1)?;
         let bytes = self.take(len)?;
-        Ok(ImageItem {
-            rect,
-            image: Image::new(Arc::from(bytes), format),
-        })
+        // The content hash and whether the bytes were left out, unless an
+        // encoder before them wrote the item.
+        let named = if self.remaining() >= 9 {
+            let hash = self.take(8)?;
+            let hash = u64::from_le_bytes(hash.try_into().expect("eight bytes"));
+            Some((hash, self.flag()?))
+        } else {
+            None
+        };
+        let image = match named {
+            Some((hash, true)) => {
+                if !bytes.is_empty() {
+                    return Err(DecodeError::Invalid);
+                }
+                let image = images.get(hash).ok_or(DecodeError::UnknownImage)?;
+                if image.format() != format {
+                    return Err(DecodeError::Invalid);
+                }
+                image.clone()
+            }
+            Some((hash, false)) => {
+                let image = Image::new(Arc::from(bytes), format);
+                if image.content_hash() != hash {
+                    return Err(DecodeError::Invalid);
+                }
+                images.0.insert(hash, image.clone());
+                image
+            }
+            None => Image::new(Arc::from(bytes), format),
+        };
+        Ok(ImageItem { rect, image })
     }
 
     fn flag(&mut self) -> Result<bool, DecodeError> {
@@ -565,7 +657,7 @@ impl<'a> Reader<'a> {
         Ok((source, bytes))
     }
 
-    fn list(&mut self) -> Result<DisplayList, DecodeError> {
+    fn list(&mut self, images: &mut Images) -> Result<DisplayList, DecodeError> {
         let width = self.f32()?;
         let height = self.f32()?;
         let span = self.span()?;
@@ -585,7 +677,7 @@ impl<'a> Reader<'a> {
                 TAG_PATH => Command::Path(body.path()?),
                 TAG_FRAME => Command::Frame(body.rect()?),
                 TAG_BOX => Command::Box(body.rect()?),
-                TAG_IMAGE => Command::Image(body.image()?),
+                TAG_IMAGE => Command::Image(body.image(images)?),
                 // A command of a later version of the format: its span is
                 // kept, the rest of its body skipped.
                 tag => Command::Unknown(Unknown { tag }),

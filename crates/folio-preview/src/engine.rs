@@ -222,8 +222,15 @@ pub(crate) struct PageEntry {
     pub(crate) id: u64,
     /// The display list.
     pub(crate) list: Arc<DisplayList>,
-    /// The display list in the wire format.
+    /// The display list in the wire format, without the bytes of its
+    /// images: for a client that has them ([`Self::images`]).
     pub(crate) bytes: Arc<[u8]>,
+    /// The content hashes of its images, if it has any.
+    pub(crate) images: Arc<[u64]>,
+    /// The display list in the wire format with every image's bytes, made
+    /// when a client first needs it, so that an edit to a page with a
+    /// large image does not copy the image ([`Self::whole`]).
+    pub(crate) whole: Arc<OnceLock<Arc<[u8]>>>,
     /// The span map in the wire format.
     pub(crate) spans: Arc<[u8]>,
 }
@@ -1622,14 +1629,38 @@ fn overlays(
 /// gives it when it is sent ([`Engine::done`]).
 fn entry(pages: &Pages, index: usize) -> PageEntry {
     let list = DisplayList::from_fragment(&pages.pages[index].fragment);
-    let bytes = wire::encode(&list).into();
+    let bytes: Arc<[u8]> = wire::encode_with(&list, |_| true).into();
     let spans = wire::encode_spans(&list.spans()).into();
+    let mut images: Vec<u64> = list
+        .items
+        .iter()
+        .filter_map(|item| match &item.command {
+            folio_render::Command::Image(image) => Some(image.image.content_hash()),
+            _ => None,
+        })
+        .collect();
+    images.sort_unstable();
+    images.dedup();
+    // Without images, the two encodings are the same.
+    let whole = OnceLock::new();
+    if images.is_empty() {
+        let _ = whole.set(bytes.clone());
+    }
     PageEntry {
         content: 0,
         id: 0,
         list: Arc::new(list),
         bytes,
+        images: images.into(),
+        whole: Arc::new(whole),
         spans,
+    }
+}
+
+impl PageEntry {
+    /// The display list in the wire format with every image's bytes.
+    pub(crate) fn whole(&self) -> &Arc<[u8]> {
+        self.whole.get_or_init(|| wire::encode(&self.list).into())
     }
 }
 

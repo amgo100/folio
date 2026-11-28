@@ -104,6 +104,13 @@ struct Received {
     frames: Vec<(u32, wire::Message)>,
 }
 
+thread_local! {
+    /// The images each connection of this test carried whole, by the
+    /// connection's local port, which the lists after name alone.
+    static IMAGES: std::cell::RefCell<std::collections::HashMap<u16, wire::Images>> =
+        std::cell::RefCell::default();
+}
+
 /// Reads one revision from the websocket.
 fn receive(ws: &mut WebSocket<TcpStream>) -> Received {
     let update = match ws.read().unwrap() {
@@ -118,7 +125,11 @@ fn receive(ws: &mut WebSocket<TcpStream>) -> Received {
             Message::Binary(bytes) => {
                 let (index, body) = bytes.split_at(4);
                 let index = u32::from_le_bytes(index.try_into().unwrap());
-                frames.push((index, wire::decode(body).expect("a valid wire message")));
+                let port = ws.get_ref().local_addr().unwrap().port();
+                let message = IMAGES.with_borrow_mut(|images| {
+                    wire::decode_with(body, images.entry(port).or_default())
+                });
+                frames.push((index, message.expect("a valid wire message")));
             }
             Message::Text(text) => {
                 let done: Value = serde_json::from_str(&text).unwrap();
@@ -376,7 +387,7 @@ fn the_viewer_draws_pages_inside_an_iframe() {
     let dir = project("exam");
     let (preview, events) = start(dir.path(), |o| o.watch(false));
     updated(&events, |u| u.pages > 0);
-    node("iframe.cjs", &preview.url());
+    node("iframe.cjs", &[&preview.url()]);
 }
 
 #[test]
@@ -389,21 +400,34 @@ fn the_viewer_draws_images() {
         eprintln!("skipped: Node.js with Playwright is not installed");
         return;
     }
-    for name in ["acceptance", "figures"] {
-        let dir = project(name);
-        let (preview, events) = start(dir.path(), |o| o.watch(false));
-        updated(&events, |u| u.pages > 0);
-        node("images.cjs", &preview.url());
-    }
+    let dir = project("acceptance");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    updated(&events, |u| u.pages > 0);
+    node("images.cjs", &[&preview.url()]);
+    // Then an edit moves every page of the figures, whose lists name the
+    // images the connection had by content hash alone, and the viewer
+    // draws them again.
+    let dir = project("figures");
+    let (preview, events) = start(dir.path(), |o| o);
+    updated(&events, |u| u.pages > 0);
+    let file = dir.path().join("main.fol");
+    node(
+        "images.cjs",
+        &[
+            &preview.url(),
+            file.to_str().unwrap(),
+            "#figure[#image(\"assets/wave.png\"",
+        ],
+    );
 }
 
 /// Runs a script of this crate's `tests` directory with Node.js and fails
 /// with its output unless it succeeds.
-fn node(script: &str, url: &str) {
+fn node(script: &str, args: &[&str]) {
     let mut child = std::process::Command::new("node")
         .current_dir(tests_dir())
         .arg(script)
-        .arg(url)
+        .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()

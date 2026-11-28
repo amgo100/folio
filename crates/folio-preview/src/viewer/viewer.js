@@ -188,8 +188,20 @@ function command(tag, r) {
       const n = r.count(1);
       const bytes = r.bytes.subarray(r.pos, r.pos + n);
       r.pos += n;
-      // The key is hashed when the image is first drawn.
-      return { kind: "image", rect, format, bytes, key: null };
+      // Its content hash and whether its bytes were left out, because
+      // this connection carried them before (`knownImages`); without
+      // them, from an older server, the key is hashed when the image is
+      // first drawn.
+      let key = null;
+      let known = false;
+      if (r.left() >= 9) {
+        const lo = r.view.getUint32(r.pos, true);
+        const hi = r.view.getUint32(r.pos + 4, true);
+        r.pos += 8;
+        key = hi.toString(16).padStart(8, "0") + lo.toString(16).padStart(8, "0");
+        known = r.u8() === 1;
+      }
+      return { kind: "image", rect, format, bytes, key, known };
     }
     default: return { kind: "unknown" }; // A command of a later version.
   }
@@ -248,6 +260,10 @@ const RASTER_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 // it is decoded or fetched, or waits to be fetched again, `pending` an
 // object that names the request.
 let imageCache = new Map();
+// Content hash → the bytes of every image this connection carried whole,
+// which later lists name alone. The server sends each once per
+// connection, so they are kept until it closes.
+let knownImages = new Map();
 // Content hash → how many times fetching a figure has failed.
 const imageFailures = new Map();
 // How many times a figure is fetched again after a failure that may pass.
@@ -1026,6 +1042,8 @@ function connect() {
   ws.onclose = () => {
     socket = null;
     incoming = null;
+    // A new connection is sent every image again.
+    knownImages = new Map();
     // The server may come back as another process, with other fonts.
     fontGeneration = null;
     dropGlyphs();
@@ -1060,6 +1078,11 @@ function apply({ update, frames }) {
     const page = pages[i];
     if (decoded.kind === "list") {
       page.list = decoded.list;
+      for (const item of page.list.items) {
+        if (item.kind !== "image" || item.key === null) continue;
+        if (item.known) item.bytes = knownImages.get(item.key) || new Uint8Array();
+        else knownImages.set(item.key, item.bytes);
+      }
       if (page.img) {
         page.img.remove();
         page.img = null;

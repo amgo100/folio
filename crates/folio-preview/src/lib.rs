@@ -143,8 +143,14 @@
 //! height of zero. An answer holds at most 32 MiB of coverage: the glyphs
 //! past it are left out, and the count says how many it holds.
 //!
-//! Images arrive in the display lists with their files' bytes. A client
-//! decodes JPEG, PNG, WebP and GIF itself (a JPEG as stored, without
+//! Images arrive in the display lists with their files' bytes, once per
+//! connection: the first list that holds an image carries its bytes and
+//! its content hash, and the lists after it on the same connection name it
+//! by the hash alone, with its bytes left out (the image item's last
+//! fields, [`folio_render::wire::encode_with`]), so a client keeps the
+//! images it was sent until the connection closes
+//! ([`folio_render::wire::Images`]). A client decodes JPEG, PNG, WebP and
+//! GIF itself (a JPEG as stored, without
 //! turning it by its Exif orientation, which PDF output ignores), and asks for SVG and PDF
 //! figures as SVG through `/figure/<hash>.svg`: `<hash>` is the content
 //! hash of the file's bytes (`Image::content_hash` of `folio-component`)
@@ -154,9 +160,9 @@
 //! it stretches to any box as the figure does, with the figure embedded as
 //! a `data:` URI (a PDF figure as the SVG it converts to), under a policy
 //! that allows nothing else. A hash no SVG or PDF figure of the current
-//! revision has is `404`. The viewer hashes an image when it first draws
-//! it and keeps decoded images by their hash while the pages it has drawn
-//! show them, so a page sent again does not decode them again.
+//! revision has is `404`. The viewer keeps decoded images by their hash
+//! while the pages it has drawn show them, so a page sent again does not
+//! decode them again.
 
 #![forbid(unsafe_code)]
 
