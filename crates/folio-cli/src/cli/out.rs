@@ -2,11 +2,11 @@
 //!
 //! Every message the command line writes goes through [`stderr`] or
 //! [`stdout`] (by way of the `errln!` and `outln!` macros), never
-//! `eprintln!` or `println!`, which panic when the stream is closed. A reader that stops early, such
-//! as `folio check 2>&1 | head`, closes the pipe: the write then fails
-//! with `BrokenPipe`, and the command goes on quietly, writing nothing
-//! more to that stream, and exits with the status of what it did (SPEC
-//! §12.1), not 101, which means a crash.
+//! `eprintln!` or `println!`, which panic when the stream is closed. A
+//! reader that stops early, such as `folio check 2>&1 | head`, closes the
+//! pipe: the write then fails with `BrokenPipe`, and the command goes on
+//! quietly, writing nothing more to that stream, and exits with the status
+//! of what it did (SPEC §12.1), not 101, which means a crash.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -28,19 +28,17 @@ pub(crate) fn stdout(args: fmt::Arguments<'_>) {
     write(&mut io::stdout().lock(), &STDOUT_CLOSED, args);
 }
 
-/// Writes `args` to `stream` and flushes it, unless `closed` says a write
-/// to it has failed. A write that fails, with `BrokenPipe` because the
-/// reader went away or with any other error, sets `closed`: a stream that
-/// cannot take a message cannot take a report of the failure either.
+/// Writes `args` to `stream` and flushes it, unless `closed` says the
+/// reader went away. A write that fails with `BrokenPipe` sets `closed`, and
+/// nothing more is written to the stream. Any other failure loses only this
+/// message: a stream that cannot take a message cannot take a report of the
+/// failure either, and a later one may go through.
 fn write(stream: &mut dyn Write, closed: &AtomicBool, args: fmt::Arguments<'_>) {
     if closed.load(Ordering::Relaxed) {
         return;
     }
-    if stream
-        .write_fmt(args)
-        .and_then(|()| stream.flush())
-        .is_err()
-    {
+    let result = stream.write_fmt(args).and_then(|()| stream.flush());
+    if result.is_err_and(|e| e.kind() == io::ErrorKind::BrokenPipe) {
         closed.store(true, Ordering::Relaxed);
     }
 }
@@ -65,12 +63,12 @@ macro_rules! outln {
 mod tests {
     use super::*;
 
-    /// A stream whose reader has gone away.
-    struct Closed;
+    /// A stream whose writes fail with `kind`.
+    struct Failing(io::ErrorKind);
 
-    impl Write for Closed {
+    impl Write for Failing {
         fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-            Err(io::ErrorKind::BrokenPipe.into())
+            Err(self.0.into())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -81,7 +79,17 @@ mod tests {
     #[test]
     fn a_closed_stream_is_left_alone() {
         let closed = AtomicBool::new(false);
-        write(&mut Closed, &closed, format_args!("lost"));
+        write(
+            &mut Failing(io::ErrorKind::WouldBlock),
+            &closed,
+            format_args!("lost"),
+        );
+        assert!(!closed.load(Ordering::Relaxed));
+        write(
+            &mut Failing(io::ErrorKind::BrokenPipe),
+            &closed,
+            format_args!("lost"),
+        );
         assert!(closed.load(Ordering::Relaxed));
 
         let mut written = Vec::new();
