@@ -547,9 +547,19 @@ fn data_files_keep_the_order_of_their_keys() {
                 "{\"z\": 1, \"a\": 2, \"m\": {\"y\": 1, \"b\": 2}}",
             ),
             ("d.toml", "z = 1\na = 2\n[b]\ny = 1\nc = 2\n[a2]\nq = 1\n"),
+            ("d.yaml", "z: 1\na: 2\nm:\n  y: 1\n  b: 2\n"),
         ],
     );
     assert_eq!(logged.text(None), "z,a,m y,b z,a,b,a2 y,c");
+    let mut logged = logged;
+    logged
+        .world
+        .set_source(
+            "main.fol",
+            "#yaml(\"d.yaml\").keys().join(\",\") #yaml(\"d.yaml\").m.keys().join(\",\")\n",
+        )
+        .unwrap();
+    assert_eq!(logged.text(None), "z,a,m y,b");
 }
 
 #[test]
@@ -983,6 +993,78 @@ fn data_files() {
         messages("#json(\"main.fol\")")[0],
         "error: the file is not valid JSON: expected value at line 1 column 1"
     );
+    // Errors in a data file say where in it they are.
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            ("main.fol", "#toml(\"d.toml\")\n#yaml(\"d.yaml\")\n"),
+            ("d.toml", "a = 1\nb = \n"),
+            ("d.yaml", "questions:\n  - text: A ball\n  marks: 3\n"),
+        ],
+    );
+    let compiled = folio::compile(&logged.world, Target::Pdf, None).unwrap();
+    let errors: Vec<_> = compiled
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(
+        errors[0].starts_with("the file is not valid TOML: ")
+            && errors[0].ends_with("(line 2, column 5)"),
+        "{errors:?}"
+    );
+    assert!(
+        errors[1].starts_with("the file is not valid YAML: ")
+            && errors[1].contains("(line 3, column "),
+        "{errors:?}"
+    );
+}
+
+/// A question bank in a data file drives generated content; an edit to
+/// the file evaluates again only the calls whose arguments changed, and
+/// not the files that do not read it (SPEC §4.4, §2.3).
+#[test]
+fn an_edit_to_a_question_bank_reevaluates_only_what_depends_on_it() {
+    let mut logged = Logged::new(
+        MANIFEST,
+        &[
+            (
+                "main.fol",
+                "#import \"card.fol\": card\n\
+                 #for q in yaml(\"bank.yaml\").questions [#card(q.text, q.marks) ]\n\
+                 #include \"intro.fol\"\n",
+            ),
+            ("card.fol", "#let card(text, marks) = [#text (#marks)]\n"),
+            ("intro.fol", "#let n = 2\nIntro #n.\n"),
+            (
+                "bank.yaml",
+                "questions:\n  - {text: A ball is thrown., marks: 3}\n  - {text: A car brakes., marks: 4}\n",
+            ),
+        ],
+    );
+    assert_eq!(
+        logged.text(None),
+        "A ball is thrown. (3) A car brakes. (4) Intro 2."
+    );
+    logged.take();
+    logged
+        .world
+        .set_file(
+            "bank.yaml",
+            b"questions:\n  - {text: A ball is thrown., marks: 3}\n  - {text: A car stops., marks: 4}\n"
+                .to_vec(),
+        )
+        .unwrap();
+    assert_eq!(
+        logged.text(None),
+        "A ball is thrown. (3) A car stops. (4) Intro 2."
+    );
+    let executed = logged.take();
+    // The file that reads the bank, and the one call with new arguments.
+    assert_eq!(executed.get("call_closure"), Some(&1), "{executed:?}");
+    assert_eq!(executed.get("eval_file"), Some(&1), "{executed:?}");
 }
 
 #[test]
