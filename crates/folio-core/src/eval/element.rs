@@ -23,6 +23,7 @@ use super::value::{Angle, Arg, Args, Array, Dict, Duration, Fraction, Func, Leng
 use super::vm::Vm;
 use crate::db::{FileKind, data_file, report_read};
 use crate::model::{self, schema};
+use crate::style::STYLED;
 
 /// The universal fields whose value may be written as a bare keyword, as a
 /// stylesheet writes it: `placement: wrap`, `handout: keep`. An identifier
@@ -149,6 +150,11 @@ impl Vm<'_> {
                 } else {
                     fields.insert(key, value);
                 }
+            } else if is_builtin(name, STYLED) {
+                // The fields of `styled` are style properties (SPEC §4.2,
+                // §5.4, D-341-3): stored as given, and checked against
+                // their properties by the style stage, as `override` is.
+                fields.insert(key, value);
             } else {
                 return Err(unknown_field(name, schema, &field, arg_span).into());
             }
@@ -179,6 +185,9 @@ impl Vm<'_> {
         let block = matches!(fields.get("block"), Some(Value::Bool(true)));
         let kind = match name.name.as_str() {
             "raw" | "math" if name.namespace.is_none() && block => ElementKind::Block,
+            // A styled span is inline; content with blocks makes it a
+            // styled block (SPEC §5.4).
+            STYLED if name.namespace.is_none() && holds_blocks(&fields) => ElementKind::Block,
             _ => schema.kind,
         };
         Ok(Content::node(Node::Element(Element {
@@ -238,6 +247,14 @@ impl Vm<'_> {
         span: Span,
     ) -> EvalResult<()> {
         if field != "override" && !LAYOUT_HINTS.contains(&field) {
+            if is_builtin(element, STYLED) {
+                return Err(EvalError::new(
+                    span,
+                    eco_format!("a property of `styled` cannot be limited to a variant or target"),
+                )
+                .with_hint("use a scoped rule instead: `#rule @variant markscheme strong { .. }`")
+                .into());
+            }
             return Err(EvalError::new(
                 span,
                 eco_format!("field `{field}` of `{element}` cannot be limited to a variant or target"),
@@ -297,7 +314,7 @@ impl Vm<'_> {
                 .into()),
             Body::Content(kind) => {
                 check_slots(&content)?;
-                if *kind == ContentKind::Inline {
+                if *kind == ContentKind::Inline && !is_builtin(name, STYLED) {
                     check_inline(&content, || eco_format!("the body of `{name}`"), span)?;
                 }
                 Ok(Some(CheckedBody::Content(content)))
@@ -633,6 +650,19 @@ fn constant(value: &Constant, ty: &FieldType, span: Span) -> Value {
 /// Whether a name is the built-in element `builtin`.
 fn is_builtin(name: &QualifiedName, builtin: &str) -> bool {
     name.namespace.is_none() && name.name.as_str() == builtin
+}
+
+/// Whether the body among an instance's fields holds blocks: a paragraph
+/// break or a block element.
+fn holds_blocks(fields: &Dict) -> bool {
+    let Some(Value::Content(body)) = fields.get(BODY) else {
+        return false;
+    };
+    body.nodes().iter().any(|node| match node {
+        Node::Parbreak(_) => true,
+        Node::Element(element) => model::is_block(element.kind),
+        _ => false,
+    })
 }
 
 /// Checks that content is inline: no paragraph breaks, and no blocks.

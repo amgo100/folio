@@ -1102,3 +1102,49 @@ fn internal_error(message: &str, kept: Option<&str>) -> Diagnostic {
     error.hints.extend(kept.map(EcoString::from));
     error
 }
+
+// ---- Local overrides (SPEC §5.4) ----
+
+pub use folio_core::style::{OVERRIDE_LITERAL, Override, OverrideForm};
+
+/// The local overrides that builds of the world's document read (SPEC
+/// §5.4), for `folio check --report overrides` and the language server:
+/// the id rules of the overrides stylesheet, and the scoped rules, layout
+/// hints, `override` fields and `styled` spans of the content each build
+/// evaluates. Each override is listed once, however many builds read it,
+/// in the order of the builds and then of the document, the id rules of a
+/// build first.
+///
+/// What evaluating and styling the builds finds is reported by [`check`]
+/// and [`compile`], not here. Fails only when an edit to the world cancels
+/// it; in a long-lived world, a panic in a query lists nothing.
+pub fn overrides(
+    world: &World,
+    builds: impl IntoIterator<Item = BuildKey>,
+) -> Result<Vec<Override>, Cancelled> {
+    let builds: Vec<BuildKey> = builds.into_iter().collect();
+    let now = || {
+        let db = world.db();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for key in &builds {
+            let build = folio_core::db::Build::versioned(
+                db,
+                world.project(),
+                key.target,
+                key.variant.clone(),
+                key.version.clone(),
+            );
+            for item in style::local_overrides(db, build) {
+                if seen.insert((item.form, item.span, item.scope.clone())) {
+                    out.push(item.clone());
+                }
+            }
+        }
+        out
+    };
+    if world.kept().is_none() {
+        return catch(world, now);
+    }
+    Ok(isolate(world, now)?.unwrap_or_default())
+}

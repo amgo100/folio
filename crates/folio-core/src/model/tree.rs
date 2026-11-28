@@ -141,8 +141,15 @@ impl Model<'_> {
         match &schema.body {
             Body::None => {}
             Body::Content(kind) => {
+                // A styled block holds blocks, though `styled` is inline
+                // when it styles a span (SPEC §5.4).
+                let kind = if is_block(element.kind) && crate::style::is_styled(&element.name) {
+                    ContentKind::Blocks
+                } else {
+                    *kind
+                };
                 if let Some(Value::Content(body)) = element.fields.get(BODY) {
-                    let body = self.content(body, *kind);
+                    let body = self.content(body, kind);
                     element.fields.insert(BODY.into(), Value::Content(body));
                 }
             }
