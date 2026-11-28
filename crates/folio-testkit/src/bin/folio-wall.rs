@@ -14,7 +14,12 @@
 //!   `watch-edit`: the acceptance exam of the test corpus served by `folio watch`'s
 //!   preview ([`folio_preview`]), an edit written to disk, and the time
 //!   until a websocket client has received the display lists of the pages
-//!   it changed;
+//!   it changed. `watch-paint` times the same edit to the completed canvas:
+//!   until the preview's viewer, in Chromium, shows the edited page with
+//!   every glyph (SPEC §12.2). It runs when Node.js can load Playwright and
+//!   its Chromium, and is left out with a note otherwise. Glyphs drawn
+//!   from another quarter-pixel offset while the right one is fetched
+//!   count as drawn;
 //! - the stages of the reference document's builds: how long each query
 //!   from evaluation to emit takes in a full compile, after a one-word
 //!   edit and after a stylesheet edit, measured by running the public
@@ -90,6 +95,112 @@ enum Prepared {
     Compiled(World, Edit),
     /// A project served by the preview, with a client that has every page.
     Watching(Box<Watching>),
+    /// A project served by the preview, shown by the viewer in Chromium.
+    Painting(Box<Painting>),
+}
+
+/// A copy of a corpus project served by the preview and shown by its
+/// viewer in Chromium, driven by `paint.cjs`, with an edit to write.
+struct Painting {
+    /// `paint.cjs`: dropped first, so that its browser closes before the
+    /// preview stops.
+    painter: Painter,
+    _preview: Preview,
+    _dir: tempfile::TempDir,
+    /// The revisions the preview starts, which tie a paint to the edit.
+    edited_revisions: std::sync::mpsc::Receiver<u64>,
+    /// The file to edit, and its text after the edit.
+    file: PathBuf,
+    edited: String,
+}
+
+/// The directory of `paint.cjs`, the script that watches what the
+/// preview's viewer paints, which Node.js runs from there.
+fn paint_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../folio-preview/tests")
+}
+
+/// Whether Node.js can load Playwright and Playwright has its Chromium,
+/// which `watch-paint` needs.
+fn playwright() -> bool {
+    let probe = "process.exit(require('fs').existsSync(\
+                 require('playwright').chromium.executablePath()) ? 0 : 1)";
+    std::process::Command::new("node")
+        .current_dir(paint_dir())
+        .args(["-e", probe])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// `paint.cjs` showing a page of a preview: its lines arrive on a channel,
+/// and dropping it closes its standard input, which stops it.
+struct Painter {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl Painter {
+    /// Starts `paint.cjs` showing page `page` (from 0) of the preview at
+    /// `url`, and waits until the viewer shows it; returns the revision.
+    fn start(url: &str, page: usize) -> (Self, u64) {
+        let mut child = std::process::Command::new("node")
+            .current_dir(paint_dir())
+            .args(["paint.cjs", url, &page.to_string()])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .expect("Node.js runs paint.cjs");
+        let stdout = child.stdout.take().expect("its output");
+        let (tx, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut painter = Self { child, lines };
+        let revision = painter.until("ready", 0).0;
+        (painter, revision)
+    }
+
+    /// Waits for a line `<word> <revision>` with a revision after `after`;
+    /// returns the revision and how many frames with holes came before.
+    fn until(&mut self, word: &str, after: u64) -> (u64, usize) {
+        let mut holes = 0;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap_or_else(|_| panic!("no `{word}` from paint.cjs in time"));
+            assert!(!line.starts_with("error "), "the viewer failed: {line}");
+            let (w, r) = line.split_once(' ').expect("a word and a revision");
+            let r: u64 = r.parse().expect("a revision");
+            holes += usize::from(w == "holes" && r > after);
+            if w == word && r > after {
+                return (r, holes);
+            }
+        }
+    }
+}
+
+impl Drop for Painter {
+    fn drop(&mut self) {
+        drop(self.child.stdin.take());
+        // A browser that hangs as it closes is killed.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// A copy of a corpus project served by the preview, with a websocket
@@ -163,6 +274,66 @@ fn watching() -> Prepared {
         file,
         edited,
     }))
+}
+
+/// Serves a copy of [`WATCHED`] with `folio watch`'s preview, watching the
+/// disk, and shows the page [`WATCH_EDIT`] changes in the viewer.
+fn painting() -> Prepared {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    copy_dir(&corpus::dir().join(WATCHED), dir.path());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (edits, edited_revisions) = std::sync::mpsc::channel();
+    let options = folio_preview::Options::new(dir.path())
+        .system_fonts(false)
+        .on_event(move |event| match event {
+            Event::Updated(_) => {
+                let _ = tx.send(());
+            }
+            Event::Edited { revision } => {
+                let _ = edits.send(*revision);
+            }
+            _ => {}
+        });
+    let preview = Preview::start(options).expect("the preview starts");
+    rx.recv().expect("the first revision");
+    // The question under the figure of the sledge, on the second page.
+    let (painter, _) = Painter::start(&preview.url(), 1);
+    // The revisions so far are not the edit's.
+    while edited_revisions.try_recv().is_ok() {}
+    let file = dir.path().join("main.fol");
+    let text = std::fs::read_to_string(&file).expect("the entry file");
+    assert!(
+        text.contains(WATCH_EDIT.0),
+        "the edit's text is in the acceptance exam"
+    );
+    let edited = text.replacen(WATCH_EDIT.0, WATCH_EDIT.1, 1);
+    Prepared::Painting(Box::new(Painting {
+        painter,
+        _preview: preview,
+        _dir: dir,
+        edited_revisions,
+        file,
+        edited,
+    }))
+}
+
+/// Writes the edit to disk and waits until the viewer shows the edited
+/// page with every glyph: the preview path of `folio watch` to the
+/// completed canvas. Panics when a frame with holes was shown. The
+/// preview is stopped after the time is taken.
+fn paint_after_edit(prepared: Prepared) -> usize {
+    let Prepared::Painting(mut painting) = prepared else {
+        unreachable!("set up as a painted project")
+    };
+    std::fs::write(&painting.file, &painting.edited).expect("the edit is written");
+    let edit = painting
+        .edited_revisions
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the edit starts a revision");
+    let (_, holes) = painting.painter.until("painted", edit - 1);
+    assert_eq!(holes, 0, "the viewer showed text with holes");
+    defer_drop(painting);
+    1
 }
 
 /// Reads one revision from the preview's websocket, to its `done`
@@ -408,6 +579,16 @@ fn scenarios() -> Vec<Scenario> {
             run: watch_after_edit,
         },
         Scenario {
+            name: "watch-paint",
+            what: "the acceptance exam in `folio watch`, an edit on disk to the completed canvas",
+            bounds: Some(Bounds {
+                gated: true,
+                ..PREVIEW
+            }),
+            setup: painting,
+            run: paint_after_edit,
+        },
+        Scenario {
             name: "check-edit",
             what: "100 pages, a one-word edit in the middle, checked without emit",
             bounds: None,
@@ -471,7 +652,7 @@ fn stage_times(prepared: Prepared) -> [Duration; STAGES.len()] {
             let took = time(|| apply(&edit, &mut world));
             (world, took)
         }
-        Prepared::Watching(_) => unreachable!("stages are timed on worlds"),
+        Prepared::Watching(_) | Prepared::Painting(_) => unreachable!("stages are timed on worlds"),
     };
     let target = Target::Pdf;
     [
@@ -590,7 +771,15 @@ fn main() -> ExitCode {
     );
     let mut failed = false;
     let mut p95s = Vec::new();
+    let painted = playwright();
     for scenario in scenarios() {
+        if scenario.name == "watch-paint" && !painted {
+            println!(
+                "{:<16} not run: needs Node.js with Playwright and its Chromium",
+                scenario.name
+            );
+            continue;
+        }
         (scenario.run)((scenario.setup)());
         bury();
         let mut times: Vec<Duration> = (0..iterations)
