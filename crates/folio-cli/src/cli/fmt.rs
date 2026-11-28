@@ -175,7 +175,7 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
     report.diagnostics(&world, &diagnostics);
     if !report.is_json() {
         for path in &formatted {
-            eprintln!("formatted {path}");
+            errln!("formatted {path}");
         }
     }
     diagnostics.iter().any(Diagnostic::is_error)

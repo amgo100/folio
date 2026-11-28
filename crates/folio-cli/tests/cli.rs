@@ -119,6 +119,37 @@ fn reports_a_missing_entry_file() {
     assert!(text.contains("folio.toml:2:9"), "{text}");
 }
 
+/// SPEC §12.1: a reader that stops early, as `head` does, closes the pipe
+/// that standard error writes to. The command stops writing and exits with
+/// the status of the check, 1 for errors, not 101 for a crash (#343).
+#[test]
+fn a_closed_pipe_ends_the_report_quietly() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let entry: Vec<String> = (0..3000).map(|i| format!("#nothing{i}")).collect();
+    let dir = project(&[("folio.toml", MANIFEST), ("main.fol", &entry.join("\n\n"))]);
+    for format in ["human", "json"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_folio"))
+            .args(["check", "--diagnostics", format])
+            .current_dir(dir.path())
+            .env_remove("FOLIO_CACHE_DIR")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut reader = BufReader::new(child.stderr.take().unwrap());
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        assert!(!first.is_empty(), "{format}");
+        // The report is far larger than a pipe holds, so writing the rest
+        // finds the pipe closed.
+        drop(reader);
+        let status = child.wait().unwrap();
+        assert_eq!(status.code(), Some(1), "{format}");
+    }
+}
+
 #[test]
 fn reports_manifest_errors() {
     let dir = project(&[("folio.toml", "[project]\nentry = \"main.fol\"\n")]);
