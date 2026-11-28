@@ -1353,7 +1353,7 @@ impl Painter {
             assert!(!line.starts_with("error "), "the viewer failed: {line}");
             let (w, r) = line.split_once(' ').expect("a word and a revision");
             let r: u64 = r.parse().unwrap();
-            if w == "holes" {
+            if w == "holes" && r > after {
                 holes.push(line.clone());
             }
             if w == word && r > after {

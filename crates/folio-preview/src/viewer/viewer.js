@@ -548,6 +548,9 @@ const scratch = document.createElement("canvas");
 // and the time it is due.
 let lateTimer = 0;
 let lateAt = 0;
+// How many frames with holes were shown before SHOW_AFTER since the last
+// report (`painted`).
+let earlyHoles = 0;
 
 // Draws a page at the current zoom. A frame with holes (glyphs or images
 // not here yet) does not replace the last frame shown without holes at
@@ -567,7 +570,13 @@ function draw(page) {
   if (scratch.width !== width) scratch.width = width;
   if (scratch.height !== height) scratch.height = height;
   const ctx = scratch.getContext("2d");
+  // The state the page before left, which a page drawn first would not
+  // see.
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "low";
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, width, height);
   const state = { missing: 0, approximate: 0 };
@@ -623,8 +632,8 @@ function draw(page) {
     page.shownList = list;
     page.holes = holes;
     // Holes shown before SHOW_AFTER, for whatever reason: not those shown
-    // because what was missing took too long.
-    page.early = holes && !late;
+    // because what was missing took too long. Reported once.
+    if (holes && !late) earlyHoles++;
     page.waitingSince = 0;
   } else {
     const due = page.waitingSince + SHOW_AFTER;
@@ -740,23 +749,23 @@ function redrawVisible() {
 // Tells a test or benchmark that drives the viewer (`folioPainted`, which
 // Playwright defines) what the visible pages show: the revision, whether
 // every one shows its current list (`current`), whether any shows a frame
-// with holes (`holes`), and one shown before SHOW_AFTER ran out (`early`:
-// on a page that had no frame without holes to keep, or a fault), and
-// whether every one is exact, with no glyph drawn from another
-// quarter-pixel offset.
+// with holes (`holes`), how many frames with holes were shown before
+// SHOW_AFTER ran out since the last report (`early`: on a page that had
+// no frame without holes to keep, or a fault), and whether every one is
+// exact, with no glyph drawn from another quarter-pixel offset.
 function painted() {
   if (typeof window.folioPainted !== "function") return;
   const dpr = window.devicePixelRatio || 1;
   let current = true;
   let holes = false;
-  let early = false;
+  const early = earlyHoles;
+  earlyHoles = 0;
   let exact = true;
   for (const i of visible) {
     const page = pages[i];
     if (!page || !page.list) continue;
     if (page.shownList !== page.list) current = false;
     if (page.holes) holes = true;
-    if (page.early) early = true;
     if (page.drawn !== zoom * dpr) exact = false;
   }
   const shown = [...visible].sort((a, b) => a - b);
@@ -809,7 +818,7 @@ function pageElement(i) {
     // The size of the frame without holes the canvas shows, the list it
     // shows, whether that has holes, and since when a frame with holes
     // has waited to replace it (`draw`).
-    shown: null, shownList: null, holes: false, early: false, waitingSince: 0,
+    shown: null, shownList: null, holes: false, waitingSince: 0,
   };
   pages[i] = page;
   return page;

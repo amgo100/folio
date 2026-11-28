@@ -41,12 +41,15 @@ async function main() {
       console.log(`error ${String(e).replace(/\s+/g, ' ')}`);
     });
     let ready = false;
+    // Set once the page is scrolled into view, which may draw pages the
+    // first time.
+    let scrolled = false;
     let last = 0;
     let lastExact = 0;
     let readyAt = null;
     const readied = new Promise((resolve) => (readyAt = resolve));
     await page.exposeFunction('folioPainted', (state) => {
-      if (!state.visible.includes(target)) return;
+      if (!scrolled || !state.visible.includes(target)) return;
       const settled = state.current && !state.holes && state.revision > 0;
       if (!ready) {
         if (settled) {
@@ -73,10 +76,10 @@ async function main() {
     const el = page.locator(`#pages .page[data-index="${target}"]`);
     await el.waitFor({ timeout: TIMEOUT });
     await el.scrollIntoViewIfNeeded();
-    // A scroll that shows no new page reports nothing: a resize makes the
-    // viewer draw and report.
     await page.waitForTimeout(500);
-    if (!ready) await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+    scrolled = true;
+    // A resize makes the viewer draw what it lacks and report.
+    await page.evaluate(() => window.dispatchEvent(new Event('resize')));
     let timer;
     await Promise.race([
       readied,

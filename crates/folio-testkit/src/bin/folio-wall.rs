@@ -173,15 +173,16 @@ impl Painter {
     /// returns the revision and how many frames with holes came before.
     fn until(&mut self, word: &str, after: u64) -> (u64, usize) {
         let mut holes = 0;
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             let line = self
                 .lines
-                .recv_timeout(Duration::from_secs(60))
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .unwrap_or_else(|_| panic!("no `{word}` from paint.cjs in time"));
             assert!(!line.starts_with("error "), "the viewer failed: {line}");
             let (w, r) = line.split_once(' ').expect("a word and a revision");
             let r: u64 = r.parse().expect("a revision");
-            holes += usize::from(w == "holes");
+            holes += usize::from(w == "holes" && r > after);
             if w == word && r > after {
                 return (r, holes);
             }
