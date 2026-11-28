@@ -26,7 +26,7 @@ page 1 419.53 × 595.28, 16 line(s)
               text (14.84, 5.22) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
             text (159.87, 14.29) SourceSerif4-Regular 10.50 w 80.65 20 glyph(s) ", the time is 3.0 s."
           box (0.00, 26.58) 334.49 × 21.22 main.fol:35:4 baselines 14.29..14.29
-            text (99.73, 14.29) SourceSerif4-Regular 10.50 w 135.03 30 glyph(s) "Figure\u{a0}1: Answer to Free fall."
+            text (99.73, 14.29) SourceSerif4-Regular 10.50 w 135.03 30 glyph(s) "Figure\u{a0}2: Answer to Free fall."
       box (0.00, 188.39) 334.49 × 126.03 main.fol:29:3 baselines 16.88..119.10
         box (0.00, 0.00) 334.49 × 24.65 main.fol:29:3 baselines 16.88..16.88 keep penalty 10000
           text (0.00, 16.88) SourceSerif4-Bold 13.00 w 61.67 11 glyph(s) "2.\u{a0}Friction"
@@ -37,7 +37,7 @@ page 1 419.53 × 595.28, 16 line(s)
           box (0.00, 0.00) 334.49 × 21.22 main.fol:14:14 baselines 14.29..14.29
             text (54.96, 14.29) SourceSerif4-Regular 10.50 w 224.56 51 glyph(s) "The deceleration is 4.0 m/s², so the force is 20 N."
           box (0.00, 26.47) 334.49 × 21.22 main.fol:35:4 baselines 14.29..14.29
-            text (100.45, 14.29) SourceSerif4-Regular 10.50 w 133.58 29 glyph(s) "Figure\u{a0}3: Answer to Friction."
+            text (100.45, 14.29) SourceSerif4-Regular 10.50 w 133.58 29 glyph(s) "Figure\u{a0}4: Answer to Friction."
       box (0.00, 330.02) 334.49 × 122.62 main.fol:29:3 baselines 16.88..119.10
         box (0.00, 0.00) 334.49 × 24.65 main.fol:29:3 baselines 16.88..16.88 keep penalty 10000
           text (0.00, 16.88) SourceSerif4-Bold 13.00 w 59.71 10 glyph(s) "3.\u{a0}Springs"
@@ -49,7 +49,7 @@ page 1 419.53 × 595.28, 16 line(s)
           box (0.00, 0.00) 334.49 × 21.22 main.fol:24:14 baselines 14.29..14.29
             text (96.32, 14.29) SourceSerif4-Regular 10.50 w 141.85 30 glyph(s) "The spring constant is 50 N/m."
           box (0.00, 26.47) 334.49 × 17.81 main.fol:35:4 baselines 14.29..14.29
-            text (101.51, 14.29) SourceSerif4-Regular 10.50 w 131.47 28 glyph(s) "Figure\u{a0}5: Answer to Springs."
+            text (101.51, 14.29) SourceSerif4-Regular 10.50 w 131.47 28 glyph(s) "Figure\u{a0}6: Answer to Springs."
 page 2 419.53 × 595.28, 9 line(s)
   box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 13.47..229.80
     box (0.00, 0.00) 334.49 × 233.31 main.fol:1:2 baselines 13.47..229.80
@@ -63,7 +63,7 @@ page 2 419.53 × 595.28, 9 line(s)
           box (0.00, 0.00) 334.49 × 21.22 main.fol:19:14 baselines 14.29..14.29
             text (43.89, 14.29) SourceSerif4-Regular 10.50 w 246.71 52 glyph(s) "Taking moments about the pivot, the weight is 200 N."
           box (0.00, 26.47) 334.49 × 21.22 main.fol:35:4 baselines 14.29..14.29
-            text (97.11, 14.29) SourceSerif4-Regular 10.50 w 140.27 28 glyph(s) "Figure\u{a0}7: Answer to Moments."
+            text (97.11, 14.29) SourceSerif4-Regular 10.50 w 140.27 28 glyph(s) "Figure\u{a0}8: Answer to Moments."
       box (0.00, 138.22) 334.49 × 95.10 main.fol:38:1 baselines 16.88..91.58
         box (0.00, 0.00) 334.49 × 24.65 main.fol:38:1 baselines 16.88..16.88 keep penalty 10000
           text (0.00, 16.88) SourceSerif4-Bold 13.00 w 98.89 16 glyph(s) "5.\u{a0}Short answers"
