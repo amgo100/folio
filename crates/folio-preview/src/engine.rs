@@ -679,8 +679,9 @@ impl Engine {
             // Removed, renamed or created: whatever writes it now has
             // opened it again.
             Change::Moved => {
-                // With everything under a directory moved.
-                for path in paths.iter().map(|path| resolved(path)) {
+                // With everything under a directory moved; a link that was
+                // made or removed is not followed to what it leads to.
+                for path in paths.iter().map(|path| location(path)) {
                     self.open.retain(|open| !open.starts_with(&path));
                     self.released
                         .retain(|released| !released.starts_with(&path));
@@ -1734,14 +1735,24 @@ struct Before {
 /// key of the files open for writing, held and released, so that a file
 /// reached through several paths, as through links inside the project,
 /// is one. A path that no longer resolves, as a removed file, is taken
-/// with its directory resolved.
+/// where it was ([`location`]).
 fn resolved(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| {
-        path.parent()
-            .and_then(|dir| dir.canonicalize().ok())
-            .zip(path.file_name())
-            .map_or_else(|| path.to_path_buf(), |(dir, name)| dir.join(name))
-    })
+    path.canonicalize().unwrap_or_else(|_| location(path))
+}
+
+/// Where a path is, its last part not followed if it is a link: its
+/// nearest directory that exists, resolved, with the rest of the path.
+fn location(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut dir = path;
+    while let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) {
+        rest.push(name);
+        if let Ok(base) = parent.canonicalize() {
+            return rest.iter().rev().fold(base, |at, part| at.join(part));
+        }
+        dir = parent;
+    }
+    path.to_path_buf()
 }
 
 /// Sends a check's end as cancelled when it is dropped before the check
@@ -1781,7 +1792,28 @@ fn error(message: String) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::torn;
+    use super::{location, resolved, torn};
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_is_one_whatever_path_reaches_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("shared")).unwrap();
+        std::fs::write(root.join("shared/a.fol"), "a").unwrap();
+        std::os::unix::fs::symlink("shared", root.join("chapters")).unwrap();
+        let file = resolved(&root.join("shared/a.fol"));
+        assert_eq!(resolved(&root.join("chapters/a.fol")), file);
+        // A link itself is where it is, not where it leads.
+        let canonical = root.canonicalize().unwrap();
+        assert_eq!(location(&root.join("chapters")), canonical.join("chapters"));
+        // A path whose directories are gone is taken from the nearest one
+        // that is not, resolved.
+        assert_eq!(
+            resolved(&root.join("gone/deeper/b.fol")),
+            canonical.join("gone/deeper/b.fol")
+        );
+    }
 
     #[test]
     fn reads_that_may_fall_inside_a_save_are_torn() {
