@@ -55,7 +55,13 @@ pub fn group_build<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<Build<'db>
         return None;
     }
     let first = group.variants.first()?.v.clone();
-    Some(Build::new(db, project, build.target(db), Some(first)))
+    Some(Build::versioned(
+        db,
+        project,
+        build.target(db),
+        Some(first),
+        build.version(db).clone(),
+    ))
 }
 
 /// Counts the common tree of the numbering group that `build` stands for
@@ -72,7 +78,13 @@ pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> Option<CommonNumbers> {
     let mut trees = Vec::new();
     let mut props = None;
     for name in &group.variants {
-        let each = Build::new(db, project, build.target(db), Some(name.v.clone()));
+        let each = Build::versioned(
+            db,
+            project,
+            build.target(db),
+            Some(name.v.clone()),
+            build.version(db).clone(),
+        );
         let root = selected_root(db, each)?;
         let selected = select(db, each).as_ref()?;
         props.get_or_insert(&selected.styled.properties);
@@ -128,7 +140,13 @@ pub fn check_target_overlays(db: &dyn Db, build: Build<'_>, group: &Name) {
     };
     let mut seen = HashSet::new();
     for name in &decl.variants {
-        let each = Build::new(db, project, build.target(db), Some(name.v.clone()));
+        let each = Build::versioned(
+            db,
+            project,
+            build.target(db),
+            Some(name.v.clone()),
+            build.version(db).clone(),
+        );
         let cascade = cascade(db, each);
         let props = &cascade.properties;
         let counted = [

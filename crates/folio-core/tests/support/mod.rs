@@ -75,8 +75,8 @@ pub(crate) fn evaluate(script: &str, limits: Limits) -> Vec<String> {
         None,
         limits,
     );
-    let _ = evaluate_project(&db, project, None);
-    evaluate_project::accumulated::<Reported>(&db, project, None)
+    let _ = evaluate_project(&db, project, None, None);
+    evaluate_project::accumulated::<Reported>(&db, project, None, None)
         .into_iter()
         .map(|reported| reported.0.message.to_string())
         .collect()

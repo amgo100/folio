@@ -1,0 +1,13 @@
+page { page-size: A5; margin-top: 15mm; margin-bottom: 15mm; margin-inner: 15mm; margin-outer: 15mm; }
+doc { font: "Source Serif 4"; font-size: 10.5pt; }
+heading { font-size: 13pt; numbering: "1."; space-after: 6pt; keep-with-next: true; }
+figure { numbering: "1"; space-before: 4pt; space-after: 8pt; }
+
+// The answer space is the exam's; the answers are the mark scheme's.
+figure.space { min-height: 15mm; border: 0.5pt solid #808080; }
+.answers { display: none; }
+
+@variant markscheme {
+  figure.space { display: none; }
+  .answers { display: auto; }
+}

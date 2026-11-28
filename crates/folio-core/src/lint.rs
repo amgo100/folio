@@ -41,7 +41,12 @@ pub fn check_lints(db: &dyn Db, build: Build<'_>) {
         .as_ref()
         .is_some_and(|host| host.components().any(has_elements));
     if linted {
-        lint_variant(db, project, build.variant(db).clone());
+        lint_variant(
+            db,
+            project,
+            build.variant(db).clone(),
+            build.version(db).clone(),
+        );
     }
 }
 
@@ -185,11 +190,11 @@ fn has_elements(component: &Registered) -> bool {
 }
 
 #[salsa::tracked]
-fn lint_variant(db: &dyn Db, project: Project, variant: Option<Name>) {
+fn lint_variant(db: &dyn Db, project: Project, variant: Option<Name>, version: Option<Name>) {
     let Some(host) = component_host(db, project).as_ref() else {
         return;
     };
-    let Some(document) = document(db, project, variant) else {
+    let Some(document) = document(db, project, variant, version) else {
         return;
     };
     for component in host.components().filter(|c| has_elements(c)) {

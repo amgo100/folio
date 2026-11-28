@@ -69,8 +69,9 @@ fn builds_the_corpus() {
     let mut checked = 0;
     for line in digests.lines() {
         let (digest, name) = line.split_once("  ").unwrap();
-        // The determinism check names outputs `{project}-{variant}.{ext}`;
-        // `folio build` names them `out/{stem}-{variant}.{ext}`.
+        // The determinism check names outputs
+        // `{project}-{variant}-{version}.{ext}`; `folio build` names them
+        // `out/{stem}-{variant}-{version}.{ext}`.
         let (project, rest) = name.split_once(['-', '.']).unwrap();
         let built = match name[project.len()..].starts_with('-') {
             true => format!("out/main-{rest}"),
@@ -90,7 +91,7 @@ fn builds_the_corpus() {
         assert_eq!(actual, digest, "{built} of {project}");
         checked += 1;
     }
-    assert_eq!(checked, 14);
+    assert_eq!(checked, 18);
 }
 
 #[test]

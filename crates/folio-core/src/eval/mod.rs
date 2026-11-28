@@ -211,18 +211,24 @@ pub(crate) struct Memo<T> {
 }
 
 /// Evaluates a project's entry file for a variant (`None` for a project
-/// without variants) and returns its content, or `None` after reporting why
-/// it could not be evaluated.
+/// without variants) and a version (`None` for a project without versions,
+/// or a build that keeps the source order) and returns its content, or
+/// `None` after reporting why it could not be evaluated.
 ///
 /// It does not read the target, so all targets of a variant share it. The
 /// files it imports and the functions it calls are evaluated once for all
-/// variants unless they read `variant`.
+/// variants and versions unless they read `variant` or `version`.
 #[salsa::tracked(returns(ref))]
-pub fn evaluate(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<Content> {
+pub fn evaluate(
+    db: &dyn Db,
+    project: Project,
+    variant: Option<Name>,
+    version: Option<Name>,
+) -> Option<Content> {
     let entry = project.manifest(db).project.entry.v.clone();
     // A missing entry file is reported by `build_files`.
     let file = source_file(db, project, entry)?;
-    let memo = eval_file_for(db, project, file, &Mode::Variant(variant, None), 0);
+    let memo = eval_file_for(db, project, file, &Mode::Variant(variant, version), 0);
     for error in &memo.recovered {
         diag::report(db, error.clone().into());
     }

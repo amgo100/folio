@@ -2,7 +2,7 @@
 //! its seed while the document is evaluated, so each version is numbered in
 //! the order it is printed, and its mark scheme in the same order.
 
-use folio::{Name, Severity, Target, World};
+use folio::{Fragment, FragmentItem, Name, Severity, Target, World};
 
 const PLAIN: &str = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\n\
                      compiler = \"0.0.0\"\nlang = \"en\"\n";
@@ -131,4 +131,104 @@ fn a_shuffled_paper_is_numbered_in_printed_order() {
             "Answer to Fields.",
         ]
     );
+}
+
+/// A paper declared in two versions, each shuffled by its version.
+const VERSIONED: &str = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\n\
+                         compiler = \"0.0.0\"\nlang = \"en\"\nstyles = [\"main.fsty\"]\n\
+                         versions = [\"A\", \"B\"]\n\n\
+                         [variants.exam]\ntargets = [\"pdf\"]\n\n\
+                         [variants.markscheme]\ntargets = [\"pdf\"]\n\n\
+                         [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
+                         shared-counters = [\"heading\"]\n";
+
+const BANK: &str = "#let bank = (\"Forces\", \"Waves\", \"Fields\", \"Optics\")\n\
+                    #for q in shuffle(bank, seed: version) [\n\
+                    = #q\n\n\
+                    #if variant == \"markscheme\" [Answer to #q.]\n\n\
+                    ]\n";
+
+/// The text of each line a build sets, in order.
+fn lines(world: &World, variant: &str, version: Option<&str>) -> Vec<String> {
+    fn walk(fragment: &Fragment, out: &mut Vec<String>) {
+        for (_, item) in &fragment.items {
+            match item {
+                FragmentItem::Group(inner) => walk(inner, out),
+                FragmentItem::Text(run) => out.push(run.text.as_str().replace('\u{a0}', " ")),
+                _ => {}
+            }
+        }
+    }
+    let variant = Name::new(variant).unwrap();
+    let version = version.map(|v| Name::new(v).unwrap());
+    let pages = folio::pages_versioned(world, Target::Pdf, Some(&variant), version.as_ref())
+        .unwrap()
+        .expect("the build is laid out");
+    let mut out = Vec::new();
+    for page in &pages.pages {
+        walk(&page.fragment, &mut out);
+    }
+    out
+}
+
+/// SPEC §6.4: each version is numbered in its own printed order, and its
+/// mark scheme, a numbering group of its own with its exam, agrees.
+#[test]
+fn each_version_numbers_its_own_order() {
+    let w = world(VERSIONED, BANK);
+    // The orders that seeds "A" and "B" give four items.
+    let a = ["1. Optics", "2. Waves", "3. Fields", "4. Forces"];
+    let b = ["1. Forces", "2. Waves", "3. Optics", "4. Fields"];
+    assert_eq!(lines(&w, "exam", Some("A")), a);
+    assert_eq!(lines(&w, "exam", Some("B")), b);
+    let scheme: Vec<String> = lines(&w, "markscheme", Some("B"))
+        .into_iter()
+        .filter(|l| !l.starts_with("Answer"))
+        .collect();
+    assert_eq!(scheme, b);
+    assert_eq!(
+        lines(&w, "markscheme", Some("A"))[..2],
+        ["1. Optics", "Answer to Optics."]
+    );
+    // Without a version, as the editor builds it, the order is the source's.
+    assert_eq!(
+        lines(&w, "exam", None),
+        ["1. Forces", "2. Waves", "3. Fields", "4. Optics"]
+    );
+    for version in ["A", "B"] {
+        for variant in ["exam", "markscheme"] {
+            let name = Name::new(variant).unwrap();
+            let version = Name::new(version).unwrap();
+            let compiled =
+                folio::compile_versioned(&w, Target::Pdf, Some(&name), Some(&version)).unwrap();
+            assert!(
+                !compiled.has_errors(),
+                "{variant} {version}: {:?}",
+                compiled.diagnostics
+            );
+            // Rebuilding in a fresh world gives the same bytes.
+            let fresh = world(VERSIONED, BANK);
+            let again =
+                folio::compile_versioned(&fresh, Target::Pdf, Some(&name), Some(&version)).unwrap();
+            assert_eq!(compiled.output, again.output, "{variant} {version}");
+        }
+    }
+}
+
+/// A version the manifest does not declare is an error.
+#[test]
+fn an_undeclared_version_is_an_error() {
+    let w = world(VERSIONED, BANK);
+    let exam = Name::new("exam").unwrap();
+    let c = Name::new("C").unwrap();
+    let compiled = folio::compile_versioned(&w, Target::Pdf, Some(&exam), Some(&c)).unwrap();
+    let errors: Vec<_> = compiled
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| (d.message.to_string(), d.hints.clone()))
+        .collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].0, "no version `C` is declared");
+    assert_eq!(errors[0].1[0], "the manifest declares `A`, `B`");
 }

@@ -1,5 +1,5 @@
-//! `folio build` (SPEC §12.1): builds the variants and targets of a project
-//! and writes their outputs where `[output] path` says (SPEC §6.4). `folio
+//! `folio build` (SPEC §12.1): builds the variants, versions and targets of
+//! a project and writes their outputs where `[output] path` says (SPEC §6.4). `folio
 //! check` runs the same command without emitting or writing anything
 //! ([`Mode::Check`]).
 
@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ecow::EcoVec;
 use folio::diag::{self, Files, Resolved, TextFiles};
 use folio::{
-    Cancelled, Compiled, Diagnostic, FileKind, FileRead, FontCache, LayoutDiagnostics, Manifest,
-    Name, ProjectPath, Target, World, check_builds, compile_builds,
+    BuildKey, Cancelled, Compiled, Diagnostic, FileKind, FileRead, FontCache, LayoutDiagnostics,
+    Manifest, Name, ProjectPath, World, check_versioned_builds, compile_versioned_builds,
 };
 use folio_syntax::DiagSpan;
 use serde::Serialize;
@@ -100,7 +100,7 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
 
     // Problems found before compiling, which the builds' follow.
     let mut diagnostics = Vec::new();
-    let builds = match select(world.manifest(), &world.builds(), args) {
+    let builds = match select(world.manifest(), &world.versioned_builds(), args) {
         Ok(builds) => builds,
         Err(error) => {
             report.diagnostics(&world, &[error]);
@@ -122,49 +122,52 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
         world.set_today(Some(today));
     }
 
-    let outputs: Vec<(Option<Name>, Target, Outcome)> =
-        if diagnostics.iter().any(Diagnostic::is_error) {
-            Vec::new()
-        } else {
-            match mode {
-                Mode::Build => compile_builds(&world, builds)
-                    .into_iter()
-                    .map(|o| {
-                        let result = o
-                            .result
-                            .map(|c| (layout.filter(c.diagnostics.clone()), Done::Compiled(c)));
-                        (o.variant, o.target, result)
-                    })
-                    .collect(),
-                Mode::Check => check_builds(&world, builds)
-                    .into_iter()
-                    .map(|o| {
-                        let result = o.result.map(|c| {
-                            let errors = c.has_errors();
-                            let writes = c.writes;
-                            (
-                                layout.filter(c.diagnostics),
-                                Done::Checked {
-                                    errors,
-                                    writes,
-                                    files: c.files,
-                                },
-                            )
-                        });
-                        (o.variant, o.target, result)
-                    })
-                    .collect(),
-            }
-        };
+    let outputs: Vec<(BuildKey, Outcome)> = if diagnostics.iter().any(Diagnostic::is_error) {
+        Vec::new()
+    } else {
+        match mode {
+            Mode::Build => compile_versioned_builds(&world, builds)
+                .into_iter()
+                .map(|o| {
+                    let result = o
+                        .result
+                        .map(|c| (layout.filter(c.diagnostics.clone()), Done::Compiled(c)));
+                    (o.build, result)
+                })
+                .collect(),
+            Mode::Check => check_versioned_builds(&world, builds)
+                .into_iter()
+                .map(|o| {
+                    let result = o.result.map(|c| {
+                        let errors = c.has_errors();
+                        let writes = c.writes;
+                        (
+                            layout.filter(c.diagnostics),
+                            Done::Checked {
+                                errors,
+                                writes,
+                                files: c.files,
+                            },
+                        )
+                    });
+                    (o.build, result)
+                })
+                .collect(),
+        }
+    };
 
     // A diagnostic of a file that several builds read is shown once.
     let mut seen: HashSet<Diagnostic> = diagnostics.iter().cloned().collect();
     // Each build, in the manifest's order, with what it compiled to, or
     // `None` when it failed.
     let mut written = Vec::new();
-    for (variant, target, result) in outputs {
-        let name = build_name(variant.as_ref(), target);
-        let path = world.manifest().output_path(variant.as_ref(), target);
+    for (key, result) in outputs {
+        let name = build_name(&key);
+        let path = world.manifest().versioned_output_path(
+            key.variant.as_ref(),
+            key.version.as_ref(),
+            key.target,
+        );
         let (found, compiled) = match result {
             Ok(outcome) => outcome,
             Err(cancelled) => {
@@ -173,7 +176,7 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
                     Mode::Check => "check",
                 };
                 diagnostics.push(error(format!("the {what} of {name} failed: {cancelled}")));
-                written.push((variant, target, path, None));
+                written.push((key, path, None));
                 continue;
             }
         };
@@ -182,7 +185,7 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
                 diagnostics.push(diagnostic.clone());
             }
         }
-        written.push((variant, target, path, Some(compiled)));
+        written.push((key, path, Some(compiled)));
     }
     report.diagnostics(&world, &diagnostics);
 
@@ -197,8 +200,8 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
         .cloned()
         .collect();
     let mut failed = diagnostics.iter().any(Diagnostic::is_error);
-    for (variant, target, path, compiled) in written {
-        let build = |path: Option<&str>, status| Build::new(&variant, target, path, status);
+    for (key, path, compiled) in written {
+        let build = |path: Option<&str>, status| Build::new(&key, path, status);
         let compiled = match compiled {
             None => {
                 let path = (mode == Mode::Build).then_some(path).flatten();
@@ -240,13 +243,13 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
 }
 
 /// The builds that the arguments choose among those the manifest declares,
-/// in the manifest's order: all of them unless `--variant` or `--target`
-/// narrows them.
+/// in the manifest's order: all of them unless `--variant`, `--versions` or
+/// `--target` narrows them.
 fn select(
     manifest: &Manifest,
-    declared: &[(Option<Name>, Target)],
+    declared: &[BuildKey],
     args: &ProjectArgs,
-) -> Result<Vec<(Option<Name>, Target)>, Diagnostic> {
+) -> Result<Vec<BuildKey>, Diagnostic> {
     let names = || -> String {
         let names: Vec<_> = manifest
             .variants
@@ -269,12 +272,26 @@ fn select(
             });
         }
     }
+    let versions = &manifest.project.versions;
+    for version in &args.versions {
+        if !versions.iter().any(|v| v.v.as_str() == version) {
+            let error = error(format!("the manifest declares no version `{version}`"));
+            let names: Vec<_> = versions.iter().map(|v| format!("`{}`", v.v)).collect();
+            return Err(if versions.is_empty() {
+                error.with_hint("declare versions in `[project]`, as `versions = [\"A\", \"B\"]`")
+            } else {
+                error.with_hint(format!("it declares {}", names.join(", ")))
+            });
+        }
+    }
     let builds: Vec<_> = declared
         .iter()
-        .filter(|(variant, target)| {
-            let variant = variant.as_ref().map_or("", Name::as_str);
+        .filter(|build| {
+            let variant = build.variant.as_ref().map_or("", Name::as_str);
+            let version = build.version.as_ref().map_or("", Name::as_str);
             (args.variants.is_empty() || args.variants.iter().any(|v| v == variant))
-                && (args.targets.is_empty() || args.targets.contains(target))
+                && (args.versions.is_empty() || args.versions.iter().any(|v| v == version))
+                && (args.targets.is_empty() || args.targets.contains(&build.target))
         })
         .cloned()
         .collect();
@@ -293,16 +310,22 @@ fn select(
     Ok(builds)
 }
 
-/// A build as the messages of `folio build` name it: `exam (pdf)`.
-fn build_name(variant: Option<&Name>, target: Target) -> String {
-    build_name_text(variant.map(Name::as_str), target.as_str())
+/// A build as the messages of `folio build` name it: `exam (pdf)`, or
+/// `exam, version B (pdf)`.
+fn build_name(build: &BuildKey) -> String {
+    build_name_text(
+        build.variant.as_ref().map(Name::as_str),
+        build.version.as_ref().map(Name::as_str),
+        build.target.as_str(),
+    )
 }
 
-/// [`build_name`] of a variant and target given by name.
-fn build_name_text(variant: Option<&str>, target: &str) -> String {
-    match variant {
-        Some(variant) => format!("{variant} ({target})"),
-        None => format!("the document ({target})"),
+/// [`build_name`] of a variant, version and target given by name.
+fn build_name_text(variant: Option<&str>, version: Option<&str>, target: &str) -> String {
+    let variant = variant.unwrap_or("the document");
+    match version {
+        Some(version) => format!("{variant}, version {version} ({target})"),
+        None => format!("{variant} ({target})"),
     }
 }
 
@@ -620,6 +643,8 @@ struct Document {
 struct Build {
     /// The variant, or `None` for a project without variants.
     variant: Option<String>,
+    /// The version, or `None` for a project without versions.
+    version: Option<String>,
     /// The target, as the manifest names it.
     target: &'static str,
     /// The output's path in the project, if the build has one.
@@ -629,10 +654,11 @@ struct Build {
 }
 
 impl Build {
-    fn new(variant: &Option<Name>, target: Target, path: Option<&str>, status: Status) -> Self {
+    fn new(build: &BuildKey, path: Option<&str>, status: Status) -> Self {
         Self {
-            variant: variant.as_ref().map(|v| v.as_str().to_owned()),
-            target: target.as_str(),
+            variant: build.variant.as_ref().map(|v| v.as_str().to_owned()),
+            version: build.version.as_ref().map(|v| v.as_str().to_owned()),
+            target: build.target.as_str(),
             path: path.map(str::to_owned),
             status,
         }
@@ -692,7 +718,11 @@ impl Report {
     /// Reports what became of a build's output.
     fn build(&mut self, build: Build) {
         let Some(document) = &mut self.json else {
-            let name = build_name_text(build.variant.as_deref(), build.target);
+            let name = build_name_text(
+                build.variant.as_deref(),
+                build.version.as_deref(),
+                build.target,
+            );
             match (build.status, &build.path) {
                 (Status::Written, Some(path)) => eprintln!("wrote {path}"),
                 (Status::Skipped, Some(path)) => {
@@ -746,14 +776,44 @@ mod tests {
 
     fn selected(manifest: &str, flags: &[&str]) -> Result<Vec<String>, String> {
         let world = World::new(manifest).unwrap();
-        select(world.manifest(), &world.builds(), &args(flags))
-            .map(|builds| {
-                builds
-                    .iter()
-                    .map(|(v, t)| build_name(v.as_ref(), *t))
-                    .collect()
-            })
+        select(world.manifest(), &world.versioned_builds(), &args(flags))
+            .map(|builds| builds.iter().map(build_name).collect())
             .map_err(|e| e.message.to_string())
+    }
+
+    /// SPEC §6.4, §12.1: every variant once per version, narrowed by
+    /// `--versions`.
+    #[test]
+    fn selects_versions() {
+        let versioned = MANIFEST.replace(
+            "compiler = \"0.0.0\"\n",
+            "compiler = \"0.0.0\"\nversions = [\"A\", \"B\"]\n",
+        );
+        assert_eq!(
+            selected(&versioned, &["--target", "pdf"]).unwrap(),
+            [
+                "exam, version A (pdf)",
+                "markscheme, version A (pdf)",
+                "exam, version B (pdf)",
+                "markscheme, version B (pdf)",
+            ]
+        );
+        assert_eq!(
+            selected(&versioned, &["--versions", "B", "--variant", "exam"]).unwrap(),
+            ["exam, version B (pdf)", "exam, version B (docx)"]
+        );
+        assert_eq!(
+            selected(&versioned, &["--versions", "C"]).unwrap_err(),
+            "the manifest declares no version `C`"
+        );
+        assert_eq!(
+            selected(MANIFEST, &["--versions", "A"]).unwrap_err(),
+            "the manifest declares no version `A`"
+        );
+        assert_eq!(
+            selected(MANIFEST, &["--variant", "exam"]).unwrap(),
+            ["exam (pdf)", "exam (docx)"]
+        );
     }
 
     #[test]
