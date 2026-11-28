@@ -55,8 +55,9 @@
 //!   flow is built at the block's width and discarded: hidden content
 //!   keeps that height with nothing drawn; answer space keeps its box and
 //!   takes its ruled lines, its `answer-height`, or the content's height
-//!   times `answer-scale`. [`Pages::spaces`] holds the heights, which the
-//!   Office writers will take.
+//!   times `answer-scale`, whole, or, with `answer-breakable: true`, in
+//!   slices a page break may fall between. [`Pages::spaces`] holds the
+//!   heights, which the Office writers will take.
 //! - **Fragments**: each page a [`Fragment`](folio_component::Fragment)
 //!   of the master's size, holding its body, which holds a fragment for
 //!   each block with its background, borders, glyph runs, baselines and
@@ -301,7 +302,8 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let (measured, measured_blocks) = measured_content(text);
     for (i, (paragraph, layout)) in text.paragraphs.iter().zip(&lines.paragraphs).enumerate() {
         if !measured.contains(&i) {
-            report_lines(db, build.project(db), paragraph, layout);
+            let objects = &jobs[i].0.objects;
+            report_lines(db, build.project(db), props, paragraph, layout, objects);
         }
     }
     // A grid whose tracks need more than its width is overfull (SPEC
@@ -538,28 +540,57 @@ pub const DETAIL_CODES: [&str; 6] = [
 ];
 
 /// Reports a paragraph's overfull and underfull lines (SPEC §7.9).
+/// `objects` holds the sizes of its objects, in order, where they are
+/// known. An overfull line that an object overflows, as an inline formula
+/// in parentheses or an image wider than the line, is reported at the
+/// object; the hints suggest only settings that are not on already.
 fn report_lines(
     db: &dyn Db,
     project: Project,
+    props: &Properties,
     paragraph: &TextParagraph,
     layout: &ParagraphLayout,
+    objects: &[ObjectMetrics],
 ) {
+    fn value<'s>(style: &'s ComputedStyle, props: &'s Properties, name: &str) -> Option<&'s Value> {
+        style.value(props, props.builtin(name))
+    }
+    let justify = matches!(
+        value(&paragraph.style, props, "justify"),
+        Some(Value::Bool(true))
+    );
+    // Hyphenation is on where every run of the paragraph's text has it:
+    // `hyphenate: auto` hyphenates justified paragraphs (SPEC §7.2).
+    let hyphenate = std::iter::once(&paragraph.style)
+        .chain(paragraph.segments.iter().map(|s| &s.style))
+        .all(|style| match value(style, props, "hyphenate") {
+            Some(Value::Bool(b)) => *b,
+            _ => justify,
+        });
     for line in &layout.lines {
         if line.overflow > Abs::zero() {
+            let message = eco_format!(
+                "this line is overfull: {:.1}pt wider than its space",
+                line.overflow.to_pt()
+            );
+            let (span, hint) = match overflowing_object(paragraph, line, objects) {
+                Some(object) => (object.span.into(), object_hint(object)),
+                None => (
+                    line_span(db, project, paragraph, line),
+                    if hyphenate {
+                        "there is no break that fits; reword the text, or break the long word \
+                         with a soft hyphen"
+                    } else {
+                        "there is no break that fits; allow hyphenation with \
+                         `hyphenate: true`, or reword the text"
+                    },
+                ),
+            };
             diag::report(
                 db,
-                Diagnostic::warning(
-                    line_span(db, project, paragraph, line),
-                    eco_format!(
-                        "this line is overfull: {:.1}pt wider than its space",
-                        line.overflow.to_pt()
-                    ),
-                )
-                .with_code(codes::OVERFULL_LINE)
-                .with_hint(
-                    "there is no break that fits; allow hyphenation with \
-                     `hyphenate: true`, or reword the text",
-                ),
+                Diagnostic::warning(span, message)
+                    .with_code(codes::OVERFULL_LINE)
+                    .with_hint(hint),
             );
         } else if line.underfull {
             let message = if line.glue.get() > 0.0 {
@@ -571,16 +602,57 @@ fn report_lines(
             } else {
                 "this line is underfull: it has no spaces to stretch to its width".into()
             };
+            // Only the lines of a justified paragraph are underfull.
+            let mut ways: Vec<&str> = Vec::new();
+            if !hyphenate {
+                ways.push("allow hyphenation with `hyphenate: true`");
+            }
+            ways.push("set `justify: false`");
+            ways.push("reword the text");
+            let hint = match ways.as_slice() {
+                [only] => (*only).to_string(),
+                [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
+                [] => unreachable!("rewording is always a way"),
+            };
             diag::report(
                 db,
                 Diagnostic::warning(line_span(db, project, paragraph, line), message)
                     .with_code(codes::UNDERFULL_LINE)
-                    .with_hint(
-                        "allow hyphenation with `hyphenate: true`, set `justify: false`, \
-                         or reword the text",
-                    ),
+                    .with_hint(hint),
             );
         }
+    }
+}
+
+/// The object an overfull line overflows with: the widest object on the
+/// line, where it is at least as wide as the overflow and more than half
+/// the line's space, so that without it the line would fit. `None` where
+/// the objects' sizes are not known, or the text overflows.
+fn overflowing_object<'a>(
+    paragraph: &'a TextParagraph,
+    line: &Line,
+    objects: &[ObjectMetrics],
+) -> Option<&'a TextObject> {
+    let space = line.width - line.overflow;
+    paragraph
+        .objects
+        .iter()
+        .zip(objects)
+        .filter(|(o, _)| line.range.start <= o.at && o.at < line.range.end)
+        .max_by(|(_, a), (_, b)| a.width.cmp(&b.width))
+        .filter(|(_, m)| m.width >= line.overflow && m.width > space * 0.5)
+        .map(|(o, _)| o)
+}
+
+/// The hint for an object wider than its line.
+fn object_hint(object: &TextObject) -> &'static str {
+    if object.math.is_some() {
+        "an inline formula breaks only after a relation or an operator at its top \
+         level; split it into several formulas, or set it as a display"
+    } else if object.image.is_some() {
+        "make the image narrower with `width`"
+    } else {
+        "nothing on this line can break; make what it holds narrower"
     }
 }
 

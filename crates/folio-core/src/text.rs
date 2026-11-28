@@ -28,6 +28,14 @@
 //!   list item's bullet, a figure's word and number) starts its first
 //!   paragraph, or its caption, in the element's style
 //!   ([`crate::resolve`]). Both stand for the whole node in the span map.
+//! - **Render templates** (SPEC §5.3): an element the Style stage gave a
+//!   template is collected from its expansion: its header, a block of the
+//!   part `header`, then its body in the element's own block. Text,
+//!   numbers and inline fields run into paragraphs; slots are the blocks
+//!   of their parts; rows and grids are grids of cells, rules and spaces
+//!   empty blocks that layout draws with their borders and heights. The
+//!   element's marker is not set: the template places its number with
+//!   `counter()`.
 //! - **Quotation marks**: a quote in markup becomes its language's mark,
 //!   opening or closing by the characters around it ([`Lang::quotes`]).
 //! - **Fonts**: each run of one style is set in its `font` chain, split by
@@ -65,7 +73,8 @@ use crate::locate::StyledChildren;
 use crate::pipeline::{resolution, step_styled};
 use crate::resolve::{Resolution, UNRESOLVED};
 use crate::style::{
-    Child, ComputedStyle, Properties, StyledNode, content_elements, styled_children,
+    BlockKind, Child, ComputedStyle, Expansion, HEADER_PART, Piece as TemplatePiece, Properties,
+    StyledNode, TemplateBlock, content_elements, styled_children,
 };
 use crate::variants::select::{Measure, Space};
 
@@ -499,6 +508,8 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         notes: Vec::new(),
         in_note: false,
         continued: Vec::new(),
+        template_grids: 0,
+        placed: Vec::new(),
         spaces,
         measuring: None,
         measured: Vec::new(),
@@ -566,6 +577,13 @@ struct Collector<'a> {
     /// The paragraph of each footnote's continuation mark, as
     /// [`Text::continued`].
     continued: Vec<Option<usize>>,
+    /// The content fields the template of the innermost templated element
+    /// being collected has placed: each is collected where it is first
+    /// placed only, so that no element instance is collected twice.
+    placed: Vec<Name>,
+    /// How many grids the template of the innermost templated element
+    /// being collected has made, which tells their locations apart.
+    template_grids: u64,
     /// The spaces Select made, by element instance and part.
     spaces: HashMap<(Location, Option<Name>), &'a Space>,
     /// The element whose content is being collected for measuring, which
@@ -711,6 +729,12 @@ impl Collector<'_> {
             block.table = None;
         }
         let owner = self.own(element);
+        if let Some(expansion) = &node.template {
+            self.templated(element, node, expansion);
+            self.owner = owner;
+            self.close();
+            return;
+        }
         // A marker that no paragraph of the element takes is dropped with
         // it. A space has no paragraph to take one.
         let markers = self.markers.len();
@@ -794,6 +818,357 @@ impl Collector<'_> {
             kind: space.kind,
             measure,
         });
+    }
+
+    /// Collects an element shown with a render template (SPEC §5.3): its
+    /// header, a block of the part [`HEADER_PART`], then its body, or its
+    /// content where the template has no body, in its own block, which is
+    /// open.
+    fn templated(&mut self, element: &Element, node: &StyledNode, expansion: &Expansion) {
+        // The grids of this instance are counted from its first, so that
+        // their locations do not depend on what comes before it.
+        let grids = std::mem::replace(&mut self.template_grids, 0);
+        let placed = std::mem::take(&mut self.placed);
+        self.templated_content(element, node, expansion);
+        self.template_grids = grids;
+        self.placed = placed;
+    }
+
+    fn templated_content(&mut self, element: &Element, node: &StyledNode, expansion: &Expansion) {
+        if let Some(header) = &expansion.header {
+            self.blocks.push(TextBlock {
+                style: header.style.clone(),
+                span: element.span,
+                location: element.location,
+                element: element.name.clone(),
+                part: Name::new(HEADER_PART),
+                children: EcoVec::new(),
+                table: None,
+            });
+            self.pieces(element, node, &header.items, &header.style);
+            self.close();
+        }
+        match &expansion.body {
+            Some(body) => self.pieces(element, node, body, &node.style),
+            None => self.element_content(element, node),
+        }
+    }
+
+    /// Collects the pieces of an expanded template into the innermost open
+    /// block, whose style is `style`: runs of text, numbers, inline fields
+    /// and images become paragraphs, and the other pieces blocks.
+    fn pieces(
+        &mut self,
+        element: &Element,
+        node: &StyledNode,
+        pieces: &[TemplatePiece],
+        style: &ComputedStyle,
+    ) {
+        let mut builder: Option<Builder> = None;
+        let mut anchored = Vec::new();
+        for piece in pieces {
+            match piece {
+                TemplatePiece::Text { text, style } => {
+                    let b = builder.get_or_insert_with(|| self.builder());
+                    b.push_part(text, style, element.span, TextSource::WHOLE, false);
+                }
+                TemplatePiece::Counter { style } => {
+                    if let Some(number) = self.counter_text(element) {
+                        let b = builder.get_or_insert_with(|| self.builder());
+                        b.push_part(&number, style, element.span, TextSource::WHOLE, false);
+                    }
+                }
+                TemplatePiece::Field { name, style } => {
+                    if !self.place(name) {
+                        continue;
+                    }
+                    let Some(eval::Value::Content(content)) = element.field(name.as_str()) else {
+                        continue;
+                    };
+                    let Some(part) = part_node(node, name) else {
+                        continue;
+                    };
+                    let mut kids = StyledChildren::new(part);
+                    if is_inline(content) {
+                        let b = builder.get_or_insert_with(|| self.builder());
+                        self.inline(content, style, element.span, &mut kids, b, &mut anchored);
+                    } else {
+                        self.flush(builder.take(), style, element, &mut anchored);
+                        self.slot(element, node, name, content);
+                    }
+                }
+                TemplatePiece::Image {
+                    path,
+                    width,
+                    alt,
+                    style,
+                    span,
+                } => {
+                    let image = self.template_image(path, width, alt, *span);
+                    let b = builder.get_or_insert_with(|| self.builder());
+                    b.object_with(style, element, element.location, None, image);
+                }
+                TemplatePiece::Slot { name, .. } => {
+                    if !self.place(name) {
+                        continue;
+                    }
+                    self.flush(builder.take(), style, element, &mut anchored);
+                    if let Some(eval::Value::Content(content)) = element.field(name.as_str()) {
+                        self.slot(element, node, name, content);
+                    }
+                }
+                TemplatePiece::Block(block) => {
+                    self.flush(builder.take(), style, element, &mut anchored);
+                    self.template_block(element, node, block);
+                }
+            }
+        }
+        self.flush(builder, style, element, &mut anchored);
+    }
+
+    /// Records that the current template places a content field, and
+    /// whether it is the first time: a field placed twice is collected the
+    /// first time only.
+    fn place(&mut self, name: &Name) -> bool {
+        if self.placed.contains(name) {
+            return false;
+        }
+        self.placed.push(name.clone());
+        true
+    }
+
+    /// The number of an element as a template's `counter()` shows it: its
+    /// formatted number, or its values as `1.1` would show them where it
+    /// has no `numbering`. `None` for an element without a counter.
+    fn counter_text(&self, element: &Element) -> Option<EcoString> {
+        let number = self
+            .resolution
+            .number(crate::resolve::Target::element(element.location))?;
+        Some(match &number.number {
+            Some(text) => text.clone(),
+            None => number
+                .values
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(".")
+                .into(),
+        })
+    }
+
+    /// Adds the pieces of an inline element's template to the paragraph
+    /// it stands in: its header's, then its body's. A block a template
+    /// makes in a line, such as a row, gives its text only.
+    fn inline_pieces<'a>(
+        &mut self,
+        element: &'a Element,
+        node: &'a StyledNode,
+        pieces: &[TemplatePiece],
+        out: &mut Builder,
+        anchored: &mut Vec<Anchored<'a>>,
+    ) {
+        for piece in pieces {
+            match piece {
+                TemplatePiece::Text { text, style } => {
+                    out.push_part(text, style, element.span, TextSource::WHOLE, false);
+                }
+                TemplatePiece::Counter { style } => {
+                    if let Some(number) = self.counter_text(element) {
+                        out.push_part(&number, style, element.span, TextSource::WHOLE, false);
+                    }
+                }
+                TemplatePiece::Field { name, style } => {
+                    if !self.place(name) {
+                        continue;
+                    }
+                    // Blocks cannot stand in a line: a content field of
+                    // blocks is left out of an inline element's template.
+                    if let (Some(eval::Value::Content(content)), Some(part)) =
+                        (element.field(name.as_str()), part_node(node, name))
+                        && is_inline(content)
+                    {
+                        let mut kids = StyledChildren::new(part);
+                        self.inline(content, style, element.span, &mut kids, out, anchored);
+                    }
+                }
+                TemplatePiece::Slot { name, style } => {
+                    if !self.place(name) {
+                        continue;
+                    }
+                    let Some(eval::Value::Content(content)) = element.field(name.as_str()) else {
+                        continue;
+                    };
+                    let kids_node = if name.as_str() == BODY {
+                        Some(node)
+                    } else {
+                        part_node(node, name)
+                    };
+                    if let Some(kids_node) = kids_node
+                        && is_inline(content)
+                    {
+                        let mut kids = StyledChildren::new(kids_node);
+                        self.inline(content, style, element.span, &mut kids, out, anchored);
+                    }
+                }
+                TemplatePiece::Image {
+                    path,
+                    width,
+                    alt,
+                    style,
+                    span,
+                } => {
+                    let image = self.template_image(path, width, alt, *span);
+                    out.object_with(style, element, element.location, None, image);
+                }
+                TemplatePiece::Block(block) => {
+                    self.inline_pieces(element, node, &block.children, out, anchored);
+                }
+            }
+        }
+    }
+
+    /// Finishes a paragraph of a template's pieces, if one was started,
+    /// and collects the notes and floats anchored in it.
+    fn flush<'a>(
+        &mut self,
+        builder: Option<Builder>,
+        style: &ComputedStyle,
+        element: &Element,
+        anchored: &mut Vec<Anchored<'a>>,
+    ) {
+        let Some(builder) = builder else {
+            return;
+        };
+        self.finish(builder, style, element);
+        for (element, node, note) in std::mem::take(anchored) {
+            match note {
+                Some(index) => self.note(element, node, index),
+                None => self.element(element, node),
+            }
+        }
+    }
+
+    /// Collects the body or a part of an element where a template places
+    /// it: the body in the element's block, a part in a block of its own
+    /// in the part's style.
+    fn slot(&mut self, element: &Element, node: &StyledNode, name: &Name, content: &Content) {
+        if name.as_str() == BODY {
+            let mut kids = StyledChildren::new(node);
+            self.content(content, &node.style, element, &mut kids);
+            return;
+        }
+        let Some(part) = part_node(node, name) else {
+            return;
+        };
+        let mut kids = StyledChildren::new(part);
+        self.open(&part.style, element, Some(name.clone()));
+        self.content(content, &part.style, element, &mut kids);
+        self.close();
+        // A part shown as answer space has its space where the template
+        // places it (SPEC §6.3).
+        if let Some(space) = self
+            .spaces
+            .get(&(element.location, Some(name.clone())))
+            .copied()
+        {
+            self.space(space, element);
+        }
+    }
+
+    /// Collects a block of a template: a row or grid as a grid of cells
+    /// (SPEC §7.4), the others as blocks of their part.
+    fn template_block(&mut self, element: &Element, node: &StyledNode, block: &TemplateBlock) {
+        let table = match block.kind {
+            BlockKind::Row | BlockKind::Grid => Some(TableRole::Grid { header_rows: 0 }),
+            BlockKind::Cell => Some(TableRole::Cell(CellSpec {
+                colspan: 1,
+                rowspan: 1,
+                column: None,
+                row: None,
+            })),
+            _ => None,
+        };
+        // Layout lays a grid out by its location, so each grid of an
+        // instance has one of its own, made from the instance's.
+        let location = if block.kind.is_grid() {
+            self.template_grids += 1;
+            Location {
+                source: element.location.source,
+                instance: element.location.instance
+                    ^ 0x9e37_79b9_7f4a_7c15_u64.wrapping_mul(self.template_grids),
+            }
+        } else {
+            element.location
+        };
+        self.blocks.push(TextBlock {
+            style: block.style.clone(),
+            span: element.span,
+            location,
+            element: element.name.clone(),
+            part: Name::new(block.kind.part()),
+            children: EcoVec::new(),
+            table,
+        });
+        self.pieces(element, node, &block.children, &block.style);
+        self.close();
+    }
+
+    /// The image a template's `image(..)` names, read; `None`, with an
+    /// error at the primitive, for a file that is missing or not an image
+    /// Folio reads.
+    fn template_image(
+        &mut self,
+        path: &str,
+        width: &Value,
+        alt: &Option<EcoString>,
+        span: Span,
+    ) -> Option<TextImage> {
+        // Reported once per primitive, however many elements it shows in,
+        // and only where Folio lays the build out.
+        let report = |this: &mut Self, message: EcoString, error: bool| {
+            if this.laid_out {
+                let diagnostic = if error {
+                    Diagnostic::error(span, message.clone())
+                } else {
+                    Diagnostic::warning(span, message.clone()).with_hint(
+                        "convert the text to paths (outlines) in the program that made the image",
+                    )
+                };
+                this.report_once(eco_format!("template-image:{span:?}:{message}"), diagnostic);
+            }
+        };
+        let Some(project_path) = crate::project::ProjectPath::new(path) else {
+            report(
+                self,
+                eco_format!("`{path}` is not a path in the project"),
+                true,
+            );
+            return None;
+        };
+        let Some(file) = data_file(self.db, self.project, project_path) else {
+            report(self, eco_format!("the image `{path}` does not exist"), true);
+            return None;
+        };
+        match load_image(self.db, file) {
+            Ok(loaded) => {
+                if loaded.text {
+                    report(
+                        self,
+                        "the text of this SVG image is not drawn: Folio does not set text in SVG images yet".into(),
+                        false,
+                    );
+                }
+                Some(TextImage {
+                    loaded: loaded.clone(),
+                    width: width.clone(),
+                    alt: alt.clone(),
+                })
+            }
+            Err(message) => {
+                report(self, message.clone(), true);
+                None
+            }
+        }
     }
 
     /// The paragraph of the markers waiting for one, beside a display: in
@@ -928,8 +1303,11 @@ impl Collector<'_> {
                 let mut part_kids = StyledChildren::new(part_node);
                 self.open(&part_node.style, element, Some(field.clone()));
                 let markers = self.markers.len();
+                // An element shown with a template has no marker (SPEC
+                // §5.3): the template places its number.
                 if let Some(marker) = self.resolution.marker(element.location)
                     && marker.part.as_ref() == Some(&field)
+                    && node.template.is_none()
                 {
                     self.markers.push(Pending {
                         text: marker.text.clone(),
@@ -1125,6 +1503,22 @@ impl Collector<'_> {
         if !is_builtin(&element.name, "image") {
             self.check_width(element, style);
         }
+        if element.kind == ElementKind::Inline
+            && let Some(expansion) = &node.template
+            && expansion.body.is_some()
+        {
+            let owner = self.own(element);
+            let placed = std::mem::take(&mut self.placed);
+            if let Some(header) = &expansion.header {
+                self.inline_pieces(element, node, &header.items, out, anchored);
+            }
+            if let Some(body) = &expansion.body {
+                self.inline_pieces(element, node, body, out, anchored);
+            }
+            self.placed = placed;
+            self.owner = owner;
+            return;
+        }
         match element.kind {
             ElementKind::Inline => {}
             // A footnote: its marker here, its blocks at the foot of the
@@ -1179,12 +1573,25 @@ impl Collector<'_> {
             out.raw(text, style, element.span);
             return;
         }
-        // A total shows the sum Resolve gave it (SPEC §4.5).
-        if is_builtin(&element.name, "total") {
-            let text = match self.resolution.query(element.location).map(|q| &q.result) {
-                Some(crate::resolve::QueryResult::Total(text)) => text.as_str(),
-                _ => UNRESOLVED,
-            };
+        // A total shows the sum Resolve gave it (SPEC §4.5), and a
+        // component's aggregate its value (D-72-1).
+        let value = match self.resolution.query(element.location).map(|q| &q.result) {
+            Some(crate::resolve::QueryResult::Total(text)) => Some(text.as_str()),
+            _ => None,
+        };
+        let aggregate = || {
+            element.name.namespace.as_ref().is_some_and(|namespace| {
+                crate::db::component_host(self.db, self.project)
+                    .as_ref()
+                    .and_then(|host| {
+                        host.components()
+                            .find(|c| &c.manifest.namespace() == namespace)
+                    })
+                    .is_some_and(|c| c.aggregate_decl(element.name.name.as_str()).is_some())
+            })
+        };
+        if value.is_some() || is_builtin(&element.name, "total") || aggregate() {
+            let text = value.unwrap_or(UNRESOLVED);
             out.push_part(text, style, element.span, TextSource::WHOLE, false);
             return;
         }
@@ -1688,6 +2095,13 @@ impl Builder {
         let mut buf = [0; 4];
         self.push(mark.encode_utf8(&mut buf), &quote.style, quote.span);
     }
+}
+
+/// The node of an element's part `name`, if it has one.
+fn part_node<'a>(node: &'a StyledNode, name: &Name) -> Option<&'a StyledNode> {
+    node.children
+        .iter()
+        .find(|child| matches!(&child.name, crate::style::NodeName::Part(n) if n == name))
 }
 
 /// The text of a `raw` element without the line breaks it ends with.

@@ -125,7 +125,6 @@ fn lists_the_warnings_for_what_is_not_supported() {
         warning(&not_implemented("baseline-grid"), "baseline-grid: 12pt;"),
         warning(&not_implemented("header"), "header: \"Exam\";"),
         warning(&not_implemented("placement"), "placement: top;"),
-        warning(&not_implemented("template"), "template: \"bold\";"),
     ];
     let mut got = located(&world, &compiled);
     got.sort();
@@ -185,20 +184,6 @@ fn rules_of_other_targets_and_other_pseudo_classes() {
             "`wrap-gap` is not implemented yet, so this declaration has no effect",
         ]
     );
-}
-
-#[test]
-fn a_render_block_is_reported_in_a_laid_out_build() {
-    let world = world("render strong {\n  body: slot(body);\n}\n", "Text.\n");
-    let message = "render templates are not implemented yet, so this `render` block has no effect";
-    let pdf: Vec<String> = compile(&world, Target::Pdf)
-        .diagnostics
-        .iter()
-        .map(|d| d.message.to_string())
-        .collect();
-    assert_eq!(pdf, [message]);
-    let docx = compile(&world, Target::Docx);
-    assert!(docx.diagnostics.iter().all(|d| d.message != message));
 }
 
 #[test]

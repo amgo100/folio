@@ -19,7 +19,7 @@
 //! element in a tree, and [`sum`] totals a field over them.
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{BODY, ElementKind, Location, QualifiedName};
+use folio_component::{BODY, ElementKind, Location, Name, QualifiedName, Value as Plain};
 use folio_syntax::Span;
 
 use crate::diag::Diagnostic;
@@ -91,6 +91,12 @@ pub(super) enum Kind {
     List,
     /// A total of a field, shown with a decimal marker.
     Total { field: EcoString, marker: char },
+    /// A component's aggregate (D-72-1), shown with a decimal marker.
+    Aggregate {
+        namespace: Name,
+        name: Name,
+        marker: char,
+    },
 }
 
 /// Whether an element is the one a query names. A query stores the
@@ -250,6 +256,27 @@ pub fn format(sum: Sum, marker: char) -> EcoString {
             text.replace('.', marker.encode_utf8(&mut [0; 4])).into()
         }
     }
+}
+
+/// An aggregate's value as the text shows it: a number as a total shows
+/// it, a string as it is; `None` for a value that has no text in every
+/// language, such as a boolean or a list.
+pub fn show(value: &Plain, marker: char) -> Option<EcoString> {
+    Some(match value {
+        Plain::Int(n) => format(Sum::Int(*n), marker),
+        Plain::Number(x) => format(Sum::Float(x.get()), marker),
+        Plain::Str(text) => text.clone(),
+        _ => return None,
+    })
+}
+
+/// The warning for an aggregate that gives no value the text can show.
+pub(super) fn no_value(query: Span, name: &QualifiedName) -> Diagnostic {
+    Diagnostic::warning(
+        query,
+        eco_format!("aggregate `{name}` gives no value that can be shown, so it shows ??"),
+    )
+    .with_hint("its component gives no number or string for this document")
 }
 
 /// The warning for a total in a numbering group whose common tree could
