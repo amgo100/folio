@@ -18,7 +18,11 @@
 //! (TeX's model, *The TeXbook*, chapter 14). It runs in up to three passes:
 //! without hyphenation and with a strict tolerance; with hyphenation and a
 //! looser one; and a final pass that accepts any line, preferring loose
-//! lines to overfull ones, so that every paragraph is broken.
+//! lines to overfull ones, so that every paragraph is broken. Lines that
+//! no glue can stretch to their width are all infinitely bad in TeX's
+//! measure; the final pass ranks them by how much of the line they leave
+//! empty, so that a paragraph of wide unbreakable objects does not set a
+//! lone fragment on a line of its own.
 //!
 //! Widths are given per line index, the last repeating for the lines after
 //! it, so a shape that changes from line to line (text wrap, §7.7) breaks
@@ -136,6 +140,14 @@ const PRETOLERANCE: f64 = 100.0;
 const TOLERANCE: f64 = 200.0;
 /// The badness of a line that cannot stretch far enough.
 pub const INF_BAD: f64 = 10_000.0;
+/// How much more an infinitely bad line costs for each part of it left
+/// empty, squared: of two lines that cannot be stretched to their width,
+/// as when a line holds one word or an object wider than its space, the
+/// emptier is the worse, so the final pass does not set a lone fragment on
+/// a line of its own to keep the others fuller (#351). At most this many
+/// times plus one the demerits of a line of [`INF_BAD`], which stays below
+/// [`OVERFULL_DEMERITS`].
+const EMPTY_DEMERITS: f64 = 100.0;
 /// The demerits of an overfull line in the final pass: more than any
 /// number of loose lines a paragraph could otherwise have.
 const OVERFULL_DEMERITS: f64 = 1e12;
@@ -429,8 +441,16 @@ pub fn demerits(
         let overflow = measure.overflow();
         OVERFULL_DEMERITS * (1.0 + overflow * overflow)
     } else {
-        let d = LINE_PENALTY + measure.badness();
-        d * d
+        let badness = measure.badness();
+        let d = LINE_PENALTY + badness;
+        let d = d * d;
+        // Only the final pass takes a line this bad.
+        if badness >= INF_BAD && measure.width > 0.0 {
+            let empty = ((measure.width - measure.natural) / measure.width).clamp(0.0, 1.0);
+            d * (1.0 + EMPTY_DEMERITS * (empty * empty))
+        } else {
+            d
+        }
     };
     if end.kind != BreakKind::Mandatory {
         if end.penalty >= 0.0 {
