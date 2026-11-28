@@ -824,5 +824,5 @@ fn separator_rows() {
         .map(ast::TableRow::is_separator)
         .collect();
     assert_eq!(rows, [false, true, true, false]);
-    assert!(!first::<ast::TableRow>(&self::root("| :: |\n")).is_separator());
+    assert!(!first::<ast::TableRow<'_>>(&self::root("| :: |\n")).is_separator());
 }
