@@ -761,6 +761,8 @@ impl std::error::Error for Cancelled {}
 /// function, as out of [`compile`]; in a long-lived world
 /// ([`WorldBuilder::long_lived`]) it is [`Failed::Internal`] instead, so
 /// that a language server or a preview that asks for one stage stays up.
+/// [`select`], [`resolve`], [`aggregate`] and [`pages_versioned`] still
+/// unwind.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Failed {
     /// An edit to the world cancelled it, as [`Cancelled`] says: run it
@@ -768,8 +770,9 @@ pub enum Failed {
     Cancelled,
     /// In a long-lived world, a query panicked. The diagnostic is the
     /// `internal-error` that [`compile`] reports for it, naming what the
-    /// panic said, even when the query panicked in another build that this
-    /// one waited for.
+    /// panic said. When the query panicked in another build that this one
+    /// waited for, salsa does not say which query it was, so the diagnostic
+    /// names the first panic of the world's revision.
     Internal(Diagnostic),
 }
 
@@ -1093,7 +1096,7 @@ fn record_panic(world: &World, message: &str) {
 /// for the build that ran it to record what the panic said. That build
 /// records it once it has unwound, which takes no longer than the parallel
 /// work it waits for on the way, such as shaping the paragraphs in hand.
-const PANIC_WAIT: Duration = Duration::from_secs(1);
+const PANIC_WAIT: Duration = Duration::from_secs(2);
 
 /// What a query that this thread waited for and that panicked said: salsa
 /// gives the waiting thread no payload, so it is the first panic recorded
