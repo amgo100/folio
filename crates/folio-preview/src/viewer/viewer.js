@@ -544,8 +544,10 @@ const visible = new Set();
 // The canvas every page is drawn on first, and copied from to the page's
 // own canvas once the frame is fit to show.
 const scratch = document.createElement("canvas");
-// When a page that kept its last frame is drawn again to show what it has.
+// When a page that kept its last frame is drawn again to show what it has,
+// and the time it is due.
 let lateTimer = 0;
+let lateAt = 0;
 
 // Draws a page at the current zoom. A frame with holes (glyphs or images
 // not here yet) does not replace the last frame shown without holes at
@@ -620,12 +622,21 @@ function draw(page) {
     page.shown = holes ? null : size;
     page.shownList = list;
     page.holes = holes;
+    // Holes that replaced a frame without them before SHOW_AFTER, which
+    // keeping the old frame is for; not those shown because what was
+    // missing took too long, or on a canvas with no frame of this size.
+    page.replaced = holes && kept && !late;
     page.waitingSince = 0;
-  } else if (!lateTimer) {
-    lateTimer = setTimeout(() => {
-      lateTimer = 0;
-      redrawVisible();
-    }, Math.max(0, page.waitingSince + SHOW_AFTER - now));
+  } else {
+    const due = page.waitingSince + SHOW_AFTER;
+    if (!lateTimer || due < lateAt) {
+      clearTimeout(lateTimer);
+      lateAt = due;
+      lateTimer = setTimeout(() => {
+        lateTimer = 0;
+        redrawVisible();
+      }, Math.max(0, due - now));
+    }
   }
   page.drawn = exact ? zoom * dpr : 0;
   return exact;
@@ -723,23 +734,26 @@ function redrawVisible() {
 // Tells a test or benchmark that drives the viewer (`folioPainted`, which
 // Playwright defines) what the visible pages show: the revision, whether
 // every one shows its current list (`current`), whether any shows a frame
-// with holes, and whether every one is exact, with no glyph drawn from
-// another quarter-pixel offset.
+// with holes (`holes`), and one that replaced a frame without them before
+// SHOW_AFTER (`replaced`, which `draw` never does), and whether every one
+// is exact, with no glyph drawn from another quarter-pixel offset.
 function painted() {
   if (typeof window.folioPainted !== "function") return;
   const dpr = window.devicePixelRatio || 1;
   let current = true;
   let holes = false;
+  let replaced = false;
   let exact = true;
   for (const i of visible) {
     const page = pages[i];
     if (!page || !page.list) continue;
     if (page.shownList !== page.list) current = false;
     if (page.holes) holes = true;
+    if (page.replaced) replaced = true;
     if (page.drawn !== zoom * dpr) exact = false;
   }
   const shown = [...visible].sort((a, b) => a - b);
-  window.folioPainted({ revision, current, holes, exact, visible: shown });
+  window.folioPainted({ revision, current, holes, replaced, exact, visible: shown });
 }
 
 // ---------------------------------------------------------------------
@@ -749,7 +763,11 @@ const observer = new IntersectionObserver((entries) => {
   for (const entry of entries) {
     const i = Number(entry.target.dataset.index);
     if (entry.isIntersecting) visible.add(i);
-    else visible.delete(i);
+    else {
+      visible.delete(i);
+      // Shown again, it waits afresh for what it lacks.
+      if (pages[i]) pages[i].waitingSince = 0;
+    }
   }
   redrawVisible();
   sendVisible();
@@ -784,7 +802,7 @@ function pageElement(i) {
     // The size of the frame without holes the canvas shows, the list it
     // shows, whether that has holes, and since when a frame with holes
     // has waited to replace it (`draw`).
-    shown: null, shownList: null, holes: false, waitingSince: 0,
+    shown: null, shownList: null, holes: false, replaced: false, waitingSince: 0,
   };
   pages[i] = page;
   return page;
@@ -1024,8 +1042,6 @@ function apply({ update, frames }) {
     const page = pages[i];
     if (decoded.kind === "list") {
       page.list = decoded.list;
-      // A frame with holes waits from now for this list.
-      page.waitingSince = 0;
       if (page.img) {
         page.img.remove();
         page.img = null;

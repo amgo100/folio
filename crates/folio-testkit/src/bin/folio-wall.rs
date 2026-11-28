@@ -286,6 +286,10 @@ fn painting() -> Prepared {
     let (painter, revision) = Painter::start(&preview.url(), 1);
     let file = dir.path().join("main.fol");
     let text = std::fs::read_to_string(&file).expect("the entry file");
+    assert!(
+        text.contains(WATCH_EDIT.0),
+        "the edit's text is in the acceptance exam"
+    );
     let edited = text.replacen(WATCH_EDIT.0, WATCH_EDIT.1, 1);
     Prepared::Painting(Box::new(Painting {
         painter,
