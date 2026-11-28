@@ -18,7 +18,11 @@ use crate::text::{GlyphRun, Location, SourceRef};
 /// Like its glyphs and shapes, a fragment names the source node it is the
 /// box of, so the span map leads from any box on a page back to source
 /// (SPEC §1.5, §12.2).
+///
+/// It is `#[non_exhaustive]`, so that a field added later breaks no code
+/// outside this crate: build one with [`Fragment::new`] (D-62-4).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct Fragment {
     /// The size of the box.
     pub size: Size,
@@ -46,6 +50,11 @@ pub struct Fragment {
     /// neutral. Keeps and break penalties are costs, not hard rules (SPEC
     /// §7.2).
     pub break_penalty_after: i32,
+    /// Whether the box is a copy of content shown elsewhere, such as the
+    /// header rows of a table set again at the top of a page (SPEC §7.4):
+    /// writers that tag output by meaning mark it as an artifact, not
+    /// content, so its structure holds the content once (§11.1).
+    pub artifact: bool,
 }
 
 impl Fragment {
@@ -61,6 +70,7 @@ impl Fragment {
             last_baseline: size.height,
             keep_with_next: false,
             break_penalty_after: 0,
+            artifact: false,
         }
     }
 

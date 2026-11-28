@@ -70,6 +70,7 @@
 mod cache;
 mod flow;
 mod footnote;
+mod grid;
 pub mod linebreak;
 mod master;
 mod math;
@@ -83,11 +84,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ecow::{EcoVec, eco_format};
-use folio_component::{Abs, Value};
+use folio_component::{Abs, Location, Value};
 use folio_syntax::{DiagSpan, SubRange};
 
 pub use self::cache::{Cache, Stats};
 pub use self::flow::{KEEP, UNBREAKABLE, WIDOW};
+pub use self::grid::{GridLayout, Grow, Place, Track, parse_tracks, place, size_tracks};
 pub use self::master::{BlockBox, BreakBefore, MAX_RULE_LINES, PageMaster, Rules, Sides};
 use self::math::maths;
 pub use self::math::{Display, LaidMath, MATH_FONT, Maths, Number};
@@ -97,8 +99,8 @@ pub use self::page::{
     pages, pages_through, paginate,
 };
 pub use self::paragraph::{
-    Align, Line, LineSlot, ObjectBreak, ObjectMetrics, ParagraphInput, ParagraphLayout,
-    ParagraphStyle, SegmentMetrics, layout_paragraph, object_offsets,
+    Align, Line, LineSlot, Measures, ObjectBreak, ObjectMetrics, ParagraphInput, ParagraphLayout,
+    ParagraphStyle, SegmentMetrics, layout_paragraph, measure_paragraph, object_offsets,
 };
 
 /// The objects the [`Regions::object`] hook sizes, here so that the test
@@ -136,6 +138,10 @@ pub struct Lines {
     /// broken with their inline formulas' sizes, and the page builder
     /// draws them and sizes the blocks of displays.
     pub maths: Maths,
+    /// The build's grids laid out in the body's width (SPEC §7.4): where
+    /// their cells stand and how wide their columns are. The slots of the
+    /// paragraphs in their cells are the cells' widths.
+    pub grids: EcoVec<GridLayout>,
 }
 
 /// The paragraphs of a build broken into lines of the body's width, or
@@ -151,25 +157,6 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     let maths = maths(db, build).unwrap_or_default();
 
     let width = PageMaster::of(&styled.page, props).body.size.width;
-    let (slots, display_widths) = flow::slots(
-        &text.root,
-        &text.notes,
-        props,
-        width,
-        text.paragraphs.len(),
-        &text.maths,
-    );
-    let slots: EcoVec<LineSlot> = slots.into();
-    // The paragraph builder places lines relative to their slots.
-    let widths: Vec<[LineSlot; 1]> = slots
-        .iter()
-        .map(|s| {
-            [LineSlot {
-                offset: Abs::zero(),
-                width: s.width,
-            }]
-        })
-        .collect();
     let mut metrics = FaceMetrics::new(fonts);
     let inputs: Vec<ParagraphInput<'_>> = text
         .paragraphs
@@ -178,6 +165,86 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
             let mut input = input_with(p, props, &mut metrics);
             input.objects = maths.metrics(&p.objects);
             input
+        })
+        .collect();
+    // Grids are laid out from the measures of their cells' paragraphs:
+    // their images at their natural widths, or at none where their width
+    // is a ratio of their lines' (SPEC §7.4).
+    let cache = db.layout_cache();
+    let measure = |i: usize| {
+        let paragraph = &text.paragraphs[i];
+        let input = &inputs[i];
+        if !paragraph.objects.iter().any(|o| o.image.is_some()) {
+            return cache.measures(input);
+        }
+        let mut input = input.clone();
+        let mut objects: Vec<ObjectMetrics> = input.objects.iter().copied().collect();
+        objects.resize(paragraph.objects.len(), ObjectMetrics::default());
+        for (object, metrics) in paragraph.objects.iter().zip(&mut objects) {
+            if let Some(image) = &object.image {
+                *metrics = match image.width {
+                    Value::Ratio(_) | Value::Number(_) => ObjectMetrics::default(),
+                    _ => {
+                        math::laid_image(image, object.location, Abs::pt(1e6), Abs::zero()).metrics
+                    }
+                };
+            }
+        }
+        input.objects = objects.into_iter().collect();
+        cache.measures(&input)
+    };
+    let display = |location: Location| {
+        let i = text
+            .maths
+            .iter()
+            .position(|m| m.display && m.location == location)?;
+        Some(maths.display(i)?.math.width)
+    };
+    let mut measurer = grid::Measurer {
+        props,
+        paragraph: &measure,
+        display: &display,
+        grids: HashMap::new(),
+    };
+    let (slots, display_widths, grids) = flow::slots_with(
+        &text.root,
+        &text.notes,
+        props,
+        width,
+        text.paragraphs.len(),
+        &text.maths,
+        Some(&mut measurer),
+    );
+    let slots: EcoVec<LineSlot> = slots.into();
+    // Images were sized before grids were laid out, in lines as wide as a
+    // grid: those in cells are sized again in their cells' widths, as the
+    // page builder draws them (SPEC §7.4).
+    let mut inputs = inputs;
+    for ((paragraph, input), slot) in text.paragraphs.iter().zip(&mut inputs).zip(&slots) {
+        if !paragraph.objects.iter().any(|o| o.image.is_some())
+            || input.objects.len() != paragraph.objects.len()
+        {
+            continue;
+        }
+        let indent = input.style.indent;
+        input.objects = paragraph
+            .objects
+            .iter()
+            .zip(input.objects.iter())
+            .map(|(object, metrics)| match &object.image {
+                Some(image) => math::laid_image(image, object.location, slot.width, indent).metrics,
+                None => *metrics,
+            })
+            .collect();
+    }
+    // The paragraph builder places lines relative to their slots.
+    let widths: Vec<[LineSlot; 1]> = slots
+        .iter()
+        .map(|s| {
+            [LineSlot {
+                offset: Abs::zero(),
+                width: s.width,
+            }]
         })
         .collect();
     let jobs: Vec<(ParagraphInput<'_>, &[LineSlot])> = inputs
@@ -197,6 +264,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         paragraphs,
         slots,
         maths,
+        grids: grids.into_iter().collect(),
     };
     // A layout pass of the page-number fixpoint reports nothing: the build
     // reports its own lines (`crate::pipeline::settle`).
@@ -205,6 +273,27 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     }
     for (paragraph, layout) in text.paragraphs.iter().zip(&lines.paragraphs) {
         report_lines(db, build.project(db), paragraph, layout);
+    }
+    // A grid whose tracks need more than its width is overfull (SPEC
+    // §7.4, §7.9).
+    for grid in &lines.grids {
+        if grid.overflow > Abs::zero() {
+            diag::report(
+                db,
+                Diagnostic::warning(
+                    grid.span,
+                    eco_format!(
+                        "this grid is overfull: its columns are {:.1}pt wider than its space",
+                        grid.overflow.to_pt()
+                    ),
+                )
+                .with_code(codes::OVERFULL_LINE)
+                .with_hint(
+                    "narrow its fixed `column-tracks`, or let its text break with \
+                     `hyphenate: true`",
+                ),
+            );
+        }
     }
     // A display wider than its block is an overfull line (SPEC §7.9).
     for (i, content) in display_widths {

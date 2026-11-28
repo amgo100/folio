@@ -396,3 +396,65 @@ fn stylesheets_choose_bold_or_arrowed_vectors() {
         );
     }
 }
+
+/// A comma written between two integers without spaces is kept as one the
+/// layout of the formula's text decides on (D-349-1).
+#[test]
+fn commas_between_numbers() {
+    assert_eq!(
+        formulas("$9,81$ $9, 81$ $1,2,3$ $1,5, 2,5$ $(0,5)$ $9,81^2$ $x,1$ $1.5,2$ $1,2^2,3$"),
+        [
+            "[num(9), num(,), num(81)]",
+            "[num(9), punct(,), num(81)]",
+            // Three or more integers joined so are a list.
+            "[num(1), punct(,), num(2), punct(,), num(3)]",
+            "[num(1), num(,), num(5), punct(,), num(2), num(,), num(5)]",
+            "[delim('(', [num(0), num(,), num(5)], ')')]",
+            "[num(9), num(,), attach([num(81)], sup: [num(2)])]",
+            "[x, punct(,), num(1)]",
+            "[num(1.5), punct(,), num(2)]",
+            "[num(1), punct(,), attach([num(2)], sup: [num(2)]), punct(,), num(3)]",
+        ]
+    );
+    // A name of math called with a number reads it as `(0,5)` does.
+    assert_eq!(
+        formulas("$sin(0,5)$ $sin(0, 5)$"),
+        [
+            "[op(sin), delim('(', [num(0), num(,), num(5)], ')')]",
+            "[op(sin), delim('(', [num(0), punct(,), num(5)], ')')]",
+        ]
+    );
+}
+
+/// With an uncertainty, `digits` is the uncertainty's significant figures,
+/// and the value is rounded to the place of its last one (D-349-2).
+#[test]
+fn digits_round_the_uncertainty_and_the_value_follows() {
+    assert_eq!(
+        formulas(
+            "#qty(1.5, \"m\", pm: 0.25, digits: 1) #qty(12.345, \"m\", pm: 0.021, digits: 2) \
+             $qty(9.8123, \"m s^-2\", pm: 0.0456, digits: 1)$ $num(1234.5, pm: 56, digits: 1)$ \
+             $qty(3.0041e8, \"m s^-1\", pm: 2.6e5, digits: 2)$ $num(0.4, pm: 3, digits: 1)$ \
+             $num(2.71828, pm: 0.096, digits: 1)$ $num(5, pm: 0.02, digits: 2)$"
+        ),
+        [
+            "[qty(1.5, pm: 0.3, unit: \"m\")]",
+            "[qty(12.345, pm: 0.021, unit: \"m\")]",
+            "[qty(9.81, pm: 0.05, unit: \"m s^-2\")]",
+            "[qty(1230, pm: 60)]",
+            "[qty(3.0041e8, pm: 2.6e5, unit: \"m s^-1\")]",
+            "[qty(0, pm: 3)]",
+            // The carry makes `0.096` `0.1`: the value follows to tenths.
+            "[qty(2.7, pm: 0.1)]",
+            // Padded to the uncertainty's place.
+            "[qty(5.000, pm: 0.020)]",
+        ]
+    );
+    // A value that rounds to zero needs no power of ten.
+    assert_eq!(
+        formulas("$num(1.5e3, pm: 2e4, digits: 1)$ $num(9.96e3, pm: 0.5e3, digits: 1)$"),
+        ["[qty(0, pm: 2e4)]", "[qty(10.0e3, pm: 0.5e3)]"]
+    );
+    // Without an uncertainty, `digits` rounds the value as before.
+    assert_eq!(formulas("$num(1.25, digits: 1)$"), ["[qty(1)]"]);
+}

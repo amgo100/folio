@@ -178,6 +178,31 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
             .positional(["variant", "body"])
             .body(content(Inline))
             .build(),
+        // Tables and layout grids (SPEC §7.4): a `grid` holds cells. Each
+        // block of its body is a cell, a `cell` element or another block
+        // standing for a cell of its own, placed by auto-flow, row by
+        // row. The tracks are the layout hint and property
+        // `column-tracks`, and the property `row-tracks`.
+        element("grid", Block, true)
+            .fields([FieldDecl::with_default(
+                name("header-rows"),
+                FieldType::Int,
+                Value::Int(0),
+            )])
+            .body(content(Blocks))
+            .build(),
+        // A cell of a grid: it spans `colspan` columns and `rowspan` rows,
+        // and stands at column `column` and row `row`, counted from 1,
+        // where they are given.
+        element("cell", Block, true)
+            .fields([
+                FieldDecl::with_default(name("colspan"), FieldType::Int, Value::Int(1)),
+                FieldDecl::with_default(name("rowspan"), FieldType::Int, Value::Int(1)),
+                optional("column", FieldType::Int),
+                optional("row", FieldType::Int),
+            ])
+            .body(content(Blocks))
+            .build(),
         // Queries (SPEC §4.5): `#outline(heading)` and `#list-of(figure)`
         // list the instances of an element the variant shows, and
         // `#total(question, "marks")` sums a field over them, on the

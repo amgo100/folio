@@ -128,7 +128,7 @@ impl<'a> NoteSet<'a> {
             carried: 0,
         };
         for carried in page.queue {
-            set.push(&carried.note, carried.from, None);
+            set.push(&carried.note, carried.from.clone(), None);
         }
         set.carried = set.runs.len();
         set
@@ -138,6 +138,55 @@ impl<'a> NoteSet<'a> {
     /// line it is.
     pub(super) fn anchor(&mut self, body: &Run<'a>, k: usize) {
         let leaf = &body.leaves[k];
+        // A part of a band of a grid anchors the notes of the lines of its
+        // cells it places, in the order of the cells (SPEC §7.4).
+        if let Some(piece) = &leaf.piece {
+            let flow: &'a super::flow::Flow = body.flow;
+            let super::flow::Leaf::Band(band) = &flow.items[leaf.item].leaf else {
+                return;
+            };
+            if piece.repeat {
+                return;
+            }
+            for cell_line in &piece.lines {
+                // Through the bands of grids nested in the cells.
+                let mut band: &'a super::flow::Band = band;
+                let mut found = None;
+                for (n, &(cell, item)) in cell_line.path.iter().enumerate() {
+                    let Some(leaf) = band.cells.get(cell).and_then(|c| c.flow.items.get(item))
+                    else {
+                        break;
+                    };
+                    match &leaf.leaf {
+                        super::flow::Leaf::Band(inner) if n + 1 < cell_line.path.len() => {
+                            band = inner;
+                        }
+                        super::flow::Leaf::Paragraph(info) if n + 1 == cell_line.path.len() => {
+                            found = Some(info);
+                        }
+                        _ => break,
+                    }
+                }
+                let Some(info) = found else {
+                    continue;
+                };
+                let Some(range) = info
+                    .layout
+                    .lines
+                    .get(cell_line.line)
+                    .map(|l| l.range.clone())
+                else {
+                    continue;
+                };
+                for anchor in &info.notes {
+                    let at = anchor.range.start;
+                    if range.start <= at && (at < range.end || at == range.start) {
+                        self.push(&anchor.note, State::START, Some(k));
+                    }
+                }
+            }
+            return;
+        }
         let Some((paragraph, line)) = &leaf.line else {
             return;
         };
@@ -156,7 +205,7 @@ impl<'a> NoteSet<'a> {
     }
 
     fn push(&mut self, note: &'a Arc<Note>, from: State, anchor: Option<usize>) {
-        let mut run = Run::new(self.page, &note.flow, from, false);
+        let mut run = Run::new(self.page, &note.flow, from.clone(), false);
         let mut n = 0;
         while run.get(n).is_some() {
             n += 1;
@@ -346,9 +395,9 @@ impl<'a> NoteSet<'a> {
             out.push(Carried {
                 note: run.note.clone(),
                 from: if m == 0 {
-                    run.from
+                    run.from.clone()
                 } else {
-                    run.run.state_at(m, run.from)
+                    run.run.state_at(m, &run.from)
                 },
             });
         }

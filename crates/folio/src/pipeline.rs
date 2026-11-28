@@ -29,15 +29,15 @@ use folio_core::db::{Build, Bytes, Db, build_output, source_file};
 use folio_core::diag::{self, Diagnostic};
 use folio_core::eval::Value;
 use folio_core::fonts::{Fonts, fonts};
-use folio_core::layout::{Pages, pages};
+use folio_core::layout::{GridLayout, Pages, lines, pages};
 use folio_core::model::document;
 use folio_core::pipeline::resolution;
 use folio_core::pipeline::step_styled;
 use folio_core::project::ProjectPath;
 use folio_core::resolve::Resolution;
 use folio_core::span_map::{source_ref, span};
-use folio_core::text::{Text, TextBlock, TextFlow, TextMath, text};
-use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Tag};
+use folio_core::text::{TableRole, Text, TextBlock, TextFlow, TextMath, text};
+use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Span2, Tag};
 use folio_syntax::{DiagSpan, Span, SubRange};
 
 /// What compiling a build produces, without its diagnostics, which
@@ -175,7 +175,11 @@ pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let text = text(db, build).as_ref()?;
     let project = build.project(db);
     let doc = document(db, project, build.variant(db).clone()).as_ref()?;
-    let structure = structure(&text.root, text);
+    let grids: Vec<GridLayout> = lines(db, build)
+        .as_ref()
+        .map(|l| l.grids.iter().cloned().collect())
+        .unwrap_or_default();
+    let structure = structure(&text.root, text, &grids);
     let plain = |field: &str| match doc.root.field(field) {
         Some(Value::Content(content)) => Some(content.plain_text()),
         Some(Value::Str(text)) => Some(text.clone()),
@@ -313,8 +317,73 @@ fn navigation(resolution: &Resolution) -> Navigation {
 /// inline formula, whose chunks are boxes too, and every image. A formula's
 /// text is its alternate description, a reading of its math tree
 /// ([`formula_alt`]). An image's is its `alt` text.
-pub(crate) fn structure(block: &TextBlock, text: &Text) -> Tag {
-    structure_of(block, text, false)
+///
+/// A grid is a table (SPEC §7.4, §11.1): a `TR` for each of its rows, as
+/// `grids` place its cells, holding the cells that start in it, `TH` in
+/// its header rows and `TD` in the others.
+pub(crate) fn structure(block: &TextBlock, text: &Text, grids: &[GridLayout]) -> Tag {
+    let s = Structure { text, grids };
+    s.of(block, false)
+}
+
+/// What the structure of a build is made from.
+struct Structure<'a> {
+    text: &'a Text,
+    grids: &'a [GridLayout],
+}
+
+impl Structure<'_> {
+    fn of(&self, block: &TextBlock, in_note: bool) -> Tag {
+        structure_of(block, self, in_note)
+    }
+
+    /// The rows of a grid's table: each a `TR` of the grid's location,
+    /// which no box names but the grid's own, holding its cells.
+    fn table(&self, grid: &TextBlock, tag: &mut Tag, in_note: bool) -> bool {
+        let Some(layout) = self.grids.iter().find(|g| g.location == grid.location) else {
+            return false;
+        };
+        let mut rows: Vec<Tag> = (0..layout.rows)
+            .map(|_| Tag {
+                boxless: true,
+                ..Tag::new(Role::TableRow, located(grid.span, grid.location))
+            })
+            .collect();
+        for (child, place) in grid.children.iter().zip(layout.places.iter()) {
+            // A block that stands for a cell without being one is its own
+            // node in a cell without a box. A paragraph of the grid's own
+            // has no block, which the document model never makes.
+            let TextFlow::Block(cell) = child else {
+                continue;
+            };
+            let span = Span2 {
+                rows: u32::try_from(place.rowspan).unwrap_or(1),
+                columns: u32::try_from(place.colspan).unwrap_or(1),
+            };
+            let role = if place.row < layout.header_rows {
+                Role::TableHeader(span)
+            } else {
+                Role::TableCell(span)
+            };
+            let inner = self.of(cell, in_note);
+            let cell_tag = if matches!(cell.table, Some(TableRole::Cell(_))) {
+                Tag { role, ..inner }
+            } else {
+                // It names no box, so the block's box is its node's.
+                Tag {
+                    boxless: true,
+                    children: vec![inner],
+                    ..Tag::new(role, Location::DETACHED)
+                }
+            };
+            if let Some(row) = rows.get_mut(place.row) {
+                row.children.push(cell_tag);
+            }
+        }
+        tag.children
+            .extend(rows.into_iter().filter(|row| !row.children.is_empty()));
+        true
+    }
 }
 
 /// The location a structure node of the element at `span`, instance
@@ -330,7 +399,8 @@ fn located(span: Span, location: Location) -> Location {
 /// The structure of a block, as [`structure`] gives it; `in_note` for the
 /// blocks of a footnote, whose own footnotes are not placed, so they have
 /// no node (SPEC §7.8).
-fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
+fn structure_of(block: &TextBlock, s: &Structure<'_>, in_note: bool) -> Tag {
+    let text = s.text;
     let role = role(&block.element, block.part.as_ref().map(|p| p.as_str()));
     // The node of its span, as its boxes name it, with its instance.
     let mut tag = Tag::new(role, located(block.span, block.location));
@@ -339,10 +409,17 @@ fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
         Role::Formula => tag.text = display_math(block, text).and_then(formula_alt),
         _ => {}
     }
+    if matches!(block.table, Some(TableRole::Grid { .. })) {
+        tag.role = Role::Table;
+        if s.table(block, &mut tag, in_note) {
+            return tag;
+        }
+        tag.role = Role::Group;
+    }
     for child in &block.children {
         match child {
             TextFlow::Block(block) => {
-                tag.children.push(structure_of(block, text, in_note));
+                tag.children.push(s.of(block, in_note));
             }
             TextFlow::Paragraph(index) => {
                 let paragraph = &text.paragraphs[*index];
@@ -366,7 +443,7 @@ fn structure_of(block: &TextBlock, text: &Text, in_note: bool) -> Tag {
                 // inside the paragraph's on the page of its anchor
                 // (SPEC §7.8, §11.1).
                 let notes = paragraph.notes.iter().filter(|_| !in_note).map(|anchor| {
-                    let mut note = structure_of(&text.notes[anchor.note], text, true);
+                    let mut note = s.of(&text.notes[anchor.note], true);
                     // Drawn after its page's body (SPEC §7.8).
                     note.foot = true;
                     (anchor.range.start, note)
