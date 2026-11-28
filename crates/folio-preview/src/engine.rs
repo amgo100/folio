@@ -693,25 +693,37 @@ impl Engine {
             return left;
         };
         let mut held = Vec::new();
+        let mut read = Vec::new();
         paths.retain(|path| {
             if released.contains(path) {
                 return true;
             }
-            let Some((rel, source)) = self
+            // A file that is gone is removed at once.
+            let Some(((rel, source), meta)) = self
                 .loader_path(path)
                 .and_then(|rel| Some((rel.clone(), world.source(&rel)?)))
+                .zip(std::fs::metadata(path).ok())
             else {
+                read.push(path.clone());
                 return true;
             };
-            let len = std::fs::metadata(path).map_or(0, |meta| meta.len());
-            let hold = torn(source.text().len() as u64, len, self.open.contains(path));
+            let hold = torn(
+                source.text().len() as u64,
+                meta.len(),
+                self.open.contains(path),
+            );
             if hold {
                 held.push(path.clone());
             } else {
+                read.push(path.clone());
                 left.push((path.clone(), rel, source));
             }
             !hold
         });
+        // Read whole, or gone: no longer held.
+        for path in read {
+            self.held.remove(&path);
+        }
         let until = Instant::now() + MAX_HOLD;
         for path in held {
             self.held.entry(path).or_insert(until);
@@ -722,8 +734,14 @@ impl Engine {
     /// Puts back the world's text of the sources that read torn
     /// ([`torn`]) after the loader read them, as their truncate or
     /// write may have come between the check of [`Self::hold`] and the
-    /// read, and holds them; takes them out of `changed`.
-    fn recheck(&mut self, sources: Vec<(PathBuf, String, Source)>, changed: &mut BTreeSet<String>) {
+    /// read, and holds them; takes them out of `changed`. Returns whether
+    /// it put any back: the world changed twice, which cancelled the check
+    /// running, so its revision must be checked again.
+    fn recheck(
+        &mut self,
+        sources: Vec<(PathBuf, String, Source)>,
+        changed: &mut BTreeSet<String>,
+    ) -> bool {
         let mut held = Vec::new();
         for (path, rel, old) in sources {
             if !changed.contains(&rel) {
@@ -742,10 +760,12 @@ impl Engine {
                 held.push(path);
             }
         }
+        let restored = !held.is_empty();
         let until = Instant::now() + MAX_HOLD;
         for path in held {
             self.held.entry(path).or_insert(until);
         }
+        restored
     }
 
     /// Builds the project's world from the disk.
@@ -826,7 +846,7 @@ impl Engine {
                 return;
             }
         };
-        self.recheck(sources, &mut update.changed);
+        let restored = self.recheck(sources, &mut update.changed);
         if project_file {
             // Cleared only here, where the change is a new revision
             // (`edited` below), whose check schedules the writes that the
@@ -847,7 +867,7 @@ impl Engine {
             // leaves the pages' hashes as they were (`Pages::hashes`).
             self.redraw = true;
         }
-        if !update.changed.is_empty() || project_file || !self.warnings.is_empty() {
+        if !update.changed.is_empty() || project_file || !self.warnings.is_empty() || restored {
             self.edited();
         }
     }
@@ -1526,4 +1546,22 @@ fn torn(old: u64, new: u64, writing: bool) -> bool {
 /// An error that points at no source.
 fn error(message: String) -> Diagnostic {
     Diagnostic::error(DiagSpan::detached(), message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::torn;
+
+    #[test]
+    fn reads_that_may_fall_inside_a_save_are_torn() {
+        // Empty while the world's text is not: torn, open or not.
+        assert!(torn(100, 0, false));
+        // Shorter: torn only while it is written.
+        assert!(torn(100, 40, true));
+        assert!(!torn(100, 40, false));
+        // As long or longer, or empty before: never.
+        assert!(!torn(100, 100, true));
+        assert!(!torn(100, 140, true));
+        assert!(!torn(0, 0, true));
+    }
 }
