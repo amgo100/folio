@@ -998,7 +998,7 @@ fn output_files<'a>(
 /// to as well. Names with `-` can meet in this way: variant `exam` of
 /// version `x-y` and variant `exam-x` of version `y`. Paths are compared
 /// normalised and without regard to ASCII case, as reserved files are.
-fn same_file<'a, T>(files: &'a [(EcoString, T)]) -> Option<&'a (EcoString, T)> {
+fn same_file<T>(files: &[(EcoString, T)]) -> Option<&(EcoString, T)> {
     let mut seen = std::collections::HashSet::new();
     files.iter().find(|(file, _)| {
         let normal = ProjectPath::new(file).map_or_else(|| file.to_string(), |p| p.as_str().into());

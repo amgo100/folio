@@ -858,11 +858,15 @@ pub fn check_versioned_builds(
     run_versioned_builds(world, builds, check_versioned)
 }
 
+/// Compiles or checks one versioned build: [`compile_versioned`] or
+/// [`check_versioned`].
+type VersionedRun<T> = fn(&World, Target, Option<&Name>, Option<&Name>) -> Result<T, Cancelled>;
+
 /// Runs `run` on builds in parallel, each on its own handle of the world.
 fn run_versioned_builds<T: Send>(
     world: &World,
     builds: impl IntoIterator<Item = BuildKey>,
-    run: fn(&World, Target, Option<&Name>, Option<&Name>) -> Result<T, Cancelled>,
+    run: VersionedRun<T>,
 ) -> Vec<VersionedOutput<T>> {
     let builds: Vec<_> = builds
         .into_iter()
