@@ -522,6 +522,33 @@ pub fn select(
     })
 }
 
+/// The value of a component's aggregate (SPEC §3.2) in a variant of the
+/// world's document for a target, named qualified (`exam.total-marks`):
+/// computed over the numbering group's common tree when the variant is in
+/// a group, and over the variant's own tree otherwise; or `None` when the
+/// component or aggregate is unknown, the document could not be styled,
+/// or the component gives no value. Fails only when an edit to the world
+/// cancels it.
+pub fn aggregate(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    name: &str,
+) -> Result<Option<folio_component::Value>, Cancelled> {
+    catch(world, || {
+        let db = world.db();
+        let (Some(namespace), Some(name)) = name
+            .split_once('.')
+            .map(|(n, a)| (Name::new(n), Name::new(a)))
+            .unwrap_or((None, None))
+        else {
+            return None;
+        };
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        folio_core::aggregate::aggregate(db, build, namespace, name).clone()
+    })
+}
+
 /// Resolves the counters, markers, labels and cross-references of a variant
 /// of the world's document for a target (SPEC §2.1, §4.5): each numbered
 /// element's values and number, the marker set before its content, what

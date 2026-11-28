@@ -7,16 +7,17 @@ use std::sync::Arc;
 
 use ecow::{EcoString, EcoVec, eco_format};
 
+use crate::aggregate::{AggregateDecl, LintReads};
 use crate::component::{
     Component, ComponentManifest, Declarations, INTERFACE_VERSION, SUPPORTED_INTERFACES,
 };
-use crate::element::{BODY, Body, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
+use crate::element::{BODY, Body, ElementKind, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
 use crate::instance::InstanceTree;
 use crate::lint::LintDiagnostic;
 use crate::names::{ComponentName, Name};
 use crate::property::PropertyDecl;
 use crate::template::TemplateDecl;
-use crate::value::{FieldType, PropertyType};
+use crate::value::{FieldType, PropertyType, Value};
 
 /// The components a compiler hosts, in registration order.
 ///
@@ -50,9 +51,17 @@ impl Registry {
         if !errors.is_empty() {
             return Err(errors);
         }
+        // Each aggregate is a bodiless inline element of the component
+        // (D-72-1), which content calls to show its value.
+        let aggregates = declarations
+            .aggregates
+            .iter()
+            .map(|a| ElementSchema::new(a.name.clone(), ElementKind::Inline))
+            .collect();
         self.components.push(Arc::new(Registered {
             manifest,
             declarations,
+            aggregates,
             component: Arc::new(component),
         }));
         Ok(())
@@ -96,6 +105,7 @@ impl Registry {
         check_elements(&mut cx, &decls.elements, &decls.locale_strings);
         check_properties(&mut cx, &decls.properties);
         check_templates(&mut cx, &decls.templates, &decls.elements);
+        check_aggregates(&mut cx, decls);
         cx.errors
     }
 }
@@ -113,6 +123,8 @@ pub struct Registered {
     pub manifest: ComponentManifest,
     /// What it adds through the extension points.
     pub declarations: Declarations,
+    /// The element of each aggregate, made from its declaration.
+    aggregates: Vec<ElementSchema>,
     component: Arc<dyn Component>,
 }
 
@@ -147,17 +159,37 @@ impl Registered {
         self.component.lint(view)
     }
 
+    /// The value of one of the component's aggregates over the instances
+    /// of its elements ([`Component::aggregate`]); `None` if it gives
+    /// none.
+    pub fn aggregate(&self, name: &str, view: &InstanceTree) -> Option<Value> {
+        self.component.aggregate(name, view)
+    }
+
+    /// The aggregate with a name, within the component's namespace.
+    pub fn aggregate_decl(&self, name: &str) -> Option<&AggregateDecl> {
+        self.declarations
+            .aggregates
+            .iter()
+            .find(|a| a.name.as_str() == name)
+    }
+
     /// The component's name.
     pub fn name(&self) -> &ComponentName {
         &self.manifest.name
     }
 
-    /// The element with a name, within the component's namespace.
+    /// The elements content can call: those the component declares, then
+    /// the element of each of its aggregates (D-72-1).
+    pub fn elements(&self) -> impl Iterator<Item = &ElementSchema> {
+        self.declarations.elements.iter().chain(&self.aggregates)
+    }
+
+    /// The element with a name, within the component's namespace: one it
+    /// declares, or the element of one of its aggregates (D-72-1), a
+    /// bodiless inline element that shows the aggregate's value.
     pub fn element(&self, name: &str) -> Option<&ElementSchema> {
-        self.declarations
-            .elements
-            .iter()
-            .find(|e| e.name.as_str() == name)
+        self.elements().find(|e| e.name.as_str() == name)
     }
 
     /// The property with a name, within the component's namespace.
@@ -493,6 +525,58 @@ fn template_id(template: &TemplateDecl) -> EcoString {
     match &template.name {
         Some(name) => eco_format!("{} as {name}", template.element),
         None => eco_format!("{}", template.element),
+    }
+}
+
+/// Checks the aggregates: each named once, and not like one of the
+/// component's elements, whose names share the namespace; each reading
+/// fields of the component's elements, each once. The fields lints read
+/// are checked the same way.
+fn check_aggregates(cx: &mut Checker, decls: &Declarations) {
+    let names: Vec<&Name> = decls.aggregates.iter().map(|a| &a.name).collect();
+    check_unique(cx, &names, |name| {
+        eco_format!("aggregate `{name}` is declared twice")
+    });
+    // The universal fields (`id`, `class` ..) are fields of every element.
+    let fields = |field: &Name| {
+        UNIVERSAL_FIELDS.contains(&field.as_str())
+            || decls
+                .elements
+                .iter()
+                .any(|e| e.fields.iter().any(|f| f.name == *field))
+    };
+    for aggregate in &decls.aggregates {
+        if decls.elements.iter().any(|e| e.name == aggregate.name) {
+            cx.error(eco_format!(
+                "aggregate `{}` has the name of one of the component's elements",
+                aggregate.name
+            ));
+        }
+        let reads: Vec<&Name> = aggregate.reads.iter().collect();
+        check_unique(cx, &reads, |field| {
+            eco_format!("aggregate `{}` reads `{field}` twice", aggregate.name)
+        });
+        for field in &aggregate.reads {
+            if !fields(field) {
+                cx.error(eco_format!(
+                    "aggregate `{}` reads `{field}`, which no element of the component has",
+                    aggregate.name
+                ));
+            }
+        }
+    }
+    if let LintReads::Fields(reads) = &decls.lint_reads {
+        let listed: Vec<&Name> = reads.iter().collect();
+        check_unique(cx, &listed, |field| {
+            eco_format!("the lints read `{field}` twice")
+        });
+        for field in reads {
+            if !fields(field) {
+                cx.error(eco_format!(
+                    "the lints read `{field}`, which no element of the component has"
+                ));
+            }
+        }
     }
 }
 
