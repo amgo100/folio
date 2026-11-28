@@ -773,7 +773,10 @@ fn pipe_rows_split_into_trimmed_cells() {
             .map(|r| r.into_iter().map(String::from).collect::<Vec<_>>())
     );
     // Text after the last pipe is a cell, and a row may close its block.
-    assert_eq!(rows("#grid[| a | b]"), [vec!["a".to_string(), "b".into()]]);
+    assert_eq!(
+        rows("#grid[\n| a | b]"),
+        [vec!["a".to_string(), "b".into()]]
+    );
 }
 
 #[test]
@@ -798,6 +801,16 @@ fn a_pipe_in_maths_code_raw_brackets_or_an_escape_splits_no_cell() {
 
 #[test]
 fn a_pipe_not_at_a_line_start_is_text() {
+    // After a content block's `[` or a list marker, a pipe is text.
+    for text in [
+        "#let n(v) = [|#v|]\n",
+        "#box[|x|]\n",
+        "- |v| is the speed\n",
+        "+ |a|\n",
+    ] {
+        ok(text);
+        assert_eq!(count(&root(text), SyntaxKind::TableRow), 0, "{text:?}");
+    }
     assert_eq!(count(&root("a | b | c\n"), SyntaxKind::TableRow), 0);
     assert_eq!(count(&root("a | b\n| c |\n"), SyntaxKind::TableRow), 1);
     ok("x | y");
@@ -825,4 +838,16 @@ fn separator_rows() {
         .collect();
     assert_eq!(rows, [false, true, true, false]);
     assert!(!first::<ast::TableRow<'_>>(&self::root("| :: |\n")).is_separator());
+}
+
+#[test]
+fn strong_and_emph_in_a_cell_end_at_its_pipe() {
+    assert_eq!(rows("| *a* | _b_ c |\n").len(), 1);
+    assert_eq!(rows("| *a* | _b_ c |\n")[0], ["*a*", "_b_ c"]);
+    // An unclosed one is an error at the pipe, and the next row stays a
+    // row.
+    let text = "| *Total | Mean | 3 |\n| c | d |\n";
+    assert!(!errors(text).is_empty());
+    assert_eq!(rows(text).len(), 2);
+    assert_eq!(rows(text)[0].len(), 3);
 }

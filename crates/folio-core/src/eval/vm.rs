@@ -1488,6 +1488,15 @@ impl<'a> Vm<'a> {
                             self.step(word.span())?;
                             Value::Str(word.get().clone())
                         }
+                        // `body: [..]` is the body as the trailing block is.
+                        ast::Expr::ContentBlock(block)
+                            if grid && name == "body" && named.scope().is_none() =>
+                        {
+                            self.step(block.span())?;
+                            let (body, rows) = self.nest(|vm| vm.grid_body(block))?;
+                            header = header.or(rows);
+                            Value::Content(body)
+                        }
                         expr => self.expr(expr)?,
                     };
                     items.push(Arg {
@@ -1532,10 +1541,10 @@ impl<'a> Vm<'a> {
                 },
             }
         }
+        // A `|---|` line's header rows, which instantiation checks against
+        // the grid's other arguments, those applied with `.with` included.
         if let Some((rows, at)) = header {
-            let mut list: Vec<Arg> = items.into_iter().collect();
-            grid::add_header_rows(&mut list, rows, at)?;
-            items = list.into_iter().collect();
+            items.push(grid::separator_arg(rows, at));
         }
         Ok(Args::new(span, items))
     }

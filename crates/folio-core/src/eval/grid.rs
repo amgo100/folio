@@ -20,6 +20,10 @@ use crate::text::MAX_TRACKS;
 /// The field a `|---|` line sets.
 const HEADER_ROWS: &str = "header-rows";
 
+/// The name of the argument that carries a `|---|` line's header rows to
+/// instantiation ([`separator_arg`]): no identifier is spelled so.
+const SEPARATOR: &str = "|---|";
+
 /// Whether an element function is the built-in `grid`.
 pub(super) fn is_grid(name: &QualifiedName) -> bool {
     name.namespace.is_none() && name.name.as_str() == "grid"
@@ -90,19 +94,30 @@ impl Vm<'_> {
     /// does not pull the next one up; the places a row leaves free get empty
     /// cells.
     pub(super) fn grid_rows(&mut self, args: Args, span: Span) -> EvalResult<Args> {
+        let args_span = args.span;
         let named =
             |arg: &Arg, name: &str| arg.name.as_deref() == Some(name) && arg.scope.is_none();
         if !args
             .items
             .iter()
-            .any(|arg| named(arg, "rows") || named(arg, "header"))
+            .any(|arg| named(arg, "rows") || named(arg, "header") || named(arg, SEPARATOR))
         {
             return Ok(args);
         }
+        // A `|---|` line's header rows, checked against all the arguments.
+        let (separators, mut items): (Vec<Arg>, Vec<Arg>) = args
+            .items
+            .into_iter()
+            .partition(|arg| named(arg, SEPARATOR));
+        for separator in separators {
+            if let Value::Int(rows) = separator.value {
+                add_header_rows(&mut items, rows, separator.span)?;
+            }
+        }
         let mut rows_arg = None;
         let mut header_arg = None;
-        let mut items = Vec::with_capacity(args.items.len());
-        for arg in args.items {
+        let all = std::mem::take(&mut items);
+        for arg in all {
             if named(&arg, "rows") {
                 rows_arg = Some(arg);
             } else if named(&arg, "header") {
@@ -188,7 +203,7 @@ impl Vm<'_> {
         if !cells.is_empty() {
             prepend_to_body(&mut items, cells, span);
         }
-        Ok(Args::new(args.span, items.into_iter().collect()))
+        Ok(Args::new(args_span, items.into_iter().collect()))
     }
 
     /// The cells of data rows, each at its place: rows in order from the
@@ -200,15 +215,60 @@ impl Vm<'_> {
         let mut taken: Vec<Vec<bool>> = Vec::new();
         let mut placed: Vec<(Vec<(usize, Content)>, Span)> = Vec::new();
         let mut columns = 0;
-        for (r, (values, span)) in data.into_iter().enumerate() {
+        // Cells made first, so that the places of those placed by their own
+        // fields are known before the others are placed.
+        let mut made: Vec<(Vec<Content>, Span)> = Vec::with_capacity(data.len());
+        for (values, span) in data {
+            let mut cells = Vec::with_capacity(values.len());
+            for value in values {
+                self.step(span)?;
+                let content = self.data_cell(value, span)?;
+                if let Some(Node::Element(cell)) = content.nodes().first() {
+                    let given = |field: &str| match cell.field(field) {
+                        Some(Value::Int(n)) => {
+                            Some(usize::try_from(*n).unwrap_or(1).clamp(1, MAX_TRACKS))
+                        }
+                        _ => None,
+                    };
+                    match (given("row"), given("column")) {
+                        (Some(row), Some(column)) => {
+                            let spans = |field: &str| given(field).unwrap_or(1);
+                            let (r, c) = (row - 1, column - 1);
+                            let end = (c + spans("colspan")).min(MAX_TRACKS);
+                            let rowspan = spans("rowspan");
+                            self.alloc(((end - c) * rowspan) as u64, span)?;
+                            if taken.len() < r + rowspan {
+                                taken.resize(r + rowspan, Vec::new());
+                            }
+                            for row in &mut taken[r..r + rowspan] {
+                                if row.len() < end {
+                                    row.resize(end, false);
+                                }
+                                for place in &mut row[c..end] {
+                                    *place = true;
+                                }
+                            }
+                            columns = columns.max(end);
+                        }
+                        (None, None) => {}
+                        _ => bail!(
+                            span,
+                            "a cell of `rows` gives its place by both `row` and `column`, or by \
+                             neither"
+                        ),
+                    }
+                }
+                cells.push(content);
+            }
+            made.push((cells, span));
+        }
+        for (r, (values, span)) in made.into_iter().enumerate() {
             if taken.len() <= r {
                 taken.resize(r + 1, Vec::new());
             }
             placed.push((Vec::with_capacity(values.len()), span));
             let mut c = 0;
-            for value in values {
-                self.step(span)?;
-                let mut content = self.data_cell(value, span)?;
+            for mut content in values {
                 let Some(Node::Element(cell)) = content.nodes().first().cloned() else {
                     unreachable!("a data cell is a cell element");
                 };
@@ -392,22 +452,37 @@ fn separator(body: ast::Markup<'_>) -> EvalResult<Option<(i64, Span)>> {
     Ok(found)
 }
 
-/// Adds the header rows a `|---|` line marks to a grid call's arguments,
-/// unless `header-rows` gives the same number; another number is an error.
-pub(super) fn add_header_rows(items: &mut Vec<Arg>, rows: i64, span: Span) -> EvalResult<()> {
-    let given = items
-        .iter()
-        .find(|arg| arg.name.as_deref() == Some(HEADER_ROWS) && arg.scope.is_none());
+/// The argument that carries the header rows a `|---|` line marks from a
+/// grid's body to its instantiation, under a name no field has.
+pub(super) fn separator_arg(rows: i64, span: Span) -> Arg {
+    Arg {
+        span,
+        name: Some(SEPARATOR.into()),
+        scope: None,
+        value: Value::Int(rows),
+        spelling: None,
+    }
+}
+
+/// Adds the header rows a `|---|` line marks to a grid's arguments, unless
+/// `header-rows` gives the same number. Another number is an error, as is
+/// the line in a grid with `rows` or `header`, whose header row comes
+/// before the body's rows.
+fn add_header_rows(items: &mut Vec<Arg>, rows: i64, span: Span) -> EvalResult<()> {
+    let named = |arg: &Arg, name: &str| arg.name.as_deref() == Some(name) && arg.scope.is_none();
     if items
         .iter()
-        .any(|arg| arg.name.as_deref() == Some("rows") && arg.scope.is_none())
+        .any(|arg| (named(arg, "rows") || named(arg, "header")) && arg.value != Value::None)
     {
-        bail!(
+        return Err(EvalError::new(
             span,
-            "a `|---|` line cannot mark header rows of a grid with `rows`, whose rows come first"
-        );
+            "a `|---|` line cannot mark header rows in a grid with `rows` or `header`, whose \
+             rows come before the body's",
+        )
+        .with_hint("leave out the line, or give the header with `header`")
+        .into());
     }
-    match given {
+    match items.iter().find(|arg| named(arg, HEADER_ROWS)) {
         Some(arg) if arg.value == Value::Int(rows) => Ok(()),
         Some(arg) => Err(EvalError::new(
             span,

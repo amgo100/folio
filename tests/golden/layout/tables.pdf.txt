@@ -1249,19 +1249,19 @@ page 5 419.53 × 595.28, 8 line(s)
             box (4.00, 46.42) 214.99 × 26.21 main.fol:95:6 baselines 16.41..15.75
               shape (0.00, 0.00) M(0.00, 0.40) L(214.99, 0.40) stroke #000000ff 0.80 Butt Miter main.fol:95:6
               shape (0.00, 0.00) M(0.00, 25.81) L(214.99, 25.81) stroke #000000ff 0.80 Butt Miter main.fol:95:6
-              box (0.00, 0.80) 30.59 × 24.61 main.fol:96:5 baselines 15.61..15.61
-                shape (0.00, 0.00) M(0.00, 24.41) L(30.59, 24.41) stroke #808080ff 0.40 Butt Miter main.fol:96:5
-                box (4.00, 2.00) 22.59 × 20.21 main.fol:96:5 baselines 13.61..13.61
+              box (0.00, 0.80) 30.59 × 24.61 main.fol:96:9 baselines 15.61..15.61
+                shape (0.00, 0.00) M(0.00, 24.41) L(30.59, 24.41) stroke #808080ff 0.40 Butt Miter main.fol:96:9
+                box (4.00, 2.00) 22.59 × 20.21 main.fol:96:9 baselines 13.61..13.61
                   text (0.00, 13.61) SourceSerif4-Regular 10.00 w 22.59 4 glyph(s) "Mass"
-              box (30.59, 0.80) 28.58 × 24.61 main.fol:96:12 baselines 14.95..14.95
-                shape (0.00, 0.00) M(0.00, 24.41) L(28.58, 24.41) stroke #808080ff 0.40 Butt Miter main.fol:96:12
-                box (4.00, 2.00) 20.58 × 18.26 main.fol:96:13 baselines 12.95..12.95
-                  box (0.00, 6.01) 17.08 × 9.00 main.fol:96:13
+              box (30.59, 0.80) 28.58 × 24.61 main.fol:96:16 baselines 14.95..14.95
+                shape (0.00, 0.00) M(0.00, 24.41) L(28.58, 24.41) stroke #808080ff 0.40 Butt Miter main.fol:96:16
+                box (4.00, 2.00) 20.58 × 18.26 main.fol:96:17 baselines 12.95..12.95
+                  box (0.00, 6.01) 17.08 × 9.00 main.fol:96:17
                     text (0.00, 6.94) NewCMMath-Regular 10.00 w 5.00 1 glyph(s) "2"
                     text (6.67, 6.94) NewCMMath-Regular 10.00 w 10.41 2 glyph(s) "kg"
                   text (17.08, 10.50) SourceSerif4-Regular 7.00 w 3.50 1 glyph(s) "3"
-          box (0.00, 497.85) 334.49 × 12.38 main.fol:96:26 baselines 9.70..9.70
-            box (0.00, 0.00) 334.49 × 12.38 main.fol:96:35 baselines 9.70..9.70
+          box (0.00, 497.85) 334.49 × 12.38 main.fol:96:30 baselines 9.70..9.70
+            box (0.00, 0.00) 334.49 × 12.38 main.fol:96:39 baselines 9.70..9.70
               text (0.00, 7.25) SourceSerif4-Regular 7.00 w 5.13 2 glyph(s) "3\u{a0}"
               text (5.13, 9.70) SourceSerif4-Regular 8.00 w 121.82 32 glyph(s) "Two masses of one kilogram each."
     shape (0.00, 494.85) M(0.00, 0.00) L(111.50, 0.00) stroke #000000ff 0.50 Butt Miter

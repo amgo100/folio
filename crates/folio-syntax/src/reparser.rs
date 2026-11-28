@@ -748,6 +748,10 @@ mod tests {
         same("x | a | b |\n| c |\n", Edit::Match("x "), "");
         same("| a | b |\n| c |\n", Edit::At(0), "x ");
         same("~~\n| a |~~\n~~", Edit::Match("a"), "#f[\n|]");
+        same("#f[| a |]\n- | b |\n", Edit::Match("[|"), "[\n|");
+        same("#f[\n| a |]\n", Edit::Match("[\n"), "[");
+        same("- | b |\n| c |\n", Edit::Match("- "), "");
+        same("| *a | b* |\n", Edit::Match("a |"), "a* |");
     }
 
     /// Test incremental reparsing of code and content blocks.

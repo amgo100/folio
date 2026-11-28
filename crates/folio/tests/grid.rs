@@ -678,7 +678,27 @@ fn pipe_row_errors() {
         errors("#grid[\n  #cell[a]\n  |---|\n]\n"),
         ["the rows above a `|---|` line must all be pipe rows"]
     );
+    assert_eq!(
+        errors("#grid(header: ([A], [B]))[\n  | H | I |\n  |---|---|\n  | 1 | 2 |\n]\n"),
+        [
+            "a `|---|` line cannot mark header rows in a grid with `rows` or `header`, whose rows \
+             come before the body's"
+        ]
+    );
+    assert_eq!(
+        errors("#let t = grid.with(rows: ((1,),))\n#t[\n  | H |\n  |---|\n  | x |\n]\n"),
+        [
+            "a `|---|` line cannot mark header rows in a grid with `rows` or `header`, whose rows \
+             come before the body's"
+        ]
+    );
+    // Pipes after a block's `[` or a list marker are text.
+    assert!(errors("#let n(v) = [|#v|]\n#n[x] #strong[|x|]\n- |v| is the speed\n").is_empty());
     // Data rows.
+    assert_eq!(
+        errors("#grid(rows: ((cell(column: 2)[x],),))\n"),
+        ["a cell of `rows` gives its place by both `row` and `column`, or by neither"]
+    );
     assert_eq!(
         errors("#grid(rows: (1, 2))\n"),
         ["row 1 of `rows`: a row is an array of cells, not an int"]
@@ -690,5 +710,29 @@ fn pipe_row_errors() {
     assert_eq!(
         errors("#grid(rows: ((1,),), header: auto, header-rows: 2)\n"),
         ["`header` makes one header row, but `header-rows` is 2"]
+    );
+}
+
+#[test]
+fn rows_in_a_named_body_and_through_with() {
+    same_pages(
+        "#grid(column-tracks: 2, body: [\n  | a | b |\n])\n",
+        "#grid(column-tracks: 2)[\n  | a | b |\n]\n",
+        &[],
+    );
+    // A `|---|` line agrees with `header-rows` applied through `.with`.
+    same_pages(
+        "#let t = grid.with(column-tracks: 2, header-rows: 1)\n#t[\n  | H | I |\n  |---|---|\n  | a | b |\n]\n",
+        "#grid(column-tracks: 2, header-rows: 1)[\n  | H | I |\n  | a | b |\n]\n",
+        &[],
+    );
+}
+
+#[test]
+fn a_data_cell_at_its_own_place_is_not_covered() {
+    same_pages(
+        "#grid(column-tracks: 2)[\n  #cell[a] #cell[x]\n  #cell[b] #cell[c]\n]\n",
+        "#grid(rows: ((cell(row: 1, column: 2)[x], [a]), ([b], [c])))\n",
+        &[],
     );
 }

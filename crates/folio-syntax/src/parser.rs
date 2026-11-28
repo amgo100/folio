@@ -148,7 +148,7 @@ fn markup_expr(p: &mut Parser<'_>, at_start: bool, nesting: &mut usize) {
         SyntaxKind::ListMarker if at_start => list_item(p),
         SyntaxKind::EnumMarker if at_start => enum_item(p),
         SyntaxKind::TermMarker if at_start => term_item(p),
-        SyntaxKind::TablePipe if at_start => table_row(p),
+        SyntaxKind::TablePipe if at_start && p.at_line_start() => table_row(p),
         SyntaxKind::RefMarker => reference(p),
         SyntaxKind::Dollar => equation(p),
 
@@ -165,10 +165,23 @@ fn markup_expr(p: &mut Parser<'_>, at_start: bool, nesting: &mut usize) {
 
 /// Parses strong content: `*Strong*`.
 fn strong(p: &mut Parser<'_>) {
-    p.with_nl_mode(AtNewline::StopParBreak, |p| {
+    // In a cell of a table row, it ends at a pipe and at the end of the
+    // line, as the cell does.
+    let (nl_mode, stop) = if p.in_cell {
+        (
+            AtNewline::Stop,
+            syntax_set!(Star, TablePipe, RightBracket, End),
+        )
+    } else {
+        (
+            AtNewline::StopParBreak,
+            syntax_set!(Star, RightBracket, End),
+        )
+    };
+    p.with_nl_mode(nl_mode, |p| {
         let m = p.marker();
         p.assert(SyntaxKind::Star);
-        markup(p, false, true, syntax_set!(Star, RightBracket, End));
+        markup(p, false, true, stop);
         let had_closing = p.expect_closing_delimiter(m, SyntaxKind::Star);
         p.wrap(m, SyntaxKind::Strong);
         if had_closing && p[m].len() == 2 {
@@ -182,10 +195,23 @@ fn strong(p: &mut Parser<'_>) {
 
 /// Parses emphasized content: `_Emphasized_`.
 fn emph(p: &mut Parser<'_>) {
-    p.with_nl_mode(AtNewline::StopParBreak, |p| {
+    // In a cell of a table row, it ends at a pipe and at the end of the
+    // line, as the cell does.
+    let (nl_mode, stop) = if p.in_cell {
+        (
+            AtNewline::Stop,
+            syntax_set!(Underscore, TablePipe, RightBracket, End),
+        )
+    } else {
+        (
+            AtNewline::StopParBreak,
+            syntax_set!(Underscore, RightBracket, End),
+        )
+    };
+    p.with_nl_mode(nl_mode, |p| {
         let m = p.marker();
         p.assert(SyntaxKind::Underscore);
-        markup(p, false, true, syntax_set!(Underscore, RightBracket, End));
+        markup(p, false, true, stop);
         let had_closing = p.expect_closing_delimiter(m, SyntaxKind::Underscore);
         p.wrap(m, SyntaxKind::Emph);
         if had_closing && p[m].len() == 2 {
@@ -264,11 +290,13 @@ fn table_row(p: &mut Parser<'_>) {
 fn table_cell(p: &mut Parser<'_>) {
     let m = p.marker();
     let mut nesting: usize = 0;
+    let in_cell = mem::replace(&mut p.in_cell, true);
     while !p.at_set(syntax_set!(TablePipe, RightBracket, End))
         || (nesting > 0 && p.at_set(syntax_set!(TablePipe, RightBracket)))
     {
         markup_expr(p, false, &mut nesting);
     }
+    p.in_cell = in_cell;
     p.wrap(m, SyntaxKind::Markup);
 }
 
@@ -1168,11 +1196,13 @@ fn code_block(p: &mut Parser<'_>) {
 fn content_block(p: &mut Parser<'_>) {
     let m = p.marker();
     let values = mem::replace(&mut p.style_values, false);
+    let in_cell = mem::replace(&mut p.in_cell, false);
     p.enter_lexer(SyntaxMode::Markup, false, AtNewline::Continue, |p| {
         p.assert(SyntaxKind::LeftBracket);
         markup(p, true, true, syntax_set!(RightBracket, End));
         p.expect_closing_delimiter(m, SyntaxKind::RightBracket);
     });
+    p.in_cell = in_cell;
     p.style_values = values;
     p.wrap(m, SyntaxKind::ContentBlock);
 }
@@ -2087,6 +2117,9 @@ struct Parser<'s> {
     /// after a space starts a new item (`margin: 0 -1mm`) rather than a
     /// subtraction. Not inside parentheses or conditions.
     split_signs: bool,
+    /// Whether the parser is in a cell of a table row, where strong and
+    /// emphasized text end at a pipe, as the cell does.
+    in_cell: bool,
 }
 
 /// A single token returned from the lexer with a cached [`SyntaxKind`] and a
@@ -2207,6 +2240,7 @@ impl<'s> Parser<'s> {
             chain_code: 0,
             style_values: false,
             split_signs: false,
+            in_cell: false,
         }
     }
 
@@ -2255,6 +2289,17 @@ impl<'s> Parser<'s> {
     }
 
     /// Whether `token` had a newline among any of its preceding trivia.
+    /// Whether only spaces and tabs stand before the current token on its
+    /// line: a table row starts only there, not after a list marker or the
+    /// `[` of a content block.
+    fn at_line_start(&self) -> bool {
+        self.text[..self.token.start]
+            .chars()
+            .rev()
+            .take_while(|&c| !crate::is_newline(c))
+            .all(|c| c == ' ' || c == '\t')
+    }
+
     fn had_newline(&self) -> bool {
         self.token.newline.is_some()
     }

@@ -93,7 +93,7 @@ The period $T$ of a simple pendulum of length $l$ is $T = 2 pi sqrt(l / g)$ for 
     Holding the pendulum. The stand was weighed down:
 
     #grid(class: "inner", column-tracks: 2)[
-  | Mass | #qty(2, "kg")#footnote[Two masses of one kilogram each.] |
+      | Mass | #qty(2, "kg")#footnote[Two masses of one kilogram each.] |
     ]
   ]
 ]
