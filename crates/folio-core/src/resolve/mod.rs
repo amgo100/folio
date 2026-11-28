@@ -55,6 +55,13 @@
 //!   ([`Resolution::set_pages`]), in the bounded fixpoint of
 //!   [`page_refs`].
 //!
+//! - **Measured content** (SPEC §6.3): the content that a `hidden` or
+//!   `answer-space` block measures, which Select keeps out of the tree, is
+//!   resolved where the block stands, as where it is shown, so that its
+//!   markers and references have their text when layout measures it. The
+//!   rest of the build does not count it, its labels are seen only by its
+//!   own references, and it reports nothing.
+//!
 //! Counters are resolved per build, on the variant's own tree, except the
 //! shared counters of a numbering group (SPEC §6.1), whose values come from
 //! the group's common tree ([`crate::variants::common`]), counted by the
