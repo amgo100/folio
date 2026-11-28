@@ -458,3 +458,24 @@ fn components_provide_default_templates() {
         "-[header[\"Aside\"] -[\"Read this.\"]]"
     );
 }
+
+#[test]
+fn a_placeholder_replaces_the_template_too() {
+    // In the mark scheme the examples are shown; in the exam, a
+    // placeholder takes the place of their content and their template.
+    let style = format!(
+        "{TEMPLATES}\n@variant exam {{ example {{ display: placeholder(\"See the mark scheme\"); }} }}\n"
+    );
+    let world = world(&style, CONTENT);
+    assert_eq!(
+        example_outlines(&world),
+        ["-[\"See the mark scheme\"]", "-[\"See the mark scheme\"]"]
+    );
+    let variant = Name::new("markscheme");
+    let text = folio::text(&world, Target::Pdf, variant.as_ref())
+        .unwrap()
+        .unwrap();
+    let mut found = Vec::new();
+    blocks(&text.root, "project.example", &mut found);
+    assert!(outline(found[0], &text).starts_with("-[header["));
+}

@@ -554,6 +554,18 @@ impl<'a> Walker<'a> {
     ) -> Option<Arc<Expansion>> {
         let cascade = self.cascade;
         let props = &cascade.properties;
+        // A template shows an element: one that a variant hides, replaces
+        // with a placeholder or with answer space has none (SPEC §6.3).
+        let shown = match style.value(props, props.builtin("display")) {
+            None | Some(folio_component::Value::Auto) => true,
+            Some(folio_component::Value::Keyword(k)) => {
+                matches!(k.as_str(), "block" | "inline" | "auto")
+            }
+            Some(_) => false,
+        };
+        if !shown {
+            return None;
+        }
         let name: Option<EcoString> = match style.value(props, props.builtin("template")) {
             // Most builds have no templates: `auto` asks for none then.
             Some(folio_component::Value::Auto) | None if cascade.templates.is_empty() => {
