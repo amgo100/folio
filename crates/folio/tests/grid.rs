@@ -500,3 +500,185 @@ fn the_base_look_rules_the_header_on_every_page() {
         assert_eq!(n, 1, "the header rule alone");
     }
 }
+
+// ---- Pipe rows and data rows (#440) ----
+
+/// Asserts that two documents lay out to the same pages, and builds both
+/// without diagnostics.
+#[track_caller]
+fn same_pages(a: &str, b: &str, files: &[(&str, &str)]) {
+    let build = |text: &str| {
+        let mut world = world("", text);
+        for (path, data) in files {
+            world.set_file(path, data.as_bytes().to_vec()).unwrap();
+        }
+        let messages: Vec<String> = diagnostics(&world)
+            .iter()
+            .map(|d| d.message.to_string())
+            .collect();
+        assert!(messages.is_empty(), "diagnostics for {text:?}: {messages:?}");
+        pages(&world).hashes.to_vec()
+    };
+    assert_eq!(build(a), build(b), "{a}\n---\n{b}");
+}
+
+/// The five tables of `docs/design/table-syntax.md`, written with cells
+/// (option A) and with pipe rows and data rows (option B).
+#[test]
+fn the_design_examples_lay_out_alike_in_both_forms() {
+    // (a) A data table with a header row and units.
+    same_pages(
+        "#grid(column-tracks: (auto, 1fr, 1fr), header-rows: 1)[\n\
+         \x20 #cell[Length $l$ / m] #cell[Period $T$ / s] #cell[$T^2$ / s²]\n\
+         \x20 #cell[0.200] #cell[0.897] #cell[0.805]\n\
+         \x20 #cell[0.250] #cell[1.003] #cell[1.006]\n]\n",
+        "#grid(column-tracks: (auto, 1fr, 1fr), header-rows: 1)[\n\
+         \x20 | Length $l$ / m | Period $T$ / s | $T^2$ / s² |\n\
+         \x20 | 0.200          | 0.897          | 0.805      |\n\
+         \x20 | 0.250          | 1.003          | 1.006      |\n]\n",
+        &[],
+    );
+    // (b) A mark scheme whose cells hold paragraphs, a list and formulas.
+    same_pages(
+        "#grid(class: \"markscheme\", column-tracks: (auto, 1fr, auto), header-rows: 1)[\n\
+         \x20 #cell[Question] #cell[Answer] #cell[Marks]\n\
+         \x20 #cell[3(a)] #cell[\n    Use of $v = u + a t$.\n\n    $a = 18 / 6.0$\n  ] #cell[2]\n\
+         \x20 #cell[3(b)] #cell[\n    Any two of:\n    - air resistance is ignored;\n    - $g$ is uniform.\n  ] #cell[2]\n]\n",
+        "#grid(class: \"markscheme\", column-tracks: (auto, 1fr, auto))[\n\
+         \x20 | Question | Answer | Marks |\n\
+         \x20 |----------|--------|-------|\n\
+         \x20 | 3(a) | #cell[\n      Use of $v = u + a t$.\n\n      $a = 18 / 6.0$\n    ] | 2 |\n\
+         \x20 | 3(b) | #cell[\n      Any two of:\n      - air resistance is ignored;\n      - $g$ is uniform.\n    ] | 2 |\n]\n",
+        &[],
+    );
+    // (c) Spans across columns and rows.
+    same_pages(
+        "#grid(column-tracks: 3, header-rows: 1)[\n\
+         \x20 #cell[Kind] #cell[Source] #cell[Remedy]\n\
+         \x20 #cell(rowspan: 2)[Random] #cell[Reaction time] #cell[Time ten swings]\n\
+         \x20 #cell[Amplitude varies] #cell[Release from a mark]\n\
+         \x20 #cell(colspan: 3)[Systematic errors are discussed below.]\n]\n",
+        "#grid(column-tracks: 3, header-rows: 1)[\n\
+         \x20 | Kind                      | Source           | Remedy              |\n\
+         \x20 | #cell(rowspan: 2)[Random] | Reaction time    | Time ten swings     |\n\
+         \x20                             | Amplitude varies | Release from a mark |\n\
+         \x20 | #cell(colspan: 3)[Systematic errors are discussed below.] |\n]\n",
+        &[],
+    );
+    // (d) A sparse table.
+    same_pages(
+        "#grid(column-tracks: 6, header-rows: 1)[\n\
+         \x20 #cell[] #cell[Mon] #cell[Tue] #cell[Wed] #cell[Thu] #cell[Fri]\n\
+         \x20 #cell[9:00] #cell[] #cell[Physics] #cell[] #cell[] #cell[Lab]\n\
+         \x20 #cell[10:00] #cell[] #cell[] #cell[Maths] #cell[] #cell[]\n]\n",
+        "#grid(column-tracks: 6, header-rows: 1)[\n\
+         \x20 |       | Mon | Tue     | Wed   | Thu | Fri |\n\
+         \x20 | 9:00  ||       Physics ||| Lab |\n\
+         \x20 | 10:00 |     |         | Maths |     |     |\n]\n",
+        &[],
+    );
+    // (e) A table from a data file, header included.
+    let csv = [("results.csv", "l,T,T2\n0.200,0.897,0.805\n0.250,1.003,1.006\n")];
+    same_pages(
+        "#let data = csv(\"results.csv\")\n\
+         #grid(column-tracks: data.first().len(), header-rows: 1)[\n\
+         \x20 #for row in data { for value in row [#cell[#value]] }\n]\n",
+        "#grid(rows: csv(\"results.csv\"), header: auto)\n",
+        &csv,
+    );
+}
+
+#[test]
+fn data_rows_take_a_header_and_come_before_the_body() {
+    same_pages(
+        "#grid(column-tracks: 2, header-rows: 1)[\n\
+         \x20 #cell[a] #cell[b]\n  #cell[1] #cell[2]\n  #cell[3] #cell[]\n  #cell[x] #cell[y]\n]\n",
+        "#grid(header: ([a], \"b\"), rows: ((1, 2), (3,)))[\n  | x | y |\n]\n",
+        &[],
+    );
+    // A row under a cell that spans rows leaves out its place.
+    same_pages(
+        "#grid(column-tracks: 2)[\n\
+         \x20 #cell(rowspan: 2)[a] #cell[b]\n  #cell[c]\n]\n",
+        "#grid(rows: ((cell(rowspan: 2)[a], [b]), ([c],)))\n",
+        &[],
+    );
+}
+
+#[test]
+fn a_separator_line_marks_header_rows() {
+    let long = |separator: bool, header: &str| {
+        let mut text = format!("#grid(column-tracks: 2{header})[\n  | Head | Er |\n");
+        if separator {
+            text.push_str("  |------|----|\n");
+        }
+        for i in 0..80 {
+            text.push_str(&format!("  | Row {i} | x |\n"));
+        }
+        text.push_str("]\n");
+        text
+    };
+    same_pages(&long(true, ""), &long(false, ", header-rows: 1"), &[]);
+    // It agrees with `header-rows`, or is an error.
+    same_pages(&long(true, ", header-rows: 1"), &long(false, ", header-rows: 1"), &[]);
+    let world = world("", &long(true, ", header-rows: 2"));
+    let messages: Vec<String> = diagnostics(&world)
+        .iter()
+        .map(|d| d.message.to_string())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("marks 1 header row, but `header-rows` is 2")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn pipe_row_errors() {
+    let errors = |text: &str| -> Vec<String> {
+        diagnostics(&world("", text))
+            .iter()
+            .filter(|d| d.severity == folio::Severity::Error)
+            .map(|d| d.message.to_string())
+            .collect()
+    };
+    // Outside a grid's body, and in a cell inside one.
+    assert_eq!(
+        errors("| a | b |\n"),
+        ["a pipe row makes cells only in a grid's body"]
+    );
+    assert_eq!(
+        errors("#grid[#cell[\n| a |\n]]\n"),
+        ["a pipe row makes cells only in a grid's body"]
+    );
+    // An escaped pipe is text.
+    assert!(errors("\\| a | b |\n").is_empty());
+    assert!(errors("#grid[\n  | a \\| b |\n]\n").is_empty());
+    // Separator lines.
+    assert_eq!(
+        errors("#grid[\n  |---|\n  | a |\n]\n"),
+        ["a `|---|` line marks the rows above it as header rows, but there are none"]
+    );
+    assert_eq!(
+        errors("#grid[\n  | a |\n  |---|\n  | b |\n  |---|\n]\n"),
+        ["a grid's body has one `|---|` line at most"]
+    );
+    assert_eq!(
+        errors("#grid[\n  #cell[a]\n  |---|\n]\n"),
+        ["the rows above a `|---|` line must all be pipe rows"]
+    );
+    // Data rows.
+    assert_eq!(
+        errors("#grid(rows: (1, 2))\n"),
+        ["row 1 of `rows`: a row is an array of cells, not an int"]
+    );
+    assert_eq!(
+        errors("#grid(header: auto)\n"),
+        ["`header: auto` makes the first row of `rows` the header row, but there is none"]
+    );
+    assert_eq!(
+        errors("#grid(rows: ((1,),), header: auto, header-rows: 2)\n"),
+        ["`header` makes one header row, but `header-rows` is 2"]
+    );
+}

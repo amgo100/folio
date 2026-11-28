@@ -13,6 +13,7 @@ use super::captures::{captures, free_variables};
 use super::content::{Content, Node, anchor};
 use super::decl;
 use super::element;
+use super::grid;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::library;
 use super::ops::{self, a_type};
@@ -100,6 +101,13 @@ pub(crate) struct Vm<'a> {
     /// The origin of the elements made now: the loop iterations being
     /// evaluated, inside the open origin of a closure call (SPEC §2.3).
     pub(crate) origin: Origin,
+    /// Whether the markup evaluated next is a grid's body, where pipe rows
+    /// make cells (SPEC §7.4). [`Vm::markup_labelled`] takes it, so the
+    /// markup nested in it is not.
+    pub(super) rows: bool,
+    /// Whether the call whose arguments are evaluated next is one of the
+    /// built-in `grid`, whose content block is its body.
+    grid_call: bool,
 }
 
 /// What an error marker shows (SPEC §12.2).
@@ -180,6 +188,8 @@ impl<'a> Vm<'a> {
             poisoned: BTreeSet::new(),
             math_depth: 0,
             origin: Origin::ROOT,
+            rows: false,
+            grid_call: false,
         }
     }
 
@@ -226,7 +236,7 @@ impl<'a> Vm<'a> {
     /// against the memory limit. Text of the content that records no node,
     /// such as a string joined to content with `+`, is the text of the
     /// expression that shows it.
-    fn display(&mut self, value: Value, span: Span) -> EvalResult<Content> {
+    pub(super) fn display(&mut self, value: Value, span: Span) -> EvalResult<Content> {
         Ok(match value {
             Value::None => Content::new(),
             Value::Content(content) => content
@@ -279,11 +289,11 @@ impl<'a> Vm<'a> {
         self.scopes.define(name, value);
     }
 
-    fn enter(&mut self) {
+    pub(super) fn enter(&mut self) {
         self.scopes.layers.push(BTreeMap::new());
     }
 
-    fn exit(&mut self) {
+    pub(super) fn exit(&mut self) {
         self.scopes.layers.pop();
     }
 
@@ -360,7 +370,7 @@ impl<'a> Vm<'a> {
 
     /// Evaluates markup. A label at its end that has no element to attach
     /// to is an error.
-    fn markup(&mut self, markup: ast::Markup<'_>) -> EvalResult<Content> {
+    pub(super) fn markup(&mut self, markup: ast::Markup<'_>) -> EvalResult<Content> {
         let (content, label) = self.markup_labelled(markup)?;
         if let Some(label) = label {
             self.tolerate(label_without_element(label.span()))?;
@@ -370,10 +380,11 @@ impl<'a> Vm<'a> {
 
     /// Evaluates markup, and returns a label at its end that has no element
     /// before it, for the heading or list item around it to take.
-    fn markup_labelled<'s>(
+    pub(super) fn markup_labelled<'s>(
         &mut self,
         markup: ast::Markup<'s>,
     ) -> EvalResult<(Content, Option<ast::Label<'s>>)> {
+        let rows = std::mem::replace(&mut self.rows, false);
         let mut out = Content::new();
         let items: Vec<ast::MarkupItem<'s>> = markup.items().collect();
         for (i, &item) in items.iter().enumerate() {
@@ -414,7 +425,11 @@ impl<'a> Vm<'a> {
                 }
                 continue;
             }
-            let content = match self.markup_expr(expr) {
+            let evaluated = match expr {
+                ast::Expr::TableRow(row) if rows => self.nest(|vm| vm.table_row(row)),
+                _ => self.markup_expr(expr),
+            };
+            let content = match evaluated {
                 // A file's own markup is in no loop or function (code turns
                 // recovery off), so a `break`, `continue` or `return` that
                 // reaches it fails the construct it came from, and the
@@ -622,6 +637,13 @@ impl<'a> Vm<'a> {
                     label,
                 )
             }
+            // Pipe rows make cells only in a grid's body, where
+            // `markup_labelled` evaluates them (SPEC §7.4).
+            ast::Expr::TableRow(_) => {
+                return Err(EvalError::new(span, "a pipe row makes cells only in a grid's body")
+                    .with_hint("put it in `#grid(..)[..]`, or write `\\|` for a pipe at the start of a line")
+                    .into());
+            }
             // Native math becomes a formula of the math tree (SPEC §8.1).
             ast::Expr::Equation(eq) => {
                 self.step(span)?;
@@ -755,6 +777,7 @@ impl<'a> Vm<'a> {
             | ast::Expr::ListItem(_)
             | ast::Expr::EnumItem(_)
             | ast::Expr::TermItem(_)
+            | ast::Expr::TableRow(_)
             | ast::Expr::Equation(_)
             | ast::Expr::TexEquation(_) => self.markup_expr(expr).map(Value::Content),
             ast::Expr::Label(label) => Ok(Value::Label(label.get().into())),
@@ -1409,6 +1432,9 @@ impl<'a> Vm<'a> {
         let Some(name) = callee.and_then(element_of) else {
             return self.args(args, span, false);
         };
+        if grid::is_grid(name) {
+            self.grid_call = true;
+        }
         let slots = match crate::model::schema(self.db, self.project, name).map(|s| &s.body) {
             Some(Body::Slots(slots)) => slots.clone(),
             _ => return self.args(args, span, true),
@@ -1424,9 +1450,24 @@ impl<'a> Vm<'a> {
     }
 
     fn args(&mut self, args: ast::Args<'_>, span: Span, element: bool) -> EvalResult<Args> {
+        // The content block of a grid call is its body, where pipe rows make
+        // cells; the calls nested in its arguments are not grid calls.
+        let grid = std::mem::replace(&mut self.grid_call, false);
+        let mut header = None;
         let mut items = EcoVec::new();
         for arg in args.items() {
             match arg {
+                ast::Arg::Pos(ast::Expr::ContentBlock(block)) if grid => {
+                    let (body, rows) = self.grid_body(block)?;
+                    header = header.or(rows);
+                    items.push(Arg {
+                        span: block.span(),
+                        name: None,
+                        scope: None,
+                        value: Value::Content(body),
+                        spelling: None,
+                    });
+                }
                 ast::Arg::Pos(expr) => items.push(Arg {
                     span: expr.span(),
                     name: None,
@@ -1489,6 +1530,11 @@ impl<'a> Vm<'a> {
                     ),
                 },
             }
+        }
+        if let Some((rows, at)) = header {
+            let mut list: Vec<Arg> = items.into_iter().collect();
+            grid::add_header_rows(&mut list, rows, at)?;
+            items = list.into_iter().collect();
         }
         Ok(Args::new(span, items))
     }
@@ -2070,7 +2116,7 @@ fn element_of(value: &Value) -> Option<&QualifiedName> {
 }
 
 /// Attaches the label that a heading's or list item's body ended with.
-fn labelled(mut content: Content, label: Option<ast::Label<'_>>) -> Content {
+pub(super) fn labelled(mut content: Content, label: Option<ast::Label<'_>>) -> Content {
     if let (Some(label), Some(element)) = (label, content.last_element_mut()) {
         element.label = Some(label.get().into());
     }

@@ -68,6 +68,12 @@ impl Vm<'_> {
         let Some(schema) = schema(self.db, self.project, name) else {
             bail!(span, "unknown element `{name}`");
         };
+        // A grid's data rows are cells before its body's (SPEC §7.4).
+        let args = if super::grid::is_grid(name) {
+            self.grid_rows(args, span)?
+        } else {
+            args
+        };
 
         // Name every argument.
         let mut positional = schema.positional_order();
