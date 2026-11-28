@@ -60,6 +60,9 @@ const MAX_LAG: Duration = Duration::from_millis(250);
 /// hold back the edit that fixes it.
 const MAX_DEFER: Duration = Duration::from_secs(1);
 
+/// The longest the wait of [`MAX_DEFER`] grows to.
+const MAX_DEFER_LIMIT: Duration = Duration::from_secs(8);
+
 /// The code of the diagnostic that stands for a panic in a query.
 const INTERNAL_ERROR: &str = "internal-error";
 
@@ -519,8 +522,8 @@ struct Engine {
     /// closed them.
     held: BTreeMap<PathBuf, Instant>,
     /// How long changes may wait for the running check: [`MAX_DEFER`],
-    /// doubled each time a check is cancelled for taking longer, until
-    /// pages are sent.
+    /// doubled each time a check is cancelled for taking longer, up to
+    /// [`MAX_DEFER_LIMIT`], until pages are sent.
     defer_limit: Duration,
     /// The revision of the check running, if one is.
     running: Option<u64>,
@@ -643,12 +646,12 @@ impl Engine {
         }
     }
 
-    /// Whether an event about `path` waits to be handled.
+    /// Whether a write of `path` waits to be handled.
     fn waiting(&mut self, path: &Path) -> bool {
         self.queue.extend(self.rx.try_iter());
         self.queue
             .iter()
-            .any(|input| matches!(input, Input::Paths(paths, change) if matches!(change, Change::Written | Change::Moved) && paths.iter().any(|p| p == path)))
+            .any(|input| matches!(input, Input::Paths(paths, change) if *change == Change::Written && paths.iter().any(|p| p == path)))
     }
 
     /// Records which paths are open for writing after an event.
@@ -699,9 +702,13 @@ impl Engine {
     /// long: the next one gets the same grace before changes wait for it,
     /// and twice as long to send pages.
     fn take_deferred(&mut self) -> Vec<PathBuf> {
-        if self.deferred_since.take().is_some() && self.running.is_some() {
+        let timed_out = self
+            .deferred_since
+            .take()
+            .is_some_and(|since| since.elapsed() >= self.defer_limit);
+        if timed_out && self.running.is_some() {
             self.lagging = Some(Instant::now());
-            self.defer_limit = self.defer_limit.saturating_mul(2);
+            self.defer_limit = (self.defer_limit * 2).min(MAX_DEFER_LIMIT);
         }
         std::mem::take(&mut self.deferred)
     }
