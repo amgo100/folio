@@ -1562,7 +1562,9 @@ fn every_version_is_written() {
     // A shuffled paper writes each variant in each version (SPEC §6.4),
     // never the paper in source order.
     let dir = project("versions");
-    let written: Arc<Mutex<Vec<(Option<String>, bool)>>> = Arc::default();
+    // Each output's path, and whether it compiled to a file.
+    type Written = Vec<(Option<String>, bool)>;
+    let written: Arc<Mutex<Written>> = Arc::default();
     let sink = written.clone();
     let (_preview, events) = start(dir.path(), |o| {
         o.watch(false)
