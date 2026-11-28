@@ -21,7 +21,7 @@
 //! or to finish, [`MAX_DEFER`] at first, so that saves faster than a check
 //! still update the preview.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -443,6 +443,7 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         deferred: BTreeSet::new(),
         deferred_since: None,
         released: BTreeSet::new(),
+        texts: HashMap::new(),
         rx,
         queue: VecDeque::new(),
     };
@@ -522,7 +523,8 @@ struct Engine {
     /// Whether a watcher runs that reports when a file open for writing
     /// is closed, which files are held for ([`torn`]).
     closes: bool,
-    /// The paths truncated or written and not closed since.
+    /// The files truncated or written and not closed since, by their
+    /// [`resolved`] paths, as are `held` and `released`.
     open: BTreeSet<PathBuf>,
     /// The files held as perhaps read in the middle of a save in place
     /// ([`torn`]), and when they are read anyway if their writer has not
@@ -541,9 +543,12 @@ struct Engine {
     deferred: BTreeSet<PathBuf>,
     /// Since when changes have waited ([`MAX_DEFER`]).
     deferred_since: Option<Instant>,
-    /// The held sources whose time ran out, read as they are when next
+    /// The held files whose time ran out, read as they are when next
     /// applied.
     released: BTreeSet<PathBuf>,
+    /// The world's sources by project path as the engine last set them,
+    /// which [`Self::recheck`] puts back when a read was torn.
+    texts: HashMap<String, Source>,
     /// What the engine is told.
     rx: Receiver<Input>,
     /// Inputs taken from `rx` to see whether events wait, handled before
@@ -654,14 +659,6 @@ impl Engine {
         }
     }
 
-    /// Whether a write of `path` waits to be handled.
-    fn waiting(&mut self, path: &Path) -> bool {
-        self.queue.extend(self.rx.try_iter());
-        self.queue
-            .iter()
-            .any(|input| matches!(input, Input::Paths(paths, change) if *change == Change::Written && paths.iter().any(|p| p == path)))
-    }
-
     /// Records which paths are open for writing after an event.
     fn note(&mut self, paths: &[PathBuf], change: Change) {
         match change {
@@ -669,8 +666,9 @@ impl Engine {
             Change::Written if self.closes => {
                 for path in paths {
                     // A new save: guarded again.
-                    self.released.remove(path);
-                    self.open.insert(path.clone());
+                    let file = resolved(path);
+                    self.released.remove(&file);
+                    self.open.insert(file);
                 }
             }
             Change::Written => {}
@@ -679,16 +677,18 @@ impl Engine {
                 for path in paths {
                     // Read with the rest of the event's batch, which takes
                     // it out of `held` unless it still reads torn.
-                    self.open.remove(path);
+                    self.open.remove(&resolved(path));
                 }
             }
             // Removed, renamed or created: whatever writes it now has
             // opened it again.
             Change::Moved => {
-                // With everything under a directory moved.
+                // With everything under a directory moved; a link that was
+                // made or removed is not followed to what it leads to.
                 for path in paths {
-                    self.open.retain(|open| !open.starts_with(path));
-                    self.released.retain(|released| !released.starts_with(path));
+                    let at = location(path);
+                    self.open.retain(|open| !open.starts_with(&at));
+                    self.released.retain(|released| !released.starts_with(&at));
                 }
             }
             Change::Other => {}
@@ -762,26 +762,25 @@ impl Engine {
     /// truncate and the end of the write of a save in place: any file
     /// still open for writing, and the sources that read [`torn`]; and
     /// holds them until their writers close them, [`MAX_HOLD`] at most.
-    /// Returns the sources left in `paths` with the world's text of each,
-    /// which [`Self::recheck`] checks again once they are read.
-    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Vec<(PathBuf, String, Option<Source>)> {
-        // Released paths are read as they are, once.
+    /// Returns the files whose hold ran out, which [`Self::recheck`] lets
+    /// through as they are, or `None` when nothing is held: no watcher
+    /// that reports closes, or no world.
+    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Option<Before> {
+        // Released files are read as they are, once.
         let released: BTreeSet<PathBuf> = paths
             .iter()
-            .filter(|path| self.released.remove(*path))
-            .cloned()
+            .map(|path| resolved(path))
+            .filter(|file| self.released.remove(file))
             .collect();
-        let mut left = Vec::new();
         if !self.closes {
-            return left;
+            return None;
         }
-        let Some(world) = &self.world else {
-            return left;
-        };
-        let mut held = Vec::new();
+        let world = self.world.as_ref()?;
+        let mut held = BTreeSet::new();
         let mut read = Vec::new();
         paths.retain(|path| {
-            if released.contains(path) {
+            let file = resolved(path);
+            if released.contains(&file) {
                 return true;
             }
             // Any file still open for writing, new ones and data files
@@ -789,78 +788,98 @@ impl Engine {
             let input = self
                 .loader_path(path)
                 .is_some_and(|rel| !rel.split('/').any(|part| part.starts_with('.')));
-            if input && self.open.contains(path) && path.is_file() {
-                held.push(path.clone());
+            let open = self.open.contains(&file);
+            if input && open && path.is_file() {
+                held.insert(file);
                 return false;
             }
-            // A file that is gone is removed at once.
-            let Some((rel, meta)) = self.loader_path(path).zip(std::fs::metadata(path).ok()) else {
-                read.push(path.clone());
+            // A file that is gone is removed at once; a new one is checked
+            // once read.
+            let Some((source, meta)) = self
+                .loader_path(path)
+                .and_then(|rel| world.source(&rel))
+                .zip(std::fs::metadata(path).ok())
+            else {
+                read.push(file);
                 return true;
             };
-            // A new source is checked once read; data files are held only
-            // while open, above.
-            let Some(source) = world.source(&rel) else {
-                read.push(path.clone());
-                if rel.ends_with(".fol") || rel.ends_with(".fsty") {
-                    left.push((path.clone(), rel, None));
-                }
-                return true;
-            };
-            let hold = torn(
-                source.text().len() as u64,
-                meta.len(),
-                self.open.contains(path),
-            );
+            let hold = torn(source.text().len() as u64, meta.len(), open);
             if hold {
-                held.push(path.clone());
+                held.insert(file);
             } else {
-                read.push(path.clone());
-                left.push((path.clone(), rel, Some(source)));
+                read.push(file);
             }
             !hold
         });
-        // A directory read again reads the files under it: those still
-        // open for writing are checked once read.
-        for dir in paths.iter().filter(|path| path.is_dir()) {
-            for path in self.open.iter().filter(|path| path.starts_with(dir)) {
-                if let Some(rel) = self.loader_path(path)
-                    && !left.iter().any(|(p, _, _)| p == path)
-                    && (rel.ends_with(".fol") || rel.ends_with(".fsty"))
-                {
-                    let source = world.source(&rel);
-                    left.push((path.clone(), rel, source));
-                }
-            }
-        }
         // Read whole, or gone: no longer held.
-        for path in read {
-            self.held.remove(&path);
+        for file in read {
+            if !held.contains(&file) {
+                self.held.remove(&file);
+            }
         }
         let until = Instant::now() + MAX_HOLD;
-        for path in held {
-            self.held.entry(path).or_insert(until);
+        for file in held {
+            self.held.entry(file).or_insert(until);
         }
-        left
+        // Every file whose hold ran out is read as it is, however the batch
+        // reaches it.
+        let released = released
+            .into_iter()
+            .chain(self.released.iter().cloned())
+            .collect();
+        Some(Before { released })
     }
 
-    /// Puts back the world's text of the sources that read torn
-    /// ([`torn`]) after the loader read them, or takes out a new one, as their truncate or
+    /// Puts back the world's text of the sources that read [`torn`] after
+    /// the loader read them, or takes out a new one, as their truncate or
     /// write may have come between the check of [`Self::hold`] and the
-    /// read, and holds them; takes them out of `changed`. Returns whether
-    /// it put any back: the world changed twice, which cancelled the check
-    /// running, so its revision must be checked again.
+    /// read, and holds them; takes them out of `changed`. Every source the
+    /// loader changed is checked, by its project path: a file may be read
+    /// under several, through links inside the project, or under a
+    /// directory read again, and whether it is being written is told by
+    /// its path or the path it resolves to. Returns whether it put any
+    /// back (the world changed twice, which cancelled the check running,
+    /// so its revision must be checked again), and the sources read torn
+    /// that it could not put back.
     fn recheck(
         &mut self,
-        sources: Vec<(PathBuf, String, Option<Source>)>,
+        before: Option<Before>,
         changed: &mut BTreeSet<String>,
         warned: usize,
-    ) -> bool {
+    ) -> (bool, BTreeSet<String>) {
+        let Some(before) = before else {
+            return (false, BTreeSet::new());
+        };
+        // Read torn, held, and not put back.
+        let mut kept = BTreeSet::new();
+        // The files being written: open, or with a write waiting to be
+        // handled, by their paths and the paths they resolve to.
+        self.queue.extend(self.rx.try_iter());
+        let queued = self.queue.iter().filter_map(|input| match input {
+            Input::Paths(paths, Change::Written) => Some(paths),
+            _ => None,
+        });
+        let written: BTreeSet<PathBuf> = queued
+            .flatten()
+            .map(|path| resolved(path))
+            .chain(self.open.iter().cloned())
+            .collect();
         let mut held = Vec::new();
-        for (path, rel, old) in sources {
-            if !changed.contains(&rel) {
+        let sources: Vec<String> = changed
+            .iter()
+            .filter(|rel| rel.ends_with(".fol") || rel.ends_with(".fsty"))
+            .cloned()
+            .collect();
+        for rel in sources {
+            let path = self.root.join(&rel);
+            let file = resolved(&path);
+            let writing = written.contains(&file);
+            // Read as it is, once, its hold over, unless a new save of it
+            // has begun.
+            if !writing && (self.released.remove(&file) || before.released.contains(&file)) {
                 continue;
             }
+            let old = self.texts.get(&rel).cloned();
             let old_len = old.as_ref().map_or(0, |old| old.text().len() as u64);
             // Removed by the loader: gone, or not UTF-8, as when the read
             // ends inside a character that a write in chunks splits.
@@ -868,34 +887,30 @@ impl Engine {
             let torn = match &new {
                 Some(new) => {
                     let new_len = new.text().len() as u64;
-                    let writing = self.open.contains(&path) || self.waiting(&path);
                     torn(old_len, new_len, writing)
                 }
-                None => {
-                    old.is_some()
-                        && path.exists()
-                        && (self.open.contains(&path) || self.waiting(&path))
-                }
+                None => old.is_some() && path.exists() && writing,
             };
             if !torn {
                 continue;
             }
-            // Read again on its close either way.
-            // A new file is taken out again.
+            // Read again on its close either way. A new file is taken out
+            // again.
             let put_back = self.world.as_mut().is_some_and(|world| match &old {
                 Some(old) => world.set_source(&rel, old.text()).is_ok(),
                 None => world.remove_source(&rel),
             });
             if put_back {
                 changed.remove(&rel);
-                held.push((path, rel));
+                held.push((file, rel));
             } else {
-                self.held.entry(path).or_insert(Instant::now() + MAX_HOLD);
+                self.held.entry(file).or_insert(Instant::now() + MAX_HOLD);
+                kept.insert(rel);
             }
         }
         let restored = !held.is_empty();
         let until = Instant::now() + MAX_HOLD;
-        for (path, rel) in held {
+        for (file, rel) in held {
             // The loader's warning that the file is not UTF-8 is about a
             // read that is put back.
             let message = format!("cannot read `{rel}`: it is not UTF-8 text");
@@ -904,9 +919,48 @@ impl Engine {
                 index += 1;
                 index <= warned || warning.message != message
             });
-            self.held.entry(path).or_insert(until);
+            self.held.entry(file).or_insert(until);
         }
-        restored
+        (restored, kept)
+    }
+
+    /// Records the world's texts of all its sources ([`Self::texts`]),
+    /// but for those still open for writing, which keep the text recorded
+    /// before, as the world's may be a torn read.
+    fn record_all(&mut self) {
+        let Some(world) = &self.world else {
+            self.texts.clear();
+            return;
+        };
+        let mut texts = HashMap::new();
+        for path in world.source_paths() {
+            let path = path.as_str();
+            let open =
+                !self.open.is_empty() && self.open.contains(&resolved(&self.root.join(path)));
+            let text = match open {
+                true => self.texts.get(path).cloned().or_else(|| world.source(path)),
+                false => world.source(path),
+            };
+            if let Some(text) = text {
+                texts.insert(path.to_owned(), text);
+            }
+        }
+        self.texts = texts;
+    }
+
+    /// Records the world's texts of the sources at the paths that changed
+    /// ([`Self::texts`]), but for those in `torn`, read torn and held
+    /// without their text put back.
+    fn record(&mut self, changed: &BTreeSet<String>, torn: &BTreeSet<String>) {
+        let Some(world) = &self.world else {
+            return;
+        };
+        for rel in changed.difference(torn) {
+            match world.source(rel) {
+                Some(source) => self.texts.insert(rel.clone(), source),
+                None => self.texts.remove(rel),
+            };
+        }
     }
 
     /// Builds the project's world from the disk.
@@ -941,6 +995,7 @@ impl Engine {
         }
         world.set_today(self.settings.today);
         self.world = Some(world);
+        self.record_all();
         self.redraw = true;
         self.edited();
     }
@@ -948,7 +1003,7 @@ impl Engine {
     /// Brings the world in step with the disk at the paths that changed.
     fn apply(&mut self, paths: &[PathBuf]) {
         let mut paths = paths.to_vec();
-        let sources = self.hold(&mut paths);
+        let before = self.hold(&mut paths);
         if paths.is_empty() {
             return;
         }
@@ -984,11 +1039,18 @@ impl Engine {
             Ok(update) => update,
             Err(e) => {
                 self.warnings.push(error(e.to_string()));
+                // What it changed before the error is not known; the files
+                // released for this batch are still to be read as they are.
+                self.record_all();
+                if let Some(before) = before {
+                    self.released.extend(before.released);
+                }
                 self.edited();
                 return;
             }
         };
-        let restored = self.recheck(sources, &mut update.changed, warned);
+        let (restored, torn) = self.recheck(before, &mut update.changed, warned);
+        self.record(&update.changed, &torn);
         if project_file {
             // Cleared only here, where the change is a new revision
             // (`edited` below), whose check schedules the writes that the
@@ -1714,6 +1776,37 @@ impl Files for Layered {
     }
 }
 
+/// What [`Engine::recheck`] needs from before the loader reads a batch:
+/// the files whose hold ran out, which are read as they are
+/// ([`Engine::hold`]).
+struct Before {
+    released: BTreeSet<PathBuf>,
+}
+
+/// The file a path names, as the path it resolves to, links followed: the
+/// key of the files open for writing, held and released, so that a file
+/// reached through several paths, as through links inside the project,
+/// is one. A path that no longer resolves, as a removed file, is taken
+/// where it was ([`location`]).
+fn resolved(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| location(path))
+}
+
+/// Where a path is, its last part not followed if it is a link: its
+/// nearest directory that exists, resolved, with the rest of the path.
+fn location(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut dir = path;
+    while let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) {
+        rest.push(name);
+        if let Ok(base) = parent.canonicalize() {
+            return rest.iter().rev().fold(base, |at, part| at.join(part));
+        }
+        dir = parent;
+    }
+    path.to_path_buf()
+}
+
 /// Sends a check's end as cancelled when it is dropped before the check
 /// sends its own, as when the check panics.
 struct Ended {
@@ -1751,7 +1844,28 @@ fn error(message: String) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use super::torn;
+    use super::{location, resolved, torn};
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_is_one_whatever_path_reaches_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("shared")).unwrap();
+        std::fs::write(root.join("shared/a.fol"), "a").unwrap();
+        std::os::unix::fs::symlink("shared", root.join("chapters")).unwrap();
+        let file = resolved(&root.join("shared/a.fol"));
+        assert_eq!(resolved(&root.join("chapters/a.fol")), file);
+        // A link itself is where it is, not where it leads.
+        let canonical = root.canonicalize().unwrap();
+        assert_eq!(location(&root.join("chapters")), canonical.join("chapters"));
+        // A path whose directories are gone is taken from the nearest one
+        // that is not, resolved.
+        assert_eq!(
+            resolved(&root.join("gone/deeper/b.fol")),
+            canonical.join("gone/deeper/b.fol")
+        );
+    }
 
     #[test]
     fn reads_that_may_fall_inside_a_save_are_torn() {

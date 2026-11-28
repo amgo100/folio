@@ -1556,3 +1556,62 @@ fn images_are_sent_once_to_clients_that_keep_them() {
 fn raw_frames_revision(read: &[(u64, Vec<Vec<u8>>)]) -> u64 {
     read.last().map_or(0, |(revision, _)| *revision)
 }
+
+// A file reached through a link inside the project is read under both
+// paths, and the watcher names it by one of them (here the link's, which
+// is why the document includes it by the other): while it is truncated
+// and still open, the whole project is read again, as after lost events,
+// and the document must not show it empty.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_read_through_a_link_while_written_is_not_shown() {
+    let dir = long_project(6);
+    let root = dir.path();
+    std::fs::create_dir(root.join("shared")).unwrap();
+    let text = std::fs::read_to_string(root.join("main.fol")).unwrap();
+    std::fs::write(root.join("shared/a.fol"), &text).unwrap();
+    std::os::unix::fs::symlink("shared", root.join("chapters")).unwrap();
+    std::fs::write(root.join("main.fol"), "#include \"shared/a.fol\"\n").unwrap();
+    let (preview, events) = start(root, |o| o);
+    let first = updated(&events, |u| u.pages > 0);
+    assert!(first.pages >= 2, "{} pages", first.pages);
+
+    let file = root.join("shared/a.fol");
+    let mut handle = std::fs::File::create(&file).unwrap();
+    // The truncate's event is handled: the file is held. Both waits are
+    // well inside its hold of half a second.
+    let mut counts = page_counts(&events, Instant::now() + Duration::from_millis(100));
+    preview.changed([root]);
+    counts.extend(page_counts(
+        &events,
+        Instant::now() + Duration::from_millis(150),
+    ));
+    assert!(
+        counts.iter().all(|&(_, pages)| pages == first.pages),
+        "{} pages, then {counts:?} while the file was written",
+        first.pages
+    );
+    // The save, twice as long, is shown once it is closed.
+    handle
+        .write_all(format!("{text}{text}").as_bytes())
+        .unwrap();
+    drop(handle);
+    let saved = updated(&events, |u| u.pages > first.pages);
+    assert!(saved.pages > first.pages);
+    preview.stop();
+}
+
+// A source emptied on purpose is held as if caught mid-save, and shown
+// empty once its hold runs out.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_source_emptied_on_purpose_is_shown_empty() {
+    let dir = long_project(6);
+    let (preview, events) = start(dir.path(), |o| o);
+    let first = updated(&events, |u| u.pages > 0);
+    assert!(first.pages >= 2, "{} pages", first.pages);
+    std::fs::write(dir.path().join("main.fol"), "").unwrap();
+    let emptied = updated(&events, |u| u.pages < first.pages);
+    assert_eq!(emptied.pages, 1);
+    preview.stop();
+}
