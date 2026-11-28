@@ -10,9 +10,9 @@ page 1 419.53 × 595.28, 14 line(s)
         text (0.00, 35.51) SourceSerif4-Regular 10.50 w 92.98 19 glyph(s) "2.\u{a0}Worked answer, 2"
         text (0.00, 56.73) SourceSerif4-Regular 10.50 w 110.11 24 glyph(s) "3.\u{a0}Launch at an angle, 2"
       box (0.00, 110.32) 334.49 × 63.66 main.fol:5:2 baselines 14.29..56.73
-        text (0.00, 14.29) SourceSerif4-Regular 10.50 w 201.33 44 glyph(s) "Figure\u{a0}2: Horizontal and vertical motion., 1"
-        text (0.00, 35.51) SourceSerif4-Regular 10.50 w 171.41 38 glyph(s) "Figure\u{a0}3: The path, drawn to scale., 2"
-        text (0.00, 56.73) SourceSerif4-Regular 10.50 w 234.13 52 glyph(s) "Figure\u{a0}4: The launch, with the velocity resolved., 2"
+        text (0.00, 14.29) SourceSerif4-Regular 10.50 w 198.60 43 glyph(s) "Figure\u{a0}2: Horizontal and vertical motion, 1"
+        text (0.00, 35.51) SourceSerif4-Regular 10.50 w 168.68 37 glyph(s) "Figure\u{a0}3: The path, drawn to scale, 2"
+        text (0.00, 56.73) SourceSerif4-Regular 10.50 w 231.40 51 glyph(s) "Figure\u{a0}4: The launch, with the velocity resolved, 2"
       box (0.00, 189.58) 334.49 × 203.03 main.fol:7:1 baselines 16.88..195.82
         box (0.00, 0.00) 334.49 × 24.65 main.fol:7:1 baselines 16.88..16.88 keep penalty 10000
           text (0.00, 16.88) SourceSerif4-Bold 13.00 w 121.78 20 glyph(s) "1.\u{a0}Horizontal launch"
