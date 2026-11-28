@@ -108,13 +108,11 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("float", float),
     ("int", int),
     ("json", json),
-    ("minmax", minmax),
     ("num", num_func),
     ("panic", panic),
     ("qty", qty_func),
     ("range", range),
     ("read", read),
-    ("repeat", repeat),
     ("repr", repr),
     ("rgb", rgb),
     ("shuffle", shuffle),
@@ -125,23 +123,38 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("yaml", yaml),
 ];
 
+/// The track functions of content, `minmax` and `repeat` (SPEC §7.4), for
+/// a name no binding, global or element takes. They are not globals, so
+/// that a stylesheet, which looks its calls up among the globals, keeps
+/// writing them as keyword calls, and an element a component names so
+/// keeps its name.
+pub(super) fn track_function(name: &str) -> Option<Value> {
+    match name {
+        "minmax" => Some(native("minmax", minmax)),
+        "repeat" => Some(native("repeat", repeat)),
+        _ => None,
+    }
+}
+
 /// `minmax(2cm, 1fr)` in a `column-tracks` hint: a track at least `min`
-/// and at most `max` wide, as a stylesheet writes it (SPEC §7.4). `min` is
-/// a length, a ratio or `auto`; `max` may also be a fraction.
+/// and at most `max` wide, as a stylesheet writes it. `min` is a length, a
+/// ratio or `auto`; `max` may also be a fraction.
 fn minmax(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
-    let min = args.expect::<Value>("the least size")?;
-    let max = args.expect::<Value>("the greatest size")?;
-    let span = args.span;
-    let min = fixed_or_auto(min, false).at(span)?;
-    let max = fixed_or_auto(max, true).at(span)?;
+    let mut sizes = Vec::with_capacity(2);
+    for (what, fraction) in [("the least size", false), ("the greatest size", true)] {
+        let Some(arg) = args.eat() else {
+            bail!(args.span, "missing argument: {what}");
+        };
+        sizes.push(track_size(arg.value, fraction).at(arg.span)?);
+    }
     Ok(Value::Call(
         track_name("minmax"),
-        [min, max].into_iter().collect(),
+        sizes.into_iter().collect(),
     ))
 }
 
 /// `repeat(3, auto)` or `repeat(2, 1fr, 2cm)` in a `column-tracks` hint:
-/// the tracks given, `n` times over, as a stylesheet writes it (SPEC §7.4).
+/// the tracks given, `n` times over, as a stylesheet writes it.
 fn repeat(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let span = args.span;
     let n = args.expect::<i64>("how many times")?;
@@ -152,7 +165,10 @@ fn repeat(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     while let Some(arg) = args.eat() {
         let track = match arg.value {
             Value::Call(name, call) if name.as_str() == "minmax" => Value::Call(name, call),
-            value => fixed_or_auto(value, true).at(arg.span)?,
+            Value::Call(name, _) if name.as_str() == "repeat" => {
+                bail!(arg.span, "`repeat` cannot hold another `repeat`");
+            }
+            value => track_size(value, true).at(arg.span)?,
         };
         items.push(track);
     }
@@ -165,12 +181,15 @@ fn repeat(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     ))
 }
 
-/// A size of a track: a length, a ratio, `auto`, or with `fraction` a
-/// fraction too.
-fn fixed_or_auto(value: Value, fraction: bool) -> StrResult<Value> {
+/// A size of a track: a length (a zero without a unit too), a ratio,
+/// `auto`, or with `fraction` a fraction too. A stylesheet token is not
+/// one: it is resolved for a whole hint or an item of its list only.
+fn track_size(value: Value, fraction: bool) -> StrResult<Value> {
     match value {
         Value::Length(_) | Value::Ratio(_) | Value::Auto => Ok(value),
         Value::Fraction(_) if fraction => Ok(value),
+        Value::Int(0) => Ok(Value::Length(Default::default())),
+        Value::Float(f) if f.get() == 0.0 => Ok(Value::Length(Default::default())),
         other => Err(eco_format!(
             "expected a length, a ratio{} or `auto`, found {}",
             if fraction { ", a fraction" } else { "" },

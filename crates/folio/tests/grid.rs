@@ -210,7 +210,7 @@ fn track_function_errors() {
         ),
         (
             "#grid(column-tracks: repeat(2, repeat(2, 1cm)))[x]\n",
-            "expected a length, a ratio, a fraction or `auto`, found a track",
+            "`repeat` cannot hold another `repeat`",
         ),
     ];
     for (text, message) in cases {
@@ -223,6 +223,36 @@ fn track_function_errors() {
     // A track function is a value of its own.
     let world = world("", "#repr(minmax(2cm, 1fr)) #type(repeat(2, auto))\n");
     assert!(messages(&world).is_empty(), "{:?}", messages(&world));
+    let all: String = page_runs(&pages(&world).pages[0])
+        .into_iter()
+        .map(|(_, t)| t)
+        .collect();
+    assert!(
+        all.contains("minmax(") && all.contains("track list"),
+        "{all}"
+    );
+}
+
+#[test]
+fn a_zero_and_stylesheet_keyword_calls() {
+    // A zero without a unit is a length in content.
+    let content = world(
+        "",
+        "#grid(column-tracks: (minmax(0, 1fr), 1fr))[\n  #cell[a] #cell[b]\n]\n",
+    );
+    let length = world(
+        "",
+        "#grid(column-tracks: (minmax(0pt, 1fr), 1fr))[\n  #cell[a] #cell[b]\n]\n",
+    );
+    assert!(messages(&content).is_empty(), "{:?}", messages(&content));
+    assert_eq!(columns_of(&content), columns_of(&length));
+    // A stylesheet still writes them as keyword calls, whose arguments it
+    // does not check.
+    let style = world(
+        "grid.t { column-tracks: minmax(min-content, 1fr) 2cm; }\n",
+        "#grid(class: \"t\")[\n  #cell[a] #cell[b]\n]\n",
+    );
+    assert!(messages(&style).is_empty(), "{:?}", messages(&style));
 }
 
 #[test]

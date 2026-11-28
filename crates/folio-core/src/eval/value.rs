@@ -101,6 +101,7 @@ impl Value {
             Self::Args(_) => "arguments",
             Self::Module(_) => "module",
             Self::Token(_) => "token",
+            Self::Call(name, _) if name.as_str() == "repeat" => "track list",
             Self::Call(..) => "track",
             Self::Math(_) => "formula",
         }
