@@ -611,3 +611,58 @@ fn answer_space_breaks_across_pages_only_when_asked() {
     assert_eq!(find(&whole, "After").0, find(&broken, "After").0);
     assert!(find(&broken, "After").1 < find(&whole, "After").1);
 }
+
+/// The text of the paragraphs that the spaces of a variant measure.
+fn measured_text(world: &World, variant: &str) -> Vec<String> {
+    fn walk(block: &folio::TextBlock, text: &folio::Text, out: &mut Vec<String>) {
+        for child in &block.children {
+            match child {
+                folio::TextFlow::Paragraph(i) => {
+                    out.push(text.paragraphs[*i].shaped.text().replace('\u{a0}', " "))
+                }
+                folio::TextFlow::Block(b) => walk(b, text, out),
+            }
+        }
+    }
+    let text = folio::text(world, Target::Pdf, Some(&name(variant)))
+        .unwrap()
+        .unwrap();
+    let mut out = Vec::new();
+    for space in &text.spaces {
+        if let Some(block) = &space.measure {
+            walk(block, &text, &mut out);
+        }
+    }
+    out
+}
+
+#[test]
+fn hidden_content_is_measured_with_its_numbers_and_references() {
+    let world = world(
+        "figure.h { display: hidden; }\nheading { numbering: \"1.\"; }\n",
+        "figure.h { display: block; }\n",
+        "= Forces <forces>\n\n#figure(caption: [A ball.])[Ball.] <ball>\n\n\
+         #figure(class: \"h\")[See @ball and @forces, and @step.\n\n\
+         + First step. <step>\n+ Second step.\n\n#figure(caption: [Inner.])[In.] <inner>\n\n\
+         As @inner shows.]\n\n#figure(caption: [After.])[Last.]\n",
+    );
+    let measured = measured_text(&world, "exam");
+    let joined = measured.join(" | ");
+    assert!(!joined.contains("??"), "{joined}");
+    assert!(joined.contains("See Figure 1 and Section 1, and 1."), "{joined}");
+    assert!(joined.contains("2.") && joined.contains("Figure 2"), "{joined}");
+    // The figure after the hidden content is numbered as if it were not
+    // there: the paper shows no gap in its numbers.
+    let exam = pages(&world, "exam");
+    assert!(shown(&exam).contains("Figure 2"), "{}", shown(&exam));
+    assert!(!shown(&exam).contains("Figure 3"));
+    // And nothing reports on what only measures.
+    let found = diagnostics(&world, "exam");
+    assert!(found.is_empty(), "{found:?}");
+    // The paper and the mark scheme still break alike.
+    assert_same(
+        find(&exam, "Last"),
+        find(&pages(&world, "markscheme"), "Last"),
+        "Last",
+    );
+}

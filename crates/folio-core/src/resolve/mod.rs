@@ -85,6 +85,7 @@ use crate::eval::{Element, Value};
 use crate::locale;
 use crate::locate::StyledChildren;
 use crate::model::{document, schema};
+use crate::variants::select::{Measure, Space};
 use crate::style::{
     Child, ComputedStyle, PropId, Properties, Styled, StyledNode, content_elements, styled_children,
 };
@@ -448,6 +449,19 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
         refs: Vec::new(),
         styles: HashMap::new(),
         patterns: HashMap::new(),
+        spaces: crate::pipeline::select(db, build.base(db))
+            .as_ref()
+            .map(|selected| {
+                selected
+                    .spaces
+                    .iter()
+                    .filter(|space| space.measure.is_some())
+                    .map(|space| ((space.location, space.part.clone()), space))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        quiet: false,
+        measured_labels: Vec::new(),
     };
     walk.out.footnotes_per_page = page_resets(db, build, styled);
     walk.element(root, &styled.root);
@@ -578,6 +592,10 @@ struct PendingRef {
     lang: Lang,
     /// Whether it refers to its target's page.
     page: bool,
+    /// Whether it is in content that a space only measures (SPEC §6.3):
+    /// it shows what it would where the content is shown, and reports
+    /// nothing.
+    quiet: bool,
 }
 
 struct Walk<'a> {
@@ -611,6 +629,14 @@ struct Walk<'a> {
     /// it has one: its own `numbering`, or, for an item, its enum's. A
     /// reference shows the number as the target does.
     patterns: HashMap<Location, Pattern>,
+    /// The spaces of `hidden` and `answer-space` whose content layout
+    /// measures, by element instance and part (SPEC §6.3).
+    spaces: HashMap<(Location, Option<Name>), &'a Space>,
+    /// Whether the walk is in content that a space only measures, which
+    /// reports nothing.
+    quiet: bool,
+    /// The labels of that content, which only its own references see.
+    measured_labels: Vec<Labelled>,
 }
 
 /// The counters that components' elements declare `within` another
@@ -691,20 +717,87 @@ impl Walk<'_> {
         for (child, child_node) in styled_children(element, node) {
             match child {
                 Child::Element(child) => self.element(child, child_node),
-                Child::Part(_, content) => {
+                Child::Part(name, content) => {
                     let mut kids = StyledChildren::new(child_node);
                     for child in content_elements(content) {
                         if let Some(child_node) = kids.element(child) {
                             self.element(child, child_node);
                         }
                     }
+                    self.measured(element.location, Name::new(name));
                 }
             }
         }
+        self.measured(element.location, None);
         if list {
             self.lists.pop();
         }
         self.close_scopes(scoped);
+    }
+
+    /// Resolves the content that the space of an element instance, or of
+    /// its part, measures (SPEC §6.3), as where it is shown: its counters
+    /// go on from those of the space, so that its markers and references
+    /// have the text they would have there. The rest of the document does
+    /// not count it: the counters, lists and labels are restored after
+    /// it, its footnotes are not numbered, its labels are seen only by its
+    /// own references, and it reports nothing.
+    fn measured(&mut self, location: Location, part: Option<Name>) {
+        let Some(measure) = self
+            .spaces
+            .get(&(location, part))
+            .and_then(|space| space.measure.as_ref())
+        else {
+            return;
+        };
+        let counters = self.counters.clone();
+        let lists = self.lists.clone();
+        let seen = self.seen.clone();
+        let (labels, footnotes, refs) = (
+            self.out.labels.len(),
+            self.out.footnotes.len(),
+            self.refs.len(),
+        );
+        let quiet = std::mem::replace(&mut self.quiet, true);
+        // The space's own element was counted where it stands; only what
+        // it held is walked.
+        let (content, node): (Vec<&Element>, &StyledNode) = match measure {
+            Measure::Element(shown, node) => {
+                let children = styled_children(shown, node);
+                for (child, child_node) in children {
+                    match child {
+                        Child::Element(child) => self.element(child, child_node),
+                        Child::Part(name, content) => {
+                            let mut kids = StyledChildren::new(child_node);
+                            for child in content_elements(content) {
+                                if let Some(child_node) = kids.element(child) {
+                                    self.element(child, child_node);
+                                }
+                            }
+                            self.measured(shown.location, Name::new(name));
+                        }
+                    }
+                }
+                (Vec::new(), node)
+            }
+            Measure::Part(content, node) => (content_elements(content).collect(), node),
+        };
+        let mut kids = StyledChildren::new(node);
+        for child in content {
+            if let Some(child_node) = kids.element(child) {
+                self.element(child, child_node);
+            }
+        }
+        self.quiet = quiet;
+        let measured: Vec<Labelled> = self.out.labels.drain(labels..).collect();
+        self.measured_labels.extend(measured);
+        self.out.footnotes.truncate(footnotes);
+        for r in &mut self.refs[refs..] {
+            r.quiet = true;
+        }
+        self.counters = counters;
+        self.lists = lists;
+        self.seen = seen;
     }
 
     /// Opens a new level of each counter scoped to an element, after the
@@ -848,6 +941,7 @@ impl Walk<'_> {
                 supplement,
                 lang: self.lang(style),
                 page: is_page_form(element),
+                quiet: self.quiet,
             });
         }
     }
@@ -1099,11 +1193,20 @@ impl Walk<'_> {
         let refs = std::mem::take(&mut self.refs);
         let mut resolved = Vec::with_capacity(refs.len());
         for r in refs {
-            let labelled = self.out.label(&r.label).cloned();
+            // A reference in measured content also sees the labels there.
+            let labelled = self.out.label(&r.label).cloned().or_else(|| {
+                self.measured_labels
+                    .iter()
+                    .find(|l| r.quiet && l.label == r.label)
+                    .cloned()
+            });
             let page = r.page.then(|| self.page_word(&r));
+            self.quiet = r.quiet;
             let (target, text) = match labelled {
                 None => {
-                    self.missing(&r);
+                    if !r.quiet {
+                        self.missing(&r);
+                    }
                     (None, EcoString::from(UNRESOLVED))
                 }
                 // The page is set once a pass has measured it.
@@ -1119,6 +1222,7 @@ impl Walk<'_> {
                 span: r.span,
             });
         }
+        self.quiet = false;
         self.out.references = resolved.into_iter().collect();
     }
 
@@ -1301,11 +1405,13 @@ impl Walk<'_> {
     }
 
     fn report(&self, diagnostic: Diagnostic) {
-        diag::report(self.db, diagnostic);
+        if !self.quiet {
+            diag::report(self.db, diagnostic);
+        }
     }
 
     fn report_once(&mut self, key: EcoString, diagnostic: Diagnostic) {
-        if self.reported.insert(key) {
+        if !self.quiet && self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
     }
