@@ -523,3 +523,23 @@ fn a_space_in_a_row_is_a_width() {
         Some(&folio_component::Value::Length(folio_component::Abs::zero()))
     );
 }
+
+#[test]
+fn content_placed_twice_is_shown_once_and_empty_rows_vanish() {
+    // The title in the header and again in the body: shown in the header
+    // only. A row whose cells' conditions all fail is no block, so the
+    // second example has no header.
+    let style = "render example {\n  \
+                   header: row(strong(field(title)) if field(title));\n  \
+                   body: field(title) slot(statement);\n}\n";
+    let world = world(style, CONTENT);
+    let outlines = example_outlines(&world);
+    assert_eq!(
+        outlines,
+        [
+            "-[header[row[cell[\"Projectile on a slope\"]]] \
+             statement[-[\"A particle is projected up a slope.\"]]]",
+            "-[statement[-[\"A ball is dropped.\"]]]",
+        ]
+    );
+}

@@ -462,6 +462,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         in_note: false,
         continued: Vec::new(),
         template_grids: 0,
+        placed: Vec::new(),
     };
     collector.element(root, &styled.root);
 
@@ -525,6 +526,10 @@ struct Collector<'a> {
     /// The paragraph of each footnote's continuation mark, as
     /// [`Text::continued`].
     continued: Vec<Option<usize>>,
+    /// The content fields the template of the innermost templated element
+    /// being collected has placed: each is collected where it is first
+    /// placed only, so that no element instance is collected twice.
+    placed: Vec<Name>,
     /// How many grids the template of the innermost templated element
     /// being collected has made, which tells their locations apart.
     template_grids: u64,
@@ -700,8 +705,10 @@ impl Collector<'_> {
         // The grids of this instance are counted from its first, so that
         // their locations do not depend on what comes before it.
         let grids = std::mem::replace(&mut self.template_grids, 0);
+        let placed = std::mem::take(&mut self.placed);
         self.templated_content(element, node, expansion);
         self.template_grids = grids;
+        self.placed = placed;
     }
 
     fn templated_content(&mut self, element: &Element, node: &StyledNode, expansion: &Expansion) {
@@ -749,6 +756,9 @@ impl Collector<'_> {
                     }
                 }
                 TemplatePiece::Field { name, style } => {
+                    if !self.place(name) {
+                        continue;
+                    }
                     let Some(eval::Value::Content(content)) = element.field(name.as_str()) else {
                         continue;
                     };
@@ -776,6 +786,9 @@ impl Collector<'_> {
                     b.object_with(style, element, element.location, None, image);
                 }
                 TemplatePiece::Slot { name, .. } => {
+                    if !self.place(name) {
+                        continue;
+                    }
                     self.flush(builder.take(), style, element, &mut anchored);
                     if let Some(eval::Value::Content(content)) = element.field(name.as_str()) {
                         self.slot(element, node, name, content);
@@ -788,6 +801,17 @@ impl Collector<'_> {
             }
         }
         self.flush(builder, style, element, &mut anchored);
+    }
+
+    /// Records that the current template places a content field, and
+    /// whether it is the first time: a field placed twice is collected the
+    /// first time only.
+    fn place(&mut self, name: &Name) -> bool {
+        if self.placed.contains(name) {
+            return false;
+        }
+        self.placed.push(name.clone());
+        true
     }
 
     /// The number of an element as a template's `counter()` shows it: its
@@ -831,6 +855,9 @@ impl Collector<'_> {
                     }
                 }
                 TemplatePiece::Field { name, style } => {
+                    if !self.place(name) {
+                        continue;
+                    }
                     // Blocks cannot stand in a line: a content field of
                     // blocks is left out of an inline element's template.
                     if let (Some(eval::Value::Content(content)), Some(part)) =
@@ -842,6 +869,9 @@ impl Collector<'_> {
                     }
                 }
                 TemplatePiece::Slot { name, style } => {
+                    if !self.place(name) {
+                        continue;
+                    }
                     let Some(eval::Value::Content(content)) = element.field(name.as_str()) else {
                         continue;
                     };
@@ -1320,14 +1350,19 @@ impl Collector<'_> {
         }
         if element.kind == ElementKind::Inline
             && let Some(expansion) = &node.template
+            && expansion.body.is_some()
         {
+            let owner = self.own(element);
+            let placed = std::mem::take(&mut self.placed);
             if let Some(header) = &expansion.header {
                 self.inline_pieces(element, node, &header.items, out, anchored);
             }
             if let Some(body) = &expansion.body {
                 self.inline_pieces(element, node, body, out, anchored);
-                return;
             }
+            self.placed = placed;
+            self.owner = owner;
+            return;
         }
         match element.kind {
             ElementKind::Inline => {}

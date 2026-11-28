@@ -984,13 +984,28 @@ fn hidden_parts(props: &Properties, style: &ComputedStyle, children: &[StyledNod
                 Some(V::Keyword(k)) => matches!(k.as_str(), "hidden" | "answer-space"),
                 _ => false,
             };
+            // `show-only` keeps the children it names and, condensed, those
+            // that hold one.
             left_out
                 || kept
                     .as_ref()
-                    .is_some_and(|kept| !kept.iter().any(|k| k == name.as_str()))
+                    .is_some_and(|kept| !holds_kept(name, child, kept))
         })
         .map(|(name, _)| name.clone())
         .collect()
+}
+
+/// Whether a part is named in `kept`, or holds a node that is.
+fn holds_kept(name: &Name, part: &StyledNode, kept: &[EcoString]) -> bool {
+    fn named(node: &StyledNode, kept: &[EcoString]) -> bool {
+        let name = match &node.name {
+            NodeName::Element(e) => e.name.as_str(),
+            NodeName::Part(p) => p.as_str(),
+            NodeName::Page => return false,
+        };
+        kept.iter().any(|k| k == name) || node.children.iter().any(|c| named(c, kept))
+    }
+    kept.iter().any(|k| k == name.as_str()) || part.children.iter().any(|c| named(c, kept))
 }
 
 /// A name as a list of names holds it: a keyword or a string.

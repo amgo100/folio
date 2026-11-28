@@ -1177,9 +1177,9 @@ impl<R: Restyle> Expander<'_, '_, R> {
                 }
             }
             Item::Layout(layout, cells, columns, span) => {
-                out.push(Piece::Block(
-                    self.layout(*layout, cells, columns, *span, at),
-                ));
+                if let Some(block) = self.layout(*layout, cells, columns, *span, at) {
+                    out.push(Piece::Block(block));
+                }
             }
             Item::Box(items) => {
                 let (style, cx) =
@@ -1263,9 +1263,10 @@ impl<R: Restyle> Expander<'_, '_, R> {
         columns: &Option<Declared>,
         span: Span,
         at: &At<R::Cx>,
-    ) -> Block {
-        // The cells that show something; a cell whose condition fails is
-        // left out, with its column.
+    ) -> Option<Block> {
+        // The cells that show something; a cell whose conditions all fail,
+        // inside an alignment too, is left out with its column, and a
+        // layout with no cells left is no block at all.
         let shown: Vec<Vec<&Item>> = cells
             .iter()
             .map(|cell| {
@@ -1273,8 +1274,19 @@ impl<R: Restyle> Expander<'_, '_, R> {
                 flatten(cell, self.element, &mut flat);
                 flat
             })
-            .filter(|cell| !cell.is_empty())
+            .filter(|cell| match cell[..] {
+                [] => false,
+                [Item::Align(_, items, _)] => {
+                    let mut inner = Vec::new();
+                    flatten(items, self.element, &mut inner);
+                    !inner.is_empty()
+                }
+                _ => true,
+            })
             .collect();
+        if shown.is_empty() {
+            return None;
+        }
         let (name, kind) = match layout {
             Layout::Row => (part_name("row"), BlockKind::Row),
             Layout::Stack => (part_name("stack"), BlockKind::Box),
@@ -1346,11 +1358,11 @@ impl<R: Restyle> Expander<'_, '_, R> {
                 }
             })
             .collect();
-        Block {
+        Some(Block {
             kind,
             style,
             children,
-        }
+        })
     }
 
     /// A cell of a row. A cell that is aligned takes the alignment, and one
