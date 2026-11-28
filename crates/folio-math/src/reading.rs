@@ -453,7 +453,10 @@ mod tests {
     #[test]
     fn pre_scripts_read_before_their_base() {
         assert_eq!(read("{}^{235}_{92}U"), "\"\"_92^235 U");
-        assert_eq!(read("{}^{14}_{6}C \\to {}^{14}_{7}N"), "\"\"_6^14 C → \"\"_7^14 N");
+        assert_eq!(
+            read("{}^{14}_{6}C \\to {}^{14}_{7}N"),
+            "\"\"_6^14 C → \"\"_7^14 N"
+        );
     }
 
     #[test]
