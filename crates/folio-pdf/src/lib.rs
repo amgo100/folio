@@ -1869,11 +1869,17 @@ mod preflight_tests {
                 boxed(3, vec![body]),
             ],
         );
+        foresees(ua, &root, section);
+    }
+
+    /// Checks a document of structure `root` whose node 1 holds `section`,
+    /// as [`check`] does, and gives the warnings.
+    fn foresees(ua: bool, root: &Tag, section: FragmentItem) -> Vec<Warning> {
         let pages = [page(vec![boxed(1, vec![section])])];
         let document = Document {
             pages: pages.iter().collect(),
             fonts: &Fonts,
-            structure: &root,
+            structure: root,
             info: Info {
                 title: Some("Forces".into()),
                 subject: None,
@@ -1902,6 +1908,7 @@ mod preflight_tests {
         assert_eq!(written.pdf_ua, checked.pdf_ua);
         assert_eq!(written.warnings, checked.warnings);
         assert_eq!(written.bytes, validated.bytes);
+        written.warnings
     }
 
     #[test]
@@ -1912,6 +1919,35 @@ mod preflight_tests {
     #[test]
     fn foresees_a_heading_without_text() {
         check(false, None, plain("A ball falls.", 3));
+    }
+
+    /// A heading that holds only a formula shows content through the
+    /// formula's node, not its own: without text, it is foreseen as
+    /// untitled, at the heading (#319); with text, it is titled.
+    #[test]
+    fn foresees_a_heading_that_holds_only_a_formula() {
+        for (ua, title) in [(false, None), (true, Some("E = m c^2"))] {
+            let mut formula = Tag::new(Role::Formula, at(4));
+            formula.text = Some("E = m c^2".into());
+            let mut head = Tag::new(Role::Heading, at(2));
+            head.text = title.map(Into::into);
+            head.children = vec![formula];
+            let mut section = Tag::new(Role::Section, at(5));
+            section.children = vec![head, Tag::new(Role::Paragraph, at(3))];
+            let mut root = Tag::new(Role::Document, at(1));
+            root.children = vec![section];
+            let section = boxed(
+                5,
+                vec![
+                    boxed(2, vec![boxed(4, vec![plain("E=mc", 4)])]),
+                    boxed(3, vec![plain("A ball falls.", 3)]),
+                ],
+            );
+            let warnings = foresees(ua, &root, section);
+            let sources: Vec<SourceRef> = warnings.iter().map(|w| w.source).collect();
+            let expected = if ua { vec![] } else { vec![SourceRef(2)] };
+            assert_eq!(sources, expected, "{warnings:?}");
+        }
     }
 
     #[test]

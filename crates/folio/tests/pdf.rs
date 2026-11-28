@@ -675,3 +675,60 @@ fn a_note_in_a_section_follows_the_whole_page() {
         fs::write(out.join("footnotes-sections.txt"), expected).unwrap();
     }
 }
+
+/// The diagnostics of `folio check` and of `folio build` for one build,
+/// by severity, message and rendered place.
+fn checked_and_built(world: &World) -> (Vec<String>, Vec<String>, Vec<u8>) {
+    let show = |diagnostics: &[Diagnostic]| -> Vec<String> {
+        diagnostics
+            .iter()
+            .map(|d| folio::diag::render(world, std::slice::from_ref(d), false))
+            .collect()
+    };
+    let checked = folio::check(world, Target::Pdf, None).unwrap();
+    let (pdf, built) = build(world);
+    (show(&checked.diagnostics), show(&built), pdf)
+}
+
+/// A heading's text holds its formulas, read from their math trees, and
+/// its images' `alt` text, so a heading that is only a formula has a title
+/// and a bookmark, and `check` and `build` agree (#319).
+#[test]
+fn a_heading_of_a_formula_has_its_reading_as_text() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n";
+    let mut world = World::new(manifest).unwrap();
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>"#;
+    world.set_file("ramp.svg", svg.to_vec()).unwrap();
+    let main = "#doc(title: [Energy])\n\n= $E = m c^2$\n\nMass is energy.\n\n= Units of $g$\n\nIt is an acceleration.\n\n= The #image(\"ramp.svg\", alt: \"ramp\") problem\n\nA block slides.\n";
+    world.set_source("main.fol", main).unwrap();
+    let (checked, built, pdf) = checked_and_built(&world);
+    assert_eq!(checked, built);
+    assert!(built.is_empty(), "{built:#?}");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("<pdfuaid:part>1</pdfuaid:part>"));
+    // Its bookmark and its `H` title.
+    assert!(text.matches("(E = m c^2)").count() >= 3, "{text}");
+    assert!(text.contains("(Units of g)"));
+    // And its images' descriptions.
+    assert!(text.contains("(The ramp problem)"));
+}
+
+/// A heading that shows only an image without `alt` has no text: `check`
+/// foresees what `build` finds, at the heading (#319).
+#[test]
+fn a_heading_of_an_undescribed_image_is_untitled_at_the_heading() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n";
+    let mut world = World::new(manifest).unwrap();
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>"#;
+    world.set_file("dot.svg", svg.to_vec()).unwrap();
+    let main = "#doc(title: [Forces])\n\n= #image(\"dot.svg\")\n\nA ball falls.\n";
+    world.set_source("main.fol", main).unwrap();
+    let (checked, built, pdf) = checked_and_built(&world);
+    assert_eq!(checked, built);
+    let heading = built
+        .iter()
+        .find(|d| d.contains("this heading has no text"))
+        .unwrap_or_else(|| panic!("a warning at the heading: {built:#?}"));
+    assert!(heading.contains("main.fol:3:1\n"), "{heading}");
+    assert!(!String::from_utf8_lossy(&pdf).contains("pdfuaid"));
+}
