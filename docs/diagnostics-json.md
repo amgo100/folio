@@ -65,7 +65,7 @@ Most diagnostics have no code yet. These have one:
 | --- | --- | --- |
 | `internal-error` | error | A query panicked in a long-lived process; it has no location. |
 | `namespace-element` | warning | A selector `name.` where `name` is both a component namespace and an element, so it reads as the namespace. |
-| `overfull-line` | warning | A line is wider than its space: no break fits. At the text the line ends with. |
+| `overfull-line` | warning | A line is wider than its space: no break fits. At the text the line ends with, or at the object (an inline formula or image) that makes the line overflow. |
 | `underfull-line` | warning | A justified line's spaces stretch further than its badness allows (TeX's limit), or it has no spaces to stretch. At the text the line ends with. |
 | `widow` | warning | A page break leaves fewer lines of a paragraph at the top of a page than `widows` asks for. At the paragraph. |
 | `orphan` | warning | A page break leaves fewer lines of a paragraph at the foot of a page than `orphans` asks for. At the paragraph. |

@@ -149,8 +149,9 @@ pub const INF_BAD: f64 = 10_000.0;
 /// [`OVERFULL_DEMERITS`].
 const EMPTY_DEMERITS: f64 = 100.0;
 /// The demerits of an overfull line in the final pass: more than any
-/// number of loose lines a paragraph could otherwise have.
-const OVERFULL_DEMERITS: f64 = 1e12;
+/// number of loose lines a paragraph could otherwise have, however empty
+/// ([`EMPTY_DEMERITS`]).
+const OVERFULL_DEMERITS: f64 = 1e15;
 /// Lengths closer than this, in points, are equal: sums of advances carry
 /// rounding errors.
 pub const EPSILON: f64 = 1e-9;

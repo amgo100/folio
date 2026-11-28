@@ -102,3 +102,16 @@ fn hints_suggest_only_settings_that_are_off() {
     assert!(!underfull.contains("hyphenate: true"), "{underfull}");
     assert!(underfull.contains("justify: false"), "{underfull}");
 }
+
+#[test]
+fn a_small_formula_beside_long_text_is_not_blamed() {
+    let world = world(
+        "doc { hyphenate: false; }\n",
+        &format!("{}$x$ and more.\n", "1234567890".repeat(8)),
+    );
+    let overfull = found(&world, "overfull-line");
+    assert_eq!(overfull.len(), 1, "{overfull:?}");
+    let (diagnostic, at) = &overfull[0];
+    assert!(!at.contains("$x$"), "{at:?}");
+    assert!(diagnostic.hints.join(" ").contains("hyphenate: true"));
+}
