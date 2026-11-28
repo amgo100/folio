@@ -141,7 +141,7 @@ fn early_cutoff_on_a_whitespace_edit() {
     let before = logged.compile("exam");
     assert!(logged.take().contains("build_output"));
 
-    // Whitespace in a paragraph: the file is reparsed and its two
+    // Whitespace in a paragraph: the file is reparsed and its three
     // per-file queries re-run, but return what they returned before, so the
     // file set of the build and the build's checks are not re-run. The file
     // is evaluated again, because its text spans changed, and so are the
@@ -151,7 +151,10 @@ fn early_cutoff_on_a_whitespace_edit() {
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(after, before);
-    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
+    assert_eq!(
+        logged.take(),
+        set(&["dependencies", "check_source", "file_elements", EVAL])
+    );
 
     // An edit that changes the imports re-runs the file set. The file it
     // adds does not exist, so the set is the same and the build's checks
@@ -169,6 +172,8 @@ fn early_cutoff_on_a_whitespace_edit() {
             "build_files",
             "dependencies",
             "check_source",
+            "file_elements",
+            "project_elements",
             "source_file",
             "match_node",
             "compile_build",
@@ -226,6 +231,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         set(&[
             "dependencies",
             "check_source",
+            "file_elements",
             "match_node",
             "compile_build",
             EVAL
@@ -243,7 +249,13 @@ fn diagnostics_change_while_the_build_is_cut_off() {
     );
     assert_eq!(
         logged.take(),
-        set(&["dependencies", "check_source", "compile_build", EVAL])
+        set(&[
+            "dependencies",
+            "check_source",
+            "file_elements",
+            "compile_build",
+            EVAL
+        ])
     );
 
     // A diagnostic of a file that two builds share is reported by one
@@ -800,4 +812,62 @@ fn snapshots_resolve_diagnostics_after_edits() {
         before
     );
     assert!(before.contains("main.fol"), "{before}");
+}
+
+/// A file on disk is read the first time something asks for it, and then
+/// kept until it is set again (SPEC §12.1).
+#[test]
+fn reads_a_file_on_disk_on_demand() {
+    let dir = tempfile::tempdir().unwrap();
+    let disk = dir.path().join("points.csv");
+    let mut world = World::new(MANIFEST).unwrap();
+    world.set_file_on_disk("data/points.csv", &disk).unwrap();
+    // Not there yet: nothing has read it.
+    std::fs::write(&disk, "x,y\n").unwrap();
+    assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n");
+    std::fs::write(&disk, "x,y\n1,2\n").unwrap();
+    assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n");
+    world.set_file_on_disk("data/points.csv", &disk).unwrap();
+    assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n1,2\n");
+
+    // A file that cannot be read is not there.
+    world
+        .set_file_on_disk("data/none.csv", dir.path().join("none.csv"))
+        .unwrap();
+    assert!(world.file_paths().any(|p| p.as_str() == "data/none.csv"));
+    assert!(world.file("data/none.csv").is_none());
+    assert!(world.set_file_on_disk("main.fol", &disk).is_err());
+}
+
+/// Adding many files one by one takes time linear in their number (#342).
+#[test]
+fn adds_many_files() {
+    let mut world = World::new(MANIFEST).unwrap();
+    for i in 0..20_000 {
+        world
+            .set_file(&format!("data/{i}.csv"), b"x".to_vec())
+            .unwrap();
+    }
+    assert_eq!(world.file_paths().count(), 20_000);
+    for i in 0..20_000 {
+        assert!(world.remove_file(&format!("data/{i}.csv")));
+    }
+    assert_eq!(world.file_paths().count(), 0);
+}
+
+/// A text data file gets a file id that errors can point into; an image
+/// does not, and removing the file frees its id.
+#[test]
+fn text_data_files_have_ids() {
+    let mut world = World::new(MANIFEST).unwrap();
+    world
+        .set_file("data/bank.yaml", b"a: 1\n".to_vec())
+        .unwrap();
+    world.set_file("figure.png", b"png".to_vec()).unwrap();
+    let id = world.id("data/bank.yaml").unwrap();
+    assert_eq!(world.path(id), Some("data/bank.yaml"));
+    assert!(world.id("figure.png").is_none());
+    assert!(world.remove_file("data/bank.yaml"));
+    assert!(world.id("data/bank.yaml").is_none());
+    assert_eq!(world.path(id), None);
 }

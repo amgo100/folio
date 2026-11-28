@@ -48,12 +48,14 @@ std = [
     "dep:rustc-hash",
     "zune-jpeg?/std",
 ]
+# Folio: without hayro-jpeg2000's SIMD paths, which it picks by CPU at run
+# time and which fuse multiply-adds on some CPUs only (Folio's SPEC §2.4,
+# #312; see FOLIO.md).
 unsafe = [
     "std",
     "dep:flate2",
     "dep:memchr",
     "hayro-jbig2?/simd",
-    "hayro-jpeg2000?/simd",
     "zune-jpeg?/x86",
     "zune-jpeg?/neon",
 ]

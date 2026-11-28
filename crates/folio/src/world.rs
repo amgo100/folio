@@ -6,12 +6,14 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io;
 use std::num::NonZeroU16;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{Name, Registry, Target};
-use folio_core::db::{BuildMode, Bytes, DataFile, Durability, FileRead, Project, SourceFile};
+use folio_core::db::{
+    BuildMode, Bytes, DataFile, Durability, FileContent, FileRead, Project, SourceFile,
+};
 use folio_core::eval::Limits;
 use folio_core::project::{Date, Lockfile, Manifest, ProjectError, ProjectPath};
 use folio_fonts::{FontCache, FontFile, FontHash, SystemFont};
@@ -34,7 +36,9 @@ use crate::diag::Files;
 /// ever.
 ///
 /// A source's file id is assigned when its path is set, and freed when the
-/// source is removed. Ids are new until about 65,000 have been given out,
+/// source is removed. A text data file (CSV, JSON, TOML, YAML, BibTeX or
+/// plain text) gets one too when it is added, so that errors can point into
+/// it, while fewer than half the ids are taken. Ids are new until about 65,000 have been given out,
 /// and then freed ones are given out again, so a world that sees any number
 /// of paths over its life never runs out of them. The
 /// diagnostics of a compilation therefore stay valid until a source is
@@ -478,12 +482,7 @@ impl World {
         let file = SourceFile::builder(path.clone(), source)
             .durability(Durability::LOW)
             .new(&self.db);
-        let mut sources = self.project.sources(&self.db).clone();
-        sources.insert(path, file);
-        self.project
-            .set_sources(&mut self.db)
-            .with_durability(Durability::LOW)
-            .to(sources);
+        self.edit_sources(|sources| sources.insert(path, file));
         Ok(id)
     }
 
@@ -526,17 +525,15 @@ impl World {
         let Some(path) = ProjectPath::new(path) else {
             return false;
         };
-        let mut sources = self.project.sources(&self.db).clone();
-        let Some(file) = sources.remove(&path) else {
+        if !self.project.sources(&self.db).contains_key(&path) {
             return false;
-        };
+        }
+        let file = self
+            .edit_sources(|sources| sources.remove(&path))
+            .expect("the source is there");
         let id = file.source(&self.db).id();
         Arc::make_mut(&mut self.nodes).remove(id);
         Arc::make_mut(&mut self.ids).release(&path);
-        self.project
-            .set_sources(&mut self.db)
-            .with_durability(Durability::LOW)
-            .to(sources);
         true
     }
 
@@ -550,12 +547,50 @@ impl World {
         self.project.files(&self.db).keys()
     }
 
+    /// The paths of the world's sources and image and data files that are
+    /// `dir` or under it, every one when it is empty, without walking the
+    /// others.
+    pub(crate) fn paths_under(&self, dir: &str) -> Vec<String> {
+        fn under<V>(map: &BTreeMap<ProjectPath, V>, dir: &str, out: &mut Vec<String>) {
+            let paths: Box<dyn Iterator<Item = &ProjectPath>> = match ProjectPath::new(dir) {
+                // The paths that start with `dir` follow it in path order.
+                Some(start) => Box::new(
+                    map.range(start..)
+                        .map(|(path, _)| path)
+                        .take_while(|path| path.as_str().starts_with(dir)),
+                ),
+                None => Box::new(map.keys()),
+            };
+            out.extend(
+                paths
+                    .map(ProjectPath::as_str)
+                    .filter(|path| {
+                        dir.is_empty()
+                            || path
+                                .strip_prefix(dir)
+                                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                    })
+                    .map(str::to_owned),
+            );
+        }
+        let mut out = Vec::new();
+        under(self.project.sources(&self.db), dir, &mut out);
+        under(self.project.files(&self.db), dir, &mut out);
+        out
+    }
+
     /// The contents of an image or data file, if the world has one at the
-    /// path.
+    /// path and it can be read. A file on disk is read now if no build has
+    /// read it yet ([`Self::set_file_on_disk`]).
     pub fn file(&self, path: &str) -> Option<Bytes> {
+        self.file_content(path)?.load().cloned()
+    }
+
+    /// The contents the world has for an image or data file, read or not.
+    pub(crate) fn file_content(&self, path: &str) -> Option<&FileContent> {
         let path = ProjectPath::new(path)?;
         let file = self.project.files(&self.db).get(&path)?;
-        Some(file.bytes(&self.db).clone())
+        Some(file.content(&self.db))
     }
 
     /// The files that diagnostics point into as they are now: the sources,
@@ -573,9 +608,16 @@ impl World {
                 (source.id(), source.clone())
             })
             .collect();
+        let data = self
+            .project
+            .files(&self.db)
+            .values()
+            .filter_map(|file| Some((file.id(&self.db)?, file.content(&self.db).clone())))
+            .collect();
         Snapshot {
             ids: self.ids.clone(),
             sources: Arc::new(sources),
+            data: Arc::new(data),
             manifest_text: self.manifest_text.clone(),
             lockfile_text: self.lockfile_text.clone(),
         }
@@ -591,29 +633,64 @@ impl World {
     /// Sets the contents of an image or data file, adding it if it is new.
     /// Sources (`.fol` and `.fsty`) go through [`Self::set_source`].
     pub fn set_file(&mut self, path: &str, bytes: impl Into<Bytes>) -> Result<(), WorldError> {
-        let path = project_path(path)?;
-        if matches!(path.extension(), Some("fol" | "fsty")) {
-            return Err(WorldError::IsSource(path));
-        }
+        let path = file_path(path)?;
         let bytes = bytes.into();
-        if let Some(file) = self.project.files(&self.db).get(&path).copied() {
-            if file.bytes(&self.db) != &bytes {
-                file.set_bytes(&mut self.db)
-                    .with_durability(Durability::LOW)
-                    .to(bytes);
-            }
+        if let Some(file) = self.project.files(&self.db).get(&path).copied()
+            && file.content(&self.db).loaded() == Some(Ok(&bytes))
+        {
             return Ok(());
         }
-        let file = DataFile::builder(path.clone(), bytes)
-            .durability(Durability::LOW)
-            .new(&self.db);
-        let mut files = self.project.files(&self.db).clone();
-        files.insert(path, file);
-        self.project
-            .set_files(&mut self.db)
-            .with_durability(Durability::LOW)
-            .to(files);
+        self.set_contents([(path, FileContent::new(bytes))]);
         Ok(())
+    }
+
+    /// Adds an image or data file whose contents are those of `disk`, a
+    /// file on disk, or points the world's file at it again. The file is
+    /// read only when a build names it, and then once, so the world sees a
+    /// later change on disk only when this is called again (SPEC §12.1).
+    /// A file that cannot be read is reported by the builds that name it.
+    pub fn set_file_on_disk(
+        &mut self,
+        path: &str,
+        disk: impl Into<PathBuf>,
+    ) -> Result<(), WorldError> {
+        let path = file_path(path)?;
+        self.set_contents([(path, FileContent::on_disk(disk))]);
+        Ok(())
+    }
+
+    /// Sets the contents of image and data files: the files the world has
+    /// one by one, and the new ones all at once, so that adding n files
+    /// takes time linear in n.
+    pub(crate) fn set_contents(
+        &mut self,
+        contents: impl IntoIterator<Item = (ProjectPath, FileContent)>,
+    ) {
+        let mut new = Vec::new();
+        for (path, content) in contents {
+            match self.project.files(&self.db).get(&path).copied() {
+                Some(file) => {
+                    file.set_content(&mut self.db)
+                        .with_durability(Durability::LOW)
+                        .to(content);
+                }
+                None => new.push((path, content)),
+            }
+        }
+        if new.is_empty() {
+            return;
+        }
+        let new: Vec<_> = new
+            .into_iter()
+            .map(|(path, content)| {
+                let id = self.data_id(&path);
+                let file = DataFile::builder(path.clone(), id, content)
+                    .durability(Durability::LOW)
+                    .new(&self.db);
+                (path, file)
+            })
+            .collect();
+        self.edit_files(|files| files.extend(new));
     }
 
     /// Removes an image or data file. Returns whether there was one.
@@ -621,18 +698,20 @@ impl World {
         let Some(path) = ProjectPath::new(path) else {
             return false;
         };
-        let mut files = self.project.files(&self.db).clone();
-        if files.remove(&path).is_none() {
+        if !self.project.files(&self.db).contains_key(&path) {
             return false;
         }
-        self.project
-            .set_files(&mut self.db)
-            .with_durability(Durability::LOW)
-            .to(files);
+        let file = self
+            .edit_files(|files| files.remove(&path))
+            .expect("the file is there");
+        if file.id(&self.db).is_some() {
+            Arc::make_mut(&mut self.ids).release(&path);
+        }
         true
     }
 
-    /// The path of a file id: a source, `folio.toml` or `folio.lock`.
+    /// The path of a file id: a source, a text data file, `folio.toml` or
+    /// `folio.lock`.
     pub fn path(&self, id: FileId) -> Option<&str> {
         match id {
             Self::MANIFEST => Some("folio.toml"),
@@ -641,7 +720,8 @@ impl World {
         }
     }
 
-    /// The file id of a source path, if the world has a source there.
+    /// The file id of a path, if the world has a source there, or a text
+    /// data file with an id.
     pub fn id(&self, path: &str) -> Option<FileId> {
         self.ids.by_path.get(&ProjectPath::new(path)?).copied()
     }
@@ -696,6 +776,55 @@ impl World {
         self.project
     }
 
+    /// Changes the map of sources in place: it is taken out of the
+    /// database and put back, rather than cloned, so that adding or removing
+    /// a source takes time logarithmic in the number of sources, not linear.
+    fn edit_sources<R>(
+        &mut self,
+        f: impl FnOnce(&mut BTreeMap<ProjectPath, SourceFile>) -> R,
+    ) -> R {
+        let mut sources = self.project.set_sources(&mut self.db).to(BTreeMap::new());
+        let result = f(&mut sources);
+        self.project
+            .set_sources(&mut self.db)
+            .with_durability(Durability::LOW)
+            .to(sources);
+        result
+    }
+
+    /// Changes the map of image and data files in place, as
+    /// [`Self::edit_sources`] does the sources.
+    fn edit_files<R>(&mut self, f: impl FnOnce(&mut BTreeMap<ProjectPath, DataFile>) -> R) -> R {
+        let mut files = self.project.set_files(&mut self.db).to(BTreeMap::new());
+        let result = f(&mut files);
+        self.project
+            .set_files(&mut self.db)
+            .with_durability(Durability::LOW)
+            .to(files);
+        result
+    }
+
+    /// A file id for a new data file, if it is a text data file and fewer
+    /// than [`MAX_DATA_IDS`] ids, half of all, are taken, so that sources
+    /// always get one.
+    fn data_id(&mut self, path: &ProjectPath) -> Option<FileId> {
+        let text = path.extension().is_some_and(|ext| {
+            ["csv", "tsv", "json", "toml", "yaml", "yml", "txt", "bib"]
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        });
+        if !text || self.ids.by_path.len() >= MAX_DATA_IDS {
+            return None;
+        }
+        Arc::make_mut(&mut self.ids).assign(path).ok()
+    }
+
+    /// The text of a data file with an id, as a build read it.
+    fn data_lines(&self, id: FileId) -> Option<Lines<String>> {
+        let file = self.project.files(&self.db).get(self.ids.path(id)?)?;
+        content_lines(file.content(&self.db))
+    }
+
     fn assign_id(&mut self, path: &ProjectPath) -> Result<FileId, WorldError> {
         if let Some(&id) = self.ids.by_path.get(path) {
             return Ok(id);
@@ -720,7 +849,9 @@ impl Files for World {
         match id {
             Self::MANIFEST => Some(self.manifest_text.clone()),
             Self::LOCKFILE => self.lockfile_text.clone(),
-            _ => Files::source(self, id).map(|source| source.lines().clone()),
+            _ => Files::source(self, id)
+                .map(|source| source.lines().clone())
+                .or_else(|| self.data_lines(id)),
         }
     }
 }
@@ -732,6 +863,16 @@ impl Debug for World {
             .field("sources", &self.ids.by_path)
             .finish_non_exhaustive()
     }
+}
+
+/// The most file ids that may be taken when a data file is given one.
+const MAX_DATA_IDS: usize = 32_768;
+
+/// The text of a data file's contents as a build read them, if it read them
+/// and they are UTF-8.
+fn content_lines(content: &FileContent) -> Option<Lines<String>> {
+    let bytes = content.loaded()?.ok()?;
+    Some(Lines::new(String::from_utf8(bytes.to_vec()).ok()?))
 }
 
 /// The raw id of the first source; 1 and 2 are the manifest and lockfile.
@@ -804,12 +945,15 @@ impl FileIds {
 pub struct Snapshot {
     ids: Arc<FileIds>,
     sources: Arc<BTreeMap<FileId, Source>>,
+    /// The data files with ids, which diagnostics can point into.
+    data: Arc<BTreeMap<FileId, FileContent>>,
     manifest_text: Lines<String>,
     lockfile_text: Option<Lines<String>>,
 }
 
 impl Snapshot {
-    /// The path of a file id: a source, `folio.toml` or `folio.lock`.
+    /// The path of a file id: a source, a text data file, `folio.toml` or
+    /// `folio.lock`.
     pub fn path(&self, id: FileId) -> Option<&str> {
         match id {
             World::MANIFEST => Some("folio.toml"),
@@ -837,7 +981,9 @@ impl Files for Snapshot {
         match id {
             World::MANIFEST => Some(self.manifest_text.clone()),
             World::LOCKFILE => self.lockfile_text.clone(),
-            _ => Files::source(self, id).map(|source| source.lines().clone()),
+            _ => Files::source(self, id)
+                .map(|source| source.lines().clone())
+                .or_else(|| content_lines(self.data.get(&id)?)),
         }
     }
 }
@@ -898,6 +1044,16 @@ impl std::error::Error for WorldError {}
 
 fn project_path(path: &str) -> Result<ProjectPath, WorldError> {
     ProjectPath::new(path).ok_or_else(|| WorldError::InvalidPath(path.into()))
+}
+
+/// The path of an image or data file: a project path that is not a
+/// source's.
+fn file_path(path: &str) -> Result<ProjectPath, WorldError> {
+    let path = project_path(path)?;
+    if matches!(path.extension(), Some("fol" | "fsty")) {
+        return Err(WorldError::IsSource(path));
+    }
+    Ok(path)
 }
 
 fn parse_lockfile(text: Option<&str>) -> Result<Lockfile, Vec<ProjectError>> {

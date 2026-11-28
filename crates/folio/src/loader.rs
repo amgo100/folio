@@ -3,10 +3,16 @@
 //!
 //! A [`Loader`] reads a project directory: `folio.toml` and `folio.lock`
 //! into a world ([`Loader::world`]), and every other file of the project as
-//! a source or a data file ([`Loader::load`]). A host that watches the
+//! a source or a data file ([`Loader::load`]). Sources (`.fol` and `.fsty`)
+//! are read at once; any other file is read the first time a build names
+//! it, as an image, a data file or a bibliography, so a large file or a
+//! folder of files that no build names costs only its directory entry
+//! (SPEC §12.1). A host that watches the
 //! project, such as `folio watch` or the language server, hands the paths
 //! that file-system events name to [`Loader::update`], which reads them
-//! again and changes the world to match; it does not watch itself.
+//! again and changes the world to match; it does not watch itself. A file
+//! that no build has read yet is not read on an event either, since no
+//! build depends on what it holds.
 //!
 //! The files of a project are every file under its directory except
 //! `folio.toml` and `folio.lock`, hidden files and directories (whose names
@@ -22,6 +28,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use folio_core::db::FileContent;
 use folio_fonts::{FontCache, PROJECT_FONT_DIR};
 use folio_syntax::DiagSpan;
 
@@ -151,8 +158,12 @@ impl ProjectErrors {
 pub struct ProjectFile {
     /// The path, with `/` as separator.
     pub path: String,
-    /// The file's contents.
-    pub bytes: Vec<u8>,
+    /// Where the file is on disk: the file a link leads to, for a link.
+    pub disk: PathBuf,
+    /// The contents of a source (`.fol` or `.fsty`), read with the
+    /// project; `None` for any other file, which is read when a build
+    /// names it.
+    pub bytes: Option<Vec<u8>>,
 }
 
 /// What [`Loader::update`] changed.
@@ -265,9 +276,9 @@ impl Loader {
             .collect();
     }
 
-    /// Reads the files of the project, in path order. Warns of files and
-    /// directories that cannot be read; fails only when the project
-    /// directory cannot.
+    /// Finds the files of the project, in path order, and reads its
+    /// sources. Warns of sources and directories that cannot be read; fails
+    /// only when the project directory cannot.
     pub fn read_files(
         &mut self,
         warnings: &mut Vec<Diagnostic>,
@@ -291,10 +302,11 @@ impl Loader {
     }
 
     /// Reads the files of the project into a world: `.fol` and `.fsty` files
-    /// as sources, the others as data files, and removes the sources and
+    /// as sources, the others as data files, which are read when a build
+    /// names them, and removes the sources and
     /// data files the project no longer has, including those a host set
     /// itself, such as unsaved editor buffers, which it sets again after.
-    /// Warns of files that cannot be read and of sources that are not
+    /// Warns of sources that cannot be read or are not
     /// UTF-8; leaves out files whose paths a document cannot name. Returns
     /// the paths it changed.
     pub fn load(
@@ -305,14 +317,12 @@ impl Loader {
         let files = self.read_files(warnings)?;
         let mut changed = BTreeSet::new();
         let found: BTreeSet<String> = files.iter().map(|f| f.path.clone()).collect();
-        for path in world_paths(world, "") {
+        for path in world.paths_under("") {
             if !found.contains(&path) && remove(world, &path) {
                 changed.insert(path);
             }
         }
-        for file in files {
-            set(world, file, &mut changed, warnings)?;
-        }
+        set_all(world, files, &mut changed, warnings, &self.canonical)?;
         Ok(changed)
     }
 
@@ -459,7 +469,7 @@ impl Loader {
             .and_then(|c| fs::metadata(c).ok());
         // Gone, or an output: the world no longer has it.
         let Some(metadata) = metadata else {
-            for path in world_paths(world, rel) {
+            for path in world.paths_under(rel) {
                 if remove(world, &path) {
                     update.changed.insert(path);
                 }
@@ -478,7 +488,7 @@ impl Loader {
         // A read of the project would not reach it: the world no longer
         // has what is under it.
         let Some(chain) = chain else {
-            for path in world_paths(world, rel) {
+            for path in world.paths_under(rel) {
                 if remove(world, &path) {
                     update.changed.insert(path);
                 }
@@ -496,7 +506,7 @@ impl Loader {
                 // As a read of the project leaves it out.
                 warnings.push(unreadable(rel, &e.to_string()));
                 self.links.remove(rel);
-                for path in world_paths(world, rel) {
+                for path in world.paths_under(rel) {
                     if remove(world, &path) {
                         update.changed.insert(path);
                     }
@@ -505,27 +515,35 @@ impl Loader {
             }
             self.links.extend(links);
             let found: BTreeSet<&str> = files.iter().map(|f| f.path.as_str()).collect();
-            for path in world_paths(world, rel) {
+            for path in world.paths_under(rel) {
                 if !found.contains(path.as_str()) && remove(world, &path) {
                     update.changed.insert(path);
                 }
             }
             files.sort_by(|a, b| a.path.cmp(&b.path));
-            for file in files {
-                set(world, file, &mut update.changed, warnings)?;
-            }
+            set_all(world, files, &mut update.changed, warnings, &self.canonical)?;
         } else if metadata.is_file() {
             // A directory that is now a file.
-            for path in world_paths(world, rel) {
+            for path in world.paths_under(rel) {
                 if path != rel && remove(world, &path) {
                     update.changed.insert(path);
                 }
+            }
+            if !is_source(rel) {
+                let file = ProjectFile {
+                    path: rel.to_owned(),
+                    disk: canonical,
+                    bytes: None,
+                };
+                set_data(world, vec![file], &mut update.changed, &self.canonical);
+                return Ok(());
             }
             match fs::read(&canonical) {
                 Ok(bytes) => {
                     let file = ProjectFile {
                         path: rel.to_owned(),
-                        bytes,
+                        disk: canonical,
+                        bytes: Some(bytes),
                     };
                     set(world, file, &mut update.changed, warnings)?;
                 }
@@ -538,7 +556,7 @@ impl Loader {
             }
         } else {
             // Neither a file nor a directory, which a read leaves out.
-            for path in world_paths(world, rel) {
+            for path in world.paths_under(rel) {
                 if remove(world, &path) {
                     update.changed.insert(path);
                 }
@@ -748,8 +766,22 @@ impl Loader {
                 if let Some(target) = target {
                     links.insert(path.clone(), target);
                 }
+                // Only sources are read now; any other file when a build
+                // names it.
+                if !is_source(&path) {
+                    files.push(ProjectFile {
+                        path,
+                        disk: canonical,
+                        bytes: None,
+                    });
+                    continue;
+                }
                 match fs::read(entry.path()) {
-                    Ok(bytes) => files.push(ProjectFile { path, bytes }),
+                    Ok(bytes) => files.push(ProjectFile {
+                        path,
+                        disk: canonical,
+                        bytes: Some(bytes),
+                    }),
                     Err(e) => warnings.push(unreadable(&path, &e.to_string())),
                 }
             }
@@ -758,44 +790,67 @@ impl Loader {
     }
 }
 
-/// Sets a file in a world: a `.fol` or `.fsty` file as a source, another as
-/// a data file. Records its path in `changed` if the world had it
-/// differently. Warns of sources that are not UTF-8, and leaves out files
-/// whose paths a document cannot name.
+/// Whether a project path names a source: a `.fol` or `.fsty` file.
+fn is_source(path: &str) -> bool {
+    matches!(
+        Path::new(path).extension().and_then(|e| e.to_str()),
+        Some("fol" | "fsty")
+    )
+}
+
+/// Sets files in a world, as [`set`] does sources and [`set_data`] the
+/// other files, which it sets together.
+fn set_all(
+    world: &mut World,
+    files: Vec<ProjectFile>,
+    changed: &mut BTreeSet<String>,
+    warnings: &mut Vec<Diagnostic>,
+    root: &Path,
+) -> Result<(), WorldError> {
+    let mut data = Vec::new();
+    for file in files {
+        if is_source(&file.path) {
+            set(world, file, changed, warnings)?;
+        } else {
+            data.push(file);
+        }
+    }
+    set_data(world, data, changed, root);
+    Ok(())
+}
+
+/// Sets a source in a world. Records its path in `changed` if the world
+/// had it differently. Warns of sources that are not UTF-8, or were not
+/// read, and leaves out files whose paths a document cannot name.
 fn set(
     world: &mut World,
     file: ProjectFile,
     changed: &mut BTreeSet<String>,
     warnings: &mut Vec<Diagnostic>,
 ) -> Result<(), WorldError> {
-    let source = matches!(
-        Path::new(&file.path).extension().and_then(|e| e.to_str()),
-        Some("fol" | "fsty")
-    );
-    let result = if source {
-        match String::from_utf8(file.bytes) {
-            // Some editors start UTF-8 files with a byte-order mark,
-            // which is not part of the text.
-            Ok(text) => {
-                let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
-                if world.source(&file.path).is_some_and(|s| s.text() == text) {
-                    return Ok(());
-                }
-                world.set_source(&file.path, text).map(drop)
-            }
-            Err(_) => {
-                warnings.push(unreadable(&file.path, "it is not UTF-8 text"));
-                if world.remove_source(&file.path) {
-                    changed.insert(file.path);
-                }
+    let text = file.bytes.map(String::from_utf8);
+    let result = match text {
+        // Some editors start UTF-8 files with a byte-order mark, which is
+        // not part of the text.
+        Some(Ok(text)) => {
+            let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
+            if world.source(&file.path).is_some_and(|s| s.text() == text) {
                 return Ok(());
             }
+            world.set_source(&file.path, text).map(drop)
         }
-    } else {
-        if world.file(&file.path).is_some_and(|b| *b == *file.bytes) {
+        Some(Err(_)) | None => {
+            let why = if text.is_some() {
+                "it is not UTF-8 text"
+            } else {
+                "it was not read"
+            };
+            warnings.push(unreadable(&file.path, why));
+            if world.remove_source(&file.path) {
+                changed.insert(file.path);
+            }
             return Ok(());
         }
-        world.set_file(&file.path, file.bytes)
     };
     match result {
         Ok(()) => {
@@ -807,22 +862,49 @@ fn set(
     }
 }
 
+/// Sets image and data files in a world, all new ones at once, as files
+/// read when a build names them, and only while they are inside the
+/// project, the canonical path `root`. A file the world has and a build has
+/// read is read again now, and recorded in `changed` if it reads
+/// differently; a file that no build has read is set afresh, unread, and
+/// not recorded, since no build depends on it. Leaves out files whose
+/// paths a document cannot name.
+fn set_data(
+    world: &mut World,
+    files: Vec<ProjectFile>,
+    changed: &mut BTreeSet<String>,
+    root: &Path,
+) {
+    let mut contents = Vec::new();
+    for file in files {
+        let Some(path) = ProjectPath::new(&file.path) else {
+            continue;
+        };
+        let content = FileContent::in_project(file.disk, root);
+        let Some(old) = world.file_content(&file.path) else {
+            contents.push((path, content));
+            changed.insert(file.path);
+            continue;
+        };
+        match old.loaded() {
+            // Nothing read it: set afresh, unread.
+            None => contents.push((path, content)),
+            Some(before) => {
+                let _ = content.load();
+                if content.loaded() != Some(before) {
+                    contents.push((path, content));
+                    changed.insert(file.path);
+                }
+            }
+        }
+    }
+    world.set_contents(contents);
+}
+
 /// Removes a source or data file from a world. Returns whether there was
 /// one.
 fn remove(world: &mut World, path: &str) -> bool {
     world.remove_source(path) || world.remove_file(path)
-}
-
-/// The paths of a world's sources and data files at or under `rel`, every
-/// one when it is empty.
-fn world_paths(world: &World, rel: &str) -> Vec<String> {
-    world
-        .source_paths()
-        .chain(world.file_paths())
-        .map(ProjectPath::as_str)
-        .filter(|path| rel.is_empty() || is_under(path, rel))
-        .map(str::to_owned)
-        .collect()
 }
 
 /// Whether a project path names a hidden file or directory, or one in a
@@ -1016,21 +1098,27 @@ mod tests {
             "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n",
         )
         .unwrap();
-        let file = |path: &str, bytes: &[u8]| ProjectFile {
-            path: path.into(),
-            bytes: bytes.to_vec(),
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = |path: &str, bytes: &[u8]| {
+            let disk = root.join(path.replace(['/', '\\'], "_"));
+            fs::write(&disk, bytes).unwrap();
+            ProjectFile {
+                path: path.into(),
+                disk,
+                bytes: is_source(path).then(|| bytes.to_vec()),
+            }
         };
         let mut warnings = Vec::new();
         let mut changed = BTreeSet::new();
-        for f in [
+        let files = vec![
             file("bad.fol", &[0xff, 0xfe]),
             file("data/points.csv", b"x,y\n"),
             file("main.fol", b"= Forces\n"),
             file("bom.fol", "\u{FEFF}= Forces\n".as_bytes()),
             file("weird\\name.csv", b""),
-        ] {
-            set(&mut world, f, &mut changed, &mut warnings).unwrap();
-        }
+        ];
+        set_all(&mut world, files, &mut changed, &mut warnings, &root).unwrap();
         assert_eq!(world.source("main.fol").unwrap().text(), "= Forces\n");
         assert_eq!(world.source("bom.fol").unwrap().text(), "= Forces\n");
         assert!(world.source("bad.fol").is_none());
@@ -1041,23 +1129,36 @@ mod tests {
             ["bom.fol", "data/points.csv", "main.fol"]
         );
 
-        // Setting what the world has changes nothing.
+        // The data file is not read until something asks for it.
+        let content = world.file_content("data/points.csv").unwrap();
+        assert!(content.loaded().is_none());
+
+        // Setting what the world has changes nothing, and a data file no
+        // build has read is not read for it.
         let mut again = BTreeSet::new();
-        set(
-            &mut world,
+        let files = vec![
             file("main.fol", b"= Forces\n"),
-            &mut again,
-            &mut warnings,
-        )
-        .unwrap();
-        set(
-            &mut world,
             file("data/points.csv", b"x,y\n"),
-            &mut again,
-            &mut warnings,
-        )
-        .unwrap();
+        ];
+        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
         assert!(again.is_empty());
+        assert!(
+            world
+                .file_content("data/points.csv")
+                .unwrap()
+                .loaded()
+                .is_none()
+        );
+
+        // Once read, a data file is compared with the disk.
+        assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n");
+        let files = vec![file("data/points.csv", b"x,y\n")];
+        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
+        assert!(again.is_empty());
+        let files = vec![file("data/points.csv", b"x,y\n1,2\n")];
+        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
+        assert_eq!(again.iter().collect::<Vec<_>>(), ["data/points.csv"]);
+        assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n1,2\n");
     }
 
     #[test]

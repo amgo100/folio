@@ -111,7 +111,39 @@ impl ComponentHost {
         })
     }
 
-    /// The components in use, in registration order.
+    /// Hosts the elements a project declares (SPEC §4.3) after the
+    /// registered components, as the component
+    /// [`PROJECT`](crate::eval::PROJECT). Returns an error, and hosts
+    /// nothing, when a component in use already has that namespace.
+    pub fn with_project(&mut self, project: Option<&Registered>) -> Option<Diagnostic> {
+        let project = project?;
+        let namespace = project.manifest.namespace();
+        if let Some(other) = self
+            .components()
+            .find(|c| c.manifest.namespace() == namespace)
+        {
+            return Some(
+                Diagnostic::error(
+                    Span::detached(),
+                    eco_format!(
+                        "component `{}` has the namespace `{namespace}`, which holds the \
+                         elements this project declares",
+                        other.name()
+                    ),
+                )
+                .with_hint("the project's own elements cannot be used with this component"),
+            );
+        }
+        self.components.push(Hosted {
+            registered: project.clone(),
+            templates: Vec::new(),
+            stylesheet: None,
+        });
+        None
+    }
+
+    /// The components in use, in registration order, then the component
+    /// that holds the project's own elements, if it declares any.
     pub fn components(&self) -> impl Iterator<Item = &Registered> {
         self.components.iter().map(|c| &c.registered)
     }
