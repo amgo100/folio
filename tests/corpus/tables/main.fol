@@ -70,3 +70,29 @@ The period $T$ of a simple pendulum of length $l$ is $T = 2 pi sqrt(l / g)$ for 
     The experiment could be extended by measuring the period at larger amplitudes, where the approximation of simple harmonic motion no longer holds and the period grows slightly with the amplitude.
   ]
 ]
+
+= Apparatus
+
+#grid(class: "kit", column-tracks: (1fr, 2fr), header-rows: 1)[
+  Item
+
+  Use
+
+  Stopwatch
+
+  Timing ten oscillations, to a hundredth of a second.
+
+  Metre rule
+
+  - measuring the length of the string;
+  - checking that the bob hangs vertically.
+
+  #cell[Clamp and stand]
+  #cell[
+    Holding the pendulum. The stand was weighed down:
+
+    #grid(class: "inner", column-tracks: 2)[
+      #cell[Mass] #cell[#qty(2, "kg")#footnote[Two masses of one kilogram each.]]
+    ]
+  ]
+]

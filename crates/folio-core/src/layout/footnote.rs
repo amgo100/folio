@@ -148,16 +148,34 @@ impl<'a> NoteSet<'a> {
             if piece.repeat {
                 return;
             }
-            for &(cell, item, line) in &piece.lines {
-                let Some(cell) = band.cells.get(cell) else {
+            for cell_line in &piece.lines {
+                // Through the bands of grids nested in the cells.
+                let mut band: &'a super::flow::Band = band;
+                let mut found = None;
+                for (n, &(cell, item)) in cell_line.path.iter().enumerate() {
+                    let Some(leaf) = band.cells.get(cell).and_then(|c| c.flow.items.get(item))
+                    else {
+                        break;
+                    };
+                    match &leaf.leaf {
+                        super::flow::Leaf::Band(inner) if n + 1 < cell_line.path.len() => {
+                            band = inner;
+                        }
+                        super::flow::Leaf::Paragraph(info) if n + 1 == cell_line.path.len() => {
+                            found = Some(info);
+                        }
+                        _ => break,
+                    }
+                }
+                let Some(info) = found else {
                     continue;
                 };
-                let Some(super::flow::Leaf::Paragraph(info)) =
-                    cell.flow.items.get(item).map(|i| &i.leaf)
+                let Some(range) = info
+                    .layout
+                    .lines
+                    .get(cell_line.line)
+                    .map(|l| l.range.clone())
                 else {
-                    continue;
-                };
-                let Some(range) = info.layout.lines.get(line).map(|l| l.range.clone()) else {
                     continue;
                 };
                 for anchor in &info.notes {

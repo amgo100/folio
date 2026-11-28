@@ -1,5 +1,5 @@
 # Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
-master 419.53 × 595.28, 4 page(s)
+master 419.53 × 595.28, 5 page(s)
 page 1 419.53 × 595.28, 71 line(s)
   box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 19.83..473.69
     box (0.00, 0.00) 334.49 × 484.75 main.fol:1:2 baselines 19.83..473.69
@@ -1148,9 +1148,9 @@ page 3 419.53 × 595.28, 43 line(s)
               text (0.00, 74.24) SourceSerif4-Regular 10.00 w 155.24 33 glyph(s) "cepted value. The small difference"
               text (0.00, 94.45) SourceSerif4-Regular 10.00 w 155.24 33 glyph(s) "comes mostly from the uncertainty"
     shape (0.00, 494.85) M(0.00, 0.00) L(111.50, 0.00) stroke #000000ff 0.50 Butt Miter
-page 4 419.53 × 595.28, 31 line(s)
-  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 10.36..262.88
-    box (0.00, 0.00) 334.49 × 370.53 main.fol:1:2 baselines 10.36..262.88
+page 4 419.53 × 595.28, 39 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 10.36..484.09
+    box (0.00, 0.00) 334.49 × 490.69 main.fol:1:2 baselines 10.36..484.09
       box (0.00, 0.00) 334.49 × 370.53 main.fol:51:1 baselines 10.36..262.88
         box (0.00, 0.00) 334.49 × 370.53 main.fol:53:2 baselines 10.36..262.88
           box (0.00, 0.00) 167.24 × 370.53 main.fol:54:4 baselines 10.36..363.93
@@ -1195,3 +1195,61 @@ page 4 419.53 × 595.28, 31 line(s)
               text (0.00, 74.24) SourceSerif4-Regular 10.00 w 155.24 33 glyph(s) "tion of simple harmonic motion no"
               text (0.00, 94.45) SourceSerif4-Regular 10.00 w 155.24 33 glyph(s) "longer holds and the period grows"
               text (0.00, 114.66) SourceSerif4-Regular 10.00 w 121.86 28 glyph(s) "slightly with the amplitude."
+      box (0.00, 378.53) 334.49 × 112.16 main.fol:74:1 baselines 16.72..105.56
+        box (0.00, 0.00) 334.49 × 24.32 main.fol:74:1 baselines 16.72..16.72 keep penalty 10000
+          text (0.00, 16.72) SourceSerif4-Bold 13.00 w 62.01 9 glyph(s) "Apparatus"
+        box (0.00, 29.32) 334.49 × 82.84 main.fol:76:2 baselines 13.61..76.24
+          box (0.00, 0.00) 111.50 × 20.21 main.fol:77:3 baselines 13.61..13.61
+            text (0.00, 13.61) SourceSerif4-Regular 10.00 w 20.97 4 glyph(s) "Item"
+          box (111.50, 0.00) 222.99 × 20.21 main.fol:79:3 baselines 13.61..13.61
+            text (0.00, 13.61) SourceSerif4-Regular 10.00 w 16.31 3 glyph(s) "Use"
+          box (0.00, 20.21) 111.50 × 20.21 main.fol:81:3 baselines 13.61..13.61
+            text (0.00, 13.61) SourceSerif4-Regular 10.00 w 46.09 9 glyph(s) "Stopwatch"
+          box (111.50, 20.21) 222.99 × 20.21 main.fol:83:3 baselines 13.61..13.61
+            text (0.00, 13.61) SourceSerif4-Regular 10.00 w 222.99 52 glyph(s) "Timing ten oscillations, to a hundredth of a second."
+          box (0.00, 40.42) 111.50 × 42.42 main.fol:85:3 baselines 13.61..13.61
+            text (0.00, 13.61) SourceSerif4-Regular 10.00 w 46.87 10 glyph(s) "Metre rule"
+          box (111.50, 40.42) 222.99 × 42.42 main.fol:87:3 baselines 13.61..35.82
+            box (15.00, 0.00) 207.99 × 20.21 main.fol:87:3 baselines 13.61..13.61
+              box (0.00, 0.00) 207.99 × 20.21 main.fol:87:5 baselines 13.61..13.61
+                text (0.00, 13.61) SourceSerif4-Regular 10.00 w 5.38 2 glyph(s) "•\u{a0}"
+                text (5.38, 13.61) SourceSerif4-Regular 10.00 w 154.74 35 glyph(s) "measuring the length of the string;"
+            box (15.00, 22.21) 207.99 × 20.21 main.fol:88:3 baselines 13.61..13.61
+              box (0.00, 0.00) 207.99 × 20.21 main.fol:88:5 baselines 13.61..13.61
+                text (0.00, 13.61) SourceSerif4-Regular 10.00 w 5.38 2 glyph(s) "•\u{a0}"
+                text (5.38, 13.61) SourceSerif4-Regular 10.00 w 171.15 39 glyph(s) "checking that the bob hangs vertically."
+page 5 419.53 × 595.28, 5 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 13.61..81.58
+    box (0.00, 0.00) 334.49 × 93.64 main.fol:1:2 baselines 13.61..81.58
+      box (0.00, 0.00) 334.49 × 93.64 main.fol:74:1 baselines 13.61..81.58
+        box (0.00, 0.00) 334.49 × 93.64 main.fol:76:2 baselines 13.61..81.58
+          box (0.00, 0.00) 111.50 × 20.21 main.fol:77:3 baselines 13.61..13.61 artifact
+            text (0.00, 13.61) SourceSerif4-Regular 10.00 w 20.97 4 glyph(s) "Item"
+          box (111.50, 0.00) 222.99 × 20.21 main.fol:79:3 baselines 13.61..13.61 artifact
+            text (0.00, 13.61) SourceSerif4-Regular 10.00 w 16.31 3 glyph(s) "Use"
+          box (0.00, 20.21) 111.50 × 73.43 main.fol:90:4 baselines 15.61..15.61
+            shape (0.00, 0.00) M(0.00, 73.23) L(111.50, 73.23) stroke #808080ff 0.40 Butt Miter main.fol:90:4
+            box (4.00, 2.00) 103.50 × 20.21 main.fol:90:9 baselines 13.61..13.61
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 74.71 15 glyph(s) "Clamp and stand"
+          box (111.50, 20.21) 222.99 × 73.43 main.fol:91:4 baselines 15.61..61.37
+            shape (0.00, 0.00) M(0.00, 73.23) L(222.99, 73.23) stroke #808080ff 0.40 Butt Miter main.fol:91:4
+            box (4.00, 2.00) 214.99 × 40.42 main.fol:92:5 baselines 13.61..33.82
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 208.99 43 glyph(s) "Holding the pendulum. The stand was weighed"
+              text (0.00, 33.82) SourceSerif4-Regular 10.00 w 27.86 5 glyph(s) "down:"
+            box (4.00, 46.42) 214.99 × 24.61 main.fol:94:6 baselines 15.61..14.95
+              box (0.00, 0.00) 30.59 × 24.61 main.fol:95:8 baselines 15.61..15.61
+                shape (0.00, 0.00) M(0.00, 24.41) L(30.59, 24.41) stroke #808080ff 0.40 Butt Miter main.fol:95:8
+                box (4.00, 2.00) 22.59 × 20.21 main.fol:95:13 baselines 13.61..13.61
+                  text (0.00, 13.61) SourceSerif4-Regular 10.00 w 22.59 4 glyph(s) "Mass"
+              box (30.59, 0.00) 28.58 × 24.61 main.fol:95:20 baselines 14.95..14.95
+                shape (0.00, 0.00) M(0.00, 24.41) L(28.58, 24.41) stroke #808080ff 0.40 Butt Miter main.fol:95:20
+                box (4.00, 2.00) 20.58 × 18.26 main.fol:95:26 baselines 12.95..12.95
+                  box (0.00, 6.01) 17.08 × 9.00 main.fol:95:26
+                    text (0.00, 6.94) NewCMMath-Regular 10.00 w 5.00 1 glyph(s) "2"
+                    text (6.67, 6.94) NewCMMath-Regular 10.00 w 10.41 2 glyph(s) "kg"
+                  text (17.08, 10.50) SourceSerif4-Regular 7.00 w 3.50 1 glyph(s) "3"
+          box (0.00, 497.85) 334.49 × 12.38 main.fol:95:39 baselines 9.70..9.70
+            box (0.00, 0.00) 334.49 × 12.38 main.fol:95:48 baselines 9.70..9.70
+              text (0.00, 7.25) SourceSerif4-Regular 7.00 w 5.13 2 glyph(s) "3\u{a0}"
+              text (5.13, 9.70) SourceSerif4-Regular 8.00 w 121.82 32 glyph(s) "Two masses of one kilogram each."
+    shape (0.00, 494.85) M(0.00, 0.00) L(111.50, 0.00) stroke #000000ff 0.50 Butt Miter

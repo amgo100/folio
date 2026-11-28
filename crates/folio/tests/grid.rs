@@ -353,3 +353,70 @@ fn an_edit_after_a_long_table_reuses_its_pages() {
         assert_eq!(before.hashes[i], after.hashes[i], "page {i}");
     }
 }
+
+#[test]
+fn footnotes_in_nested_grids_go_to_the_page_foot() {
+    let world = world(
+        "",
+        "#grid(column-tracks: (1fr, 1fr))[\n  #cell[Outer] #cell[\n    #grid(column-tracks: 2)[\n      \
+         #cell[Inner#footnote[Nested note.]] #cell[x]\n    ]\n  ]\n]\n",
+    );
+    let pages = pages(&world);
+    let page = &pages.pages[0];
+    let note = find(page, "Nested").expect("the note is placed");
+    assert!(note.y > find(page, "Inner").unwrap().y + Abs::mm(50.0));
+    // The nested cell's lines are among the page's lines.
+    let text = folio::text(&world, Target::Pdf, None).unwrap().unwrap();
+    let inner = text
+        .paragraphs
+        .iter()
+        .position(|p| p.shaped.text().starts_with("Inner"))
+        .unwrap();
+    assert!(page.lines.iter().any(|l| l.paragraph == inner));
+}
+
+#[test]
+fn a_header_cell_spanning_rows_makes_them_header_rows() {
+    let world = world(
+        "",
+        "#grid(column-tracks: 2, header-rows: 1)[\n  #cell(rowspan: 2)[Head] #cell[a]\n  \
+         #cell[b] #cell[c] #cell[d]\n]\n",
+    );
+    let lines = folio::lines(&world, Target::Pdf, None).unwrap().unwrap();
+    assert_eq!(lines.grids[0].header_rows, 2);
+}
+
+#[test]
+fn a_row_continued_on_the_next_page_is_not_padded_to_parity() {
+    let world = world(
+        "grid { break-before: odd-page; row-breakable: true; }\n",
+        &format!(
+            "Intro.\n\n#grid(column-tracks: (1fr, 1fr))[\n  #cell[{}] #cell[Short]\n]\n",
+            "Long words in a very tall cell. ".repeat(150)
+        ),
+    );
+    let pages = pages(&world);
+    // The intro, a blank page before the grid's odd page, then the row
+    // on every page after it.
+    assert!(pages.pages.len() >= 4, "{}", pages.pages.len());
+    assert!(page_runs(&pages.pages[1]).is_empty());
+    for page in &pages.pages[2..] {
+        assert!(!page_runs(page).is_empty());
+    }
+}
+
+#[test]
+fn blocks_stand_for_cells() {
+    let world = world(
+        "",
+        "#grid(column-tracks: 2)[\n  First cell.\n\n  Second cell.\n\n  - an item\n  - another\n\n  \
+         #cell[Last]\n]\n",
+    );
+    let lines = folio::lines(&world, Target::Pdf, None).unwrap().unwrap();
+    assert_eq!(lines.grids[0].places.len(), 4);
+    let page = &pages(&world).pages[0];
+    let (a, b) = (find(page, "First").unwrap(), find(page, "Second").unwrap());
+    assert!(close(a.y, b.y) && a.x < b.x);
+    let pdf = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(pdf.diagnostics.is_empty(), "{:?}", pdf.diagnostics);
+}

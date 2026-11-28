@@ -354,6 +354,10 @@ pub struct Tag {
     /// the page's body before its notes. Its place in the structure, where
     /// its anchor is, does not change.
     pub foot: bool,
+    /// Whether the node has no box of its own, as a row of a table and the
+    /// cell around a block that stands for one (SPEC §7.4): the boxes of
+    /// the nodes it holds are found through it.
+    pub boxless: bool,
 }
 
 impl Tag {
@@ -367,6 +371,7 @@ impl Tag {
             text: None,
             children: Vec::new(),
             foot: false,
+            boxless: false,
         }
     }
 }
@@ -412,8 +417,7 @@ pub enum Role {
     Group,
     /// A table (`Table`): a grid (SPEC §7.4), whose children are its rows.
     Table,
-    /// A row of a table (`TR`). It has no box of its own: the boxes of
-    /// its cells are found among its children.
+    /// A row of a table (`TR`), a node without a box ([`Tag::boxless`]).
     TableRow,
     /// A cell of a table's header rows (`TH`), with the rows and columns
     /// it spans.

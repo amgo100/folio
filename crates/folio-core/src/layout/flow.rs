@@ -741,7 +741,17 @@ pub(super) enum Origin {
 
 /// Where the leaves of the cells of each band come from, by the band's
 /// leaf ([`Flow::cells`]).
-pub(super) type CellOrigins = Vec<(usize, Vec<Vec<Origin>>)>;
+pub(super) type CellOrigins = Vec<(usize, Vec<CellSource>)>;
+
+/// Where the leaves of a cell come from, and those of the cells of the
+/// bands it holds.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
+pub(super) struct CellSource {
+    /// Where each leaf of the cell's flow comes from.
+    pub origins: Vec<Origin>,
+    /// The same for the bands of grids nested in the cell.
+    pub cells: CellOrigins,
+}
 
 /// The flow of a build, or of a footnote's note.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -1342,20 +1352,27 @@ impl Builder<'_> {
     /// header bands, or directly after them, costs [`KEEP`].
     fn grid(&mut self, block: &TextBlock, boxed: &BlockBox, layout: &GridLayout) {
         let (x, _) = boxed.content();
+        let mut nested: Vec<CellOrigins> = Vec::new();
         let cells: Vec<(Place, Flow)> = block
             .children
             .iter()
             .zip(layout.places.iter())
             .map(|(child, place)| {
                 let (cx, width) = layout.cell_box(place, x);
-                (*place, self.cell_flow(child, cx, width, block))
+                let (flow, cells) = self.cell_flow(child, cx, width, block);
+                nested.push(cells);
+                (*place, flow)
             })
             .collect();
         // The cells' origins, kept out of their bands.
         let mut cells = cells;
-        let origins: Vec<Vec<Origin>> = cells
+        let origins: Vec<CellSource> = cells
             .iter_mut()
-            .map(|(_, flow)| std::mem::take(&mut flow.origins))
+            .zip(nested)
+            .map(|((_, flow), cells)| CellSource {
+                origins: std::mem::take(&mut flow.origins),
+                cells,
+            })
             .collect();
         let heights: Vec<Abs> = cells.iter().map(|(_, flow)| flow_height(flow)).collect();
         let breakable = matches!(
@@ -1443,8 +1460,15 @@ impl Builder<'_> {
 
     /// The flow of a cell of a grid, whose box is `width` wide at `x` from
     /// the left of the body: a `cell`'s, or another block's standing for a
-    /// cell; or a box without decoration around a paragraph.
-    fn cell_flow(&self, child: &TextFlow, x: Abs, width: Abs, grid: &TextBlock) -> Flow {
+    /// cell; or a box without decoration around a paragraph. With it, where
+    /// the leaves of the cells of the grids nested in it come from.
+    fn cell_flow(
+        &self,
+        child: &TextFlow,
+        x: Abs,
+        width: Abs,
+        grid: &TextBlock,
+    ) -> (Flow, CellOrigins) {
         let mut builder = Builder {
             sizes: self.sizes,
             displays: self.displays.clone(),
@@ -1500,7 +1524,7 @@ impl Builder<'_> {
         for fill in &builder.fills {
             flow.fill(fill);
         }
-        flow
+        (flow, builder.cells)
     }
 
     /// The content of the block of a display, as wide as the block's

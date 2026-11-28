@@ -210,18 +210,15 @@ impl<'a> Tagger<'a> {
             .iter()
             .position(|child| is_box_of(child, location))
             .map(|i| from + i);
-        // A row of a table has no box: a cell's box is found among the
-        // children of the rows from the current one on, and enters its row
-        // first, or the row it entered before, as the cells of a row broken
-        // across pages continue it (SPEC §7.4).
+        // A node without a box, such as a row of a table, is entered for a
+        // box of a node it holds, among the nodes from the current one on:
+        // the one entered before, as the cells of a row broken across pages
+        // continue it, or a new one (SPEC §7.4).
         if found.is_none() {
             let rows = out.cursor.unwrap_or(0);
             let row = children[rows..]
                 .iter()
-                .position(|child| {
-                    child.role == Role::TableRow
-                        && child.children.iter().any(|cell| is_box_of(cell, location))
-                })
+                .position(|child| through(child, location))
                 .map(|i| rows + i);
             if let Some(index) = row {
                 let entered = match self.nodes[node].entered[index] {
@@ -510,6 +507,17 @@ impl<'a> Tagger<'a> {
             },
         }
     }
+}
+
+/// Whether a box of the element instance at `location` is a box of a node
+/// that `tag`, a node without a box, holds, directly or through other
+/// nodes without boxes.
+fn through(tag: &Tag, location: Location) -> bool {
+    tag.boxless
+        && tag
+            .children
+            .iter()
+            .any(|child| is_box_of(child, location) || through(child, location))
 }
 
 /// A cell's span as PDF writes it: only where it is more than one.

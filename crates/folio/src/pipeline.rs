@@ -344,21 +344,37 @@ impl Structure<'_> {
             return false;
         };
         let mut rows: Vec<Tag> = (0..layout.rows)
-            .map(|_| Tag::new(Role::TableRow, located(grid.span, grid.location)))
+            .map(|_| Tag {
+                boxless: true,
+                ..Tag::new(Role::TableRow, located(grid.span, grid.location))
+            })
             .collect();
         for (child, place) in grid.children.iter().zip(layout.places.iter()) {
+            // A block that stands for a cell without being one is its own
+            // node in a cell without a box. A paragraph of the grid's own
+            // has no block, which the document model never makes.
             let TextFlow::Block(cell) = child else {
                 continue;
             };
-            let mut cell_tag = self.of(cell, in_note);
             let span = Span2 {
                 rows: u32::try_from(place.rowspan).unwrap_or(1),
                 columns: u32::try_from(place.colspan).unwrap_or(1),
             };
-            cell_tag.role = if place.row < layout.header_rows {
+            let role = if place.row < layout.header_rows {
                 Role::TableHeader(span)
             } else {
                 Role::TableCell(span)
+            };
+            let inner = self.of(cell, in_note);
+            let cell_tag = if matches!(cell.table, Some(TableRole::Cell(_))) {
+                Tag { role, ..inner }
+            } else {
+                // It names no box, so the block's box is its node's.
+                Tag {
+                    boxless: true,
+                    children: vec![inner],
+                    ..Tag::new(role, Location::DETACHED)
+                }
             };
             if let Some(row) = rows.get_mut(place.row) {
                 row.children.push(cell_tag);

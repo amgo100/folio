@@ -59,8 +59,8 @@ use folio_syntax::Span;
 use super::cache::Cache;
 use super::codes;
 use super::flow::{
-    Band, BlockObject, Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin,
-    ParagraphInfo, Part, Shared, Sizes, UNBREAKABLE, Walk,
+    Band, BlockObject, Boundary, Caches, CellOrigins, Constraint, Flow, Fx, Item, KEEP, Leaf,
+    Origin, ParagraphInfo, Part, Shared, Sizes, UNBREAKABLE, Walk,
 };
 use super::footnote::{self, Carried, NOTE_SPLIT, NoteSet, Placement};
 use super::master::{BlockBox, PageMaster};
@@ -312,8 +312,8 @@ impl State {
 
 /// A line on a page as its builder records it: its leaf counted from the
 /// page's first, the line of its paragraph, and for a line of a cell of a
-/// band, the cell and the leaf of the cell's flow.
-type PageLine = (usize, usize, Option<(usize, usize)>);
+/// band, the path to it ([`CellLine::path`]).
+type PageLine = (usize, usize, Option<EcoVec<(usize, usize)>>);
 
 /// A page as its builder made it: it does not depend on where in the flow
 /// the page is.
@@ -608,16 +608,9 @@ fn build_pages(
         },
         &lines.grids,
     );
-    // The paragraph of leaf `j` of cell `c` of the band at leaf `item`.
-    let cell_paragraph = |item: usize, c: usize, j: usize| {
-        let at = flow.cells.partition_point(|(i, _)| *i < item);
-        match flow.cells.get(at) {
-            Some((i, cells)) if *i == item => match cells.get(c).and_then(|o| o.get(j)) {
-                Some(Origin::Paragraph(p)) => *p,
-                _ => usize::MAX,
-            },
-            _ => usize::MAX,
-        }
+    // The paragraph at the end of `path` in the band at leaf `item`.
+    let cell_paragraph = |item: usize, path: &[(usize, usize)]| {
+        cell_origin(&flow.cells, item, path).unwrap_or(usize::MAX)
     };
     let paragraph = |item: usize| match flow.origins[item] {
         Origin::Paragraph(p) => p,
@@ -665,6 +658,7 @@ fn build_pages(
         // `break-before: odd-page` and `even-page` pad with a blank page.
         if state != State::START
             && state.line == 0
+            && state.band.is_empty()
             && let Some(odd) = flow.boundary(state.item).parity
             && (pages.len() % 2 == 0) != odd
         {
@@ -696,12 +690,12 @@ fn build_pages(
         let lines = out
             .lines
             .iter()
-            .map(|&(k, line, cell)| LineRef {
+            .map(|(k, line, cell)| LineRef {
                 paragraph: match cell {
                     None => paragraph(state.item + k),
-                    Some((c, j)) => cell_paragraph(state.item + k, c, j),
+                    Some(path) => cell_paragraph(state.item + k, path),
                 },
-                line,
+                line: *line,
             })
             .collect();
         pages.push(Page { fragment, lines });
@@ -719,6 +713,25 @@ fn build_pages(
         page_refs: PageNumbers::default(),
     };
     (pages, complete)
+}
+
+/// The paragraph that leaf `path` of the band at leaf `item` comes from,
+/// through the bands nested in its cells ([`CellLine::path`]).
+fn cell_origin(cells: &CellOrigins, item: usize, path: &[(usize, usize)]) -> Option<usize> {
+    let ((c, j), rest) = path.split_first()?;
+    let at = cells.partition_point(|(i, _)| *i < item);
+    let (i, sources) = cells.get(at)?;
+    if *i != item {
+        return None;
+    }
+    let source = sources.get(*c)?;
+    if rest.is_empty() {
+        return match source.origins.get(*j)? {
+            Origin::Paragraph(p) => Some(*p),
+            Origin::Empty => None,
+        };
+    }
+    cell_origin(&source.cells, *j, rest)
 }
 
 /// A hash of what a page shows: its fragments' sizes, positions,
@@ -1025,10 +1038,18 @@ pub(super) struct Piece {
     /// Whether it is a header band set again at the top of a page, which
     /// is drawn as a copy and anchors no footnotes.
     pub(super) repeat: bool,
-    /// The lines of the cells that the part places: each its cell, the
-    /// leaf of the cell's flow and the line, so that their footnotes are
-    /// placed at the page's foot (SPEC §7.4, §7.8).
-    pub(super) lines: EcoVec<(usize, usize, usize)>,
+    /// The lines of the cells that the part places, so that their
+    /// footnotes are placed at the page's foot (SPEC §7.4, §7.8).
+    pub(super) lines: EcoVec<CellLine>,
+}
+
+/// A line of a cell of a band: the cells and leaves that lead to it, the
+/// first of the band, the others of grids nested in it, the last leaf a
+/// paragraph's; and the line.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct CellLine {
+    pub(super) path: EcoVec<(usize, usize)>,
+    pub(super) line: usize,
 }
 
 impl Placed {
@@ -1203,7 +1224,19 @@ impl<'a> Run<'a> {
                 for (c, run) in runs.iter().enumerate() {
                     for leaf in &run.leaves[kept_before[c]..kept[c]] {
                         if let Some((_, line)) = &leaf.line {
-                            lines.push((c, leaf.item, *line));
+                            lines.push(CellLine {
+                                path: EcoVec::from([(c, leaf.item)]),
+                                line: *line,
+                            });
+                        } else if let Some(inner) = leaf.piece.as_ref().filter(|p| !p.repeat) {
+                            for nested in &inner.lines {
+                                let mut path = EcoVec::from([(c, leaf.item)]);
+                                path.extend(nested.path.iter().copied());
+                                lines.push(CellLine {
+                                    path,
+                                    line: nested.line,
+                                });
+                            }
                         }
                     }
                 }
@@ -1581,8 +1614,8 @@ fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
         if let Some((_, line)) = &leaf.line {
             lines.push((leaf.item - start, *line, None));
         } else if let Some(piece) = &leaf.piece {
-            for &(cell, item, line) in &piece.lines {
-                lines.push((leaf.item - start, line, Some((cell, item))));
+            for cell in &piece.lines {
+                lines.push((leaf.item - start, cell.line, Some(cell.path.clone())));
             }
         }
     }
@@ -1983,7 +2016,9 @@ fn draw_band(run: &Run<'_>, piece: &Piece, top: Abs, asm: &mut Assembler) {
             open: Vec::new(),
             items: Vec::new(),
             baselines: None,
-            widen: asm.widen,
+            // Cells are laid out in the master's body, whatever the page's
+            // width.
+            widen: Abs::zero(),
             floor,
         };
         let begin = if start.state == State::START {

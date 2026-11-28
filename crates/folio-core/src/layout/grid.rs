@@ -428,7 +428,9 @@ pub struct GridLayout {
     pub rows: usize,
     /// The least height of each row, from `row-tracks`.
     pub row_mins: EcoVec<Abs>,
-    /// How many of the first rows are header rows.
+    /// How many of the first rows are header rows: as many as
+    /// `header-rows` asks for, and the rows that cells spanning from them
+    /// join to them.
     pub header_rows: usize,
     /// How far the columns are wider than the grid's content box, or zero.
     pub overflow: Abs,
@@ -508,14 +510,7 @@ impl Measurer<'_> {
             .map(|s| s.column.unwrap_or(1) - 1 + s.colspan.min(MAX_TRACKS))
             .max()
             .unwrap_or(1);
-        let count = if given.is_empty() {
-            asked.clamp(1, MAX_TRACKS)
-        } else {
-            given
-                .len()
-                .max(specs.iter().filter_map(|s| s.column).max().unwrap_or(0))
-                .min(MAX_TRACKS)
-        };
+        let count = given.len().max(asked).clamp(1, MAX_TRACKS);
         let mut tracks = given;
         tracks.resize(count, Track::AUTO);
         let (places, rows) = place(&specs, count);
@@ -548,7 +543,7 @@ impl Measurer<'_> {
         let row_mins = (0..rows)
             .map(|r| row_tracks.get(r).and_then(|t| t.min).unwrap_or_default())
             .collect();
-        GridLayout {
+        let mut layout = GridLayout {
             location: grid.location,
             span: grid.span,
             columns: columns.into_iter().collect(),
@@ -556,9 +551,20 @@ impl Measurer<'_> {
             places: places.into_iter().collect(),
             rows,
             row_mins,
-            header_rows,
+            header_rows: header_rows.min(rows),
             overflow,
+        };
+        // A cell that spans from the header rows into the rows after them
+        // makes those header rows too, as they are set again with them.
+        if layout.header_rows > 0 {
+            layout.header_rows = bands(&layout)
+                .into_iter()
+                .filter(|&(start, _)| start < layout.header_rows)
+                .map(|(_, end)| end + 1)
+                .max()
+                .unwrap_or(layout.header_rows);
         }
+        layout
     }
 
     /// The measures of what a block holds, with the padding and borders of
