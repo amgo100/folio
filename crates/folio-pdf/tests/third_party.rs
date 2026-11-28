@@ -313,6 +313,66 @@ fn every_build_uses_the_patched_crates() {
     }
 }
 
+/// What moxcms and hayro-jpeg2000 must not do outside their SIMD code,
+/// which their copies refuse to build (#312): fuse a multiply-add on some
+/// targets only, or take a run-time function from pxfm, which picks a path
+/// by CPU. `(crate, pattern, files allowed to have it)`.
+const UNFUSED: &[(&str, &str, &[&str])] = &[
+    ("moxcms", "target_feature = \"fma\"", &[]),
+    ("moxcms", "MulAdd::mul_add(", &[]),
+    ("moxcms", "f32::mul_add(", &[]),
+    ("moxcms", "f64::mul_add(", &[]),
+    // pxfm's `const fn`s, which the compiler evaluates, the same on every
+    // host.
+    ("moxcms", "pxfm::", &["src/defaults.rs"]),
+    ("hayro-jpeg2000", "target_feature = \"fma\"", &[]),
+    ("hayro-jpeg2000", "f32::mul_add(", &[]),
+    ("hayro-jpeg2000", "f64::mul_add(", &[]),
+];
+
+/// moxcms's SIMD code, which its copy refuses to build.
+const MOXCMS_SIMD: &[&str] = &[
+    "src/conversions/avx/",
+    "src/conversions/avx512/",
+    "src/conversions/neon/",
+    "src/conversions/sse/",
+];
+
+#[test]
+fn colour_crates_round_the_same_on_every_cpu() {
+    let mut failures = Vec::new();
+    for (name, pattern, allowed) in UNFUSED {
+        let dir = root().join("third_party").join(name);
+        let mut files = Vec::new();
+        rust_files(&dir.join("src"), &mut files);
+        for file in files {
+            let rel = file
+                .strip_prefix(&dir)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if allowed.contains(&rel.as_str()) || MOXCMS_SIMD.iter().any(|d| rel.starts_with(d))
+            {
+                continue;
+            }
+            let text = fs::read_to_string(&file).unwrap();
+            for (i, line) in code(&text).iter().enumerate() {
+                if line.contains(pattern) {
+                    failures.push(format!("third_party/{name}/{rel}:{}: `{pattern}`", i + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "moxcms or hayro-jpeg2000 fuses multiply-adds on some targets only, or \
+         takes a function from pxfm that picks its path by CPU, so colours \
+         would differ by machine (SPEC §2.4, #312); write `a * b + c` and use \
+         `libm` (third_party/moxcms/src/folio_libm.rs):\n{}",
+        failures.join("\n")
+    );
+}
+
 #[test]
 fn arrowheads_turn_by_libm() {
     // An arrow along (12, 5): glibc's `atan2f` gives it another angle on

@@ -12,7 +12,7 @@
 //! `data/colour.py`), which runs every 8-bit level through those paths, and
 //! compares a digest of the SVG with the one recorded here, on x86-64 with
 //! AVX2 and FMA. It must pass unchanged on x86-64 without them and on
-//! aarch64: `tests/README.md` says how to run it there under QEMU.
+//! aarch64: `third_party/README.md` says how to run it there under QEMU.
 
 use std::fs;
 use std::path::Path;
@@ -57,6 +57,6 @@ fn colour_converts_the_same_everywhere() {
          {DIGEST:#018x}: moxcms or hayro-jpeg2000 computes otherwise than on \
          the machine that recorded it (SPEC §2.4, #312). If the change was \
          meant, record the new digest and check it on aarch64 and on x86-64 \
-         without AVX2 (tests/README.md)"
+         without AVX2 (third_party/README.md)"
     );
 }

@@ -46,8 +46,8 @@ pxfm's functions with `libm`. `crates/folio-pdf/tests/data/colour.pdf`,
 written by `colour.py` beside it, runs every 8-bit level through these
 paths, and `cargo test -p folio-pdf --test colour` compares a digest of
 its conversion with the one recorded on x86-64. It passes unchanged under
-QEMU on aarch64 and on x86-64 CPUs without AVX2 or SSE 4.1 (`qemu64`,
-`Nehalem`); before the patch, each of the three gave its own digest.
+QEMU on aarch64 and on x86-64 CPUs without AVX2 (`Nehalem`) or SSE 4.1
+(`qemu64`); before the patch, each of the three gave its own digest.
 `pxfm` itself is not patched: moxcms keeps only its `const fn`s, which the
 compiler evaluates the same on every host.
 
