@@ -1081,7 +1081,7 @@ fn messages(warnings: &[Diagnostic]) -> Messages {
 /// without the byte order mark the loader leaves out of a source's text,
 /// which an editor does not show either. With the mark, every place on the
 /// first line would be off by it.
-fn disk_text(file: &std::path::Path) -> Option<String> {
+fn disk_text(file: &Path) -> Option<String> {
     let text = std::fs::read_to_string(file).ok()?;
     Some(match text.strip_prefix('\u{FEFF}') {
         Some(rest) => rest.to_owned(),
