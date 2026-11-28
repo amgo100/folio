@@ -509,7 +509,7 @@ impl Measurer<'_> {
         // As many columns as the tracks give, or the cells ask for.
         let asked = specs
             .iter()
-            .map(|s| s.column.unwrap_or(1) - 1 + s.colspan.min(MAX_TRACKS))
+            .map(|s| s.column.unwrap_or(1).saturating_sub(1) + s.colspan.min(MAX_TRACKS))
             .max()
             .unwrap_or(1);
         let count = given.len().max(asked).clamp(1, MAX_TRACKS);
