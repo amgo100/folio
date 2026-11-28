@@ -24,7 +24,7 @@
 //! `hidden` is to keep the space of the content without drawing it, and
 //! `answer-space` to put answer space in its place; until layout measures
 //! content it does not draw, both leave the content out, with a warning,
-//! so that it never reaches the output ([`Select::answer_space`] is where
+//! so that it never reaches the output (`Select::answer_space` is where
 //! answer space plugs in).
 //!
 //! Select copies only what changes: an element whose subtree it leaves as

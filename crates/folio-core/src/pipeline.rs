@@ -7,7 +7,7 @@
 //!    the smallest block an edit touches ([`SourceFile`](crate::db::SourceFile));
 //!    [`check_source`](crate::db::check_source) reports its syntax errors.
 //! 2. **Evaluate**: [`evaluate`](crate::eval::evaluate) and the document
-//!    model ([`document`](crate::model::document)). Neither reads the
+//!    model ([`document`]). Neither reads the
 //!    target, and code that does not read `variant` is evaluated once for
 //!    every variant.
 //! 3. **Style**: [`styles()`].
