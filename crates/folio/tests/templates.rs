@@ -770,3 +770,46 @@ fn a_space_a_template_shows_only_in_a_line_keeps_its_space() {
             .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution"))
     );
 }
+
+#[test]
+fn what_select_keeps_of_content_a_template_leaves_out() {
+    // A list whose template does not place its body keeps the template's
+    // text; a display equation inside inline content an inline template
+    // places is left out with its number.
+    let lists = world(
+        "render list { body: \"(list omitted)\"; }\n",
+        "Before.\n\n- one\n- two\n\nAfter.\n",
+    );
+    let shown: Vec<String> = text(&lists)
+        .paragraphs
+        .iter()
+        .map(|p| p.shaped.text().to_string())
+        .collect();
+    assert_eq!(shown, ["Before.", "(list omitted)", "After."]);
+
+    let content = r#"#element hint() {
+  kind: inline
+  body: slots(note: inline)
+}
+
+Text #hint[#note[see $ x = 1 $ <eq:a>]] more.
+
+$ y = 2 $
+"#;
+    let world = world(
+        "math { numbering: \"(1)\"; }\nrender hint { body: \"(\" slot(note) \")\"; }\n",
+        content,
+    );
+    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    assert!(resolution.label("eq:a").is_none());
+    assert_eq!(
+        resolution
+            .numbers
+            .iter()
+            .filter(|n| n.counter == "equation")
+            .count(),
+        1
+    );
+}

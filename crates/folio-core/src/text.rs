@@ -857,24 +857,22 @@ impl Collector<'_> {
                 // body, so that no answer space is lost (SPEC §6.3). A
                 // `hidden` part keeps no block there: in the variants that
                 // show it, it is not there either.
-                let mut unplaced: Vec<Name> = if self.spaces.is_empty() {
+                // In the order of the element's fields.
+                let unplaced: Vec<Name> = if self.spaces.is_empty() {
                     Vec::new()
                 } else {
-                    self.spaces
-                        .iter()
-                        .filter(|((location, _), space)| {
-                            *location == element.location && space.kind == SpaceKind::Answer
-                        })
-                        .filter_map(|((_, part), _)| part.clone())
-                        .filter(|name| !self.placed.contains(name))
-                        .collect()
-                };
-                unplaced.sort_by_key(|name| {
                     element
                         .fields
                         .iter()
-                        .position(|(key, _)| key.as_str() == name.as_str())
-                });
+                        .filter_map(|(key, _)| Name::new(key))
+                        .filter(|name| {
+                            self.spaces
+                                .get(&(element.location, Some(name.clone())))
+                                .is_some_and(|space| space.kind == SpaceKind::Answer)
+                        })
+                        .filter(|name| !self.placed.contains(name))
+                        .collect()
+                };
                 for name in unplaced {
                     if let Some(eval::Value::Content(content)) = element.field(name.as_str())
                         && self.place(&name)
