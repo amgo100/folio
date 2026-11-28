@@ -1,0 +1,44 @@
+#doc(title: [Forces], subject: "Year 11 physics, shuffled versions")
+
+// Each version takes the questions in its own order (SPEC §6.4), and its
+// mark scheme in the same order.
+#let bank = (
+  (
+    title: [Free fall],
+    text: [A stone is dropped from rest from a bridge 45 m above a river. Find the time it takes to reach the water.],
+    answer: [From $s = 1/2 g t^2$, the time is 3.0 s.],
+  ),
+  (
+    title: [Friction],
+    text: [A box of mass 5.0 kg slides to rest from 4.0 m/s in 2.0 m. Find the friction force on it.],
+    answer: [The deceleration is 4.0 m/s², so the force is 20 N.],
+  ),
+  (
+    title: [Moments],
+    text: [A uniform plank 4.0 m long rests on a pivot 1.0 m from one end. Find the weight that balances it at that end if the plank weighs 200 N.],
+    answer: [Taking moments about the pivot, the weight is 200 N.],
+  ),
+  (
+    title: [Springs],
+    text: [A spring stretches by 6.0 cm under a load of 3.0 N. Find its spring constant.],
+    answer: [The spring constant is 50 N/m.],
+  ),
+)
+
+#for q in shuffle(bank, seed: version) [
+  = #q.title
+
+  #q.text
+
+  #figure(class: "space", caption: [Your answer.])[]
+
+  #figure(class: "answers", caption: [Answer to #q.title.])[#q.answer]
+]
+
+= Short answers
+
+#shuffle(seed: version)[
+  + State Newton's first law of motion.
+  + Give the unit of momentum in base units.
+  + Name the force that keeps a satellite in orbit.
+]
