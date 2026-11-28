@@ -406,7 +406,10 @@ fn hidden_tables_and_cells_keep_their_height() {
         "Before.\n\n#grid(class: \"t\", column-tracks: (auto, 1fr), header-rows: 1)[\n\
          #cell[Run] #cell[Note]\n{rows}]\n\nAfter.\n"
     );
-    for style in ["grid.t { display: hidden; }\n", "cell { display: hidden; }\n"] {
+    for style in [
+        "grid.t { display: hidden; }\n",
+        "cell { display: hidden; }\n",
+    ] {
         let world = world(style, "grid.t, cell { display: block; }\n", &text);
         let exam = pages(&world, "exam");
         let markscheme = pages(&world, "markscheme");

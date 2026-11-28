@@ -100,6 +100,7 @@ pub(super) fn slots(
 
 /// The slots of [`slots`], with grids laid out by `measurer` where it is
 /// given, and the grids laid out.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn slots_with(
     root: &TextBlock,
     notes: &[TextBlock],
@@ -1749,7 +1750,8 @@ impl Builder<'_> {
     }
 
     /// How tall `block` is as a block `width` wide, as [`extent`] gives
-    /// it: its flow built on its own and discarded (SPEC §6.3).
+    /// it, or for a cell, as its band sets it: its flow built on its own
+    /// and discarded (SPEC §6.3).
     fn measure(&self, block: &TextBlock, width: Abs) -> (Abs, Abs, Abs) {
         let discarded = RefCell::new(Vec::new());
         let builder = Builder {
@@ -1778,7 +1780,13 @@ impl Builder<'_> {
             cells: Vec::new(),
             spaces: &discarded,
         };
-        extent(&builder.flow(block))
+        let flow = builder.flow(block);
+        // A cell is as tall as its flow with the spaces at its ends
+        // dropped, as its band sets it.
+        if matches!(block.table, Some(TableRole::Cell(_))) {
+            return (Abs::zero(), flow_height(&flow), Abs::zero());
+        }
+        extent(&flow)
     }
 
     /// The ruled lines of a block (SPEC §6.3), after its content: a leaf
