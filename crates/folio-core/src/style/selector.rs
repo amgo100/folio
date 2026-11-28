@@ -147,10 +147,12 @@ impl Need {
     }
 }
 
-/// What a set of rules needs to see of nodes, by the nodes' names: a rule
-/// whose compound names an element tests only the nodes of that name, so
-/// one `heading[level=1]` or `heading + paragraph` adds nothing to the
-/// views of other nodes.
+/// What a set of rules needs to see of nodes, by the nodes' names: a
+/// compound that names an element adds what it tests only to the views of
+/// nodes of that name. `heading[level=1]` makes headings show their level
+/// and no other node; `heading + paragraph` makes paragraphs show their
+/// previous sibling, as subjects, and headings what the rule tests of
+/// them, as context.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
 pub struct Needs {
     /// What compounds without a name need, of every node.

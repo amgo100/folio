@@ -431,9 +431,10 @@ impl<'a> Styler<'a> {
         self.style(groups)
     }
 
-    /// The computed value of a declared property at a font size; the font
-    /// size itself is `size`, computed from the parent's. A value that does
-    /// not fit its property falls back as if it were not declared.
+    /// The computed value of a declared property at a font size. A value
+    /// that does not fit its property falls back as if it were not
+    /// declared. The font size itself is `size`, which already holds that
+    /// fallback, the parent's size, where the declared one is not a length.
     fn declared(
         &self,
         id: PropId,
