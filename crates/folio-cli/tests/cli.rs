@@ -656,6 +656,9 @@ fn formats_the_corpus_without_changing_its_outputs() {
         let document = json(&output);
         let diagnostics = document["diagnostics"].as_array().unwrap();
         assert_eq!(diagnostics.len(), files.len(), "{name}: {document:#}");
+        // A check rewrites nothing (#277).
+        assert_eq!(document["formatted"], serde_json::json!([]), "{name}");
+        assert_eq!(document["builds"], serde_json::json!([]), "{name}");
         for diagnostic in diagnostics {
             assert_eq!(diagnostic["code"], "unformatted");
             assert!(
@@ -671,7 +674,27 @@ fn formats_the_corpus_without_changing_its_outputs() {
         }
 
         // Formatting gives what formatting the corpus gives, and the same
-        // outputs.
+        // outputs. The JSON document lists the files it rewrote, in path
+        // order: every untidy one, and on a second run none (#277).
+        let mut untidy_paths: Vec<_> = files.iter().map(|(path, _)| path.clone()).collect();
+        untidy_paths.sort();
+        let output = folio(messy.path(), &["fmt", "--diagnostics", "json"]);
+        assert!(output.status.success(), "{name}: {}", stderr(&output));
+        let document = json(&output);
+        assert_eq!(document["version"], 1);
+        assert_eq!(
+            document["formatted"],
+            serde_json::json!(untidy_paths),
+            "{name}: {document:#}"
+        );
+        let output = folio(messy.path(), &["fmt", "--diagnostics", "json"]);
+        assert_eq!(json(&output)["formatted"], serde_json::json!([]), "{name}");
+        // Without the flag, each rewritten file is a line.
+        let lines = folio(tidy.path(), &["fmt"]);
+        assert!(lines.status.success(), "{name}: {}", stderr(&lines));
+        for line in stderr(&lines).lines() {
+            assert!(line.starts_with("formatted "), "{name}: {line}");
+        }
         for dir in [tidy.path(), messy.path()] {
             let output = folio(dir, &["fmt"]);
             assert!(output.status.success(), "{name}: {}", stderr(&output));
