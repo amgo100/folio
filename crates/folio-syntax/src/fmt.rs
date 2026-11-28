@@ -44,6 +44,17 @@
 //!   argument, after `(` or before `)`. Runs of whitespace that hold other
 //!   characters than spaces, tabs and line breaks (a form feed, U+2028) are
 //!   kept as written.
+//! - Table rows (SPEC §7.4) are the exception to unaligned columns. In a
+//!   row that is a line of its own, one space separates each pipe from the
+//!   cell next to it, and a cell of only spaces is written `||`. The rows
+//!   of consecutive lines with the same indentation and number of cells are
+//!   aligned: each cell is padded after it to the width of the widest cell
+//!   of its column, counting a wide character as two columns (`||` stays
+//!   where the whole column is empty). A `|---|` line keeps the spacing the
+//!   other rules give it, and does not divide the rows around it. A row
+//!   that runs over several lines, through a cell's content block, keeps
+//!   its first line as written, and the `]` that closes the block is
+//!   indented two spaces more than the row.
 //!
 //! Formatting never changes what a file means: the result parses to the same
 //! tree apart from whitespace ([`equivalent`]), which [`format()`] checks
@@ -432,6 +443,21 @@ struct Walk {
     /// For each gap, whether a list, enum or term marker follows it on its
     /// line.
     marker_ahead: Vec<bool>,
+    /// The table rows, inner rows before the rows whose cells hold them
+    /// (SPEC §7.4).
+    rows: Vec<Row>,
+    /// For each token, whether it is in a table row.
+    row_tokens: Vec<bool>,
+}
+
+/// A table row, by the indices of its tokens: its pipes, and each cell's
+/// tokens (`start..end`, empty for an empty cell, at the pipe after it).
+#[derive(Debug, Clone)]
+struct Row {
+    tokens: Range<usize>,
+    pipes: Vec<usize>,
+    cells: Vec<Range<usize>>,
+    separator: bool,
 }
 
 impl Walk {
@@ -445,8 +471,16 @@ impl Walk {
             items: Vec::new(),
             opens_markup: Vec::new(),
             marker_ahead: Vec::new(),
+            rows: Vec::new(),
+            row_tokens: Vec::new(),
         };
         this.walk(root, root.kind(), 0);
+        this.row_tokens = vec![false; this.tokens.len()];
+        for row in &this.rows {
+            for token in &mut this.row_tokens[row.tokens.clone()] {
+                *token = true;
+            }
+        }
         this.find_markup_lines();
         this.find_markers_ahead();
         this
@@ -495,15 +529,36 @@ impl Walk {
         }
         let mut at = offset;
         let items = is_container(kind) || is_markup(kind);
+        let first = self.tokens.len();
+        let mut row = (kind == SyntaxKind::TableRow).then(|| Row {
+            tokens: first..first,
+            pipes: Vec::new(),
+            cells: Vec::new(),
+            separator: node
+                .cast::<crate::ast::TableRow<'_>>()
+                .is_some_and(|row| row.is_separator()),
+        });
         for child in node.children() {
             if items {
                 self.items.push(self.depth);
             }
+            let before = self.tokens.len();
             self.walk(child, kind, at);
+            if let Some(row) = &mut row {
+                match child.kind() {
+                    SyntaxKind::TablePipe => row.pipes.push(before),
+                    SyntaxKind::Markup => row.cells.push(before..self.tokens.len()),
+                    _ => {}
+                }
+            }
             if items {
                 self.items.pop();
             }
             at += child.len();
+        }
+        if let Some(mut row) = row {
+            row.tokens = first..self.tokens.len();
+            self.rows.push(row);
         }
     }
 
@@ -659,6 +714,8 @@ impl Walk {
     /// Decides every gap.
     fn run(self) -> Edits {
         let mut edits = Edits::new();
+        // The whitespace each gap gets, where it changes.
+        let mut decided: Vec<Option<EcoString>> = vec![None; self.gaps.len()];
         // The indentation of the current line, and of the line where its
         // item starts, which a declaration block's `{` indents from.
         let mut indent = EcoString::new();
@@ -820,11 +877,7 @@ impl Walk {
                 (Some(prev), Some(next)) => Some(inline_code(text, prev, next)),
             };
 
-            if let Some(new) = new
-                && new != text
-            {
-                edits.replace(gap.range.0..gap.range.1, new);
-            }
+            decided[i] = new;
 
             // The brackets the next token opens or closes.
             if let Some(next) = next {
@@ -843,6 +896,12 @@ impl Walk {
                     let rule = next.kind == SyntaxKind::LeftBrace && is_rule_block(next.parent);
                     open.push(if rule {
                         item_indent.clone()
+                    } else if next.parent == SyntaxKind::ContentBlock && self.in_row(i) {
+                        // A cell's content block in a table row closes
+                        // indented under the row.
+                        let mut cell = indent.clone();
+                        cell.push_str("  ");
+                        cell
                     } else {
                         indent.clone()
                     });
@@ -857,8 +916,178 @@ impl Walk {
                 }
             }
         }
+        self.align_rows(&mut decided);
+        for (gap, new) in self.gaps.iter().zip(decided) {
+            if let Some(new) = new
+                && new != self.text[gap.range.0..gap.range.1]
+            {
+                edits.replace(gap.range.0..gap.range.1, new);
+            }
+        }
         edits
     }
+
+    /// Whether token `i` is in a table row.
+    fn in_row(&self, i: usize) -> bool {
+        self.row_tokens.get(i).copied().unwrap_or(false)
+    }
+
+    /// The whitespace written or decided for gap `i`.
+    fn gap_text<'a>(&'a self, decided: &'a [Option<EcoString>], i: usize) -> &'a str {
+        match &decided[i] {
+            Some(new) => new,
+            None => &self.text[self.gaps[i].range.0..self.gaps[i].range.1],
+        }
+    }
+
+    /// Lays out the table rows of content (SPEC §7.4, §12.1): in a row that
+    /// is a line of its own, one space separates each pipe from the cell
+    /// next to it, and a cell of only spaces is written `||`; the rows of
+    /// consecutive lines with the same indentation and the same number of
+    /// cells are aligned, each cell padded with spaces after it to the
+    /// width of the widest cell of its column (`||` stays where the whole
+    /// column is empty). A separator line (`|---|`) is left as the other
+    /// rules lay it out, and does not divide the rows around it. A row that
+    /// runs over several lines, through a cell's content block, stays as
+    /// written: moving its first line would move the list markers on it
+    /// against the lines below.
+    fn align_rows(&self, decided: &mut [Option<EcoString>]) {
+        let breaks = |text: &str| count_newlines(text);
+        // The rows that are lines of their own, with the width of each
+        // cell and the row's indentation.
+        let mut lines: Vec<Option<(Vec<usize>, EcoString)>> = Vec::with_capacity(self.rows.len());
+        for row in &self.rows {
+            lines.push(self.row_line(row, decided));
+        }
+        // Groups of rows to align: consecutive lines, separators skipped.
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        let mut last: Option<usize> = None;
+        for (r, row) in self.rows.iter().enumerate() {
+            let consecutive = last.is_some_and(|l| {
+                let prev = &self.rows[l];
+                prev.tokens.end == row.tokens.start
+                    && breaks(self.gap_text(decided, row.tokens.start)) == 1
+            });
+            if row.separator && lines[r].is_some() {
+                // A separator does not divide the rows around it.
+                if !consecutive {
+                    groups.push(Vec::new());
+                }
+                last = Some(r);
+                continue;
+            }
+            let Some((widths, indent)) = &lines[r] else {
+                last = None;
+                groups.push(Vec::new());
+                continue;
+            };
+            let joins = consecutive
+                && groups.last().and_then(|g| g.last()).is_some_and(|&p| {
+                    let (w, i) = lines[p].as_ref().expect("grouped rows are lines");
+                    w.len() == widths.len() && i == indent
+                });
+            if joins {
+                groups.last_mut().expect("checked above").push(r);
+            } else {
+                groups.push(vec![r]);
+            }
+            last = Some(r);
+        }
+        for group in groups {
+            let mut columns: Vec<usize> = Vec::new();
+            for &r in &group {
+                let (widths, _) = lines[r].as_ref().expect("grouped rows are lines");
+                columns.resize(columns.len().max(widths.len()), 0);
+                for (k, &w) in widths.iter().enumerate() {
+                    columns[k] = columns[k].max(w);
+                }
+            }
+            for &r in &group {
+                let row = &self.rows[r];
+                let (widths, _) = lines[r].as_ref().expect("grouped rows are lines");
+                for (k, cell) in row.cells.iter().enumerate() {
+                    let pad = columns[k] - widths[k];
+                    if cell.is_empty() {
+                        // An empty cell: the gap between its pipes.
+                        decided[cell.start] = Some(if columns[k] == 0 {
+                            EcoString::new()
+                        } else {
+                            " ".repeat(columns[k] + 2).into()
+                        });
+                        continue;
+                    }
+                    decided[cell.start] = Some(" ".into());
+                    // The gap before the pipe after the cell, if one closes
+                    // it.
+                    if row.pipes.contains(&cell.end) {
+                        let mut after = EcoString::from(" ");
+                        after.push_str(&" ".repeat(pad));
+                        decided[cell.end] = Some(after);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The width of each cell of a row that is a line of its own, as the
+    /// row is formatted, and the line's indentation; `None` for another
+    /// row, or one with a comment.
+    fn row_line(&self, row: &Row, decided: &[Option<EcoString>]) -> Option<(Vec<usize>, EcoString)> {
+        let (first, end) = (row.tokens.start, row.tokens.end);
+        if first == end {
+            return None;
+        }
+        let before = self.gap_text(decided, first);
+        let starts_line = first == 0 || count_newlines(before) > 0;
+        let span = &self.text[self.tokens[first].range.0..self.tokens[end - 1].range.1];
+        if !starts_line
+            || count_newlines(span) > 0
+            || self.tokens[first..end].iter().any(Token::is_comment)
+        {
+            return None;
+        }
+        let mut widths = Vec::with_capacity(row.cells.len());
+        for cell in &row.cells {
+            let mut width = 0;
+            for t in cell.clone() {
+                if t > cell.start {
+                    width += text_width(self.gap_text(decided, t));
+                }
+                let token = &self.tokens[t];
+                width += text_width(&self.text[token.range.0..token.range.1]);
+            }
+            widths.push(width);
+        }
+        Some((widths, trailing_indent(before).into()))
+    }
+}
+
+/// How many columns a text takes in a monospaced editor: a column for each
+/// grapheme cluster, two for a wide one (East Asian wide and full-width
+/// characters, and emoji).
+fn text_width(text: &str) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    text.graphemes(true)
+        .map(|g| {
+            let c = g.chars().next().map_or(0, u32::from);
+            let wide = matches!(c,
+                0x1100..=0x115F
+                | 0x2E80..=0x303E
+                | 0x3041..=0x33FF
+                | 0x3400..=0x4DBF
+                | 0x4E00..=0x9FFF
+                | 0xA000..=0xA4CF
+                | 0xAC00..=0xD7A3
+                | 0xF900..=0xFAFF
+                | 0xFE30..=0xFE4F
+                | 0xFF00..=0xFF60
+                | 0xFFE0..=0xFFE6
+                | 0x1F300..=0x1F64F
+                | 0x1F900..=0x1F9FF
+                | 0x20000..=0x3FFFD);
+            if wide { 2 } else { 1 }
+        })
+        .sum()
 }
 
 /// The markers of list, enum and term items.
@@ -1296,6 +1525,53 @@ mod tests {
         // Spaces after the last marker of a line still collapse.
         markup("-   a\n    b\n", "- a\n    b\n");
         markup("/ Term:   x\n", "/ Term: x\n");
+    }
+
+    #[test]
+    fn table_rows() {
+        // Consecutive rows are aligned; `||` stays an empty column.
+        markup(
+            "#grid[\n  |a|bb|\n  | ccc |d|\n  |e   ||\n]\n",
+            "#grid[\n  | a   | bb |\n  | ccc | d  |\n  | e   |    |\n]\n",
+        );
+        markup("| a || b |\n", "| a || b |\n");
+        markup("|   a   |  |b|\n", "| a || b |\n");
+        // A separator does not divide the rows, and stays as written.
+        markup(
+            "| Head | X |\n|---|:-:|\n| 1 | 22 |\n",
+            "| Head | X  |\n|---|:-:|\n| 1    | 22 |\n",
+        );
+        // Rows with other indentation or another number of cells, or after
+        // a blank line, are aligned apart.
+        markup(
+            "| aaa | b |\n  | c | d |\n| e |\n\n| f | g |\n",
+            "| aaa | b |\n  | c | d |\n| e |\n\n| f | g |\n",
+        );
+        // Wide characters take two columns, and markup and code in cells
+        // count as formatted.
+        markup(
+            "| 表 | x |\n| ab | y |\n",
+            "| 表 | x |\n| ab | y |\n",
+        );
+        markup(
+            "| #f(a,b) | x |\n| $y$   z | w |\n",
+            "| #f(a, b) | x |\n| $y$ z    | w |\n",
+        );
+        // A cell after the last pipe, and a row that is not a line of its
+        // own.
+        markup("| a |  b\n| cc | d\n", "| a  | b\n| cc | d\n");
+        markup("#grid[| a |  b |]\n", "#grid[| a | b |]\n");
+        // A row whose cell holds a block over several lines stays as
+        // written, and divides the rows around it.
+        // Its block closes indented under the row.
+        markup(
+            "#grid[\n  | aaa | b |\n  | c | #cell[\n      Two.\n] | 2 |\n  | d |  e |\n]\n",
+            "#grid[\n  | aaa | b |\n  | c | #cell[\n      Two.\n    ] | 2 |\n  | d | e |\n]\n",
+        );
+        markup(
+            "| a |  #cell[- x\n    - y] |\n",
+            "| a |  #cell[- x\n    - y] |\n",
+        );
     }
 
     #[test]
