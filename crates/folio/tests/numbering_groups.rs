@@ -292,3 +292,20 @@ fn variants_restarting_a_shared_counter_differently_warn() {
         "{found:?}"
     );
 }
+
+/// #448: instances that each variant of a group shows alone at the same
+/// place are numbered in the order they are written, not by variant.
+#[test]
+fn instances_shown_by_one_variant_each_keep_source_order() {
+    let world = world(
+        "\"figure\"",
+        "Text.\n\n\
+         #figure(class: \"exam-only\", caption: [Space one])[]\n\n\
+         #figure(class: \"scheme-only\", caption: [Answer one])[A.]\n\n\
+         Between.\n\n\
+         #figure(class: \"exam-only\", caption: [Space two])[]\n\n\
+         #figure(class: \"scheme-only\", caption: [Answer two])[B.]\n",
+    );
+    assert_eq!(numbers(&world, "exam"), ["figure: 1", "figure: 3"]);
+    assert_eq!(numbers(&world, "markscheme"), ["figure: 2", "figure: 4"]);
+}
