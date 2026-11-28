@@ -128,7 +128,8 @@ pub fn instances<'a>(root: &'a Element, target: &str) -> Vec<&'a Element> {
 /// The title of an entry: its caption, or else its body, as the
 /// document shows the text: `shown` gives the text of an element that
 /// shows text of its own (a reference's), notes and floats are left out,
-/// and the rest gives its text. Trimmed.
+/// and every other element gives the text of its fields of content, as
+/// [`Content::plain_text`] does. Trimmed.
 pub(super) fn title(element: &Element, shown: &dyn Fn(&Element) -> Option<EcoString>) -> EcoString {
     fn write(
         content: &Content,
@@ -146,8 +147,15 @@ pub(super) fn title(element: &Element, shown: &dyn Fn(&Element) -> Option<EcoStr
                     }
                     if let Some(text) = shown(child) {
                         out.push_str(&text);
-                    } else if let Some(Value::Content(body)) = child.field(BODY) {
-                        write(body, shown, out);
+                        continue;
+                    }
+                    // As `Content::plain_text` writes it: the text of every
+                    // field of content. A formula holds none, so it shows
+                    // nothing in a title yet.
+                    for (_, value) in child.fields.iter() {
+                        if let Value::Content(inner) = value {
+                            write(inner, shown, out);
+                        }
                     }
                 }
                 Node::Slot(_) | Node::Rule(_) => {}
