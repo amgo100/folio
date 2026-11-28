@@ -522,7 +522,8 @@ struct Engine {
     /// Whether a watcher runs that reports when a file open for writing
     /// is closed, which files are held for ([`torn`]).
     closes: bool,
-    /// The paths truncated or written and not closed since.
+    /// The files truncated or written and not closed since, by their
+    /// [`resolved`] paths, as are `held` and `released`.
     open: BTreeSet<PathBuf>,
     /// The files held as perhaps read in the middle of a save in place
     /// ([`torn`]), and when they are read anyway if their writer has not
@@ -541,7 +542,7 @@ struct Engine {
     deferred: BTreeSet<PathBuf>,
     /// Since when changes have waited ([`MAX_DEFER`]).
     deferred_since: Option<Instant>,
-    /// The held sources whose time ran out, read as they are when next
+    /// The held files whose time ran out, read as they are when next
     /// applied.
     released: BTreeSet<PathBuf>,
     /// What the engine is told.
@@ -661,18 +662,9 @@ impl Engine {
             Change::Written if self.closes => {
                 for path in paths {
                     // A new save: guarded again.
-                    self.released.remove(path);
-                    self.open.insert(path.clone());
-                }
-                // Under every path that reaches the same file.
-                if !self.released.is_empty() {
-                    let written: BTreeSet<PathBuf> =
-                        paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
-                    self.released.retain(|released| {
-                        released
-                            .canonicalize()
-                            .map_or(true, |r| !written.contains(&r))
-                    });
+                    let file = resolved(path);
+                    self.released.remove(&file);
+                    self.open.insert(file);
                 }
             }
             Change::Written => {}
@@ -681,29 +673,17 @@ impl Engine {
                 for path in paths {
                     // Read with the rest of the event's batch, which takes
                     // it out of `held` unless it still reads torn.
-                    self.open.remove(path);
-                }
-                // Held under another path that reaches the same file, as
-                // through a link: the loader reads it under every such path
-                // with the batch.
-                if !self.held.is_empty() || !self.open.is_empty() {
-                    let closed: BTreeSet<PathBuf> =
-                        paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
-                    let other = |path: &PathBuf| {
-                        !paths.contains(path)
-                            && path.canonicalize().is_ok_and(|r| closed.contains(&r))
-                    };
-                    self.held.retain(|held, _| !other(held));
-                    self.open.retain(|open| !other(open));
+                    self.open.remove(&resolved(path));
                 }
             }
             // Removed, renamed or created: whatever writes it now has
             // opened it again.
             Change::Moved => {
                 // With everything under a directory moved.
-                for path in paths {
-                    self.open.retain(|open| !open.starts_with(path));
-                    self.released.retain(|released| !released.starts_with(path));
+                for path in paths.iter().map(|path| resolved(path)) {
+                    self.open.retain(|open| !open.starts_with(&path));
+                    self.released
+                        .retain(|released| !released.starts_with(&path));
                 }
             }
             Change::Other => {}
@@ -766,13 +746,6 @@ impl Engine {
             self.open.remove(path);
             self.released.insert(path.clone());
         }
-        // Under every path that reaches the same file.
-        if !due.is_empty() && !self.open.is_empty() {
-            let resolved: BTreeSet<PathBuf> =
-                due.iter().filter_map(|p| p.canonicalize().ok()).collect();
-            self.open
-                .retain(|open| open.canonicalize().map_or(true, |r| !resolved.contains(&r)));
-        }
         if self.lagging_behind() {
             self.defer(due);
         } else {
@@ -787,20 +760,21 @@ impl Engine {
     /// Returns the world's sources as they are, by project path, which
     /// [`Self::recheck`] checks the loader's reads against.
     fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Option<Before> {
-        // Released paths are read as they are, once.
+        // Released files are read as they are, once.
         let released: BTreeSet<PathBuf> = paths
             .iter()
-            .filter(|path| self.released.remove(*path))
-            .cloned()
+            .map(|path| resolved(path))
+            .filter(|file| self.released.remove(file))
             .collect();
         if !self.closes {
             return None;
         }
         let world = self.world.as_ref()?;
-        let mut held = Vec::new();
+        let mut held = BTreeSet::new();
         let mut read = Vec::new();
         paths.retain(|path| {
-            if released.contains(path) {
+            let file = resolved(path);
+            if released.contains(&file) {
                 return true;
             }
             // Any file still open for writing, new ones and data files
@@ -808,8 +782,9 @@ impl Engine {
             let input = self
                 .loader_path(path)
                 .is_some_and(|rel| !rel.split('/').any(|part| part.starts_with('.')));
-            if input && self.open.contains(path) && path.is_file() {
-                held.push(path.clone());
+            let open = self.open.contains(&file);
+            if input && open && path.is_file() {
+                held.insert(file);
                 return false;
             }
             // A file that is gone is removed at once; a new one is checked
@@ -819,18 +794,14 @@ impl Engine {
                 .and_then(|rel| world.source(&rel))
                 .zip(std::fs::metadata(path).ok())
             else {
-                read.push(path.clone());
+                read.push(file);
                 return true;
             };
-            let hold = torn(
-                source.text().len() as u64,
-                meta.len(),
-                self.open.contains(path),
-            );
+            let hold = torn(source.text().len() as u64, meta.len(), open);
             if hold {
-                held.push(path.clone());
+                held.insert(file);
             } else {
-                read.push(path.clone());
+                read.push(file);
             }
             !hold
         });
@@ -844,32 +815,17 @@ impl Engine {
                 Some((path.to_owned(), world.source(path)?))
             })
             .collect();
-        let before = Before {
-            sources,
-            released: released
-                .iter()
-                .filter_map(|path| path.canonicalize().ok())
-                .chain(released.iter().cloned())
-                .collect(),
-        };
-        // Read whole, or gone: no longer held, under any path that reaches
-        // the same file.
-        if !self.held.is_empty() && !read.is_empty() {
-            let resolved: BTreeSet<PathBuf> = read
-                .iter()
-                .filter_map(|p| p.canonicalize().ok())
-                .chain(read.iter().cloned())
-                .collect();
-            self.held.retain(|held, _| {
-                !resolved.contains(held)
-                    && held.canonicalize().map_or(true, |r| !resolved.contains(&r))
-            });
+        // Read whole, or gone: no longer held.
+        for file in read {
+            if !held.contains(&file) {
+                self.held.remove(&file);
+            }
         }
         let until = Instant::now() + MAX_HOLD;
-        for path in held {
-            self.held.entry(path).or_insert(until);
+        for file in held {
+            self.held.entry(file).or_insert(until);
         }
-        Some(before)
+        Some(Before { sources, released })
     }
 
     /// Puts back the world's text of the sources that read [`torn`] after
@@ -898,12 +854,10 @@ impl Engine {
             Input::Paths(paths, Change::Written) => Some(paths),
             _ => None,
         });
-        let written: BTreeSet<PathBuf> = self
-            .open
-            .iter()
-            .chain(queued.flatten())
-            .flat_map(|path| [Some(path.clone()), path.canonicalize().ok()])
+        let written: BTreeSet<PathBuf> = queued
             .flatten()
+            .map(|path| resolved(path))
+            .chain(self.open.iter().cloned())
             .collect();
         let mut held = Vec::new();
         let sources: Vec<String> = changed
@@ -913,17 +867,12 @@ impl Engine {
             .collect();
         for rel in sources {
             let path = self.root.join(&rel);
-            let resolved = path.canonicalize().ok();
+            let file = resolved(&path);
             // Read as it is, its hold over.
-            if before.released.contains(&path)
-                || resolved
-                    .as_ref()
-                    .is_some_and(|r| before.released.contains(r))
-            {
+            if before.released.contains(&file) {
                 continue;
             }
-            let writing =
-                written.contains(&path) || resolved.as_ref().is_some_and(|r| written.contains(r));
+            let writing = written.contains(&file);
             let old = before.sources.get(&rel);
             let old_len = old.map_or(0, |old| old.text().len() as u64);
             // Removed by the loader: gone, or not UTF-8, as when the read
@@ -947,14 +896,14 @@ impl Engine {
             });
             if put_back {
                 changed.remove(&rel);
-                held.push((path, rel));
+                held.push((file, rel));
             } else {
-                self.held.entry(path).or_insert(Instant::now() + MAX_HOLD);
+                self.held.entry(file).or_insert(Instant::now() + MAX_HOLD);
             }
         }
         let restored = !held.is_empty();
         let until = Instant::now() + MAX_HOLD;
-        for (path, rel) in held {
+        for (file, rel) in held {
             // The loader's warning that the file is not UTF-8 is about a
             // read that is put back.
             let message = format!("cannot read `{rel}`: it is not UTF-8 text");
@@ -963,7 +912,7 @@ impl Engine {
                 index += 1;
                 index <= warned || warning.message != message
             });
-            self.held.entry(path).or_insert(until);
+            self.held.entry(file).or_insert(until);
         }
         restored
     }
@@ -1774,11 +1723,25 @@ impl Files for Layered {
 }
 
 /// The world's sources before the loader reads a batch, by project path,
-/// and the paths whose hold ran out, by their paths and the paths they
-/// resolve to, which are read as they are ([`Engine::hold`]).
+/// and the files whose hold ran out, which are read as they are
+/// ([`Engine::hold`]).
 struct Before {
     sources: HashMap<String, Source>,
     released: BTreeSet<PathBuf>,
+}
+
+/// The file a path names, as the path it resolves to, links followed: the
+/// key of the files open for writing, held and released, so that a file
+/// reached through several paths, as through links inside the project,
+/// is one. A path that no longer resolves, as a removed file, is taken
+/// with its directory resolved.
+fn resolved(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|dir| dir.canonicalize().ok())
+            .zip(path.file_name())
+            .map_or_else(|| path.to_path_buf(), |(dir, name)| dir.join(name))
+    })
 }
 
 /// Sends a check's end as cancelled when it is dropped before the check

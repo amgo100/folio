@@ -1593,6 +1593,10 @@ fn a_file_read_through_a_link_while_written_is_not_shown() {
         Instant::now() + Duration::from_secs(2),
     ));
     assert!(
+        counts.iter().any(|&(r, _)| r > first.revision),
+        "no revision sent: {counts:?}"
+    );
+    assert!(
         counts.iter().all(|&(_, pages)| pages == first.pages),
         "{} pages, then {counts:?}",
         first.pages
