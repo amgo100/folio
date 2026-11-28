@@ -50,6 +50,13 @@
 //!   [`KEEP`], [`UNBREAKABLE`]); `break-before` forces one. Constraints are
 //!   costs, not rules: the least-bad page wins, and the constraints it
 //!   relaxes are warnings (§7.2).
+//! - **Spaces** (SPEC §6.3): a block whose content `hidden` or
+//!   `answer-space` left out is sized from the content it measures, whose
+//!   flow is built at the block's width and discarded: hidden content
+//!   keeps that height with nothing drawn; answer space keeps its box and
+//!   takes its ruled lines, its `answer-height`, or the content's height
+//!   times `answer-scale`. [`Pages::spaces`] holds the heights, which the
+//!   Office writers will take.
 //! - **Fragments**: each page a [`Fragment`](folio_component::Fragment)
 //!   of the master's size, holding its body, which holds a fragment for
 //!   each block with its background, borders, glyph runs, baselines and

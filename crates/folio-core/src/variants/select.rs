@@ -105,9 +105,9 @@ pub enum Measure {
 
 /// Selects what a variant shows of a document (SPEC §6.2, §6.3): `root` is
 /// the `doc` element of the document tree, `node` its styled node.
-/// Reports content that is left out where it should keep its space or
-/// become answer space, which no stage lays out yet, and variant
-/// conditions that name no declared variant.
+/// Reports inline content that `hidden` or `answer-space` leaves out,
+/// as only blocks keep their space, and variant conditions that name no
+/// declared variant.
 pub fn select(
     db: &dyn Db,
     manifest: &Manifest,

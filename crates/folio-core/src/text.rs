@@ -16,6 +16,13 @@
 //!   builder places at the foot of the anchor's page. Their paragraphs are
 //!   paragraphs of the build like any other, after the paragraph they are
 //!   anchored in.
+//! - **Spaces** (SPEC §6.3): the block of an element or part whose content
+//!   `hidden` or `answer-space` left out holds nothing. The content it
+//!   measures, as Select kept it, is collected as a footnote's blocks are,
+//!   into a tree of its own in no block of the document
+//!   ([`Text::spaces`]): its paragraphs and formulas are the build's, so
+//!   they are shaped, broken and laid out like any other, but no writer
+//!   reaches them.
 //! - **Generated text** (SPEC §4.5): a reference is the text the Resolve
 //!   stage gave it (`Figure 2`), and an element's marker (its number, a
 //!   list item's bullet, a figure's word and number) starts its first
@@ -694,6 +701,13 @@ impl Collector<'_> {
             _ => self.spaces.get(&(element.location, None)).copied(),
         };
         self.open(&node.style, element, None);
+        // An emptied grid lays out no cells; the grid it measures does.
+        if space.is_some()
+            && let Some(block) = self.blocks.last_mut()
+            && matches!(block.table, Some(TableRole::Grid { .. }))
+        {
+            block.table = None;
+        }
         let owner = self.own(element);
         // A marker that no paragraph of the element takes is dropped with
         // it. A space has no paragraph to take one.

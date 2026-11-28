@@ -396,3 +396,40 @@ fn nothing_hidden_reaches_the_pdf() {
         assert!(!shown(&exam).contains(word), "{word} was drawn");
     }
 }
+
+#[test]
+fn hidden_tables_and_cells_keep_their_height() {
+    let rows: String = (1..=12)
+        .map(|i| format!("#cell[{i}] #cell[SECRET row {i}, with a longer note that wraps]\n"))
+        .collect();
+    let text = format!(
+        "Before.\n\n#grid(class: \"t\", column-tracks: (auto, 1fr), header-rows: 1)[\n\
+         #cell[Run] #cell[Note]\n{rows}]\n\nAfter.\n"
+    );
+    for style in ["grid.t { display: hidden; }\n", "cell { display: hidden; }\n"] {
+        let world = world(style, "grid.t, cell { display: block; }\n", &text);
+        let exam = pages(&world, "exam");
+        let markscheme = pages(&world, "markscheme");
+        assert!(!shown(&exam).contains("SECRET"), "{style}");
+        assert!(shown(&markscheme).contains("SECRET"));
+        assert_same(find(&exam, "After"), find(&markscheme, "After"), style);
+    }
+}
+
+#[test]
+fn hidden_footnotes_are_not_placed() {
+    let world = world(
+        "figure.note { display: hidden; }\n",
+        "figure.note { display: block; }\n",
+        "Before.\n\n#figure(class: \"note\")[Hidden text.#footnote[SECRET note.]]\n\n\
+         After.#footnote[Shown note.]\n",
+    );
+    let exam = pages(&world, "exam");
+    assert!(!shown(&exam).contains("SECRET"), "{}", shown(&exam));
+    assert!(shown(&exam).contains("Shown"));
+    assert_same(
+        find(&exam, "After"),
+        find(&pages(&world, "markscheme"), "After"),
+        "After",
+    );
+}
