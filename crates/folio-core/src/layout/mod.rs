@@ -133,7 +133,7 @@ pub const TYPING_BUDGET: Duration = Duration::from_millis(5);
 pub struct Lines {
     /// The width of the default page master's body.
     pub width: Abs,
-    /// The paragraphs, in the order of the build's [`Text`](crate::text::Text),
+    /// The paragraphs, in the order of the build's [`Text`],
     /// each shared with every build and revision that breaks an equal
     /// paragraph in the same width.
     pub paragraphs: EcoVec<Arc<ParagraphLayout>>,
