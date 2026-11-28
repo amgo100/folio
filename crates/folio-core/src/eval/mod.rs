@@ -348,7 +348,7 @@ pub(crate) fn call_function(
         Err(Stop::Error(error)) => Err(*error),
         Err(Stop::NeedsVariant) => Err(EvalError::new(
             span,
-            "a stylesheet value cannot depend on the variant",
+            "a stylesheet value cannot depend on the variant or the version",
         )
         .with_hint("put rules for one variant in `@variant name { .. }`")),
         Err(Stop::Reported) => Err(EvalError::new(span, "this function cannot be evaluated")),

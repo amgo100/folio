@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use ecow::{EcoString, eco_format};
-use folio_component::{Color, QualifiedName, Scalar};
+use folio_component::{Color, ElementKind, QualifiedName, Scalar};
 use folio_syntax::{DiagSpan, FileId, Span, ast};
 
 use super::MAX_NESTING;
@@ -391,8 +391,9 @@ fn range(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 /// `shuffle(items, seed: "B")`: the array's items in an order fixed by the
 /// seed, a string or an integer (an integer seeds as its decimal digits, so
 /// `seed: 2` and `seed: "2"` agree). `#shuffle(seed: "B")[..]` reorders the
-/// elements at the top level of its body in the same way, and leaves the
-/// text, spaces and breaks between them where they are. `seed: none` keeps
+/// block elements at the top level of its body in the same way, and leaves
+/// the text, inline elements, spaces and breaks between them where they
+/// are. `seed: none` keeps
 /// the order, so that a build without versions is not shuffled (SPEC §6.4).
 fn shuffle(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let span = args.span;
@@ -430,7 +431,7 @@ fn shuffle(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
             };
             let nodes = body.nodes();
             let at: Vec<usize> = (0..nodes.len())
-                .filter(|&i| matches!(nodes[i], Node::Element(_)))
+                .filter(|&i| matches!(&nodes[i], Node::Element(e) if e.kind == ElementKind::Block))
                 .collect();
             vm.alloc(2 * ITEM * nodes.len() as u64, span)?;
             let order = permutation(seed.as_bytes(), at.len());

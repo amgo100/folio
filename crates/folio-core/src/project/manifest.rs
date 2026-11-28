@@ -402,6 +402,30 @@ impl Manifest {
             })
             .unwrap_or_default();
 
+        // With the default output path, outputs can still meet in one file
+        // through the names of variants and versions; it is reported at
+        // the version that brings the second.
+        if root.get("output").is_none()
+            && let Some(project) = &project
+            && !project.versions.is_empty()
+        {
+            let files = output_files(
+                &OutputPattern::default(),
+                &variants,
+                &project.versions,
+                &project.entry.v,
+            );
+            if let Some((file, Some(version))) = same_file(&files)
+                && let DiagSpanKind::Range { range, .. } = version.span.get()
+            {
+                cx.error(
+                    range,
+                    eco_format!("two outputs would be written to `{file}`"),
+                )
+                .hint("rename a variant or version, or set `[output] path`");
+            }
+        }
+
         let manifest = project.map(|project| Self {
             project,
             components,
@@ -467,9 +491,14 @@ impl Manifest {
     /// target writes its output to (SPEC §6.4): `[output] path` with the
     /// entry file's stem, the variant and the target's extension. `None`
     /// when the target writes no file. `variant` is `None` for a project
-    /// without variants. The build has no version; see
+    /// without variants. The build has no version, so in a project with
+    /// versions it writes no file, and this is `None`: only the versions
+    /// are written (SPEC §6.4), never the paper in source order. See
     /// [`Manifest::versioned_output_path`].
     pub fn output_path(&self, variant: Option<&Name>, target: Target) -> Option<EcoString> {
+        if !self.project.versions.is_empty() {
+            return None;
+        }
         self.versioned_output_path(variant, None, target)
     }
 
@@ -872,8 +901,10 @@ fn read_output(
     };
 
     // Two outputs must not share a file.
+    let mut shared = false;
     let writes_file = |v: &Variant| v.targets.iter().any(|t| t.v.extension().is_some());
     if !path.v.uses("variant") && variants.iter().filter(|v| writes_file(v)).count() > 1 {
+        shared = true;
         cx.error(range.clone(), "every variant writes to the same file")
             .hint("add `{variant}` to the path");
     }
@@ -883,6 +914,7 @@ fn read_output(
         variants.iter().any(writes_file)
     };
     if !path.v.uses("version") && versions.len() > 1 && writes_any {
+        shared = true;
         cx.error(range.clone(), "every version writes to the same file")
             .hint("add `{version}` to the path");
     }
@@ -895,6 +927,7 @@ fn read_output(
     if !path.v.uses("ext")
         && let Some(variant) = variants.iter().find(|v| file_targets(v) > 1)
     {
+        shared = true;
         cx.error(
             range.clone(),
             eco_format!(
@@ -908,36 +941,67 @@ fn read_output(
     // No output replaces a file the project is made of. The first file
     // that a build would write there is reported.
     if let Some(entry) = entry {
-        let builds: Vec<(Option<&str>, Target)> = if variants.is_empty() {
-            vec![(None, Target::Pdf)]
-        } else {
-            variants
-                .iter()
-                .flat_map(|v| v.targets.iter().map(|t| (Some(v.name.v.as_str()), t.v)))
-                .collect()
-        };
-        let versions: Vec<Option<&str>> = if versions.is_empty() {
-            vec![None]
-        } else {
-            versions.iter().map(|v| Some(v.v.as_str())).collect()
-        };
-        let files: Vec<EcoString> = versions
-            .iter()
-            .flat_map(|version| {
-                builds.iter().filter_map(|(variant, target)| {
-                    let ext = target.extension()?;
-                    Some(path.v.resolve(entry.stem(), *variant, *version, ext))
-                })
-            })
-            .collect();
+        let files = output_files(&path.v, variants, versions, entry);
         if let Some(invalid) = files
             .iter()
-            .find_map(|file| reserved_output(file, entry, components))
+            .find_map(|(file, _)| reserved_output(file, entry, components))
         {
-            cx.invalid(range, invalid);
+            cx.invalid(range.clone(), invalid);
+        }
+        if !shared && let Some((file, _)) = same_file(&files) {
+            cx.error(
+                range,
+                eco_format!("two outputs would be written to `{file}`"),
+            )
+            .hint("rename a variant or version, or separate them in the path with `/`");
         }
     }
     Output { path }
+}
+
+/// The file every build writes with an output pattern, with the version
+/// it is built in, if any.
+fn output_files<'a>(
+    pattern: &OutputPattern,
+    variants: &[Variant],
+    versions: &'a [Spanned<Name>],
+    entry: &ProjectPath,
+) -> Vec<(EcoString, Option<&'a Spanned<Name>>)> {
+    let builds: Vec<(Option<&str>, Target)> = if variants.is_empty() {
+        vec![(None, Target::Pdf)]
+    } else {
+        variants
+            .iter()
+            .flat_map(|v| v.targets.iter().map(|t| (Some(v.name.v.as_str()), t.v)))
+            .collect()
+    };
+    let versions: Vec<Option<&Spanned<Name>>> = if versions.is_empty() {
+        vec![None]
+    } else {
+        versions.iter().map(Some).collect()
+    };
+    versions
+        .iter()
+        .flat_map(|version| {
+            builds.iter().filter_map(move |(variant, target)| {
+                let ext = target.extension()?;
+                let name = version.map(|v| v.v.as_str());
+                Some((pattern.resolve(entry.stem(), *variant, name, ext), *version))
+            })
+        })
+        .collect()
+}
+
+/// The first output written to a file that an output before it is written
+/// to as well. Names with `-` can meet in this way: variant `exam` of
+/// version `x-y` and variant `exam-x` of version `y`. Paths are compared
+/// normalised and without regard to ASCII case, as reserved files are.
+fn same_file<'a, T>(files: &'a [(EcoString, T)]) -> Option<&'a (EcoString, T)> {
+    let mut seen = std::collections::HashSet::new();
+    files.iter().find(|(file, _)| {
+        let normal = ProjectPath::new(file).map_or_else(|| file.to_string(), |p| p.as_str().into());
+        !seen.insert(normal.to_ascii_lowercase())
+    })
 }
 
 /// Why an output may not be written to `file`, a project path, when it would

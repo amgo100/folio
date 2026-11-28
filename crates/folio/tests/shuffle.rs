@@ -103,6 +103,13 @@ fn a_body_reorders_its_elements() {
     let w = world(PLAIN, main);
     assert_eq!(text(&w, None), "Four Two Between. Three One none Five Six");
     assert!(errors(&w).is_empty(), "{:?}", errors(&w));
+
+    // Inline elements belong to the text around them, and stay with it.
+    let w = world(
+        PLAIN,
+        "#shuffle(seed: \"A\")[\n= One\n\nRead *carefully*.\n\n= Two\n\n= Three\n]\n",
+    );
+    assert_eq!(text(&w, None), "Three Read carefully. Two One");
 }
 
 /// SPEC §6.4: questions shuffled with one seed are numbered in printed

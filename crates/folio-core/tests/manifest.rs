@@ -299,10 +299,7 @@ fn versions() {
             .as_deref(),
         Some("out/main-exam-B.pdf")
     );
-    assert_eq!(
-        m.output_path(Some(&exam), Target::Pdf).as_deref(),
-        Some("out/main-exam.pdf")
-    );
+    assert_eq!(m.output_path(Some(&exam), Target::Pdf), None);
     // Without variants, the version follows the stem.
     let m = parse(&format!("{PROJECT}versions = [\"A\", \"B\"]\n"));
     assert_eq!(
@@ -346,6 +343,28 @@ fn versions() {
         "every version writes to the same file @ \"out/{stem}.{ext}\"\n  \
          hint: add `{version}` to the path\n"
     );
+    // Names with `-` can still meet in one file.
+    assert_eq!(
+        errors(
+            "versions = [\"x-y\", \"y\"]\n\n[variants.exam]\ntargets = [\"pdf\"]\n\n\
+             [variants.exam-x]\ntargets = [\"pdf\"]\n\n\
+             [output]\npath = \"out/{stem}-{variant}-{version}.{ext}\"\n"
+        ),
+        "two outputs would be written to `out/main-exam-x-y.pdf` @ \
+         \"out/{stem}-{variant}-{version}.{ext}\"\n  \
+         hint: rename a variant or version, or separate them in the path with `/`\n"
+    );
+    assert_eq!(
+        errors(
+            "versions = [\"x-y\", \"y\"]\n\n[variants.exam]\ntargets = [\"pdf\"]\n\n\
+             [variants.exam-x]\ntargets = [\"pdf\"]\n"
+        ),
+        "two outputs would be written to `out/main-exam-x-y.pdf` @ \"y\"\n  \
+         hint: rename a variant or version, or set `[output] path`\n"
+    );
+    // Only the versions write files, never the paper in source order.
+    let m = parse(&format!("{PROJECT}versions = [\"A\"]\n"));
+    assert_eq!(m.output_path(None, Target::Pdf), None);
     // One version needs no `{version}`.
     parse(&format!(
         "{PROJECT}versions = [\"A\"]\n\n[output]\npath = \"out/{{stem}}.{{ext}}\"\n"
