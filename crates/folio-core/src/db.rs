@@ -174,6 +174,9 @@ enum Content {
     Bytes(Bytes),
     Disk {
         path: PathBuf,
+        /// The directory the file must still be in, by canonical path,
+        /// when it is read.
+        within: Option<PathBuf>,
         read: OnceLock<Result<Bytes, EcoString>>,
     },
 }
@@ -189,15 +192,22 @@ impl FileContent {
     pub fn on_disk(path: impl Into<PathBuf>) -> Self {
         Self(Arc::new(Content::Disk {
             path: path.into(),
+            within: None,
             read: OnceLock::new(),
         }))
     }
 
-    /// The contents of a file on disk, read now.
-    pub fn read(path: impl Into<PathBuf>) -> Self {
-        let content = Self::on_disk(path);
-        let _ = content.load();
-        content
+    /// The contents of a file on disk, not read until a query asks for
+    /// them, and then read only if the file, links resolved, is still
+    /// inside `root`, a canonical path: a file of the project that was
+    /// replaced by a link to somewhere else meanwhile is not read (SPEC
+    /// §12.1, §14.3).
+    pub fn in_project(path: impl Into<PathBuf>, root: impl Into<PathBuf>) -> Self {
+        Self(Arc::new(Content::Disk {
+            path: path.into(),
+            within: Some(root.into()),
+            read: OnceLock::new(),
+        }))
     }
 
     /// The bytes, read from disk on the first call; `None` when the file
@@ -211,8 +221,14 @@ impl FileContent {
     pub fn try_load(&self) -> Result<&Bytes, &EcoString> {
         match &*self.0 {
             Content::Bytes(bytes) => Ok(bytes),
-            Content::Disk { path, read } => read
+            Content::Disk { path, within, read } => read
                 .get_or_init(|| {
+                    if let Some(root) = within {
+                        let canonical = path.canonicalize().map_err(|e| eco_format!("{e}"))?;
+                        if !canonical.starts_with(root) {
+                            return Err("it leads outside the project".into());
+                        }
+                    }
                     std::fs::read(path)
                         .map(Bytes::from)
                         .map_err(|e| eco_format!("{e}"))
@@ -243,7 +259,7 @@ impl Debug for FileContent {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &*self.0 {
             Content::Bytes(bytes) => bytes.fmt(f),
-            Content::Disk { path, read } => match read.get() {
+            Content::Disk { path, read, .. } => match read.get() {
                 Some(Ok(bytes)) => write!(f, "{bytes:?} from {}", path.display()),
                 Some(Err(e)) => write!(f, "unreadable {}: {e}", path.display()),
                 None => write!(f, "unread {}", path.display()),

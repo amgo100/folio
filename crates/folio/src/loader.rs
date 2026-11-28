@@ -322,7 +322,7 @@ impl Loader {
                 changed.insert(path);
             }
         }
-        set_all(world, files, &mut changed, warnings)?;
+        set_all(world, files, &mut changed, warnings, &self.canonical)?;
         Ok(changed)
     }
 
@@ -521,7 +521,7 @@ impl Loader {
                 }
             }
             files.sort_by(|a, b| a.path.cmp(&b.path));
-            set_all(world, files, &mut update.changed, warnings)?;
+            set_all(world, files, &mut update.changed, warnings, &self.canonical)?;
         } else if metadata.is_file() {
             // A directory that is now a file.
             for path in world.paths_under(rel) {
@@ -535,7 +535,7 @@ impl Loader {
                     disk: canonical,
                     bytes: None,
                 };
-                set_data(world, vec![file], &mut update.changed);
+                set_data(world, vec![file], &mut update.changed, &self.canonical);
                 return Ok(());
             }
             match fs::read(&canonical) {
@@ -805,6 +805,7 @@ fn set_all(
     files: Vec<ProjectFile>,
     changed: &mut BTreeSet<String>,
     warnings: &mut Vec<Diagnostic>,
+    root: &Path,
 ) -> Result<(), WorldError> {
     let mut data = Vec::new();
     for file in files {
@@ -814,7 +815,7 @@ fn set_all(
             data.push(file);
         }
     }
-    set_data(world, data, changed);
+    set_data(world, data, changed, root);
     Ok(())
 }
 
@@ -862,36 +863,40 @@ fn set(
 }
 
 /// Sets image and data files in a world, all new ones at once, as files
-/// read when a build names them. A file the world has and a build has read
-/// is read again now, and recorded in `changed` if it reads differently; a
-/// file that no build has read is not read, and not recorded, since no
-/// build depends on it. Leaves out files whose paths a document cannot
-/// name.
-fn set_data(world: &mut World, files: Vec<ProjectFile>, changed: &mut BTreeSet<String>) {
+/// read when a build names them, and only while they are inside the
+/// project, the canonical path `root`. A file the world has and a build has
+/// read is read again now, and recorded in `changed` if it reads
+/// differently; a file that no build has read is set afresh, unread, and
+/// not recorded, since no build depends on it. Leaves out files whose
+/// paths a document cannot name.
+fn set_data(
+    world: &mut World,
+    files: Vec<ProjectFile>,
+    changed: &mut BTreeSet<String>,
+    root: &Path,
+) {
     let mut contents = Vec::new();
     for file in files {
         let Some(path) = ProjectPath::new(&file.path) else {
             continue;
         };
-        let content = match world.file_content(&file.path) {
-            None => FileContent::on_disk(file.disk),
-            Some(old) => match old.loaded() {
-                None if old.disk_path() == Some(&file.disk) => continue,
-                None => {
-                    contents.push((path, FileContent::on_disk(file.disk)));
-                    continue;
-                }
-                Some(before) => {
-                    let new = FileContent::read(file.disk);
-                    if new.loaded() == Some(before) {
-                        continue;
-                    }
-                    new
-                }
-            },
+        let content = FileContent::in_project(file.disk, root);
+        let Some(old) = world.file_content(&file.path) else {
+            contents.push((path, content));
+            changed.insert(file.path);
+            continue;
         };
-        contents.push((path, content));
-        changed.insert(file.path);
+        match old.loaded() {
+            // Nothing read it: set afresh, unread.
+            None => contents.push((path, content)),
+            Some(before) => {
+                let _ = content.load();
+                if content.loaded() != Some(before) {
+                    contents.push((path, content));
+                    changed.insert(file.path);
+                }
+            }
+        }
     }
     world.set_contents(contents);
 }
@@ -1094,8 +1099,9 @@ mod tests {
         )
         .unwrap();
         let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
         let file = |path: &str, bytes: &[u8]| {
-            let disk = dir.path().join(path.replace(['/', '\\'], "_"));
+            let disk = root.join(path.replace(['/', '\\'], "_"));
             fs::write(&disk, bytes).unwrap();
             ProjectFile {
                 path: path.into(),
@@ -1112,7 +1118,7 @@ mod tests {
             file("bom.fol", "\u{FEFF}= Forces\n".as_bytes()),
             file("weird\\name.csv", b""),
         ];
-        set_all(&mut world, files, &mut changed, &mut warnings).unwrap();
+        set_all(&mut world, files, &mut changed, &mut warnings, &root).unwrap();
         assert_eq!(world.source("main.fol").unwrap().text(), "= Forces\n");
         assert_eq!(world.source("bom.fol").unwrap().text(), "= Forces\n");
         assert!(world.source("bad.fol").is_none());
@@ -1134,7 +1140,7 @@ mod tests {
             file("main.fol", b"= Forces\n"),
             file("data/points.csv", b"x,y\n"),
         ];
-        set_all(&mut world, files, &mut again, &mut warnings).unwrap();
+        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
         assert!(again.is_empty());
         assert!(
             world
@@ -1147,10 +1153,10 @@ mod tests {
         // Once read, a data file is compared with the disk.
         assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n");
         let files = vec![file("data/points.csv", b"x,y\n")];
-        set_all(&mut world, files, &mut again, &mut warnings).unwrap();
+        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
         assert!(again.is_empty());
         let files = vec![file("data/points.csv", b"x,y\n1,2\n")];
-        set_all(&mut world, files, &mut again, &mut warnings).unwrap();
+        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
         assert_eq!(again.iter().collect::<Vec<_>>(), ["data/points.csv"]);
         assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n1,2\n");
     }

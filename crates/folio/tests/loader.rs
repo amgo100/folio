@@ -482,27 +482,52 @@ fn an_event_for_an_unread_data_file_changes_nothing() {
 
 /// Loading a project with many files takes time linear in their number
 /// (#342): 20,000 files took 79 s in a debug build when each one copied
-/// the world's map of files.
+/// the world's map of files. `world.rs` adds 20,000 files in memory.
 #[test]
 fn loads_many_files() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "folio.toml", MANIFEST);
     write(dir.path(), "main.fol", "= Forces\n");
-    for i in 0..100 {
+    for i in 0..20 {
         let sub = dir.path().join(format!("node_modules/p{i}"));
         fs::create_dir_all(&sub).unwrap();
-        for j in 0..200 {
+        for j in 0..250 {
             fs::write(sub.join(format!("f{j}.js")), "x").unwrap();
         }
     }
-    let start = std::time::Instant::now();
     let mut loader = Loader::new(dir.path()).unwrap();
     let mut world = loader.world(World::builder()).unwrap();
     let changed = loader.load(&mut world, &mut Vec::new()).unwrap();
-    assert_eq!(changed.len(), 20_001);
-    let compiled = folio::check(&world, Target::Pdf, None).unwrap();
-    assert!(!compiled.has_errors(), "{:?}", compiled.diagnostics);
-    // A bound loose enough for a slow machine running other tests.
-    let took = start.elapsed();
-    assert!(took.as_secs() < 30, "took {took:?}");
+    assert_eq!(changed.len(), 5_001);
+    let checked = folio::check(&world, Target::Pdf, None).unwrap();
+    assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
+}
+
+/// A data file replaced by a link that leads outside the project after
+/// loading is not read (SPEC §12.1, §14.3).
+#[cfg(unix)]
+#[test]
+fn does_not_read_a_file_that_now_leads_outside_the_project() {
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("secret.txt"), "Secret.").unwrap();
+    let (dir, _, world, _) = project(&[
+        ("main.fol", "#read(\"notes.txt\")\n"),
+        ("notes.txt", "Notes."),
+    ]);
+    fs::remove_file(dir.path().join("notes.txt")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("secret.txt"),
+        dir.path().join("notes.txt"),
+    )
+    .unwrap();
+    let compiled = folio::compile(&world, Target::Pdf, None).unwrap();
+    assert!(
+        compiled
+            .diagnostics
+            .iter()
+            .any(|d| d.message == "cannot read `notes.txt`: it leads outside the project"),
+        "{:?}",
+        compiled.diagnostics
+    );
+    assert!(world.file("notes.txt").is_none());
 }
