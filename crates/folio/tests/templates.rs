@@ -185,8 +185,8 @@ fn conditions_read_the_fields_of_each_element() {
     // Without a title, the header has no colon; with a core difficulty,
     // no badge, and the row has one cell.
     let content = CONTENT.replace(r#"#example(class: "short")"#, "#example");
-    let world = world(TEMPLATES, &content);
-    let outlines = example_outlines(&world);
+    let untitled = world(TEMPLATES, &content);
+    let outlines = example_outlines(&untitled);
     assert_eq!(
         outlines[1],
         "-[header[row[cell[\"Example 2\"]]] statement[-[\"A ball is dropped.\"]] rule[] \
