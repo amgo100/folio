@@ -42,7 +42,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{BODY, Location, Name, QualifiedName, Value as Style};
+use folio_component::{BODY, ElementKind, Location, Name, QualifiedName, Value as Style};
 use folio_syntax::Span;
 
 use crate::db::Db;
@@ -369,8 +369,12 @@ impl Select<'_> {
             let Value::Content(content) = value else {
                 continue;
             };
+            // An inline element's template sets only inline content in its
+            // line, so blocks it names are not placed either.
+            let blocks_in_line =
+                element.kind == ElementKind::Inline && !crate::text::is_inline(content);
             if let Some(placed) = &placed
-                && !placed.iter().any(|name| name.as_str() == key.as_str())
+                && (blocks_in_line || !placed.iter().any(|name| name.as_str() == key.as_str()))
             {
                 let fields = fields.get_or_insert_with(|| element.fields.clone());
                 if key == BODY {

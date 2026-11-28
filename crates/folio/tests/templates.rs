@@ -609,3 +609,118 @@ See @eq:speed.
         2
     );
 }
+
+#[test]
+fn a_body_the_template_leaves_out_and_a_slot_its_header_places() {
+    // The body (with a numbered equation) is not placed: it is not
+    // counted. The note is placed by the header: it is kept.
+    let content = r#"#element card(note: content = none) {
+  kind: block
+  body: blocks
+}
+
+#card(note: [Read first.])[
+  $ x = 1 $ <eq:hidden>
+]
+
+$ y = 2 $
+"#;
+    let style = "math { numbering: \"(1)\"; }\n\
+                 render card { header: field(note); body: \"Card\"; }\n";
+    let world = world(style, content);
+    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    let equations = resolution
+        .numbers
+        .iter()
+        .filter(|n| n.counter == "equation")
+        .count();
+    assert_eq!(equations, 1);
+    assert!(resolution.label("eq:hidden").is_none());
+    let text = text(&world);
+    let mut found = Vec::new();
+    blocks(&text.root, "project.card", &mut found);
+    assert_eq!(
+        outline(found[0], &text),
+        "-[header[\"Read first.\"] \"Card\"]"
+    );
+}
+
+#[test]
+fn a_part_shown_as_hidden_is_still_placed() {
+    // `if field(solution) { slot(solution) }`: the exam shows the solution
+    // as `hidden`, which keeps its block, so the template still places it
+    // and its space, and counts what the variant counts without a template
+    // (SPEC §6.3).
+    let content = r#"#element example() {
+  kind: block
+  body: slots(statement: blocks, solution: blocks)
+}
+
+#example[
+  #statement[A ball is dropped.]
+  #solution[$ s = 1/2 g t^2 $]
+]
+"#;
+    let style = "math { numbering: \"(1)\"; }\n\
+                 render example { body: slot(statement) if field(solution) { slot(solution) }; }\n\
+                 @variant exam { example > solution { display: hidden; } }\n";
+    let templated = world(style, content);
+    let plain = world(
+        "math { numbering: \"(1)\"; }\n\
+         @variant exam { example > solution { display: hidden; } }\n",
+        content,
+    );
+    let count = |world: &World, variant: &str| {
+        let variant = Name::new(variant);
+        folio::resolve(world, Target::Pdf, variant.as_ref())
+            .unwrap()
+            .unwrap()
+            .numbers
+            .iter()
+            .filter(|n| n.counter == "equation")
+            .count()
+    };
+    // The template counts what the variant counts without it.
+    for variant in ["exam", "markscheme"] {
+        assert_eq!(
+            count(&templated, variant),
+            count(&plain, variant),
+            "{variant}"
+        );
+    }
+    let world = templated;
+    let text = text(&world);
+    assert!(
+        text.spaces
+            .iter()
+            .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution"))
+    );
+}
+
+#[test]
+fn blocks_an_inline_template_cannot_set_are_not_counted() {
+    let content = r#"#element hint() {
+  kind: inline
+  body: slots(note: blocks)
+}
+
+Text #hint[#note[$ x = 1 $]] more.
+
+$ y = 2 $
+"#;
+    let style = "math { numbering: \"(1)\"; }\nrender hint { body: \"(hint)\" slot(note); }\n";
+    let world = world(style, content);
+    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resolution
+            .numbers
+            .iter()
+            .filter(|n| n.counter == "equation")
+            .count(),
+        1
+    );
+}

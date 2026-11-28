@@ -966,10 +966,11 @@ impl<'a> Restyle for Walker<'a> {
     }
 }
 
-/// The parts of an element that the variant hides, which its template
-/// reads as unset: those whose `display` leaves their content out (`none`,
-/// `hidden`, `answer-space`), and, where the element has `show-only`, those
-/// it does not name (SPEC §6.2, §6.3).
+/// The parts of an element that the variant removes, which its template
+/// reads as unset: those with `display: none`, and, where the element has
+/// `show-only`, those it does not keep (SPEC §6.2). A part shown as
+/// `hidden` or `answer-space` keeps its block, is counted and is placed
+/// where the template places it, so it reads as set (SPEC §6.3).
 fn hidden_parts(props: &Properties, style: &ComputedStyle, children: &[StyledNode]) -> Vec<Name> {
     use folio_component::Value as V;
     let display = props.builtin("display");
@@ -985,11 +986,7 @@ fn hidden_parts(props: &Properties, style: &ComputedStyle, children: &[StyledNod
             _ => None,
         })
         .filter(|(name, child)| {
-            let left_out = match child.style.value(props, display) {
-                Some(V::None) => true,
-                Some(V::Keyword(k)) => matches!(k.as_str(), "hidden" | "answer-space"),
-                _ => false,
-            };
+            let left_out = matches!(child.style.value(props, display), Some(V::None));
             // `show-only` keeps the children it names and, condensed, those
             // that hold one.
             left_out

@@ -2110,7 +2110,7 @@ fn is_builtin(name: &QualifiedName, builtin: &str) -> bool {
 /// Whether content is inline: it has text, or an inline element or a note.
 /// Content of blocks has neither: the document model groups inline content
 /// between blocks into paragraphs.
-fn is_inline(content: &Content) -> bool {
+pub(crate) fn is_inline(content: &Content) -> bool {
     content.nodes().iter().any(|node| match node {
         Node::Text { .. } | Node::Space(_) | Node::Linebreak(_) | Node::Quote { .. } => true,
         Node::Element(element) => matches!(element.kind, ElementKind::Inline | ElementKind::Note),

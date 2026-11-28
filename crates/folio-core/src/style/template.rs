@@ -334,7 +334,8 @@ impl Compile<'_> {
                 self.db,
                 Diagnostic::warning(
                     span,
-                    "graphic primitives are not drawn yet, so this template leaves them out",
+                    "graphic primitives are not drawn yet, so this template leaves them out, \
+                     with any slot or field inside them",
                 )
                 .with_hint("graphics arrive in a later version (SPEC §9)"),
             );
