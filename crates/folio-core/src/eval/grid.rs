@@ -4,7 +4,7 @@
 //! document model and layout see one kind of grid.
 
 use ecow::{EcoString, eco_format};
-use folio_component::QualifiedName;
+use folio_component::{ElementKind, QualifiedName};
 use folio_syntax::Span;
 use folio_syntax::ast::{self, AstNode};
 
@@ -115,7 +115,8 @@ impl Vm<'_> {
             self.step(cell.span())?;
             let (mut content, mut label) = self.markup_labelled(cell)?;
             // A label at the end of a cell is the cell's, not that of the
-            // element before it in the cell, unless that is a `#cell`.
+            // inline element before it (`| *Total* <t> |`); a block, such
+            // as a figure or a display, keeps its own.
             let trailing = cell
                 .exprs()
                 .rev()
@@ -128,6 +129,7 @@ impl Vm<'_> {
                 && label.is_none()
                 && lone_cell(&content).is_none()
                 && let Some(element) = content.last_element_mut()
+                && element.kind == ElementKind::Inline
                 && element.label.as_deref() == Some(written.get())
             {
                 element.label = None;

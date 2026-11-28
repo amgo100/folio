@@ -817,6 +817,14 @@ fn more_pipe_row_errors() {
             .iter()
             .any(|m| m.contains("strong")),
     );
+    // A figure in a cell keeps its label.
+    assert!(
+        !all(
+            "#grid(column-tracks: 2)[\n  | #figure(caption: [A])[x] <fig:a> | b |\n]\nSee @fig:a.\n"
+        )
+        .iter()
+        .any(|m| m.contains("cell")),
+    );
     // A pipe in brackets around strong text, in a cell.
     assert!(errors("#grid(column-tracks: 2)[\n  | [*a | b*] | c |\n]\n").is_empty());
     // A blank line ends a run of rows, and a span with it.

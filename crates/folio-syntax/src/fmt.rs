@@ -1016,7 +1016,7 @@ impl Walk {
             for &r in &group {
                 let row = &self.rows[r];
                 let (widths, _) = lines[r].as_ref().expect("grouped rows are lines");
-                for (k, cell) in row.cells.iter().enumerate() {
+                for (k, cell) in row.cells.iter().enumerate().take(widths.len()) {
                     let pad = columns[k] - widths[k];
                     if cell.is_empty() {
                         // An empty cell: the gap between its pipes.
@@ -1061,8 +1061,17 @@ impl Walk {
         {
             return None;
         }
-        let mut widths = Vec::with_capacity(row.cells.len());
-        for cell in &row.cells {
+        // A label alone after the last pipe is no cell to align.
+        let mut cells = row.cells.as_slice();
+        if let Some(last) = cells.last()
+            && !row.pipes.contains(&last.end)
+            && last.len() == 1
+            && self.tokens[last.start].kind == SyntaxKind::Label
+        {
+            cells = &cells[..cells.len() - 1];
+        }
+        let mut widths = Vec::with_capacity(cells.len());
+        for cell in cells {
             let mut width = 0;
             for t in cell.clone() {
                 if t > cell.start {
@@ -1576,6 +1585,11 @@ mod tests {
         // own.
         markup("| a |  b\n| cc | d\n", "| a  | b\n| cc | d\n");
         markup("#grid[| a |  b |]\n", "#grid[| a | b |]\n");
+        // A label after the last pipe does not keep a row from its column.
+        markup(
+            "| a | b | <t>\n| ccc | d |\n",
+            "| a   | b | <t>\n| ccc | d |\n",
+        );
         // A row whose cell holds a block over several lines stays as
         // written, and divides the rows around it.
         // Its block closes indented under the row.
