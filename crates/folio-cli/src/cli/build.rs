@@ -616,7 +616,8 @@ pub(super) fn replace(
     result
 }
 
-/// Where `folio build` and `folio check` report what they found and did:
+/// Where `folio build`, `folio check` and `folio fmt` report what they
+/// found and did:
 /// to standard error, as it goes, with source excerpts; or, with
 /// `--diagnostics json`, as one JSON document written when the command
 /// ends (`docs/diagnostics-json.md`).
@@ -636,6 +637,10 @@ struct Document {
     diagnostics: Vec<Resolved>,
     /// The builds that were compiled, and what became of their outputs.
     builds: Vec<Build>,
+    /// The files that `folio fmt` rewrote, in path order; only in its
+    /// document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    formatted: Option<Vec<String>>,
 }
 
 /// A build in the JSON document, and what became of its output.
@@ -689,6 +694,16 @@ impl Report {
         Self::with(args.color, args.diagnostics)
     }
 
+    /// The report of `folio fmt`, whose JSON document lists the files it
+    /// rewrote.
+    pub(super) fn fmt(color: Color, format: DiagnosticsFormat) -> Self {
+        let mut report = Self::with(color, format);
+        if let Some(document) = &mut report.json {
+            document.formatted = Some(Vec::new());
+        }
+        report
+    }
+
     /// A report coloured as `color` says, in `format`.
     pub(super) fn with(color: Color, format: DiagnosticsFormat) -> Self {
         Self {
@@ -700,11 +715,6 @@ impl Report {
         }
     }
 
-    /// Whether the report is the JSON document.
-    pub(super) fn is_json(&self) -> bool {
-        self.json.is_some()
-    }
-
     /// Reports diagnostics, with their spans resolved against `files`.
     pub(super) fn diagnostics(&mut self, files: &dyn Files, diagnostics: &[Diagnostic]) {
         match &mut self.json {
@@ -712,6 +722,14 @@ impl Report {
                 .diagnostics
                 .extend(diagnostics.iter().map(|d| diag::resolve_in_file(files, d))),
             None => print(files, diagnostics, self.color),
+        }
+    }
+
+    /// Reports a file that `folio fmt` rewrote.
+    pub(super) fn formatted(&mut self, path: &str) {
+        match self.json.as_mut().and_then(|d| d.formatted.as_mut()) {
+            Some(formatted) => formatted.push(path.to_owned()),
+            None => errln!("formatted {path}"),
         }
     }
 

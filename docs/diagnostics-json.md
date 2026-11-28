@@ -1,6 +1,6 @@
 # Diagnostics as JSON
 
-`folio build --diagnostics json` writes one JSON document to standard error when the command ends, in place of the source excerpts and the `wrote …` lines it writes by default (SPEC §12, §12.1). `folio check --diagnostics json` writes the same document: the diagnostics that `folio build` would report, and each build it checked with the status `"checked"` and no path, as a check writes nothing. Apart from the cases below, standard error then holds that document and nothing else, so a program can parse all of it. The exit status is the same as without the flag.
+`folio build --diagnostics json` writes one JSON document to standard error when the command ends, in place of the source excerpts and the `wrote …` lines it writes by default (SPEC §12, §12.1). `folio check --diagnostics json` writes the same document: the diagnostics that `folio build` would report, and each build it checked with the status `"checked"` and no path, as a check writes nothing. `folio fmt --diagnostics json` writes it too, in place of the `formatted …` lines: its diagnostics (with `--check`, an error with the code `unformatted` and a fix for each file that is not formatted), no builds, and the files it rewrote in `formatted`. Apart from the cases below, standard error then holds that document and nothing else, so a program can parse all of it. The exit status is the same as without the flag.
 
 Some messages are still plain text, with no document or before it:
 
@@ -43,7 +43,8 @@ A reader that closes standard error before the document ends, as `head` does, ge
 | --- | --- | --- |
 | `version` | integer | The version of this shape: `1`. |
 | `diagnostics` | array of diagnostics | Every diagnostic of the command, in the order the terminal would show them. A diagnostic that several builds report appears once. |
-| `builds` | array of builds | The builds that were compiled or checked, in the manifest's order, each once. It is empty when the command stopped before compiling, for example because the manifest has errors. |
+| `builds` | array of builds | The builds that were compiled or checked, in the manifest's order, each once. It is empty when the command stopped before compiling, for example because the manifest has errors, and always from `folio fmt`, which builds nothing. |
+| `formatted` | array of strings | Only from `folio fmt`: the files it rewrote, relative to the project directory with `/` between directories, in path order. Empty with `--check`, which rewrites nothing, and when every file was formatted already. A file that a link leads to is listed once, under the first path that reaches it. |
 
 ### A diagnostic
 

@@ -12,7 +12,9 @@
 //! With `--check`, no file changes: each file that is not formatted is
 //! reported as an error with the code `unformatted` and a fix whose edits
 //! format it. The exit status is 1 when there are errors, and with
-//! `--check` when a file is not formatted.
+//! `--check` when a file is not formatted. With `--diagnostics json`, the
+//! JSON document lists the files it rewrote in `formatted`
+//! (`docs/diagnostics-json.md`), in place of the `formatted …` lines.
 
 use std::collections::HashSet;
 use std::fs;
@@ -35,7 +37,7 @@ const UNFORMATTED: &str = "unformatted";
 
 /// Runs `folio fmt`.
 pub(crate) fn fmt(args: &FmtArgs) -> ExitCode {
-    let mut report = Report::with(args.color, args.diagnostics);
+    let mut report = Report::fmt(args.color, args.diagnostics);
     let failed = run(args, &mut report);
     report.finish();
     if failed {
@@ -184,10 +186,8 @@ fn run(args: &FmtArgs, report: &mut Report) -> bool {
     }
 
     report.diagnostics(&world, &diagnostics);
-    if !report.is_json() {
-        for path in &formatted {
-            errln!("formatted {path}");
-        }
+    for path in &formatted {
+        report.formatted(path);
     }
     diagnostics.iter().any(Diagnostic::is_error)
 }
