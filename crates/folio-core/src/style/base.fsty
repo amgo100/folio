@@ -45,6 +45,12 @@ enum enum enum { numbering: "(i)"; }
 figure { space-before: 1em; space-after: 1em; align: center; }
 figure[caption] { keep-together: true; }
 
+// Tables (SPEC §7.4, decision D-62-2): light rules, as books set them:
+// small padding in the cells, a rule above and below the grid and one
+// under its header rows, and no vertical lines.
+grid { space-before: 1em; space-after: 1em; border-top: 0.8pt solid; border-bottom: 0.8pt solid; header-rule: 0.4pt solid; }
+cell { padding: 0.25em 0.5em; }
+
 // `strong` and `emph` say what text is (SPEC §4.3); this is how it looks.
 strong { font-weight: bold; }
 emph { font-style: italic; }

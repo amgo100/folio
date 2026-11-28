@@ -380,6 +380,9 @@ fn dump_items(
                 if inner.break_penalty_after != 0 {
                     let _ = write!(out, " penalty {}", inner.break_penalty_after);
                 }
+                if inner.artifact {
+                    out.push_str(" artifact");
+                }
                 out.push('\n');
                 dump_items(world, inner, depth + 1, font_name, out);
             }

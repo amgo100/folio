@@ -21,7 +21,7 @@
 //! | [`Node::Styled`] | `m:sty` and `m:scr` on the runs inside |
 //! | [`Node::Operator`] | `m:func` with an upright `m:fName` |
 //! | [`Node::Quantity`] | the nodes [`Quantity::lower`] makes, in the [`NumberFormat`] of its text |
-//! | atoms and text | `m:r` runs; `m:nor` for text |
+//! | atoms and text | `m:r` runs; `m:nor` for text; numbers in the [`NumberFormat`] of their text ([`quantity::format_numbers`]) |
 //! | lines with alignment points | `m:eqArr` with `&` in its runs |
 //!
 //! A PDF `Formula` is described by [`Formula::reading`], a linear reading
@@ -348,7 +348,11 @@ pub enum Node {
     /// A variable: a letter, set in italic unless styled otherwise. `x`,
     /// `α` (written `alpha`).
     Ident(Atom),
-    /// A number: `25`, `3.14`. Its digits stay together.
+    /// A number: `25`, `3.14`. Its digits stay together, and layout
+    /// writes them in the number format of the formula's text, with its
+    /// decimal marker and digit groups (SPEC §8.1). A number whose text is
+    /// `,` is a comma written between two numbers without spaces
+    /// ([`Node::decimal_comma`]).
     Number(Atom),
     /// A symbol that is neither a letter nor a number: an operator, a
     /// relation, a delimiter, punctuation. Its class decides its spacing.
@@ -506,6 +510,19 @@ impl Node {
         Self::Number(Atom {
             text: digits,
             class: MathClass::Normal,
+            span,
+        })
+    }
+
+    /// A comma written between two numbers without spaces, `9,81`: the
+    /// decimal marker where the formula's text writes numbers with a
+    /// decimal comma, so that the three are one number there, and
+    /// punctuation elsewhere (SPEC §8.1). Which it is depends on the
+    /// language of the text, so the tree keeps it and layout decides.
+    pub fn decimal_comma(span: Span) -> Self {
+        Self::Number(Atom {
+            text: ",".into(),
+            class: MathClass::Punctuation,
             span,
         })
     }

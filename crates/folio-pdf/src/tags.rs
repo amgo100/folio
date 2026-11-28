@@ -28,7 +28,9 @@ use ecow::EcoString;
 use folio_component::{Abs, Location, SourceRef};
 use krilla::destination::XyzDestination;
 use krilla::outline::{Outline, OutlineNode};
-use krilla::tagging::{Identifier, ListNumbering, Node, Tag as KTag, TagGroup, TagKind, TagTree};
+use krilla::tagging::{
+    Identifier, ListNumbering, Node, TableHeaderScope, Tag as KTag, TagGroup, TagKind, TagTree,
+};
 
 use crate::{ListKind, Role, Tag, pt};
 
@@ -208,6 +210,28 @@ impl<'a> Tagger<'a> {
             .iter()
             .position(|child| is_box_of(child, location))
             .map(|i| from + i);
+        // A node without a box, such as a row of a table, is entered for a
+        // box of a node it holds, among the nodes from the current one on:
+        // the one entered before, as the cells of a row broken across pages
+        // continue it, or a new one (SPEC §7.4).
+        if found.is_none() {
+            let rows = out.cursor.unwrap_or(0);
+            let row = children[rows..]
+                .iter()
+                .position(|child| through(child, location))
+                .map(|i| rows + i);
+            if let Some(index) = row {
+                let entered = match self.nodes[node].entered[index] {
+                    Some(entered) => {
+                        self.nodes[node].cursor = Some(index);
+                        entered
+                    }
+                    None => self.open(node, index, true, y),
+                };
+                return self.enter_cell(entered, location, y);
+            }
+        }
+        let out = &self.nodes[node];
         // A footnote's box comes after its anchor's line, whose formulas
         // after the anchor the cursor has passed: it is found among the
         // notes not yet entered before the cursor too, and leaves the
@@ -221,9 +245,57 @@ impl<'a> Tagger<'a> {
             Some(index) => (index, true),
             None => match behind() {
                 Some(index) => (index, false),
-                None => return node,
+                None => {
+                    // A note anchored deeper than its box is drawn, as in a
+                    // cell of a table, is found through the nodes entered
+                    // that hold it (SPEC §7.4).
+                    if self.is_foot_box(location)
+                        && let Some(inner) =
+                            children
+                                .iter()
+                                .zip(&out.entered)
+                                .find_map(|(child, entered)| {
+                                    entered.filter(|_| {
+                                        !is_box_of(child, location) && holds(child, location)
+                                    })
+                                })
+                    {
+                        return self.enter(inner, location, y);
+                    }
+                    return node;
+                }
             },
         };
+        self.open(node, index, moves, y)
+    }
+
+    /// The node of a cell of the row `row`: the one entered before, as the
+    /// cells of a row broken across pages continue on the next, or a new
+    /// one.
+    fn enter_cell(&mut self, row: usize, location: Location, y: Abs) -> usize {
+        let out = &self.nodes[row];
+        if let Some(index) = out
+            .children
+            .iter()
+            .position(|cell| is_box_of(cell, location))
+        {
+            let entered = match out.entered[index] {
+                Some(entered) => entered,
+                None => self.open(row, index, true, y),
+            };
+            // The top of a cell's part of a row is the top of a page for
+            // the boxes in it: a block broken across pages continues there.
+            self.leading = true;
+            return entered;
+        }
+        self.enter(row, location, y)
+    }
+
+    /// Opens a node for child `index` of `node`, in document order; `moves`
+    /// moves the cursor of `node` to it.
+    fn open(&mut self, node: usize, index: usize, moves: bool, y: Abs) -> usize {
+        let out = &self.nodes[node];
+        let children = out.children;
         let tag = &children[index];
         let sections = out.sections + u16::from(tag.role == Role::Section);
         let parent = self.container(node, tag.role);
@@ -385,6 +457,8 @@ impl<'a> Tagger<'a> {
                     | Role::Code
                     | Role::Formula
                     | Role::Figure
+                    | Role::TableHeader(_)
+                    | Role::TableCell(_)
             ),
             Kind::Top | Kind::ListBody | Kind::Link => false,
         };
@@ -439,6 +513,28 @@ impl<'a> Tagger<'a> {
     }
 }
 
+/// Whether a box of the element instance at `location` is a box of a node
+/// that `tag`, a node without a box, holds, directly or through other
+/// nodes without boxes.
+fn through(tag: &Tag, location: Location) -> bool {
+    tag.boxless
+        && tag
+            .children
+            .iter()
+            .any(|child| is_box_of(child, location) || through(child, location))
+}
+
+/// A cell's span as PDF writes it: only where it is more than one.
+fn span_of(n: u32) -> Option<std::num::NonZeroU32> {
+    std::num::NonZeroU32::new(n).filter(|n| n.get() > 1)
+}
+
+/// Whether a tag or one of its descendants is a box of the element
+/// instance at `location`.
+fn holds(tag: &Tag, location: Location) -> bool {
+    is_box_of(tag, location) || tag.children.iter().any(|c| holds(c, location))
+}
+
 /// Whether a group of the element instance at `location` is a box of
 /// `tag`: they name the same source and the same instance.
 fn is_box_of(tag: &Tag, location: Location) -> bool {
@@ -486,6 +582,16 @@ fn group(out: Out<'_>, nodes: &mut [Option<Out<'_>>]) -> Option<TagGroup> {
             Role::Code => KTag::Code.into(),
             Role::Formula => KTag::Formula(tag.text.as_ref().map(|t| t.to_string())).into(),
             Role::Figure => KTag::Figure(tag.text.as_ref().map(|t| t.to_string())).into(),
+            Role::Table => KTag::Table.into(),
+            Role::TableRow => KTag::TR.into(),
+            Role::TableHeader(span) => KTag::TH(TableHeaderScope::Column)
+                .with_row_span(span_of(span.rows))
+                .with_col_span(span_of(span.columns))
+                .into(),
+            Role::TableCell(span) => KTag::TD
+                .with_row_span(span_of(span.rows))
+                .with_col_span(span_of(span.columns))
+                .into(),
         },
     };
     let children: Vec<Node> = out

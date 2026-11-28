@@ -124,6 +124,11 @@ fn variant_condition(conditional: ast::Conditional<'_>) -> Option<Diagnostic> {
         BinOp::In | BinOp::NotIn if is_variant(lhs) => names(rhs)?,
         _ => return None,
     };
+    // `variant in ()` names no variant: it is always false, not a choice
+    // of variant.
+    if listed.is_empty() {
+        return None;
+    }
     let quoted: Vec<String> = listed.iter().map(|n| format!("{n:?}")).collect();
     let hint = match (op, &listed[..]) {
         (BinOp::Eq | BinOp::In, [name]) => eco_format!(

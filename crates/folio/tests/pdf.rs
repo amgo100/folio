@@ -126,6 +126,17 @@ fn expected_text(world: &World, variant: Option<&Name>) -> String {
                 .collect::<String>(),
         );
     }
+    // The copies a page sets again at its top, such as a table's header
+    // rows: artifacts, which a reader still copies (SPEC §7.4).
+    let copies: Vec<String> = pages
+        .pages
+        .iter()
+        .map(|page| {
+            let mut out = String::new();
+            collect_copies(&page.fragment, &mut out);
+            out
+        })
+        .collect();
     let mut line_page = HashMap::new();
     for (i, page) in pages.pages.iter().enumerate() {
         for line in &page.lines {
@@ -139,6 +150,7 @@ fn expected_text(world: &World, variant: Option<&Name>) -> String {
         line_page: &line_page,
         lines: &lines,
         notes: &on_page,
+        copies: &copies,
         page: 0,
         out: String::new(),
     };
@@ -224,6 +236,21 @@ fn positioned(fragment: &Fragment, at: Point, out: &mut Vec<(i64, String)>) {
     }
 }
 
+/// The text of the boxes in `fragment` that are copies
+/// ([`Fragment::artifact`]), each on a line of its own, in drawing order.
+fn collect_copies(fragment: &Fragment, out: &mut String) {
+    for (_, item) in fragment.items.iter() {
+        if let FragmentItem::Group(group) = item {
+            if group.artifact {
+                runs(group, out);
+                out.push('\n');
+            } else {
+                collect_copies(group, out);
+            }
+        }
+    }
+}
+
 /// The text of the glyph runs in `fragment`, in drawing order.
 fn runs(fragment: &Fragment, out: &mut String) {
     for (_, item) in fragment.items.iter() {
@@ -243,17 +270,21 @@ struct Expected<'a> {
     line_page: &'a HashMap<(usize, usize), usize>,
     lines: &'a folio::Lines,
     notes: &'a [String],
+    copies: &'a [String],
     page: usize,
     out: String,
 }
 
 impl Expected<'_> {
     /// Writes the notes of the pages before `page`, which the text has
-    /// reached.
+    /// reached, each followed by the copies the next page starts with.
     fn reach(&mut self, page: usize) {
         while self.page < page {
             self.out.push_str(&self.notes[self.page]);
             self.page += 1;
+            if let Some(copies) = self.copies.get(self.page) {
+                self.out.push_str(copies);
+            }
         }
     }
 
@@ -273,12 +304,103 @@ impl Expected<'_> {
             self.out.push('\n');
             return;
         }
+        // A grid's cells are read page by page, as a row broken across
+        // pages is drawn (SPEC §7.4).
+        if block.element.namespace.is_none() && block.element.name.as_str() == "grid" {
+            self.grid(block);
+            return;
+        }
         for child in block.children.iter() {
             match child {
                 TextFlow::Block(child) => self.block(child),
                 TextFlow::Paragraph(index) => self.paragraph(*index),
             }
         }
+    }
+
+    /// Writes a grid's cells page by page, each page's in the order of the
+    /// cells.
+    fn grid(&mut self, block: &TextBlock) {
+        let mut parts: Vec<(usize, usize, String)> = Vec::new();
+        for (c, child) in block.children.iter().enumerate() {
+            let mut cell = Vec::new();
+            match child {
+                TextFlow::Block(b) => self.cell_parts(b, &mut cell),
+                TextFlow::Paragraph(i) => self.paragraph_parts(*i, &mut cell),
+            }
+            parts.extend(cell.into_iter().map(|(page, text)| (page, c, text)));
+        }
+        parts.sort_by_key(|(page, c, _)| (*page, *c));
+        for (page, _, text) in parts {
+            self.reach(page);
+            self.out.push_str(&text);
+        }
+    }
+
+    /// The text of a cell's block, each part with the page it is on.
+    fn cell_parts(&self, block: &TextBlock, out: &mut Vec<(usize, String)>) {
+        let location = (block.location.source, block.location.instance);
+        if let Some(boxes) = self.drawn.get(&location)
+            && self
+                .text
+                .maths
+                .iter()
+                .any(|m| m.display && m.location == block.location)
+        {
+            let page = self.first_page.get(&location).copied().unwrap_or(self.page);
+            out.push((page, format!("{}\n", boxes.concat())));
+            return;
+        }
+        for child in block.children.iter() {
+            match child {
+                TextFlow::Block(child) => self.cell_parts(child, out),
+                TextFlow::Paragraph(index) => self.paragraph_parts(*index, out),
+            }
+        }
+    }
+
+    /// The text of a paragraph, each part with the page its lines are on.
+    fn paragraph_parts(&self, index: usize, out: &mut Vec<(usize, String)>) {
+        let text = self.text;
+        let paragraph = &text.paragraphs[index];
+        let starts: Vec<usize> = self.lines.paragraphs[index]
+            .lines
+            .iter()
+            .map(|l| l.range.start)
+            .collect();
+        let mut page = self
+            .line_page
+            .get(&(index, 0))
+            .copied()
+            .unwrap_or(self.page);
+        let mut line = String::new();
+        let mut objects = paragraph.objects.iter();
+        for (at, c) in paragraph.shaped.text().char_indices() {
+            if let Some(l) = starts.iter().position(|&s| s == at)
+                && let Some(&next) = self.line_page.get(&(index, l))
+                && next > page
+            {
+                out.push((page, format!("{}\n", line.trim())));
+                line.clear();
+                page = next;
+            }
+            match c {
+                '\u{FFFC}' => {
+                    let chunk = objects
+                        .next()
+                        .and_then(|o| {
+                            Some(((o.location.source, o.location.instance), o.math?.chunk))
+                        })
+                        .and_then(|(at, chunk)| self.drawn.get(&at)?.get(chunk));
+                    if let Some(chunk) = chunk {
+                        line.push_str(chunk);
+                    }
+                }
+                '\u{2028}' => line.push(' '),
+                c => line.push(c),
+            }
+        }
+        out.push((page, format!("{}\n", line.trim())));
     }
 
     fn paragraph(&mut self, index: usize) {
