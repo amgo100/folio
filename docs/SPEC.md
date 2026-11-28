@@ -288,6 +288,8 @@ struct Fragment {
 | WebAssembly (after 1.0) | Any language compiled against the published WIT interface | A `wasmtime` sandbox with fuel and memory limits | All except layout containers | Third-party computation, such as circuit layout |
 | Native | Rust against `folio-component` | The Folio process, compiled into the binary | All | First-party components that need speed or layout containers |
 
+A project's own content files can declare elements in the same language as a package (§4.3); they are hosted as the project's own package component, in the namespace `project`.
+
 The native interface is defined in WebAssembly-compatible terms (plain data in and out, no references into core internals, except the layout-container callback, which is why that extension point stays native) so that the WebAssembly tier can be added without changing it.
 
 ### 3.5 Contracts
@@ -437,7 +439,7 @@ Air resistance is negligible.#sidenote[Take $g = qty(9.81, "m s^-2")$.]
 
 ### 4.3 Elements
 
-Every element, built in or added by a component, has a declared schema. A package component (§3.4) can declare one in Folio's own language:
+Every element, built in or added by a component, has a declared schema. A package component (§3.4), or a project in its own content files, can declare one in Folio's own language:
 
 ```
 #element example(
@@ -447,12 +449,16 @@ Every element, built in or added by a component, has a declared schema. A packag
 ) {
   kind: block                         // block | inline | float | note | slide
   body: slots(statement: blocks, solution: blocks)
-  counter: within heading(level: 1)   // or scoped(question, part), §4.5
-  ref-key: "example"                  // word looked up in locale files
+  counter: within heading(level: 1)   // or auto, or scoped(question, part), §4.5
+  ref-key: "example"                  // word looked up in locale strings
+  words: (en: "Example", pl: "przykł.")
 }
 ```
 
-- **Fields** are typed (`content`, `str`, `int`, `number`, `bool`, `choice(...)`, `ref`, arrays and dictionaries) with defaults. Wrong types and unknown fields are compile errors with a source span. Length and colour fields are allowed only when marked `layout-data` (§5.5). A `content` field holds inline content, and a `ref` field a label (`see: <fig:ball>`).
+- **Declarations** are fixed per project. A declaration sits at the top level of a content file, not inside code, a block or a function, and its types and defaults are literals, so the compiler collects the declarations of every content file the entry file imports or includes, directly or through others, before any script runs. The declared elements are hosted like a package component's, in the namespace `project` (`project.example`), so stylesheets, counters, references, lints and templates treat them as they treat a component's. In content, a declared element is a variable bound by its declaration: usable after it in its own file, and elsewhere where it is imported (`#import "lib/blocks.fol": example`). Stylesheets see every declared element, imported or not. Declaring a name twice in a project, or the name of a built-in element, is an error. Decision recorded: D-58-1 = A.
+- **Entries.** `kind` defaults to `block`. `body` is `none`, `inline`, `blocks` or `slots(..)`; without it an inline or note element takes inline content and any other element blocks. `counter` is `auto` for a counter that only steps, `within` an element with optional field values, `scoped(..)`, or `within` and `scoped` together; an unqualified name in it is a built-in element or one the project declares. `words` gives the words of the reference key by language, English at least; a reference key the core already has words for (`figure`, `section`, `equation`) may leave it out, and a language without a word falls back to the core's word, then to the English one (§4.5). Elements that share a reference key share its words.
+
+- **Fields** are typed (`content`, `str`, `int`, `number`, `bool`, `choice(...)`, `ref`, arrays and dictionaries) with defaults. Wrong types and unknown fields are compile errors with a source span. Length and colour fields are allowed only when marked `layout-data` (§5.5), which a declaration writes around the type: `scale: layout-data(length) = 1cm`. A `content` field holds inline content, and a `ref` field a label (`see: <fig:ball>`).
 - **Positional fields.** A schema can list fields that a call gives by position, in order; `body` in the list places the body, which otherwise comes after them. A call's trailing content blocks are positional arguments, so `#image("assets/ball.svg")` gives `path`, and `#figure[...][Path of the ball.]` gives `body` and then `caption`.
 - **Field order.** An instance stores its fields in an order its schema fixes, not the order a call gives them in: the positional fields, with the body where they place it; the other fields, in declaration order; the body, if the positional fields do not place it, with its slots in declaration order; then the universal fields (§4.2), each followed by its versions limited to a variant or target, by scope. `#figure(caption: [C])[B]` and `#figure([B], caption: [C])` are the same instance, and its body and parts reach styling (`:first`, `+`), layout and the outputs in that order.
 - **Built-in inline elements** are semantic: `strong` and `emph` say what text is, not that it is bold or italic. The base stylesheet (§5.1) gives them that look, and a project can restyle them.

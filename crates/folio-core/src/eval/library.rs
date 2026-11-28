@@ -57,6 +57,11 @@ pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
     };
     let mut names = Vec::new();
     for component in host.components() {
+        // The project's own elements are variables where they are declared
+        // and imported, not everywhere (SPEC §4.3).
+        if super::is_project(component) {
+            continue;
+        }
         let namespace = component.manifest.namespace();
         let elements: BTreeMap<EcoString, Value> = component
             .declarations

@@ -583,8 +583,9 @@ pub fn build_files(db: &dyn Db, build: Build<'_>) -> EcoVec<SourceFile> {
 /// reported as an error ([`crate::component::unhosted`]) while the others
 /// are still hosted, so `Some` does not mean that nothing was reported.
 ///
-/// Reads only the registry (durable) and the manifest and lockfile, so an
-/// edit to a source does not re-run or even re-validate it.
+/// Reads the registry (durable), the manifest and lockfile, and the element
+/// declarations of the project's content files, which an edit outside a
+/// declaration leaves equal, so such an edit does not re-run it.
 #[salsa::tracked(returns(ref))]
 pub fn component_host(db: &dyn Db, project: Project) -> Option<ComponentHost> {
     for error in
@@ -598,7 +599,14 @@ pub fn component_host(db: &dyn Db, project: Project) -> Option<ComponentHost> {
         &project.lockfile(db).bindings,
     );
     match host {
-        Ok(host) => Some(host),
+        Ok(mut host) => {
+            // The elements the project declares (SPEC §4.3).
+            let elements = crate::eval::project_component(db, project);
+            if let Some(error) = host.with_project(elements.as_ref()) {
+                diag::report(db, error);
+            }
+            Some(host)
+        }
         Err(errors) => {
             for error in errors {
                 diag::report(db, error.into());
