@@ -748,6 +748,11 @@ pub(super) struct Flow {
     pub end: Boundary,
     /// Where each leaf comes from.
     pub origins: Vec<Origin>,
+    /// Where the leaves of the cells of each band come from, by the band's
+    /// leaf, for the pages' line lists: kept out of the bands, so that a
+    /// band is equal wherever an edit moved it (SPEC §2.3). Empty in the
+    /// flows of notes and cells.
+    pub cells: Vec<(usize, Vec<Vec<Origin>>)>,
 }
 
 impl Flow {
@@ -803,6 +808,7 @@ impl Flow {
             in_cell: false,
             fills: Vec::new(),
             grids: &grids,
+            cells: Vec::new(),
         };
         builder.flow(&text.root)
     }
@@ -1162,6 +1168,8 @@ struct Builder<'a> {
     in_cell: bool,
     /// The grids laid out, by location (SPEC §7.4).
     grids: &'a HashMap<Location, GridLayout>,
+    /// Where the leaves of each band's cells come from ([`Flow::cells`]).
+    cells: Vec<(usize, Vec<Vec<Origin>>)>,
 }
 
 /// A block with a `min-height` (SPEC §6.3): the leaves it holds, and how
@@ -1197,6 +1205,7 @@ impl Builder<'_> {
             items: self.items,
             end,
             origins: self.origins,
+            cells: self.cells,
         };
         // Inner blocks first, so that an outer block measures the inner
         // ones grown.
@@ -1234,6 +1243,7 @@ impl Builder<'_> {
             in_cell: false,
             fills: Vec::new(),
             grids: self.grids,
+            cells: Vec::new(),
         };
         let mark = continued.and_then(|i| builder.paragraph_info(i));
         let mut flow = builder.flow(block);
@@ -1337,6 +1347,12 @@ impl Builder<'_> {
                 (*place, self.cell_flow(child, cx, width, block))
             })
             .collect();
+        // The cells' origins, kept out of their bands.
+        let mut cells = cells;
+        let origins: Vec<Vec<Origin>> = cells
+            .iter_mut()
+            .map(|(_, flow)| std::mem::take(&mut flow.origins))
+            .collect();
         let heights: Vec<Abs> = cells.iter().map(|(_, flow)| flow_height(flow)).collect();
         let breakable = matches!(
             block
@@ -1403,6 +1419,10 @@ impl Builder<'_> {
             if header {
                 headers.push(band.clone());
             }
+            self.cells.push((
+                self.items.len(),
+                members.iter().map(|&i| origins[i].clone()).collect(),
+            ));
             self.leaf(Leaf::Band(band), Origin::Empty);
         }
         // A break between the header bands, or directly after them, costs
@@ -1444,6 +1464,7 @@ impl Builder<'_> {
             in_cell: true,
             fills: Vec::new(),
             grids: self.grids,
+            cells: Vec::new(),
         };
         match child {
             TextFlow::Block(b) => {
@@ -1470,6 +1491,7 @@ impl Builder<'_> {
             items: builder.items,
             end,
             origins: builder.origins,
+            cells: Vec::new(),
         };
         for fill in &builder.fills {
             flow.fill(fill);

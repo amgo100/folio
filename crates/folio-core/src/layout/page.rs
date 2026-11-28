@@ -181,6 +181,8 @@ fn visit(fragment: &Fragment, f: &mut dyn FnMut(Location)) {
     }
     for (_, item) in &fragment.items {
         match item {
+            // A copy shows content whose page is the first that shows it.
+            FragmentItem::Group(group) if group.artifact => {}
             FragmentItem::Group(group) => visit(group, f),
             FragmentItem::Object(object) => f(object.location),
             _ => {}
@@ -201,6 +203,7 @@ fn same(a: &Fragment, b: &Fragment) -> bool {
             && a.last_baseline == b.last_baseline
             && a.keep_with_next == b.keep_with_next
             && a.break_penalty_after == b.break_penalty_after
+            && a.artifact == b.artifact
     } else {
         a == b
     }
@@ -318,8 +321,9 @@ struct PageOut {
     /// and its line and width as in [`State`].
     next: State,
     /// The lines on the page: each a leaf counted from the page's first,
-    /// and the line of its paragraph.
-    lines: EcoVec<(usize, usize)>,
+    /// the line of its paragraph, and for a line of a cell of a band
+    /// (SPEC §7.4), the cell and the leaf of the cell's flow.
+    lines: EcoVec<(usize, usize, Option<(usize, usize)>)>,
     /// The paragraphs that start on the page and were broken at a width
     /// other than the one the flow was built for, or with sized objects,
     /// each a leaf counted from the page's first: their lines' diagnostics
@@ -599,6 +603,17 @@ fn build_pages(
         },
         &lines.grids,
     );
+    // The paragraph of leaf `j` of cell `c` of the band at leaf `item`.
+    let cell_paragraph = |item: usize, c: usize, j: usize| {
+        let at = flow.cells.partition_point(|(i, _)| *i < item);
+        match flow.cells.get(at) {
+            Some((i, cells)) if *i == item => match cells.get(c).and_then(|o| o.get(j)) {
+                Some(Origin::Paragraph(p)) => *p,
+                _ => usize::MAX,
+            },
+            _ => usize::MAX,
+        }
+    };
     let paragraph = |item: usize| match flow.origins[item] {
         Origin::Paragraph(p) => p,
         Origin::Empty => usize::MAX,
@@ -676,8 +691,11 @@ fn build_pages(
         let lines = out
             .lines
             .iter()
-            .map(|&(k, line)| LineRef {
-                paragraph: paragraph(state.item + k),
+            .map(|&(k, line, cell)| LineRef {
+                paragraph: match cell {
+                    None => paragraph(state.item + k),
+                    Some((c, j)) => cell_paragraph(state.item + k, c, j),
+                },
                 line,
             })
             .collect();
@@ -708,6 +726,7 @@ fn content_hash(fragment: &Fragment) -> u64 {
         fragment.last_baseline.hash(h);
         fragment.keep_with_next.hash(h);
         fragment.break_penalty_after.hash(h);
+        fragment.artifact.hash(h);
         fragment.items.len().hash(h);
         for (pos, item) in &fragment.items {
             pos.hash(h);
@@ -1552,10 +1571,16 @@ fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
         (span, found.notes.overflow)
     });
     let placed = &run.leaves[..found.end];
-    let lines = placed
-        .iter()
-        .filter_map(|leaf| Some((leaf.item - start, leaf.line.as_ref()?.1)))
-        .collect();
+    let mut lines = EcoVec::new();
+    for leaf in placed {
+        if let Some((_, line)) = &leaf.line {
+            lines.push((leaf.item - start, *line, None));
+        } else if let Some(piece) = &leaf.piece {
+            for &(cell, item, line) in &piece.lines {
+                lines.push((leaf.item - start, line, Some((cell, item))));
+            }
+        }
+    }
     let rebroken = placed
         .iter()
         .filter_map(|leaf| match &leaf.line {
@@ -1819,13 +1844,15 @@ fn lay(
         let base = y;
         y += head.before.walk(Walk::Top, |p, at| asm.event(p, base + at));
     }
-    // The top of the read of a band whose parts are being laid.
+    // The top of the read of a band whose parts are being laid, and the
+    // parts laid but not yet drawn.
     let mut band_top: Option<Abs> = None;
+    let mut waiting: Vec<usize> = Vec::new();
     for k in 0..end {
         let leaf = &run.leaves[k];
         if let Some(piece) = &leaf.piece {
             // A read of a band is drawn once its last part on the page is
-            // reached.
+            // reached, and what its parts anchor follows it.
             let top = *band_top.get_or_insert(y);
             let ends = k + 1 == end
                 || run.leaves[k + 1]
@@ -1835,6 +1862,19 @@ fn lay(
             if ends {
                 draw_band(run, piece, top, asm);
                 band_top = None;
+                for waited in waiting.drain(..) {
+                    after(waited, asm);
+                }
+            } else {
+                waiting.push(k);
+                y += leaf.height();
+                if k + 1 < end {
+                    let base = y;
+                    y += run
+                        .boundary(k + 1)
+                        .walk(Walk::Through, |p, at| asm.event(p, base + at));
+                }
+                continue;
             }
         } else if let Some((paragraph, line)) = &leaf.line {
             let baseline = y + paragraph.layout.lines[*line].ascent;
@@ -1973,14 +2013,13 @@ fn draw_band(run: &Run<'_>, piece: &Piece, top: Abs, asm: &mut Assembler) {
     }
 }
 
-/// Makes the boxes among `items` name no element instance: they are a
-/// copy, such as a header band set again (SPEC §7.4).
+/// Marks the boxes among `items` as a copy, such as a header band set
+/// again (SPEC §7.4): they keep naming their element instances, for the
+/// span map, but are artifacts, and no page-number reference finds them.
 fn detach(items: &mut [(Point, FragmentItem)]) {
     for (_, item) in items {
         if let FragmentItem::Group(group) = item {
-            group.source = Location::DETACHED.source;
-            group.instance = Location::DETACHED.instance;
-            detach(group.items.make_mut());
+            group.artifact = true;
         }
     }
 }

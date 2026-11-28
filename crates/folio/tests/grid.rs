@@ -201,6 +201,22 @@ fn header_rows_repeat_on_every_page_the_grid_continues() {
         }
     }
     assert_eq!(next, 81);
+    // The copies of the header are artifacts; the first is content.
+    fn artifacts(fragment: &Fragment) -> usize {
+        fragment
+            .items
+            .iter()
+            .map(|(_, item)| match item {
+                FragmentItem::Group(g) if g.artifact => 1,
+                FragmentItem::Group(g) => artifacts(g),
+                _ => 0,
+            })
+            .sum()
+    }
+    assert_eq!(artifacts(&pages.pages[0].fragment), 0);
+    for page in &pages.pages[1..] {
+        assert_eq!(artifacts(&page.fragment), 2);
+    }
     // Rows are not broken: no row warns.
     assert!(!codes(&world).contains(&"broken-unbreakable".to_owned()));
 }

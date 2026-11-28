@@ -410,6 +410,26 @@ pub enum Role {
     /// Anything else (`Div`): an element without a standard meaning, such
     /// as most components' elements.
     Group,
+    /// A table (`Table`): a grid (SPEC §7.4), whose children are its rows.
+    Table,
+    /// A row of a table (`TR`). It has no box of its own: the boxes of
+    /// its cells are found among its children.
+    TableRow,
+    /// A cell of a table's header rows (`TH`), with the rows and columns
+    /// it spans.
+    TableHeader(Span2),
+    /// Any other cell of a table (`TD`), with the rows and columns it
+    /// spans.
+    TableCell(Span2),
+}
+
+/// The rows and columns a cell of a table spans, each at least one.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct Span2 {
+    /// The rows.
+    pub rows: u32,
+    /// The columns.
+    pub columns: u32,
 }
 
 /// How a list labels its items.
@@ -873,6 +893,9 @@ struct Writer<'a> {
     /// Whether the deferred notes are being drawn, when nothing inside
     /// them is deferred again.
     in_feet: bool,
+    /// How many boxes that are copies ([`Fragment::artifact`]) are being
+    /// drawn: their content is an artifact, in no structure node.
+    in_artifact: usize,
     /// The link of each glyph of each run of the page being drawn, by the
     /// run's drawing ([`RunAt`]), assigned in the order of the page's
     /// fragments before it is drawn, so that drawing footnotes last takes
@@ -1186,6 +1209,7 @@ impl<'a> Writer<'a> {
             images: HashMap::new(),
             deferred: Vec::new(),
             in_feet: false,
+            in_artifact: 0,
             assigned: HashMap::new(),
             assigning: None,
         }
@@ -1274,6 +1298,8 @@ impl Writer<'_> {
         for (offset, item) in fragment.items.iter() {
             let at = pos + *offset;
             match item {
+                // A copy links nowhere (SPEC §7.4).
+                FragmentItem::Group(group) if group.artifact => {}
                 FragmentItem::Group(group) if self.tagger.is_foot_box(group.location()) => {
                     let before = (self.assigning.take(), self.links.current);
                     self.assign(group, at);
@@ -1326,6 +1352,15 @@ impl Writer<'_> {
     /// Draws an item at `at` within a box of `node`.
     fn item(&mut self, surface: &mut Surface<'_>, item: &FragmentItem, at: Point, node: usize) {
         match item {
+            // A copy, such as a table's header rows set again (SPEC §7.4),
+            // is an artifact: in no structure node, so the structure holds
+            // its content once (§11.1).
+            FragmentItem::Group(group) if group.artifact || self.in_artifact > 0 => {
+                self.in_artifact += 1;
+                self.fragment(surface, group, at, node);
+                self.in_artifact -= 1;
+                self.tagger.advance();
+            }
             FragmentItem::Group(group) => {
                 let child = self.tagger.enter(node, group.location(), at.y);
                 // A note's box is drawn last whether or not its node was
@@ -1382,7 +1417,12 @@ impl Writer<'_> {
     /// is left out, with a warning; the check does not read images.
     fn image(&mut self, surface: &mut Surface<'_>, image: &ImageBox, at: Point, node: usize) {
         self.tagger.advance();
-        let id = surface.start_tagged(ContentTag::Other);
+        let artifact = self.in_artifact > 0;
+        let id = surface.start_tagged(if artifact {
+            ContentTag::Artifact(krilla::tagging::Artifact::with_kind(ArtifactType::Layout))
+        } else {
+            ContentTag::Other
+        });
         // The check prepares images too, so that it foresees their
         // warnings; it expects the claim of PDF/UA-1 a title allows.
         let embed = !self.ua;
@@ -1413,7 +1453,9 @@ impl Writer<'_> {
             }
         }
         surface.end_tagged();
-        self.tagger.content(node, id, None);
+        if !artifact {
+            self.tagger.content(node, id, None);
+        }
     }
 
     /// Draws a glyph run with its baseline starting at `at`, as content of
@@ -1439,7 +1481,8 @@ impl Writer<'_> {
         // none, as the text of a link is content of its `Link` element.
         let mut pieces: Vec<(Range<usize>, Option<usize>)> = Vec::with_capacity(1);
         // Without links, a run is one piece.
-        let linked = !self.links.sources.is_empty();
+        // A copy's text links nowhere: it is an artifact.
+        let linked = !self.links.sources.is_empty() && self.in_artifact == 0;
         if !linked && !run.glyphs.is_empty() {
             pieces.push((0..run.glyphs.len(), None));
         }
@@ -1464,6 +1507,9 @@ impl Writer<'_> {
             if dry.glyphs {
                 let last_resort = name(&font, &self.names) == "LastResort";
                 dry.run(run, &font, last_resort);
+            }
+            if self.in_artifact > 0 {
+                return;
             }
             for (_, link) in pieces {
                 let id = surface.start_tagged(ContentTag::Span(SpanTag::empty()));
@@ -1505,8 +1551,13 @@ impl Writer<'_> {
                 })
                 .collect();
             let width: f32 = glyphs.iter().map(|g| g.x_advance * size).sum();
-            let span = SpanTag::empty().with_actual_text(actual);
-            let id = surface.start_tagged(ContentTag::Span(span));
+            let artifact = self.in_artifact > 0;
+            let tag = if artifact {
+                ContentTag::Artifact(krilla::tagging::Artifact::with_kind(ArtifactType::Layout))
+            } else {
+                ContentTag::Span(SpanTag::empty().with_actual_text(actual))
+            };
+            let id = surface.start_tagged(tag);
             surface.draw_glyphs(
                 krilla::geom::Point::from_xy(x, pt(at.y)),
                 &glyphs,
@@ -1516,6 +1567,10 @@ impl Writer<'_> {
                 false,
             );
             surface.end_tagged();
+            if artifact {
+                x += width;
+                continue;
+            }
             self.tagger.content(node, id, link);
             if let Some(link) = link {
                 let top = pt(at.y) - ascender * size;

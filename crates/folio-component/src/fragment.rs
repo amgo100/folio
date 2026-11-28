@@ -46,6 +46,11 @@ pub struct Fragment {
     /// neutral. Keeps and break penalties are costs, not hard rules (SPEC
     /// §7.2).
     pub break_penalty_after: i32,
+    /// Whether the box is a copy of content shown elsewhere, such as the
+    /// header rows of a table set again at the top of a page (SPEC §7.4):
+    /// writers that tag output by meaning mark it as an artifact, not
+    /// content, so its structure holds the content once (§11.1).
+    pub artifact: bool,
 }
 
 impl Fragment {
@@ -61,6 +66,7 @@ impl Fragment {
             last_baseline: size.height,
             keep_with_next: false,
             break_penalty_after: 0,
+            artifact: false,
         }
     }
 
