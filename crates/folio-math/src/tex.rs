@@ -44,8 +44,8 @@ use ecow::{EcoString, eco_format};
 use folio_syntax::Span;
 
 use crate::{
-    Accent, Cases, Decoration, DecorationKind, Delimited, Formula, Frac, Label, Line, MathClass,
-    MathVariant, Matrix, Node, Operator, Root, Row, Styled, Vector,
+    Accent, Attach, Cases, Decoration, DecorationKind, Delimited, Formula, Frac, Label, Line,
+    MathClass, MathVariant, Matrix, Node, Operator, Root, Row, Styled, Vector,
 };
 
 /// An error in LaTeX input.
@@ -1124,6 +1124,30 @@ impl<'s> Parser<'s> {
                 let base = self.arg(range, "base")?;
                 items.push(Node::Accent(Arc::new(Accent { base, accent, span })));
             }
+            Cmd::Set(over) => {
+                let annotation = self.arg(range.clone(), "annotation")?;
+                let base = self.arg(range.clone(), "relation")?;
+                if !matches!(base.nodes(), [Node::Symbol(atom)] if atom.class == MathClass::Relation)
+                {
+                    return Err(TexError::new(
+                        range,
+                        eco_format!("`\\{name}` sets an annotation over or under a relation only"),
+                    )
+                    .with_hint("over another body, write a brace with its annotation: `\\overbrace{a + b}^{n}`"));
+                }
+                let (sub, sup) = if over {
+                    (None, Some(annotation))
+                } else {
+                    (Some(annotation), None)
+                };
+                items.push(Node::Attach(Arc::new(Attach {
+                    base,
+                    sub,
+                    sup,
+                    primes: 0,
+                    span,
+                })));
+            }
             Cmd::Vector => {
                 let base = self.arg(range, "vector")?;
                 items.push(Node::Vector(Arc::new(Vector {
@@ -1320,6 +1344,9 @@ enum Cmd {
     Accent(char),
     /// `\vec{F}`.
     Vector,
+    /// `\overset{a}{=}` (`true`) or `\underset{a}{=}`: an annotation over
+    /// or under a relation, its limits.
+    Set(bool),
     /// A line or brace over or under its argument.
     Decoration(DecorationKind),
     /// A math alphabet for its argument.
@@ -1364,6 +1391,8 @@ fn command(name: &str) -> Option<Cmd> {
         "frac" | "dfrac" | "tfrac" | "cfrac" => Cmd::Frac,
         "sqrt" => Cmd::Sqrt,
         "vec" => Cmd::Vector,
+        "overset" | "stackrel" => Cmd::Set(true),
+        "underset" => Cmd::Set(false),
         "hat" | "widehat" => Cmd::Accent('\u{302}'),
         "grave" => Cmd::Accent('\u{300}'),
         "acute" => Cmd::Accent('\u{301}'),
@@ -1402,12 +1431,34 @@ fn command(name: &str) -> Option<Cmd> {
         "begin" => Cmd::Begin,
         "label" => Cmd::Label,
         "\\" | "right" | "end" => Cmd::Structural,
-        "nonumber" | "notag" | "tag" => Cmd::Unsupported(Some(
-            "remove it: equation numbers are not set from LaTeX input",
+        "nonumber" | "notag" => Cmd::Unsupported(Some(
+            "a display is numbered as a whole, or only on its lines that have a `\\label{..}` when any has one; \
+             to number some lines and not others, label those to number. To leave a display unnumbered, \
+             set `numbering: none` on it in a stylesheet",
         )),
-        "binom" | "dbinom" | "tbinom" | "overset" | "underset" | "stackrel" | "substack"
-        | "middle" | "boxed" | "cancel" | "phantom" | "hphantom" | "vphantom" | "color"
-        | "hspace" | "intertext" | "newcommand" | "renewcommand" | "def" => Cmd::Unsupported(None),
+        "tag" => Cmd::Unsupported(Some(
+            "equation numbers come from the `equation` counter and the `numbering` property; \
+             a display cannot set its own",
+        )),
+        "binom" | "dbinom" | "tbinom" | "choose" => Cmd::Unsupported(Some(
+            "the math tree has no binomial yet; write `\\begin{pmatrix} n \\\\ k \\end{pmatrix}`",
+        )),
+        "phantom" | "hphantom" | "vphantom" => Cmd::Unsupported(Some(
+            "the math tree has no phantoms yet; align lines with `&` and space them with `\\quad`",
+        )),
+        "rm" => Cmd::Unsupported(Some("write `\\mathrm{..}` around what is upright")),
+        "bf" => Cmd::Unsupported(Some("write `\\mathbf{..}` around what is bold")),
+        "it" => Cmd::Unsupported(Some("write `\\mathit{..}` around what is italic")),
+        "cal" => Cmd::Unsupported(Some("write `\\mathcal{..}` around what is calligraphic")),
+        "over" => Cmd::Unsupported(Some("write the fraction as `\\frac{a}{b}`")),
+        "si" | "SI" | "qty" | "unit" | "num" | "ang" => Cmd::Unsupported(Some(
+            "quantities are native, outside `:tex`: `$qty(9.81, \"m s^-2\")$`, `$num(6.02e23)$`, `$unit(\"kg\")$`",
+        )),
+        "ce" | "pu" => Cmd::Unsupported(Some(
+            "chemical formulas (mhchem) are not read; write subscripts with `\\mathrm`: `\\mathrm{H_2O}`",
+        )),
+        "substack" | "middle" | "boxed" | "cancel" | "color" | "hspace" | "intertext"
+        | "newcommand" | "renewcommand" | "def" => Cmd::Unsupported(None),
         "[" | "]" | "(" | ")" => Cmd::Unsupported(Some(
             "the dollars already make the equation; remove `\\[`, `\\]`, `\\(` and `\\)`",
         )),
@@ -1474,6 +1525,8 @@ pub const SYMBOLS: &[(&str, char)] = &[
     ("Omega", 'Ω'),
     // Letter-like symbols.
     ("hbar", 'ℏ'),
+    ("imath", 'ı'),
+    ("jmath", 'ȷ'),
     ("ell", 'ℓ'),
     ("aleph", 'ℵ'),
     ("partial", '∂'),
@@ -1751,7 +1804,12 @@ fn unknown_command(name: &str, range: Range<usize>) -> TexError {
         // comparisons short, whatever the length of the unknown name.
         .filter(|entry| entry.len() > 1 && entry.len().abs_diff(name.len()) <= 2)
         .map(|entry| (distance(name, entry), entry))
-        .filter(|&(d, entry)| d <= 2 && d < entry.len().min(name.len()))
+        // A short name is close to too many others at a distance of two:
+        // `\\si` is not a typo of `\\Pi`.
+        .filter(|&(d, entry)| {
+            let shorter = entry.len().min(name.len());
+            d < shorter && d <= if shorter < 5 { 1 } else { 2 }
+        })
         .min();
     match best {
         Some((_, entry)) => error.with_hint(eco_format!("did you mean `\\{entry}`?")),
@@ -1894,6 +1952,72 @@ mod tests {
         );
         let e = parse("\\alpah", Span::detached(), 100).unwrap_err();
         assert_eq!(e.hints, ["did you mean `\\alpha`?"]);
+    }
+
+    fn hint(src: &str) -> String {
+        let e = parse(src, Span::detached(), 100).unwrap_err();
+        e.hints.join(" | ")
+    }
+
+    #[test]
+    fn suggestions_for_short_names_are_one_edit_away() {
+        // Two edits match almost any short name (#353).
+        for (src, not) in [
+            ("\\si", "Pi"),
+            ("\\ce", "Re"),
+            ("\\foo", "cos"),
+            ("\\large", "arg"),
+        ] {
+            assert!(
+                !hint(src).contains(&format!("`\\{not}`")),
+                "{src}: {}",
+                hint(src)
+            );
+        }
+        assert_eq!(hint("\\coss"), "did you mean `\\cos`?");
+        assert_eq!(hint("\\alpah"), "did you mean `\\alpha`?");
+        assert_eq!(hint("\\lamdba"), "did you mean `\\lambda`?");
+        assert_eq!(hint("\\mathbbb{R}"), "did you mean `\\mathbb`?");
+    }
+
+    #[test]
+    fn commands_of_other_packages_point_to_folio() {
+        assert!(hint("\\rm d").contains("`\\mathrm{..}`"));
+        assert!(hint("\\bf x").contains("`\\mathbf{..}`"));
+        assert!(hint("a \\over b").contains("`\\frac{a}{b}`"));
+        for src in ["\\si{m}", "\\SI{9.81}{m}", "\\qty{9.81}{m}"] {
+            assert!(hint(src).contains("`$qty(9.81, \"m s^-2\")$`"), "{src}");
+        }
+        assert!(hint("x \\nonumber").contains("`\\label{..}`"));
+        assert!(hint("x \\tag{1}").contains("`equation` counter"));
+        assert!(hint("\\binom{n}{k}").contains("pmatrix"));
+    }
+
+    #[test]
+    fn annotations_over_relations() {
+        assert_eq!(
+            repr("a \\overset{!}{=} b"),
+            "[a, attach([rel(=)], sup: [sym(!)]), b]"
+        );
+        assert_eq!(
+            repr("a \\stackrel{?}{=} b"),
+            "[a, attach([rel(=)], sup: [punct(?)]), b]"
+        );
+        assert_eq!(
+            repr("x \\underset{n \\to 0}{\\to} y"),
+            "[x, attach([rel(→)], sub: [n, rel(→), num(0)]), y]"
+        );
+        assert_eq!(
+            error("\\overset{a}{x}"),
+            (
+                "`\\overset` sets an annotation over or under a relation only".into(),
+                "\\overset".into()
+            )
+        );
+        assert_eq!(
+            repr("\\imath + \\jmath + \\hbar"),
+            "[ı, vary(+), ȷ, vary(+), ℏ]"
+        );
     }
 
     #[test]

@@ -222,6 +222,11 @@ fn accents_decorations_styles_and_symbols() {
         tree("$alpha Omega arrow.r.long arrow.long.r <= != dots.h oo$"),
         "[α, Ω, rel(⟶), rel(⟶), rel(≤), rel(≠), sym(…), sym(∞)]"
     );
+    // `hbar` is LaTeX's name for `planck.reduce`; `dotless` letters (#353).
+    assert_eq!(
+        tree("$hbar planck.reduce dotless.i dotless.j$"),
+        "[ℏ, ℏ, ı, ȷ]"
+    );
     // `dot` is the accent when called and the operator otherwise.
     assert_eq!(tree("$a dot b$"), "[a, bin(⋅), b]");
 }
