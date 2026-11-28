@@ -467,16 +467,19 @@ impl<'a> Walker<'a> {
         };
         let inherited = note.as_ref().unwrap_or(&style);
 
-        // The children, with this node as their context.
-        let context_view = self.view(siblings, i, Role::Context, needs);
-        let child_context = Some(ContextKey::new(self.db, context_view, context));
-        let scoped_view = self
-            .has_scoped
+        // The children, with this node as their context. A leaf has none,
+        // so its context is neither seen nor interned.
+        let grandchildren = child.children();
+        let has_children = !grandchildren.is_empty();
+        let child_context = has_children.then(|| {
+            let view = self.view(siblings, i, Role::Context, needs);
+            ContextKey::new(self.db, view, context)
+        });
+        let scoped_view = (self.has_scoped && has_children)
             .then(|| self.view(siblings, i, Role::Context, &self.scoped_needs));
         if let Some(view) = &scoped_view {
             self.scoped_chain.push(view.clone());
         }
-        let grandchildren = child.children();
         let mut children: EcoVec<StyledNode> = (0..grandchildren.len())
             .map(|j| {
                 let owner = (span, location);

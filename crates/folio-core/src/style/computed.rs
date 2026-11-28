@@ -217,6 +217,22 @@ pub(super) struct Styler<'a> {
     /// The font size `initial` resolves `em` lengths at.
     initial_size: Abs,
     font_size: PropId,
+    /// What each group's properties have in common, by group index.
+    kinds: Vec<GroupKind>,
+}
+
+/// What the properties of a group have in common, which decides where a
+/// group that no declaration touches comes from.
+#[derive(Debug, Copy, Clone)]
+struct GroupKind {
+    /// Every property inherits.
+    all_inherit: bool,
+    /// No property inherits.
+    none_inherit: bool,
+    /// A property that inherits has an initial value in `em`.
+    em_inherited: bool,
+    /// A property that does not inherit has an initial value in `em`.
+    em_own: bool,
 }
 
 impl<'a> Styler<'a> {
@@ -229,6 +245,21 @@ impl<'a> Styler<'a> {
             initial: ComputedStyle::new(Vec::new()),
             initial_size: Abs::pt(11.0),
             font_size,
+            kinds: (0..props.group_count())
+                .map(|g| {
+                    let members = props.members(GroupId(g as u16));
+                    let all = |f: &dyn Fn(PropId) -> bool| members.iter().all(|&id| f(id));
+                    let any = |f: &dyn Fn(PropId) -> bool| members.iter().any(|&id| f(id));
+                    let inherited = |id: PropId| props.get(id).inherited;
+                    let em = |id: PropId| has_em(&props.get(id).initial);
+                    GroupKind {
+                        all_inherit: all(&inherited),
+                        none_inherit: all(&|id| !inherited(id)),
+                        em_inherited: any(&|id| em(id) && inherited(id)),
+                        em_own: any(&|id| em(id) && !inherited(id)),
+                    }
+                })
+                .collect(),
         };
         let size = match &props.get(font_size).initial {
             Value::Length(size) => *size,
@@ -326,21 +357,25 @@ impl<'a> Styler<'a> {
             _ => parent_size,
         };
 
+        let mut touched_groups = vec![false; props.group_count()];
+        for &id in cascaded.keys() {
+            touched_groups[props.get(id).group.index()] = true;
+        }
         let mut groups = Vec::with_capacity(props.group_count());
-        for g in 0..props.group_count() {
+        for (g, &touched) in touched_groups.iter().enumerate() {
             let group = GroupId(g as u16);
             let members = props.members(group);
-            let touched = members.iter().any(|id| cascaded.contains_key(id));
-            let all_inherit = members.iter().all(|&id| props.get(id).inherited);
-            let none_inherit = members.iter().all(|&id| !props.get(id).inherited);
+            let GroupKind {
+                all_inherit,
+                none_inherit,
+                em_inherited,
+                em_own,
+            } = self.kinds[g];
             // An initial value in `em` is relative to the node's own font
             // size, so a group that falls back to one cannot be shared
             // when the size differs from the initial style's.
-            let em_initial = size != self.initial_size
-                && members.iter().any(|&id| {
-                    let prop = props.get(id);
-                    has_em(&prop.initial) && (!prop.inherited || parent.is_none())
-                });
+            let em_initial =
+                size != self.initial_size && (em_own || (em_inherited && parent.is_none()));
             // The group the node has where no declaration touches it: the
             // parent's, or the initial one.
             let untouched = if em_initial {
