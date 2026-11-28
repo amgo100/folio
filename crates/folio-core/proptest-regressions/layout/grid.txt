@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 750c73cc81815fb610701a31569916a0797bac235318105c56e74731cbcff25d # shrinks to (tracks, cells, width) = ([Track { min: Some(0.6848285424988378pt), max: Fixed(5.6179747182624045pt) }, Track { min: Some(0.0pt), max: Fr(4.936978301147857) }], [(0, 2, Measures { min: 27.682682991903516pt, max: 27.682682991903516pt })], 27.603047595729336)

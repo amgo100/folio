@@ -51,10 +51,11 @@ fn counted(
     db: &dyn Db,
     project: Project,
     variant: &Name,
+    version: Option<&Name>,
     shared: &[QualifiedName],
 ) -> HashMap<Location, (Span, QualifiedName, u64)> {
     let mut out = HashMap::new();
-    if let Some(doc) = document(db, project, Some(variant.clone())) {
+    if let Some(doc) = document(db, project, Some(variant.clone()), version.cloned()) {
         visit_origins(&doc.root, &mut |element, origin| {
             if shared.iter().any(|c| counts(c, element)) {
                 out.insert(
@@ -77,6 +78,19 @@ fn counted(
 /// documents report belongs to their own builds.
 #[salsa::tracked(returns(ref))]
 pub fn check_pairing(db: &dyn Db, project: Project, variant: Option<Name>) -> EcoVec<Diagnostic> {
+    check_version_pairing(db, project, variant, None).clone()
+}
+
+/// [`check_pairing`] for one version of a shuffled paper: each version's
+/// variants pair with each other, as each version and its mark scheme form
+/// their own numbering group (SPEC §6.4).
+#[salsa::tracked(returns(ref))]
+pub fn check_version_pairing(
+    db: &dyn Db,
+    project: Project,
+    variant: Option<Name>,
+    version: Option<Name>,
+) -> EcoVec<Diagnostic> {
     let mut out = EcoVec::new();
     let Some(variant) = variant else {
         return out;
@@ -94,7 +108,7 @@ pub fn check_pairing(db: &dyn Db, project: Project, variant: Option<Name>) -> Ec
     let all: Vec<(&Name, _)> = group
         .variants
         .iter()
-        .map(|v| (&v.v, counted(db, project, &v.v, &shared)))
+        .map(|v| (&v.v, counted(db, project, &v.v, version.as_ref(), &shared)))
         .collect();
     let Some((_, own)) = all.iter().find(|(v, _)| **v == variant) else {
         return out;

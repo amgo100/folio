@@ -33,7 +33,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use folio::{BuildMode, Name, Target, World};
+use folio::{BuildMode, World};
 use sha2::{Digest, Sha256};
 
 /// The directory a child process writes its outputs to; set only in the
@@ -143,11 +143,13 @@ fn data_files(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 
 /// The name of a build's output, as `folio build` names it (SPEC §6.4),
 /// with the target as its extension.
-fn file_name(project: &str, variant: Option<&Name>, target: Target) -> String {
-    match variant {
-        Some(variant) => format!("{project}-{variant}.{}", target.as_str()),
-        None => format!("{project}.{}", target.as_str()),
+fn file_name(project: &str, build: &folio::BuildKey) -> String {
+    let mut name = project.to_owned();
+    for part in [&build.variant, &build.version].into_iter().flatten() {
+        name.push('-');
+        name.push_str(part.as_str());
     }
+    format!("{name}.{}", build.target.as_str())
 }
 
 /// Writes a build's output, if it has one, and its diagnostics as JSON.
@@ -165,28 +167,34 @@ fn build_corpus(out: &Path, strategy: &str) {
         let sources = sources(&dir);
         match strategy {
             FRESH => {
-                let builds = world(&dir, &sources).builds();
-                for (variant, target) in builds.into_iter().rev() {
+                let builds = world(&dir, &sources).versioned_builds();
+                for build in builds.into_iter().rev() {
                     let world = world(&dir, &sources);
-                    let compiled = folio::compile(&world, target, variant.as_ref()).unwrap();
-                    let name = file_name(&project, variant.as_ref(), target);
+                    let compiled = folio::compile_versioned(
+                        &world,
+                        build.target,
+                        build.variant.as_ref(),
+                        build.version.as_ref(),
+                    )
+                    .unwrap();
+                    let name = file_name(&project, &build);
                     write_build(out, &name, &world, &compiled);
                 }
             }
             SHARED => {
                 let mut world = world(&dir, &sources);
-                folio::compile_all(&world);
+                folio::compile_versioned_builds(&world, world.versioned_builds());
                 // An edit and its revert, recompiled after each.
                 let entry = world.manifest().project.entry.v.to_string();
                 let text = &sources[&entry];
                 world
                     .set_source(&entry, &format!("{text}\n\nAn added paragraph.\n"))
                     .unwrap();
-                folio::compile_all(&world);
+                folio::compile_versioned_builds(&world, world.versioned_builds());
                 world.set_source(&entry, text).unwrap();
-                for output in folio::compile_all(&world) {
+                for output in folio::compile_versioned_builds(&world, world.versioned_builds()) {
                     let compiled = output.result.unwrap();
-                    let name = file_name(&project, output.variant.as_ref(), output.target);
+                    let name = file_name(&project, &output.build);
                     write_build(out, &name, &world, &compiled);
                 }
             }

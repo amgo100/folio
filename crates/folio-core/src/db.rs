@@ -273,8 +273,9 @@ impl Debug for FileContent {
     }
 }
 
-/// One output of a project: its target, and its variant, or none when the
-/// manifest declares no variants.
+/// One output of a project: its target, its variant, or none when the
+/// manifest declares no variants, and its version of a shuffled paper, or
+/// none when the manifest declares no versions (SPEC §6.4).
 ///
 /// A build may also be a layout pass of the page-number fixpoint (SPEC
 /// §2.3): the same output, with its page-number references set to the
@@ -288,6 +289,10 @@ pub struct Build<'db> {
     pub target: Target,
     #[returns(ref)]
     pub variant: Option<Name>,
+    /// The version of a shuffled paper; `None` for a project without
+    /// versions.
+    #[returns(ref)]
+    pub version: Option<Name>,
     /// For a layout pass, the page numbers it sets its page-number
     /// references with; `None` for the build itself.
     #[returns(ref)]
@@ -296,8 +301,21 @@ pub struct Build<'db> {
 
 impl<'db> Build<'db> {
     /// The build of a project's output for a target and a variant.
+    /// It has no version; see [`Build::versioned`].
     pub fn new(db: &'db dyn Db, project: Project, target: Target, variant: Option<Name>) -> Self {
-        Self::with_pass(db, project, target, variant, None)
+        Self::with_pass(db, project, target, variant, None, None)
+    }
+
+    /// The build of one version of a shuffled paper (SPEC §6.4): a
+    /// project's output for a target, a variant and a version.
+    pub fn versioned(
+        db: &'db dyn Db,
+        project: Project,
+        target: Target,
+        variant: Option<Name>,
+        version: Option<Name>,
+    ) -> Self {
+        Self::with_pass(db, project, target, variant, version, None)
     }
 
     /// The build that a layout pass is a pass of, or the build itself.
@@ -305,11 +323,12 @@ impl<'db> Build<'db> {
         if self.pass(db).is_none() {
             return self;
         }
-        Self::new(
+        Self::versioned(
             db,
             self.project(db),
             self.target(db),
             self.variant(db).clone(),
+            self.version(db).clone(),
         )
     }
 
@@ -631,6 +650,9 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     for diagnostic in check_build(project.manifest(db), build.target(db), build.variant(db)) {
         diag::report(db, diagnostic);
     }
+    if let Some(diagnostic) = check_version(project.manifest(db), build.version(db)) {
+        diag::report(db, diagnostic);
+    }
     for diagnostic in project
         .manifest(db)
         .not_implemented(build.variant(db).as_ref())
@@ -649,6 +671,27 @@ pub fn build_output(db: &dyn Db, build: Build<'_>) -> BuildOutput {
     BuildOutput {
         sources: files.iter().map(|f| f.path(db).clone()).collect(),
     }
+}
+
+/// Checks that the manifest declares a build's version. A build without a
+/// version is allowed in a project with versions: it keeps the source order
+/// (`version` is `none`), as the editor's checks and preview build it.
+fn check_version(manifest: &Manifest, version: &Option<Name>) -> Option<Diagnostic> {
+    let name = version.as_ref()?;
+    let versions = &manifest.project.versions;
+    if versions.iter().any(|v| &v.v == name) {
+        return None;
+    }
+    let diag = Diagnostic::error(
+        DiagSpan::detached(),
+        eco_format!("no version `{name}` is declared"),
+    );
+    Some(if versions.is_empty() {
+        diag.with_hint("declare versions in `[project]`, as `versions = [\"A\", \"B\"]`")
+    } else {
+        let names: Vec<String> = versions.iter().map(|v| format!("`{}`", v.v)).collect();
+        diag.with_hint(eco_format!("the manifest declares {}", names.join(", ")))
+    })
 }
 
 /// The variant of a build, if the manifest declares it.

@@ -115,6 +115,18 @@ impl Project {
             None => self.name.clone(),
         }
     }
+
+    /// [`Project::build_name`] of a build of one version of a shuffled
+    /// paper (SPEC §6.4): `{project}-{variant}-{version}`, each part left
+    /// out when the project has none.
+    pub fn versioned_build_name(&self, variant: Option<&Name>, version: Option<&Name>) -> String {
+        let mut name = self.build_name(variant);
+        if let Some(version) = version {
+            name.push('-');
+            name.push_str(version.as_str());
+        }
+        name
+    }
 }
 
 /// The corpus projects, in order of name.
