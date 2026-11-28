@@ -44,8 +44,8 @@ use ecow::{EcoString, eco_format};
 use folio_syntax::Span;
 
 use crate::{
-    Accent, Attach, Cases, Decoration, DecorationKind, Delimited, Formula, Frac, Label, Line,
-    MathClass, MathVariant, Matrix, Node, Operator, Root, Row, Styled, Vector,
+    Accent, Attach, Cases, ColumnAlign, Decoration, DecorationKind, Delimited, Formula, Frac,
+    Label, Line, MathClass, MathVariant, Matrix, Node, Operator, Root, Row, Styled, Vector,
 };
 
 /// An error in LaTeX input.
@@ -174,6 +174,29 @@ struct Items {
 
 impl Items {
     fn push(&mut self, node: Node) {
+        // Scripts on an empty base before a nucleus are its pre-scripts:
+        // `{}^{14}_{6}\mathrm{C}`.
+        if matches!(
+            node,
+            Node::Ident(_) | Node::Number(_) | Node::Text(_) | Node::Styled(_)
+        ) && let Some(Item::Node(Node::Attach(attach))) = self.items.last()
+            && attach.base.nodes().is_empty()
+            && attach.primes == 0
+            && attach.pre_sub.is_none()
+            && attach.pre_sup.is_none()
+        {
+            let attach = Attach {
+                base: Row::new([node]),
+                sub: None,
+                sup: None,
+                primes: 0,
+                pre_sub: attach.sub.clone(),
+                pre_sup: attach.sup.clone(),
+                span: attach.span,
+            };
+            *self.items.last_mut().expect("an item") = Item::Node(Node::Attach(Arc::new(attach)));
+            return;
+        }
         self.items.push(Item::Node(node));
     }
 
@@ -527,10 +550,11 @@ impl<'s> Parser<'s> {
             _ => None,
         };
         if let Some((open, close)) = delims {
-            if name == "array" {
-                self.array_columns(whole.clone())?;
-            }
-            return self.matrix(&name, open, close, whole);
+            let align = match name.as_str() {
+                "array" => self.array_columns(whole.clone())?,
+                _ => Vec::new(),
+            };
+            return self.matrix(&name, open, close, align, whole);
         }
         match name.as_str() {
             "cases" | "dcases" => self.cases(&name, whole),
@@ -547,8 +571,9 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// The column specification of `array`, which may only align columns.
-    fn array_columns(&mut self, begin: Range<usize>) -> TexResult<()> {
+    /// The column specification of `array`, which may only align columns:
+    /// the alignment of each.
+    fn array_columns(&mut self, begin: Range<usize>) -> TexResult<Vec<ColumnAlign>> {
         let (spec, range) = self.raw_arg(begin, "its columns")?;
         if let Some((i, c)) = spec
             .char_indices()
@@ -561,7 +586,15 @@ impl<'s> Parser<'s> {
             )
             .with_hint("the columns of an array can be `l`, `c` or `r`; rules between them are not supported"));
         }
-        Ok(())
+        Ok(spec
+            .chars()
+            .filter_map(|c| match c {
+                'l' => Some(ColumnAlign::Left),
+                'c' => Some(ColumnAlign::Center),
+                'r' => Some(ColumnAlign::Right),
+                _ => None,
+            })
+            .collect())
     }
 
     /// The cells of a matrix, up to `\end{name}`. Short rows are filled
@@ -571,6 +604,7 @@ impl<'s> Parser<'s> {
         name: &str,
         open: Option<char>,
         close: Option<char>,
+        align: Vec<ColumnAlign>,
         begin: Range<usize>,
     ) -> TexResult<Node> {
         let mut rows: Vec<Vec<Row>> = vec![Vec::new()];
@@ -616,6 +650,7 @@ impl<'s> Parser<'s> {
             rows,
             open,
             close,
+            align,
             span: self.span,
         })))
     }
@@ -1149,6 +1184,8 @@ impl<'s> Parser<'s> {
                     sub,
                     sup,
                     primes: 0,
+                    pre_sub: None,
+                    pre_sup: None,
                     span,
                 })));
             }
@@ -2019,6 +2056,39 @@ mod tests {
         assert_eq!(
             repr("\\imath + \\jmath + \\hbar"),
             "[ı, vary(+), ȷ, vary(+), ℏ]"
+        );
+    }
+
+    #[test]
+    fn pre_scripts_on_an_empty_base() {
+        // Isotope notation (#352): the scripts belong to the nucleus.
+        assert_eq!(
+            repr("{}^{14}_{6}C"),
+            "[attach([C], pre-sub: [num(6)], pre-sup: [num(14)])]"
+        );
+        assert_eq!(
+            repr("{}_{92}^{235}\\mathrm{U} + {}^1_0 n"),
+            "[attach([upright([U])], pre-sub: [num(92)], pre-sup: [num(235)]), vary(+), \
+             attach([n], pre-sub: [num(0)], pre-sup: [num(1)])]"
+        );
+        // Scripts after the nucleus too, and a pre-script alone.
+        assert_eq!(
+            repr("{}^{238}U^{2+}"),
+            "[attach([U], sup: [num(2), vary(+)], pre-sup: [num(238)])]"
+        );
+        // Before an operator or a relation, an empty base stays a base.
+        assert_eq!(repr("{}^2 = x"), "[attach([], sup: [num(2)]), rel(=), x]");
+    }
+
+    #[test]
+    fn array_columns_keep_their_alignment() {
+        assert_eq!(
+            repr("\\begin{array}{lcr} a & b & c \\end{array}"),
+            "[mat(none, [[a], [b], [c]], none, align: lcr)]"
+        );
+        assert_eq!(
+            repr("\\begin{pmatrix} a \\end{pmatrix}"),
+            "[mat('(', [[a]], ')')]"
         );
     }
 

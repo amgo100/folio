@@ -13,7 +13,7 @@ use super::font::Constant;
 use super::fragment::{Frame, FrameFragment, MathFragment};
 use super::run::{Alternator, RowLayout, measure_row, stack_rows};
 use super::{Ctx, Style};
-use crate::{Cases, Matrix, Row};
+use crate::{Cases, ColumnAlign, Matrix, Row};
 
 /// The space between the rows of a matrix and between cases, in ems.
 const ROW_GAP: f64 = 0.2;
@@ -23,15 +23,22 @@ const COL_GAP: f64 = 0.5;
 /// of cases are.
 const DELIM_SCALE: f64 = 1.1;
 
-/// Lays out a matrix between its delimiters, its cells centred in their
-/// columns.
+/// Lays out a matrix between its delimiters, its cells aligned in their
+/// columns as the matrix says: centred unless it says otherwise.
 pub(crate) fn layout_matrix(
     ctx: &mut Ctx,
     matrix: &Matrix,
     style: Style,
     out: &mut Vec<MathFragment>,
 ) {
-    let table = layout_table(ctx, &matrix.rows, style, (COL_GAP, ROW_GAP), Kind::Matrix);
+    let table = layout_table(
+        ctx,
+        &matrix.rows,
+        &matrix.align,
+        style,
+        (COL_GAP, ROW_GAP),
+        Kind::Matrix,
+    );
     fence(
         ctx,
         table,
@@ -52,7 +59,7 @@ pub(crate) fn layout_cases(
     out: &mut Vec<MathFragment>,
 ) {
     let rows: Vec<Vec<Row>> = cases.cases.iter().map(|case| vec![case.clone()]).collect();
-    let table = layout_table(ctx, &rows, style, (0.0, ROW_GAP), Kind::Cases);
+    let table = layout_table(ctx, &rows, &[], style, (0.0, ROW_GAP), Kind::Cases);
     fence(ctx, table, Some('{'), None, style, cases.span, out);
 }
 
@@ -90,12 +97,14 @@ enum Kind {
 const CASES_GAP: f64 = 1.0;
 
 /// Lays out rows of cells in the style of a denominator, `gap` apart
-/// (columns, rows, in ems). A matrix centres the rows of each column, and
-/// alternates its cells' alignment at their alignment points; cases start
-/// every part at its point, a quad after the part before.
+/// (columns, rows, in ems). A matrix aligns the rows of each column as
+/// `align` says, centred by default, and alternates its cells' alignment
+/// at their alignment points; cases start every part at its point, a quad
+/// after the part before.
 fn layout_table(
     ctx: &mut Ctx,
     rows: &[Vec<Row>],
+    align: &[ColumnAlign],
     style: Style,
     gap: (f64, f64),
     kind: Kind,
@@ -148,8 +157,9 @@ fn layout_table(
     } else {
         Alternator::None
     };
-    for col in cols {
+    for (c, col) in cols.into_iter().enumerate() {
         let parts = col.iter().map(|cell| cell.columns.len()).max().unwrap_or(1);
+        let column_align = align.get(c).copied().unwrap_or_default();
         let mut widths = vec![0.0f64; parts];
         for cell in &col {
             for (i, part) in cell.columns.iter().enumerate() {
@@ -161,8 +171,16 @@ fn layout_table(
             frame_height: cell.height,
             row_height: Some(heights[r]),
         });
-        let stacked = stack_rows(rows, &widths, alternator, matrix, row_gap, 0.0);
+        // A column without alignment points is centred, or aligned at
+        // its start or end.
+        let centred = matrix && column_align == ColumnAlign::Center;
+        let stacked = stack_rows(rows, &widths, alternator, centred, row_gap, 0.0);
+        let column_width = stacked.width;
         for (sub, sx, sy) in stacked.frames {
+            let sx = match column_align {
+                ColumnAlign::Right if matrix && parts == 1 => column_width - sub.width,
+                _ => sx,
+            };
             frame.push_frame(x + sx, sy, sub);
         }
         x += stacked.width + col_gap;

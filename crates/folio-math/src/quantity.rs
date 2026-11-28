@@ -731,6 +731,8 @@ fn power_of_ten(exponent: i32, span: Span, out: &mut Vec<Node>) {
         sub: None,
         sup: Some(signed(exponent, span)),
         primes: 0,
+        pre_sub: None,
+        pre_sup: None,
         span,
     })));
 }
@@ -937,6 +939,8 @@ impl Unit {
                     sub: None,
                     sup: Some(signed(factor.power, span)),
                     primes: 0,
+                    pre_sub: None,
+                    pre_sup: None,
                     span,
                 })));
             }

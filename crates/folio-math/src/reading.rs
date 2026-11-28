@@ -224,6 +224,21 @@ impl Reader<'_> {
             }
             Node::Attach(attach) => {
                 self.space_before();
+                // Pre-scripts read as scripts on an empty base before it:
+                // `""_92^235 U`.
+                if attach.pre_sub.is_some() || attach.pre_sup.is_some() {
+                    self.glue("\"\"");
+                    if let Some(sub) = &attach.pre_sub {
+                        self.glue("_");
+                        self.part(sub);
+                    }
+                    if let Some(sup) = &attach.pre_sup {
+                        self.glue("^");
+                        self.part(sup);
+                    }
+                    self.space = true;
+                    self.space_before();
+                }
                 self.part(&attach.base);
                 for _ in 0..attach.primes {
                     self.glue("'");
@@ -433,6 +448,12 @@ mod tests {
         assert_eq!(read("x_{i+1}^2 + y'"), "x_(i + 1)^2 + y'");
         assert_eq!(read("E = m c^2"), "E = m c^2");
         assert_eq!(read("\\sum_{i=1}^n i"), "∑_(i = 1)^n i");
+    }
+
+    #[test]
+    fn pre_scripts_read_before_their_base() {
+        assert_eq!(read("{}^{235}_{92}U"), "\"\"_92^235 U");
+        assert_eq!(read("{}^{14}_{6}C \\to {}^{14}_{7}N"), "\"\"_6^14 C → \"\"_7^14 N");
     }
 
     #[test]

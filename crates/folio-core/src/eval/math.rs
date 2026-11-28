@@ -773,6 +773,7 @@ impl Vm<'_> {
                     rows,
                     open,
                     close,
+                    align: Vec::new(),
                     span,
                 }))
             }
@@ -1504,6 +1505,8 @@ fn number_nodes(value: &Number, span: Span, out: &mut Vec<math::Node>) {
         sub: None,
         sup: Some(Row::new(power)),
         primes: 0,
+        pre_sub: None,
+        pre_sup: None,
         span,
     })));
 }

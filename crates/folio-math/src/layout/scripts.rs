@@ -52,7 +52,23 @@ pub(crate) fn layout_attach(
         };
         (None, tr, None, sub)
     };
-    out.push(layout_attachments(ctx, style, class, base, [t, tr, b, br]));
+    // Pre-scripts are scripts, never limits: ²³⁵₉₂U.
+    let tl = attach
+        .pre_sup
+        .as_ref()
+        .map(|row| layout_script(ctx, row, style.sup()));
+    let bl = attach
+        .pre_sub
+        .as_ref()
+        .map(|row| layout_script(ctx, row, style.sub()));
+    out.push(layout_scripted(
+        ctx,
+        style,
+        class,
+        base,
+        [t, tr, b, br],
+        [tl, bl],
+    ));
 }
 
 /// Lays out an n-ary operator with its limits: below and above it in
@@ -157,7 +173,21 @@ pub(crate) fn layout_attachments(
     style: Style,
     class: MathClass,
     base: MathFragment,
+    parts: [Option<MathFragment>; 4],
+) -> MathFragment {
+    layout_scripted(ctx, style, class, base, parts, [None, None])
+}
+
+/// Lays out a base with its upper limit, superscript, lower limit and
+/// subscript, and its pre-superscript and pre-subscript, which are
+/// right-aligned against the base.
+fn layout_scripted(
+    ctx: &Ctx,
+    style: Style,
+    class: MathClass,
+    base: MathFragment,
     [t, tr, b, br]: [Option<MathFragment>; 4],
+    [tl, bl]: [Option<MathFragment>; 2],
 ) -> MathFragment {
     let size = base.font_size().unwrap_or_else(|| ctx.font_size(style));
     let c = |constant: Constant| ctx.font.constant(constant) * size;
@@ -167,6 +197,11 @@ pub(crate) fn layout_attachments(
         (0.0, 0.0)
     } else {
         script_shifts(ctx, size, style.cramped, &base, tr.as_ref(), br.as_ref())
+    };
+    let (tl_shift, bl_shift) = if tl.is_none() && bl.is_none() {
+        (0.0, 0.0)
+    } else {
+        script_shifts(ctx, size, style.cramped, &base, tl.as_ref(), bl.as_ref())
     };
     let t_shift = t.as_ref().map_or(0.0, |t| {
         base.ascent()
@@ -181,11 +216,13 @@ pub(crate) fn layout_attachments(
     let ascent = base
         .ascent()
         .max(tr.as_ref().map_or(0.0, |tr| tr_shift + tr.ascent()))
-        .max(t.as_ref().map_or(0.0, |t| t_shift + t.ascent()));
+        .max(t.as_ref().map_or(0.0, |t| t_shift + t.ascent()))
+        .max(tl.as_ref().map_or(0.0, |tl| tl_shift + tl.ascent()));
     let descent = base
         .descent()
         .max(br.as_ref().map_or(0.0, |br| br_shift + br.descent()))
-        .max(b.as_ref().map_or(0.0, |b| b_shift + b.descent()));
+        .max(b.as_ref().map_or(0.0, |b| b_shift + b.descent()))
+        .max(bl.as_ref().map_or(0.0, |bl| bl_shift + bl.descent()));
 
     // How far the limits reach beyond the base, shifted right (above) and
     // left (below) by half its italic correction.
@@ -213,7 +250,17 @@ pub(crate) fn layout_attachments(
         (space_after + br.width() + kern, kern)
     });
 
-    let pre = t_pre.max(b_pre).max(0.0);
+    // How far the pre-scripts reach before the base, with their kerns.
+    let (tl_pre, tl_kern) = tl.as_ref().map_or((0.0, 0.0), |tl| {
+        let kern = math_kern(ctx, &base, tl, tl_shift, Corner::TopLeft);
+        (space_after + tl.width() + kern, kern)
+    });
+    let (bl_pre, bl_kern) = bl.as_ref().map_or((0.0, 0.0), |bl| {
+        let kern = math_kern(ctx, &base, bl, bl_shift, Corner::BottomLeft);
+        (space_after + bl.width() + kern, kern)
+    });
+
+    let pre = t_pre.max(b_pre).max(tl_pre).max(bl_pre).max(0.0);
     let base_width = base.width();
     let post = t_post.max(b_post).max(tr_post).max(br_post);
     let width = pre + base_width + post;
@@ -229,6 +276,17 @@ pub(crate) fn layout_attachments(
     if let Some(br) = br {
         let y = ascent + br_shift - br.ascent();
         frame.push_frame(pre + base_width + br_kern, y, br.into_frame());
+    }
+    // Right-aligned against the base, as the numbers of ²³⁵₉₂U are.
+    if let Some(tl) = tl {
+        let y = ascent - tl_shift - tl.ascent();
+        let x = pre - tl.width() - tl_kern;
+        frame.push_frame(x, y, tl.into_frame());
+    }
+    if let Some(bl) = bl {
+        let y = ascent + bl_shift - bl.ascent();
+        let x = pre - bl.width() - bl_kern;
+        frame.push_frame(x, y, bl.into_frame());
     }
     if let Some(t) = t {
         let y = ascent - t_shift - t.ascent();
