@@ -8,12 +8,15 @@ question { numbering: "1"; space-before: 1.5em; space-after: 0.5em; }
 part { numbering: "(a)"; space-before: 0.5em; space-after: 0.5em; }
 part part { numbering: "(i)"; }
 
-// A question's and a part's number stand beside their text.
-question > grid, part > grid {
+// A question's and a part's number stand beside their text, in the grid
+// their template makes inside a stack (a table in the question is a grid
+// of its own, which these rules leave alone).
+question > stack, part > stack { space-before: 0pt; space-after: 0pt; }
+question > stack > grid, part > stack > grid {
   space-before: 0pt; space-after: 0pt; border-top: none; border-bottom: none;
   row-breakable: true;
 }
-question > grid > cell, part > grid > cell { padding: 0pt; }
+question > stack > grid > cell, part > stack > grid > cell { padding: 0pt; }
 question > box { align: end; space-before: 0.5em; }
 
 // Answers are answer space in the paper; mark codes and notes for the
@@ -32,8 +35,8 @@ answer > box { border: 0.5pt solid; padding: 0.4em 0.6em; }
 
 // The mark scheme's table (`template: markscheme-table`): a row for each
 // question and part, ruled between rows.
-question > stack, part > stack { space-before: 0pt; space-after: 0pt; }
-question > stack > grid, part > stack > grid {
+question > stack > stack, part > stack > stack { space-before: 0pt; space-after: 0pt; }
+question > stack > stack > grid, part > stack > stack > grid {
   space-before: 0pt; space-after: 0pt; border-top: none; border-bottom: 0.4pt solid;
   row-breakable: true;
 }

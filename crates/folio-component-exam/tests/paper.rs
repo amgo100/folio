@@ -277,3 +277,39 @@ fn fractions_of_marks_show_rounded() {
     );
     assert_eq!(paragraphs(&world, "exam")[0], "Total: 1.3.");
 }
+
+/// The default stylesheet styles the grids its templates make, never a
+/// table the teacher puts in a question, with or without a template.
+#[test]
+fn a_table_in_a_question_keeps_its_own_look() {
+    use folio::style::NodeName;
+    let text = "#grid[#cell[A.] #cell[B.]]\n\n\
+                #question(class: \"plain\")[Q.\n  #grid[#cell[C.] #cell[D.]]\n]\n\n\
+                #question[Q.\n  #grid[#cell[E.] #cell[F.]]\n]\n";
+    let world = world(MANIFEST, ".plain { template: none; }\n", text);
+    assert!(diagnostics(&world, "exam").is_empty());
+    let styled = folio::styles(&world, Target::Pdf, Some(&name("exam")))
+        .unwrap()
+        .unwrap();
+    let grids: Vec<_> = styled
+        .nodes()
+        .into_iter()
+        .filter(|n| matches!(&n.name, NodeName::Element(e) if e.to_string() == "grid"))
+        .collect();
+    // The three tables, and the grids of the second question's template.
+    assert!(grids.len() >= 3, "{}", grids.len());
+    let look = |node| {
+        ["border-top", "border-bottom", "space-before"].map(|p| styled.value(node, p).cloned())
+    };
+    let table = look(grids[0]);
+    assert!(table[0].is_some(), "the base sheet rules a table");
+    for grid in &grids[1..] {
+        let inner = look(grid);
+        // A template's grid is unruled; a table is ruled like the first.
+        if inner[0] == table[0] {
+            assert_eq!(inner, table);
+        }
+    }
+    let tables = grids.iter().filter(|g| look(g) == table).count();
+    assert_eq!(tables, 3, "every table keeps the base sheet's look");
+}

@@ -19,7 +19,7 @@ pub const MARKSCHEME_TABLE: &str = "markscheme-table";
 /// A question: its number beside its body, and after it the trailer with
 /// its marks, when it gives them.
 const QUESTION_DEFAULT: &str = "
-    body: grid(strong(counter()), slot(), columns: 8mm 1fr)
+    body: stack(grid(strong(counter()), slot(), columns: 8mm 1fr))
           box(strong(\"(Total for \" term() \" \" counter() \": \" field(marks) \" \"
               if field(marks) == 1 { \"mark\" } else { \"marks\" } \")\")) if field(marks);
 ";
@@ -27,16 +27,22 @@ const QUESTION_DEFAULT: &str = "
 /// A part: its number beside its body, and its marks in brackets at the
 /// end of the row.
 const PART_DEFAULT: &str = "
-    body: grid(counter(), slot(), align-end(\"[\" field(marks) \"]\") if field(marks),
-               columns: 9mm 1fr auto);
+    body: stack(grid(counter(), slot(), align-end(\"[\" field(marks) \"]\") if field(marks),
+                     columns: 9mm 1fr auto));
 ";
 
 /// A row of the mark scheme's table: the number, what the variant shows
 /// of the body (its answers and notes, with `show-only`), and the marks.
 const TABLE_ROW: &str = "
-    body: stack(grid(strong(counter()), slot(), align-end(field(marks)) if field(marks),
-                     columns: 18mm 1fr 15mm));
+    body: stack(stack(grid(strong(counter()), slot(), align-end(field(marks)) if field(marks),
+                           columns: 18mm 1fr 15mm)));
 ";
+
+// Each template wraps its grid in a `stack`, and the table's in two, so
+// that the default stylesheet's rules (`question > stack > grid`,
+// `question > stack > stack > grid`) style the grid the template makes
+// and never a table the question holds: `grid` is also a built-in
+// element, and `stack` is only a template's part.
 
 /// The component's templates.
 pub fn templates() -> EcoVec<TemplateDecl> {

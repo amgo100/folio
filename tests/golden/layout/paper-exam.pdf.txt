@@ -16,139 +16,161 @@ page 1 595.28 × 841.89, 25 line(s)
           text (0.00, 19.53) SourceSerif4-Bold 15.40 w 66.40 9 glyph(s) "Section A"
         box (0.00, 44.76) 481.89 × 247.43 main.fol:10:2 baselines 14.97..143.96
           box (0.00, 0.00) 481.89 × 247.43 main.fol:10:2 baselines 14.97..143.96
-            box (0.00, 0.00) 22.68 × 247.43 main.fol:10:2 baselines 14.97..14.97
-              text (0.00, 14.97) SourceSerif4-Bold 11.00 w 5.96 1 glyph(s) "1"
-            box (22.68, 0.00) 459.21 × 247.43 main.fol:10:2 baselines 14.97..143.96
-              box (0.00, 0.00) 459.21 × 22.23 main.fol:11:3 baselines 14.97..14.97
-                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 184.56 39 glyph(s) "A ball is thrown vertically upwards at "
-                box (184.56, 6.72) 33.66 × 11.00 main.fol:11:42
-                  text (0.00, 8.25) NewCMMath-Regular 11.00 w 11.00 2 glyph(s) "12"
-                  text (14.67, 8.25) NewCMMath-Regular 11.00 w 19.00 3 glyph(s) "m/s"
-                text (218.22, 14.97) SourceSerif4-Regular 11.00 w 31.40 7 glyph(s) ". Take "
-                box (249.63, 10.11) 20.19 × 7.12 main.fol:11:59
-                  text (0.00, 4.86) NewCMMath-Regular 11.00 w 5.52 1 glyph(s) "𝑔"
-                  text (8.58, 4.86) NewCMMath-Regular 11.00 w 8.56 1 glyph(s) "="
-                box (269.82, 5.85) 43.02 × 11.87 main.fol:11:59
-                  text (0.00, 9.12) NewCMMath-Regular 11.00 w 19.56 4 glyph(s) "9.81"
-                  text (19.56, 9.12) NewCMMath-Regular 11.00 w 19.00 3 glyph(s) "m/s"
-                  text (38.55, 5.13) NewCMMath-Regular 7.70 w 3.85 1 glyph(s) "2"
-                text (312.84, 14.97) SourceSerif4-Regular 11.00 w 3.30 1 glyph(s) "."
-              box (0.00, 27.73) 459.21 × 95.76 main.fol:13:4 baselines 14.97..14.97
-                box (0.00, 0.00) 459.21 × 95.76 main.fol:13:4 baselines 14.97..14.97
-                  box (0.00, 0.00) 25.51 × 95.76 main.fol:13:4 baselines 14.97..14.97
-                    text (0.00, 14.97) SourceSerif4-Regular 11.00 w 13.06 3 glyph(s) "(a)"
-                  box (25.51, 0.00) 421.16 × 95.76 main.fol:13:4 baselines 14.97..95.76
-                    box (0.00, 0.00) 421.16 × 22.23 main.fol:14:5 baselines 14.97..14.97
-                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 222.08 47 glyph(s) "Calculate the greatest height the ball reaches."
-                    box (0.00, 27.73) 421.16 × 68.03 main.fol:15:6 baselines 22.68..68.03
-                      shape (0.00, 22.43) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:6
-                      shape (0.00, 45.10) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:6
-                      shape (0.00, 67.78) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:6
-                  box (446.67, 0.00) 12.54 × 95.76 main.fol:13:4 baselines 14.97..14.97
-                    box (0.00, 0.00) 12.54 × 22.23 main.fol:13:4 baselines 14.97..14.97
-                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[2]"
-              box (0.00, 128.99) 459.21 × 118.44 main.fol:19:4 baselines 14.97..14.97
-                box (0.00, 0.00) 459.21 × 118.44 main.fol:19:4 baselines 14.97..14.97
-                  box (0.00, 0.00) 25.51 × 118.44 main.fol:19:4 baselines 14.97..14.97
-                    text (0.00, 14.97) SourceSerif4-Regular 11.00 w 13.68 3 glyph(s) "(b)"
-                  box (25.51, 0.00) 421.16 × 118.44 main.fol:19:4 baselines 14.97..118.44
-                    box (0.00, 0.00) 421.16 × 22.23 main.fol:20:5 baselines 14.97..14.97
-                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 282.06 60 glyph(s) "Calculate the time it takes to return to the thrower’s hand."
-                    box (0.00, 27.73) 421.16 × 90.71 main.fol:21:6 baselines 22.68..90.71
-                      shape (0.00, 22.43) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:6
-                      shape (0.00, 45.10) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:6
-                      shape (0.00, 67.78) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:6
-                      shape (0.00, 90.46) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:6
-                  box (446.67, 0.00) 12.54 × 118.44 main.fol:19:4 baselines 14.97..14.97
-                    box (0.00, 0.00) 12.54 × 22.23 main.fol:19:4 baselines 14.97..14.97
-                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[3]"
+            box (0.00, 0.00) 481.89 × 247.43 main.fol:10:2 baselines 14.97..143.96
+              box (0.00, 0.00) 481.89 × 247.43 main.fol:10:2 baselines 14.97..143.96
+                box (0.00, 0.00) 22.68 × 247.43 main.fol:10:2 baselines 14.97..14.97
+                  text (0.00, 14.97) SourceSerif4-Bold 11.00 w 5.96 1 glyph(s) "1"
+                box (22.68, 0.00) 459.21 × 247.43 main.fol:10:2 baselines 14.97..143.96
+                  box (0.00, 0.00) 459.21 × 22.23 main.fol:11:3 baselines 14.97..14.97
+                    text (0.00, 14.97) SourceSerif4-Regular 11.00 w 184.56 39 glyph(s) "A ball is thrown vertically upwards at "
+                    box (184.56, 6.72) 33.66 × 11.00 main.fol:11:42
+                      text (0.00, 8.25) NewCMMath-Regular 11.00 w 11.00 2 glyph(s) "12"
+                      text (14.67, 8.25) NewCMMath-Regular 11.00 w 19.00 3 glyph(s) "m/s"
+                    text (218.22, 14.97) SourceSerif4-Regular 11.00 w 31.40 7 glyph(s) ". Take "
+                    box (249.63, 10.11) 20.19 × 7.12 main.fol:11:59
+                      text (0.00, 4.86) NewCMMath-Regular 11.00 w 5.52 1 glyph(s) "𝑔"
+                      text (8.58, 4.86) NewCMMath-Regular 11.00 w 8.56 1 glyph(s) "="
+                    box (269.82, 5.85) 43.02 × 11.87 main.fol:11:59
+                      text (0.00, 9.12) NewCMMath-Regular 11.00 w 19.56 4 glyph(s) "9.81"
+                      text (19.56, 9.12) NewCMMath-Regular 11.00 w 19.00 3 glyph(s) "m/s"
+                      text (38.55, 5.13) NewCMMath-Regular 7.70 w 3.85 1 glyph(s) "2"
+                    text (312.84, 14.97) SourceSerif4-Regular 11.00 w 3.30 1 glyph(s) "."
+                  box (0.00, 27.73) 459.21 × 95.76 main.fol:13:4 baselines 14.97..14.97
+                    box (0.00, 0.00) 459.21 × 95.76 main.fol:13:4 baselines 14.97..14.97
+                      box (0.00, 0.00) 459.21 × 95.76 main.fol:13:4 baselines 14.97..14.97
+                        box (0.00, 0.00) 459.21 × 95.76 main.fol:13:4 baselines 14.97..14.97
+                          box (0.00, 0.00) 25.51 × 95.76 main.fol:13:4 baselines 14.97..14.97
+                            text (0.00, 14.97) SourceSerif4-Regular 11.00 w 13.06 3 glyph(s) "(a)"
+                          box (25.51, 0.00) 421.16 × 95.76 main.fol:13:4 baselines 14.97..95.76
+                            box (0.00, 0.00) 421.16 × 22.23 main.fol:14:5 baselines 14.97..14.97
+                              text (0.00, 14.97) SourceSerif4-Regular 11.00 w 222.08 47 glyph(s) "Calculate the greatest height the ball reaches."
+                            box (0.00, 27.73) 421.16 × 68.03 main.fol:15:6 baselines 22.68..68.03
+                              shape (0.00, 22.43) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:6
+                              shape (0.00, 45.10) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:6
+                              shape (0.00, 67.78) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:6
+                          box (446.67, 0.00) 12.54 × 95.76 main.fol:13:4 baselines 14.97..14.97
+                            box (0.00, 0.00) 12.54 × 22.23 main.fol:13:4 baselines 14.97..14.97
+                              text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[2]"
+                  box (0.00, 128.99) 459.21 × 118.44 main.fol:19:4 baselines 14.97..14.97
+                    box (0.00, 0.00) 459.21 × 118.44 main.fol:19:4 baselines 14.97..14.97
+                      box (0.00, 0.00) 459.21 × 118.44 main.fol:19:4 baselines 14.97..14.97
+                        box (0.00, 0.00) 459.21 × 118.44 main.fol:19:4 baselines 14.97..14.97
+                          box (0.00, 0.00) 25.51 × 118.44 main.fol:19:4 baselines 14.97..14.97
+                            text (0.00, 14.97) SourceSerif4-Regular 11.00 w 13.68 3 glyph(s) "(b)"
+                          box (25.51, 0.00) 421.16 × 118.44 main.fol:19:4 baselines 14.97..118.44
+                            box (0.00, 0.00) 421.16 × 22.23 main.fol:20:5 baselines 14.97..14.97
+                              text (0.00, 14.97) SourceSerif4-Regular 11.00 w 282.06 60 glyph(s) "Calculate the time it takes to return to the thrower’s hand."
+                            box (0.00, 27.73) 421.16 × 90.71 main.fol:21:6 baselines 22.68..90.71
+                              shape (0.00, 22.43) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:6
+                              shape (0.00, 45.10) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:6
+                              shape (0.00, 67.78) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:6
+                              shape (0.00, 90.46) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:6
+                          box (446.67, 0.00) 12.54 × 118.44 main.fol:19:4 baselines 14.97..14.97
+                            box (0.00, 0.00) 12.54 × 22.23 main.fol:19:4 baselines 14.97..14.97
+                              text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[3]"
         box (0.00, 308.70) 481.89 × 279.77 main.fol:28:2 baselines 14.97..272.51
           box (0.00, 0.00) 481.89 × 279.77 main.fol:28:2 baselines 14.97..272.51
-            box (0.00, 0.00) 22.68 × 279.77 main.fol:28:2 baselines 14.97..14.97
-              text (0.00, 14.97) SourceSerif4-Bold 11.00 w 5.96 1 glyph(s) "2"
-            box (22.68, 0.00) 459.21 × 279.77 main.fol:28:2 baselines 14.97..272.51
-              box (0.00, 0.00) 459.21 × 44.46 main.fol:29:3 baselines 14.97..37.20
-                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 90.05 18 glyph(s) "A trolley of mass "
-                box (90.05, 7.34) 29.18 × 9.90 main.fol:29:21
-                  text (0.00, 7.63) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "2.0"
-                  text (17.72, 7.63) NewCMMath-Regular 11.00 w 11.45 2 glyph(s) "kg"
-                text (119.22, 14.97) SourceSerif4-Regular 11.00 w 289.65 56 glyph(s) " is pushed along a smooth track. Its speed doubles from "
-                box (408.87, 6.72) 36.72 × 11.00 main.fol:29:87
-                  text (0.00, 8.25) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "1.5"
-                  text (17.72, 8.25) NewCMMath-Regular 11.00 w 19.00 3 glyph(s) "m/s"
-                text (445.59, 14.97) SourceSerif4-Regular 11.00 w 13.62 3 glyph(s) " to"
-                box (0.00, 28.95) 36.72 × 11.00 main.fol:29:102
-                  text (0.00, 8.25) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "3.0"
-                  text (17.72, 8.25) NewCMMath-Regular 11.00 w 19.00 3 glyph(s) "m/s"
-                text (36.72, 37.20) SourceSerif4-Regular 11.00 w 15.07 4 glyph(s) " in "
-                box (51.79, 29.75) 22.06 × 7.69 main.fol:29:117
-                  text (0.00, 7.45) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "4.0"
-                  text (17.72, 7.45) NewCMMath-Regular 11.00 w 4.33 1 glyph(s) "s"
-                text (73.85, 37.20) SourceSerif4-Regular 11.00 w 3.30 1 glyph(s) "."
-              box (0.00, 49.96) 459.21 × 95.76 main.fol:31:4 baselines 14.97..14.97
-                box (0.00, 0.00) 459.21 × 95.76 main.fol:31:4 baselines 14.97..14.97
-                  box (0.00, 0.00) 25.51 × 95.76 main.fol:31:4 baselines 14.97..14.97
-                    text (0.00, 14.97) SourceSerif4-Regular 11.00 w 13.06 3 glyph(s) "(a)"
-                  box (25.51, 0.00) 421.16 × 95.76 main.fol:31:4 baselines 14.97..95.76
-                    box (0.00, 0.00) 421.16 × 22.23 main.fol:32:5 baselines 14.97..14.97
-                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 185.35 40 glyph(s) "Find the resultant force on the trolley."
-                    box (0.00, 27.73) 421.16 × 68.03 main.fol:33:6 baselines 22.68..68.03
-                      shape (0.00, 22.43) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:33:6
-                      shape (0.00, 45.10) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:33:6
-                      shape (0.00, 67.78) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:33:6
-                  box (446.67, 0.00) 12.54 × 95.76 main.fol:31:4 baselines 14.97..14.97
-                    box (0.00, 0.00) 12.54 × 22.23 main.fol:31:4 baselines 14.97..14.97
-                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[2]"
-              box (0.00, 151.22) 459.21 × 128.55 main.fol:37:4 baselines 14.97..121.29
-                box (0.00, 0.00) 459.21 × 128.55 main.fol:37:4 baselines 14.97..121.29
-                  box (0.00, 0.00) 25.51 × 128.55 main.fol:37:4 baselines 14.97..14.97
-                    text (0.00, 14.97) SourceSerif4-Regular 11.00 w 13.68 3 glyph(s) "(b)"
-                  box (25.51, 0.00) 433.70 × 128.55 main.fol:37:4 baselines 14.97..121.29
-                    box (0.00, 0.00) 433.70 × 22.23 main.fol:38:5 baselines 14.97..14.97
-                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 123.22 25 glyph(s) "Find the work done on it."
-                    box (0.00, 27.73) 433.70 × 73.09 main.fol:40:6 baselines 14.97..14.97
-                      box (0.00, 0.00) 433.70 × 73.09 main.fol:40:6 baselines 14.97..14.97
-                        box (0.00, 0.00) 25.51 × 73.09 main.fol:40:6 baselines 14.97..14.97
-                          text (0.00, 14.97) SourceSerif4-Regular 11.00 w 10.74 3 glyph(s) "(i)"
-                        box (25.51, 0.00) 395.65 × 73.09 main.fol:40:6 baselines 14.97..73.09
-                          box (0.00, 0.00) 395.65 × 22.23 main.fol:41:7 baselines 14.97..14.97
-                            text (0.00, 14.97) SourceSerif4-Regular 11.00 w 181.85 39 glyph(s) "State the change in its kinetic energy."
-                          box (0.00, 27.73) 395.65 × 45.35 main.fol:42:8 baselines 22.68..45.35
-                            shape (0.00, 22.43) M(0.00, 0.00) L(395.65, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:42:8
-                            shape (0.00, 45.10) M(0.00, 0.00) L(395.65, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:42:8
-                        box (421.16, 0.00) 12.54 × 73.09 main.fol:40:6 baselines 14.97..14.97
-                          box (0.00, 0.00) 12.54 × 22.23 main.fol:40:6 baselines 14.97..14.97
-                            text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[1]"
-                    box (0.00, 106.32) 433.70 × 22.23 main.fol:44:6 baselines 14.97..14.97
-                      box (0.00, 0.00) 433.70 × 22.23 main.fol:44:6 baselines 14.97..14.97
-                        box (0.00, 0.00) 25.51 × 22.23 main.fol:44:6 baselines 14.97..14.97
-                          text (0.00, 14.97) SourceSerif4-Regular 11.00 w 14.01 4 glyph(s) "(ii)"
-                        box (25.51, 0.00) 395.65 × 22.23 main.fol:44:6 baselines 14.97..14.97
-                          box (0.00, 0.00) 395.65 × 18.66 main.fol:45:7 baselines 14.97..14.97
-                            text (0.00, 14.97) SourceSerif4-Regular 11.00 w 179.54 36 glyph(s) "Explain why it equals the work done."
-                        box (421.16, 0.00) 12.54 × 22.23 main.fol:44:6 baselines 14.97..14.97
-                          box (0.00, 0.00) 12.54 × 22.23 main.fol:44:6 baselines 14.97..14.97
-                            text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[1]"
+            box (0.00, 0.00) 481.89 × 279.77 main.fol:28:2 baselines 14.97..272.51
+              box (0.00, 0.00) 481.89 × 279.77 main.fol:28:2 baselines 14.97..272.51
+                box (0.00, 0.00) 22.68 × 279.77 main.fol:28:2 baselines 14.97..14.97
+                  text (0.00, 14.97) SourceSerif4-Bold 11.00 w 5.96 1 glyph(s) "2"
+                box (22.68, 0.00) 459.21 × 279.77 main.fol:28:2 baselines 14.97..272.51
+                  box (0.00, 0.00) 459.21 × 44.46 main.fol:29:3 baselines 14.97..37.20
+                    text (0.00, 14.97) SourceSerif4-Regular 11.00 w 90.05 18 glyph(s) "A trolley of mass "
+                    box (90.05, 7.34) 29.18 × 9.90 main.fol:29:21
+                      text (0.00, 7.63) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "2.0"
+                      text (17.72, 7.63) NewCMMath-Regular 11.00 w 11.45 2 glyph(s) "kg"
+                    text (119.22, 14.97) SourceSerif4-Regular 11.00 w 289.65 56 glyph(s) " is pushed along a smooth track. Its speed doubles from "
+                    box (408.87, 6.72) 36.72 × 11.00 main.fol:29:87
+                      text (0.00, 8.25) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "1.5"
+                      text (17.72, 8.25) NewCMMath-Regular 11.00 w 19.00 3 glyph(s) "m/s"
+                    text (445.59, 14.97) SourceSerif4-Regular 11.00 w 13.62 3 glyph(s) " to"
+                    box (0.00, 28.95) 36.72 × 11.00 main.fol:29:102
+                      text (0.00, 8.25) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "3.0"
+                      text (17.72, 8.25) NewCMMath-Regular 11.00 w 19.00 3 glyph(s) "m/s"
+                    text (36.72, 37.20) SourceSerif4-Regular 11.00 w 15.07 4 glyph(s) " in "
+                    box (51.79, 29.75) 22.06 × 7.69 main.fol:29:117
+                      text (0.00, 7.45) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "4.0"
+                      text (17.72, 7.45) NewCMMath-Regular 11.00 w 4.33 1 glyph(s) "s"
+                    text (73.85, 37.20) SourceSerif4-Regular 11.00 w 3.30 1 glyph(s) "."
+                  box (0.00, 49.96) 459.21 × 95.76 main.fol:31:4 baselines 14.97..14.97
+                    box (0.00, 0.00) 459.21 × 95.76 main.fol:31:4 baselines 14.97..14.97
+                      box (0.00, 0.00) 459.21 × 95.76 main.fol:31:4 baselines 14.97..14.97
+                        box (0.00, 0.00) 459.21 × 95.76 main.fol:31:4 baselines 14.97..14.97
+                          box (0.00, 0.00) 25.51 × 95.76 main.fol:31:4 baselines 14.97..14.97
+                            text (0.00, 14.97) SourceSerif4-Regular 11.00 w 13.06 3 glyph(s) "(a)"
+                          box (25.51, 0.00) 421.16 × 95.76 main.fol:31:4 baselines 14.97..95.76
+                            box (0.00, 0.00) 421.16 × 22.23 main.fol:32:5 baselines 14.97..14.97
+                              text (0.00, 14.97) SourceSerif4-Regular 11.00 w 185.35 40 glyph(s) "Find the resultant force on the trolley."
+                            box (0.00, 27.73) 421.16 × 68.03 main.fol:33:6 baselines 22.68..68.03
+                              shape (0.00, 22.43) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:33:6
+                              shape (0.00, 45.10) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:33:6
+                              shape (0.00, 67.78) M(0.00, 0.00) L(421.16, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:33:6
+                          box (446.67, 0.00) 12.54 × 95.76 main.fol:31:4 baselines 14.97..14.97
+                            box (0.00, 0.00) 12.54 × 22.23 main.fol:31:4 baselines 14.97..14.97
+                              text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[2]"
+                  box (0.00, 151.22) 459.21 × 128.55 main.fol:37:4 baselines 14.97..121.29
+                    box (0.00, 0.00) 459.21 × 128.55 main.fol:37:4 baselines 14.97..121.29
+                      box (0.00, 0.00) 459.21 × 128.55 main.fol:37:4 baselines 14.97..121.29
+                        box (0.00, 0.00) 459.21 × 128.55 main.fol:37:4 baselines 14.97..121.29
+                          box (0.00, 0.00) 25.51 × 128.55 main.fol:37:4 baselines 14.97..14.97
+                            text (0.00, 14.97) SourceSerif4-Regular 11.00 w 13.68 3 glyph(s) "(b)"
+                          box (25.51, 0.00) 433.70 × 128.55 main.fol:37:4 baselines 14.97..121.29
+                            box (0.00, 0.00) 433.70 × 22.23 main.fol:38:5 baselines 14.97..14.97
+                              text (0.00, 14.97) SourceSerif4-Regular 11.00 w 123.22 25 glyph(s) "Find the work done on it."
+                            box (0.00, 27.73) 433.70 × 73.09 main.fol:40:6 baselines 14.97..14.97
+                              box (0.00, 0.00) 433.70 × 73.09 main.fol:40:6 baselines 14.97..14.97
+                                box (0.00, 0.00) 433.70 × 73.09 main.fol:40:6 baselines 14.97..14.97
+                                  box (0.00, 0.00) 433.70 × 73.09 main.fol:40:6 baselines 14.97..14.97
+                                    box (0.00, 0.00) 25.51 × 73.09 main.fol:40:6 baselines 14.97..14.97
+                                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 10.74 3 glyph(s) "(i)"
+                                    box (25.51, 0.00) 395.65 × 73.09 main.fol:40:6 baselines 14.97..73.09
+                                      box (0.00, 0.00) 395.65 × 22.23 main.fol:41:7 baselines 14.97..14.97
+                                        text (0.00, 14.97) SourceSerif4-Regular 11.00 w 181.85 39 glyph(s) "State the change in its kinetic energy."
+                                      box (0.00, 27.73) 395.65 × 45.35 main.fol:42:8 baselines 22.68..45.35
+                                        shape (0.00, 22.43) M(0.00, 0.00) L(395.65, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:42:8
+                                        shape (0.00, 45.10) M(0.00, 0.00) L(395.65, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:42:8
+                                    box (421.16, 0.00) 12.54 × 73.09 main.fol:40:6 baselines 14.97..14.97
+                                      box (0.00, 0.00) 12.54 × 22.23 main.fol:40:6 baselines 14.97..14.97
+                                        text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[1]"
+                            box (0.00, 106.32) 433.70 × 22.23 main.fol:44:6 baselines 14.97..14.97
+                              box (0.00, 0.00) 433.70 × 22.23 main.fol:44:6 baselines 14.97..14.97
+                                box (0.00, 0.00) 433.70 × 22.23 main.fol:44:6 baselines 14.97..14.97
+                                  box (0.00, 0.00) 433.70 × 22.23 main.fol:44:6 baselines 14.97..14.97
+                                    box (0.00, 0.00) 25.51 × 22.23 main.fol:44:6 baselines 14.97..14.97
+                                      text (0.00, 14.97) SourceSerif4-Regular 11.00 w 14.01 4 glyph(s) "(ii)"
+                                    box (25.51, 0.00) 395.65 × 22.23 main.fol:44:6 baselines 14.97..14.97
+                                      box (0.00, 0.00) 395.65 × 18.66 main.fol:45:7 baselines 14.97..14.97
+                                        text (0.00, 14.97) SourceSerif4-Regular 11.00 w 179.54 36 glyph(s) "Explain why it equals the work done."
+                                    box (421.16, 0.00) 12.54 × 22.23 main.fol:44:6 baselines 14.97..14.97
+                                      box (0.00, 0.00) 12.54 × 22.23 main.fol:44:6 baselines 14.97..14.97
+                                        text (0.00, 14.97) SourceSerif4-Regular 11.00 w 12.54 3 glyph(s) "[1]"
 page 2 595.28 × 841.89, 6 line(s)
   box (56.69, 56.69) 481.89 × 728.50 main.fol:1:2 baselines 22.68..257.62
     box (0.00, 0.00) 481.89 × 261.30 main.fol:1:2 baselines 22.68..257.62
       box (0.00, 0.00) 481.89 × 73.09 main.fol:8:1 baselines 22.68..65.83
         box (0.00, 0.00) 481.89 × 73.09 main.fol:28:2 baselines 22.68..65.83
           box (0.00, 0.00) 481.89 × 45.35 main.fol:28:2 baselines 22.68..45.35
-            box (0.00, 0.00) 22.68 × 45.35 main.fol:28:2
-            box (22.68, 0.00) 459.21 × 45.35 main.fol:28:2 baselines 22.68..45.35
-              box (0.00, 0.00) 459.21 × 45.35 main.fol:37:4 baselines 22.68..45.35
-                box (0.00, 0.00) 459.21 × 45.35 main.fol:37:4 baselines 22.68..45.35
-                  box (0.00, 0.00) 25.51 × 45.35 main.fol:37:4
-                  box (25.51, 0.00) 433.70 × 45.35 main.fol:37:4 baselines 22.68..45.35
-                    box (0.00, 0.00) 433.70 × 45.35 main.fol:44:6 baselines 22.68..45.35
-                      box (0.00, 0.00) 433.70 × 45.35 main.fol:44:6 baselines 22.68..45.35
-                        box (0.00, 0.00) 25.51 × 45.35 main.fol:44:6
-                        box (25.51, 0.00) 395.65 × 45.35 main.fol:44:6 baselines 22.68..45.35
-                          box (0.00, 0.00) 395.65 × 45.35 main.fol:46:8 baselines 22.68..45.35
-                            shape (0.00, 22.43) M(0.00, 0.00) L(395.65, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:46:8
-                            shape (0.00, 45.10) M(0.00, 0.00) L(395.65, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:46:8
-                        box (421.16, 0.00) 12.54 × 45.35 main.fol:44:6
+            box (0.00, 0.00) 481.89 × 45.35 main.fol:28:2 baselines 22.68..45.35
+              box (0.00, 0.00) 481.89 × 45.35 main.fol:28:2 baselines 22.68..45.35
+                box (0.00, 0.00) 22.68 × 45.35 main.fol:28:2
+                box (22.68, 0.00) 459.21 × 45.35 main.fol:28:2 baselines 22.68..45.35
+                  box (0.00, 0.00) 459.21 × 45.35 main.fol:37:4 baselines 22.68..45.35
+                    box (0.00, 0.00) 459.21 × 45.35 main.fol:37:4 baselines 22.68..45.35
+                      box (0.00, 0.00) 459.21 × 45.35 main.fol:37:4 baselines 22.68..45.35
+                        box (0.00, 0.00) 459.21 × 45.35 main.fol:37:4 baselines 22.68..45.35
+                          box (0.00, 0.00) 25.51 × 45.35 main.fol:37:4
+                          box (25.51, 0.00) 433.70 × 45.35 main.fol:37:4 baselines 22.68..45.35
+                            box (0.00, 0.00) 433.70 × 45.35 main.fol:44:6 baselines 22.68..45.35
+                              box (0.00, 0.00) 433.70 × 45.35 main.fol:44:6 baselines 22.68..45.35
+                                box (0.00, 0.00) 433.70 × 45.35 main.fol:44:6 baselines 22.68..45.35
+                                  box (0.00, 0.00) 433.70 × 45.35 main.fol:44:6 baselines 22.68..45.35
+                                    box (0.00, 0.00) 25.51 × 45.35 main.fol:44:6
+                                    box (25.51, 0.00) 395.65 × 45.35 main.fol:44:6 baselines 22.68..45.35
+                                      box (0.00, 0.00) 395.65 × 45.35 main.fol:46:8 baselines 22.68..45.35
+                                        shape (0.00, 22.43) M(0.00, 0.00) L(395.65, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:46:8
+                                        shape (0.00, 45.10) M(0.00, 0.00) L(395.65, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:46:8
+                                    box (421.16, 0.00) 12.54 × 45.35 main.fol:44:6
           box (0.00, 50.85) 481.89 × 22.23 main.fol:28:2 baselines 14.97..14.97
             text (328.47, 14.97) SourceSerif4-Bold 11.00 w 153.42 31 glyph(s) "(Total for Question 2: 4 marks)"
       box (0.00, 91.57) 481.89 × 169.74 main.fol:51:1 baselines 19.53..166.05
@@ -156,14 +178,16 @@ page 2 595.28 × 841.89, 6 line(s)
           text (0.00, 19.53) SourceSerif4-Bold 15.40 w 66.04 9 glyph(s) "Section B"
         box (0.00, 44.76) 481.89 × 100.82 main.fol:53:2 baselines 14.97..93.56
           box (0.00, 0.00) 481.89 × 73.09 main.fol:53:2 baselines 14.97..73.09
-            box (0.00, 0.00) 22.68 × 73.09 main.fol:53:2 baselines 14.97..14.97
-              text (0.00, 14.97) SourceSerif4-Bold 11.00 w 5.96 1 glyph(s) "3"
-            box (22.68, 0.00) 459.21 × 73.09 main.fol:53:2 baselines 14.97..73.09
-              box (0.00, 0.00) 459.21 × 22.23 main.fol:54:3 baselines 14.97..14.97
-                text (0.00, 14.97) SourceSerif4-Regular 11.00 w 170.56 35 glyph(s) "State Newton’s third law of motion."
-              box (0.00, 27.73) 459.21 × 45.35 main.fol:55:4 baselines 22.68..45.35
-                shape (0.00, 22.43) M(0.00, 0.00) L(459.21, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:55:4
-                shape (0.00, 45.10) M(0.00, 0.00) L(459.21, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:55:4
+            box (0.00, 0.00) 481.89 × 73.09 main.fol:53:2 baselines 14.97..73.09
+              box (0.00, 0.00) 481.89 × 73.09 main.fol:53:2 baselines 14.97..73.09
+                box (0.00, 0.00) 22.68 × 73.09 main.fol:53:2 baselines 14.97..14.97
+                  text (0.00, 14.97) SourceSerif4-Bold 11.00 w 5.96 1 glyph(s) "3"
+                box (22.68, 0.00) 459.21 × 73.09 main.fol:53:2 baselines 14.97..73.09
+                  box (0.00, 0.00) 459.21 × 22.23 main.fol:54:3 baselines 14.97..14.97
+                    text (0.00, 14.97) SourceSerif4-Regular 11.00 w 170.56 35 glyph(s) "State Newton’s third law of motion."
+                  box (0.00, 27.73) 459.21 × 45.35 main.fol:55:4 baselines 22.68..45.35
+                    shape (0.00, 22.43) M(0.00, 0.00) L(459.21, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:55:4
+                    shape (0.00, 45.10) M(0.00, 0.00) L(459.21, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:55:4
           box (0.00, 78.59) 481.89 × 22.23 main.fol:53:2 baselines 14.97..14.97
             text (333.44, 14.97) SourceSerif4-Bold 11.00 w 148.44 30 glyph(s) "(Total for Question 3: 1 mark)"
         box (0.00, 151.08) 481.89 × 18.66 main.fol:60:1 baselines 14.97..14.97
