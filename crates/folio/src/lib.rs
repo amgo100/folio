@@ -30,6 +30,7 @@
 #![forbid(unsafe_code)]
 
 pub mod diag;
+pub mod leaks;
 pub mod loader;
 mod pipeline;
 pub mod span_map;
@@ -931,6 +932,73 @@ fn run_versioned_builds<T: Send>(
             VersionedOutput { build, result }
         })
         .collect()
+}
+
+// ---- The leak check (SPEC §6.4) ----
+
+/// Checks that what a version of a variant does not show reaches none of
+/// its output for a target (SPEC §6.4, [`leaks`]): by the provenance of
+/// everything the writer is given, and by searching the written file's
+/// text, as a reader sees it, for the text of what the variant does not
+/// show. The result is the leaks found, each an error with the code
+/// [`leaks::LEAK`] or [`leaks::LEAK_TEXT`] at the hidden node; it holds
+/// none of the build's other diagnostics, which [`check_versioned`] and
+/// [`compile_versioned`] report. A build whose document cannot be styled
+/// or written, and a target without a writer yet, has nothing to check.
+///
+/// `folio check --leaks` runs it after checking each build, and `folio
+/// build` and `folio check` run it on every build of a project in strict
+/// mode or a CI build ([`checks_leaks_by_default`]). Fails only when an edit to the world
+/// cancels the check; in a long-lived world a panic in a query is an
+/// `internal-error`, as [`compile`] says.
+pub fn check_leaks(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    version: Option<&Name>,
+) -> Result<EcoVec<Diagnostic>, Cancelled> {
+    let now = || {
+        let db = world.db();
+        let build = folio_core::db::Build::versioned(
+            db,
+            world.project(),
+            target,
+            variant.cloned(),
+            version.cloned(),
+        );
+        leaks::leaks(db, build).clone()
+    };
+    if world.kept().is_none() {
+        return catch(world, now);
+    }
+    Ok(isolate(world, now)?.unwrap_or_else(|panic| EcoVec::from([internal_error(&panic, None)])))
+}
+
+/// Checks builds for leaks ([`check_leaks`]) as [`check_versioned_builds`]
+/// checks them: in parallel, each on its own handle of the world, the
+/// results in the order of the builds.
+pub fn check_leaks_builds(
+    world: &World,
+    builds: impl IntoIterator<Item = BuildKey>,
+) -> Vec<VersionedOutput<EcoVec<Diagnostic>>> {
+    run_versioned_builds(world, builds, check_leaks)
+}
+
+/// Whether every build of the world's project is checked for leaks
+/// without being asked (SPEC §6.4): in a CI build ([`BuildMode::Ci`]) and
+/// in strict mode (`[formatting] mode = "strict"`, SPEC §5.5), but not in
+/// watch mode, which keeps no output. Other builds are checked when `folio
+/// check --leaks` asks.
+pub fn checks_leaks_by_default(world: &World) -> bool {
+    let db = world.db();
+    let project = world.project();
+    let strict =
+        project.manifest(db).formatting.mode.v == folio_core::project::FormattingMode::Strict;
+    match *project.mode(db) {
+        BuildMode::Watch => false,
+        BuildMode::Ci => true,
+        BuildMode::Build => strict,
+    }
 }
 
 /// The pages of a version of a variant of the world's document for a

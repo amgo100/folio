@@ -711,6 +711,7 @@ dependencies = [
  "hayro-svg",
  "krilla",
  "krilla-svg",
+ "kurbo",
  "libm",
  "usvg",
 ]

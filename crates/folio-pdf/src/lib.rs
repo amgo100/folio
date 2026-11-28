@@ -38,14 +38,25 @@
 //! the validator and again without it. Only a failure the check does not
 //! foresee still costs the second writing.
 //!
+//! Every item it is given names where it came from (SPEC §6.4): a box,
+//! image or object its element instance, a glyph its text node and
+//! instance, a node of the structure (and so a bookmark or alternate
+//! description) its instance, a destination or link its own, and the
+//! metadata the nodes it was read from ([`Info::provenance`]). The leak
+//! check reads that, and reads the written file back as a reader sees it
+//! ([`extract_text`]).
+//!
 //! Like every writer it reads no clock, so the same input gives the same
 //! bytes (SPEC §2.4): the PDF has no dates, and its IDs are hashes of its
 //! content.
 
 #![forbid(unsafe_code)]
 
+mod extract;
 mod image;
 mod tags;
+
+pub use extract::{Extracted, extract_text};
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Formatter};
@@ -124,6 +135,20 @@ pub struct Info {
     pub subject: Option<EcoString>,
     /// The language of its text, as a BCP 47 tag.
     pub lang: Option<EcoString>,
+    /// Where the title and subject were read from (SPEC §6.4): the nodes
+    /// of their text, each with the element instance it is in, for the
+    /// leak check. The writer does not read it.
+    pub provenance: Vec<Provenance>,
+}
+
+/// Where an item of output came from (SPEC §6.4): its source node and the
+/// innermost element instance it is in.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct Provenance {
+    /// The source node, such as a text node.
+    pub source: SourceRef,
+    /// The element instance it is in.
+    pub location: Location,
 }
 
 /// How a reader moves through a document (SPEC §11.1): named destinations
@@ -1943,6 +1968,7 @@ mod preflight_tests {
                 title: Some("Forces".into()),
                 subject: None,
                 lang: Some("en".into()),
+                provenance: Vec::new(),
             },
             navigation: &Navigation::default(),
         };
