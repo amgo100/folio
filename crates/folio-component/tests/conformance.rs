@@ -1,12 +1,14 @@
 //! Conformance of a test component with the M2 interface additions (SPEC
-//! §3.2, #337): a default stylesheet, a lint over the instance view, and
-//! the lint diagnostics it returns.
+//! §3.2, #337, #72): a default stylesheet, a lint over the instance view,
+//! the lint diagnostics it returns, and aggregates with the fields they
+//! read.
 
 use ecow::EcoVec;
 use folio_component::{
-    BODY, Body, Component, ComponentManifest, ComponentName, ContentKind, Declarations,
-    ElementKind, ElementSchema, FieldDecl, FieldType, Instance, InstanceTree, LintDiagnostic,
-    Location, Name, Part, QualifiedName, Registry, Severity, SourceRef, Target, Value,
+    AggregateDecl, BODY, Body, Component, ComponentManifest, ComponentName, ContentKind,
+    Declarations, ElementKind, ElementSchema, FieldDecl, FieldType, Instance, InstanceTree,
+    LintDiagnostic, LintReads, Location, Name, Part, QualifiedName, Registry, Severity, SourceRef,
+    Target, Value,
 };
 
 fn name(text: &str) -> Name {
@@ -162,4 +164,127 @@ fn lints_default_to_none() {
         }
     }
     assert!(Plain.lint(&InstanceTree::default()).is_empty());
+}
+
+/// A component with the aggregate of total marks, reading `marks`.
+struct Totals {
+    aggregates: EcoVec<AggregateDecl>,
+    lint_reads: LintReads,
+}
+
+impl Component for Totals {
+    fn manifest(&self) -> ComponentManifest {
+        ComponentManifest::new(
+            ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
+    }
+
+    fn declarations(&self) -> Declarations {
+        let mut declarations = Marks.declarations();
+        declarations.aggregates = self.aggregates.clone();
+        declarations.lint_reads = self.lint_reads.clone();
+        declarations
+    }
+
+    fn aggregate(&self, name: &str, view: &InstanceTree) -> Option<Value> {
+        (name == "total-marks").then(|| {
+            Value::Int(
+                view.iter()
+                    .filter(|i| i.name.name.as_str() == "question")
+                    .map(|i| match i.field("marks") {
+                        Some(Value::Int(m)) => *m,
+                        _ => 0,
+                    })
+                    .sum(),
+            )
+        })
+    }
+}
+
+fn totals(aggregates: impl IntoIterator<Item = AggregateDecl>) -> Totals {
+    Totals {
+        aggregates: aggregates.into_iter().collect(),
+        lint_reads: LintReads::All,
+    }
+}
+
+#[test]
+fn an_aggregate_reads_the_instance_view() {
+    let mut registry = Registry::new();
+    registry
+        .register(totals([
+            AggregateDecl::new(name("total-marks")).reading([name("marks")])
+        ]))
+        .unwrap();
+    let registered = registry.components().next().unwrap();
+    let view = InstanceTree::new([
+        instance("question", 1, 3, vec![instance("part", 2, 3, vec![])]),
+        instance("question", 3, 4, vec![]),
+    ]);
+    assert_eq!(
+        registered.aggregate("total-marks", &view),
+        Some(Value::Int(7))
+    );
+    // The same view gives the same value (SPEC §3.5).
+    assert_eq!(
+        registered.aggregate("total-marks", &view),
+        Some(Value::Int(7))
+    );
+    assert_eq!(registered.aggregate("unknown", &view), None);
+    assert!(registered.aggregate_decl("total-marks").is_some());
+}
+
+#[test]
+fn aggregates_default_to_none() {
+    let mut registry = Registry::new();
+    registry.register(Marks).unwrap();
+    let registered = registry.components().next().unwrap();
+    assert!(registered.declarations.aggregates.is_empty());
+    assert_eq!(registered.declarations.lint_reads, LintReads::All);
+    assert_eq!(
+        registered.aggregate("total-marks", &InstanceTree::default()),
+        None
+    );
+}
+
+#[test]
+fn aggregate_declarations_are_checked() {
+    let errors = |component: Totals| {
+        let mut registry = Registry::new();
+        registry
+            .register(component)
+            .unwrap_err()
+            .into_iter()
+            .map(|e| e.message.to_string())
+            .collect::<Vec<_>>()
+    };
+    let total = || AggregateDecl::new(name("total-marks")).reading([name("marks")]);
+    assert_eq!(
+        errors(totals([total(), total()])),
+        ["aggregate `total-marks` is declared twice"]
+    );
+    assert_eq!(
+        errors(totals([AggregateDecl::new(name("question"))])),
+        ["aggregate `question` has the name of one of the component's elements"]
+    );
+    assert_eq!(
+        errors(totals([
+            AggregateDecl::new(name("total-marks")).reading([name("marks"), name("marks")])
+        ])),
+        ["aggregate `total-marks` reads `marks` twice"]
+    );
+    assert_eq!(
+        errors(totals([
+            AggregateDecl::new(name("total-marks")).reading([name("score")])
+        ])),
+        ["aggregate `total-marks` reads `score`, which no element of the component has"]
+    );
+    let mut lints = totals([]);
+    lints.lint_reads = LintReads::Fields(EcoVec::from([name("score")]));
+    assert_eq!(
+        errors(lints),
+        ["the lints read `score`, which no element of the component has"]
+    );
 }

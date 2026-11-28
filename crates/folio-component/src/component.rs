@@ -2,12 +2,14 @@
 
 use ecow::{EcoString, EcoVec};
 
+use crate::aggregate::{AggregateDecl, LintReads};
 use crate::element::{ElementSchema, LocaleString};
 use crate::instance::InstanceTree;
 use crate::lint::LintDiagnostic;
 use crate::names::{ComponentName, Name, Target};
 use crate::property::PropertyDecl;
 use crate::template::TemplateDecl;
+use crate::value::Value;
 
 /// The version of the component interface that this crate defines. A
 /// component declares the version it targets (`folio-component = "1"`); the
@@ -40,6 +42,18 @@ pub trait Component: Send + Sync {
     fn lint(&self, view: &InstanceTree) -> EcoVec<LintDiagnostic> {
         let _ = view;
         EcoVec::new()
+    }
+
+    /// The value of one of the component's aggregates (SPEC §3.2), named
+    /// as [`Declarations::aggregates`] declares it, over the instances of
+    /// its elements: a number, a string or another plain value. The view
+    /// holds only the fields the aggregate reads; in a numbering group it
+    /// is made from the group's common tree. The core calls it once per
+    /// view and caches the result. `None` for a name it does not know;
+    /// a component without aggregates keeps the default.
+    fn aggregate(&self, name: &str, view: &InstanceTree) -> Option<Value> {
+        let _ = (name, view);
+        None
     }
 }
 
@@ -107,6 +121,11 @@ pub struct Declarations {
     /// ones, whatever the project's lockfile binds; another component's
     /// names must be qualified. It may not `@import`.
     pub stylesheet: Option<EcoString>,
+    /// The component's aggregates (SPEC §3.2), each with the fields it
+    /// reads.
+    pub aggregates: EcoVec<AggregateDecl>,
+    /// The fields its lints read (SPEC §3.5); every field when not set.
+    pub lint_reads: LintReads,
 }
 
 impl Declarations {
