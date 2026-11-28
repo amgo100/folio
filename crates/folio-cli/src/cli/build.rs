@@ -671,6 +671,27 @@ struct Document {
     /// document.
     #[serde(skip_serializing_if = "Option::is_none")]
     formatted: Option<Vec<String>>,
+    /// The local overrides of the checked builds; only from `folio check
+    /// --report overrides` (D-69-1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overrides: Option<Vec<OverrideEntry>>,
+}
+
+/// A local override in the JSON document (SPEC §5.4).
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+pub(super) struct OverrideEntry {
+    /// `id-rule`, `scoped-rule`, `hint`, `override` or `styled`.
+    pub(super) form: &'static str,
+    /// Where it is written, as diagnostics' locations are given.
+    pub(super) location: Option<diag::Location>,
+    /// The element it styles, or a rule's selectors as written.
+    pub(super) element: String,
+    /// The label of the element it styles, if it has one.
+    pub(super) label: Option<String>,
+    /// The properties it declares, as written.
+    pub(super) properties: Vec<String>,
+    /// The variant or target it is limited to, or `None`.
+    pub(super) scope: Option<String>,
 }
 
 /// A build in the JSON document, and what became of its output.
@@ -763,6 +784,19 @@ impl Report {
                 .get_or_insert_default()
                 .push(path.to_owned()),
             None => errln!("formatted {path}"),
+        }
+    }
+
+    /// Reports the local overrides of `folio check --report overrides`
+    /// in the JSON document, and answers whether there is one: without it,
+    /// the caller lists them as text.
+    pub(super) fn overrides(&mut self, entries: Vec<OverrideEntry>) -> bool {
+        match &mut self.json {
+            Some(document) => {
+                document.overrides.get_or_insert_default().extend(entries);
+                true
+            }
+            None => false,
         }
     }
 

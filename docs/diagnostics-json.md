@@ -44,7 +44,19 @@ A reader that closes standard error before the document ends, as `head` does, ge
 | `version` | integer | The version of this shape: `1`. |
 | `diagnostics` | array of diagnostics | Every diagnostic of the command, in the order the terminal would show them. A diagnostic that several builds report appears once. |
 | `builds` | array of builds | The builds that were compiled or checked, in the manifest's order, each once. It is empty when the command stopped before compiling, for example because the manifest has errors, and always from `folio fmt`, which builds nothing. |
+| `overrides` | array of overrides | Only from `folio check --report overrides`: the local overrides of the builds it checked (SPEC §5.4), each once, by file and position, the weakest form first where several start at one place. Left out otherwise. Decision recorded: D-69-1 = A. |
 | `formatted` | array of strings | Only from `folio fmt`: the files it rewrote, relative to the project directory with `/` between directories, in path order. Empty with `--check`, which rewrites nothing, and when every file was formatted already. A file that a link leads to is listed once, under the first path that reaches it. Compilers before the field was added leave it out, so a missing field means the files are not known, not that none was rewritten. |
+
+### An override
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `form` | string | `"id-rule"` (a rule for a label in the overrides stylesheet), `"scoped-rule"` (`#rule`), `"hint"` (an element's layout hints), `"override"` (its `override` field) or `"styled"` (`#styled`). |
+| `location` | location or `null` | Where it is written: the rule, or the element whose fields hold it. A location as diagnostics have them. |
+| `element` | string | The element it styles (`"figure"`, `"exam.question"`), or a rule's selectors as written (`"#{fig:ball}"`, `"question > answer"`). |
+| `label` | string or `null` | The label of the element it styles, if it has one. |
+| `properties` | array of strings | The properties it declares, as written (`"space-before"`, `"multicol.columns"`). |
+| `scope` | string or `null` | The variant or target it is limited to: the name after `@` of a field (`"markscheme"`), or a scoped rule's scopes (`"variant markscheme"`, `"target pptx"`). |
 
 ### A diagnostic
 
@@ -68,6 +80,7 @@ Most diagnostics have no code yet. These have one:
 | --- | --- | --- |
 | `internal-error` | error | A query panicked in a long-lived process; it has no location. |
 | `namespace-element` | warning | A selector `name.` where `name` is both a component namespace and an element, so it reads as the namespace. |
+| `override-literal` | warning | A local override in content gives a colour as a literal (`rgb("d62728")`, or `#d62728` in a scoped rule) where a stylesheet token would keep it in step with the stylesheets (SPEC §5.4). At the element, or at the colour in a scoped rule. |
 | `overfull-line` | warning | A line is wider than its space: no break fits. At the text the line ends with, or at the object (an inline formula or image) that makes the line overflow. |
 | `underfull-line` | warning | A justified line's spaces stretch further than its badness allows (TeX's limit), or it has no spaces to stretch. At the text the line ends with. |
 | `widow` | warning | A page break leaves fewer lines of a paragraph at the top of a page than `widows` asks for. At the paragraph. |

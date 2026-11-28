@@ -327,6 +327,41 @@ fn check_reports_local_overrides() {
     let output = folio(dir.path(), &["check"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(output.stdout.is_empty());
+
+    // In the JSON document, as `overrides` (D-69-1), with locations as
+    // diagnostics have them.
+    let output = folio(
+        dir.path(),
+        &["check", "--report", "overrides", "--diagnostics", "json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(output.stdout.is_empty());
+    let document: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let overrides = document["overrides"].as_array().unwrap();
+    assert_eq!(overrides.len(), 5);
+    assert_eq!(
+        overrides[2],
+        serde_json::json!({
+            "form": "override",
+            "location": {
+                "path": "main.fol",
+                "bytes": { "start": 66, "end": 124 },
+                "start": { "line": 4, "column": 2 },
+                "end": { "line": 4, "column": 60 },
+            },
+            "element": "figure",
+            "label": "fig:ball",
+            "properties": ["space-before"],
+            "scope": null,
+        })
+    );
+    assert_eq!(overrides[0]["scope"], "variant markscheme");
+    assert_eq!(overrides[0]["element"], "strong");
+    assert_eq!(overrides[4]["form"], "id-rule");
+    // Without the flag, the document has no `overrides`.
+    let output = folio(dir.path(), &["check", "--diagnostics", "json"]);
+    let document: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(document.get("overrides").is_none());
 }
 
 #[test]
