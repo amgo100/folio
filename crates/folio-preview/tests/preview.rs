@@ -1213,3 +1213,94 @@ fn without_a_visible_page_the_revision_is_sent_at_once() {
     }
     preview.stop();
 }
+
+/// The page counts of every revision sent, first pages and updates, until
+/// `until`, with the revision of each.
+fn page_counts(events: &Receiver<Event>, until: Instant) -> Vec<(u64, usize)> {
+    let mut counts = Vec::new();
+    while let Ok(event) = events.recv_deadline(until) {
+        match event {
+            Event::FirstPages {
+                revision, pages, ..
+            } => counts.push((revision, pages)),
+            Event::Updated(update) => counts.push((update.revision, update.pages)),
+            _ => {}
+        }
+    }
+    counts
+}
+
+// Held until the writer closes the file, which inotify reports; other
+// watchers hold nothing until they have reported a close.
+#[cfg(target_os = "linux")]
+#[test]
+fn saves_in_place_never_show_the_file_between_truncate_and_write() {
+    let dir = long_project(6);
+    let (preview, events) = start(dir.path(), |o| o);
+    let first = updated(&events, |u| u.pages > 0);
+    assert!(first.pages >= 2, "{} pages", first.pages);
+    let mut ws = connect(&preview, preview.token(), None).unwrap();
+    receive_from(&mut ws, first.revision);
+    ws.send(Message::text(r#"{"type":"visible","pages":[0]}"#))
+        .unwrap();
+
+    // Each save truncates the file, waits longer than the debounce, and
+    // writes it again, as a slow editor saving in place would.
+    let file = dir.path().join("main.fol");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let saver = std::thread::spawn(move || {
+        for i in 0..25 {
+            let new = text.replacen("Section 0", &format!("Section 0, save {i}"), 1);
+            let mut handle = std::fs::File::create(&file).unwrap();
+            std::thread::sleep(Duration::from_millis(40));
+            handle.write_all(new.as_bytes()).unwrap();
+            drop(handle);
+            std::thread::sleep(Duration::from_millis(15));
+        }
+    });
+    let counts = page_counts(&events, Instant::now() + Duration::from_secs(4));
+    saver.join().unwrap();
+    assert!(
+        counts.iter().any(|&(r, _)| r > first.revision),
+        "no revision sent: {counts:?}"
+    );
+    assert!(
+        counts.iter().all(|&(_, pages)| pages == first.pages),
+        "{} pages, then {counts:?}",
+        first.pages
+    );
+    preview.stop();
+}
+
+#[test]
+fn saves_faster_than_a_check_still_update_the_pages() {
+    let dir = long_project(30);
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    let file = dir.path().join("main.fol");
+    let text = std::fs::read_to_string(&file).unwrap();
+    // A save every 20 ms for three seconds, each reflowing every page and
+    // cancelling the check of the save before if nothing else did.
+    let start = Instant::now();
+    let mut i = 0;
+    let mut sent = None;
+    while start.elapsed() < Duration::from_secs(3) {
+        let words = "word ".repeat(i * 7);
+        let new = text.replacen("Sentence 0 ", &format!("{words}Sentence 0 "), 1);
+        std::fs::write(&file, new).unwrap();
+        preview.changed([&file]);
+        i += 1;
+        std::thread::sleep(Duration::from_millis(20));
+        while let Ok(event) = events.try_recv() {
+            if let Event::Updated(update) = event
+                && update.revision > first.revision
+                && sent.is_none()
+            {
+                sent = Some(start.elapsed());
+            }
+        }
+    }
+    let sent = sent.expect("no revision sent while the saves went on");
+    eprintln!("first revision sent after {sent:?} of saves");
+    preview.stop();
+}

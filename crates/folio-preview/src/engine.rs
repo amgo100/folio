@@ -11,7 +11,17 @@
 //! said which pages it shows, the check lays out the pages through the
 //! last of them and sends those that changed, then checks the revision,
 //! which lays out the rest, and sends the rest with the diagnostics.
+//!
+//! Two guards keep a stream of saves from showing what no save meant. A
+//! source saved in place is truncated and then written: when it reads
+//! shorter than the world's text while a write is still open, or empty, it
+//! is held until the writer closes it ([`MAX_HOLD`] at most), so that the
+//! preview never shows the empty file between the two. And once the pages have
+//! lagged behind the world for [`MAX_LAG`], changes wait for the running
+//! check to send its first pages, so that saves faster than a check still
+//! update the preview.
 
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -36,13 +46,21 @@ use crate::{Error, Event, Hook, Options, Outputs, OutputsHook, Update};
 /// The longest a stream of file-system events postpones reading them.
 const MAX_DEBOUNCE: Duration = Duration::from_millis(100);
 
+/// The longest a source that reads shorter while it is written waits for
+/// its writer to close it.
+const MAX_HOLD: Duration = Duration::from_millis(500);
+
+/// How long the pages may lag behind the world before changes wait for
+/// the running check's first pages.
+const MAX_LAG: Duration = Duration::from_millis(250);
+
 /// The code of the diagnostic that stands for a panic in a query.
 const INTERNAL_ERROR: &str = "internal-error";
 
 /// What the engine's thread is told.
 enum Input {
     /// Files or directories changed.
-    Paths(Vec<PathBuf>),
+    Paths(Vec<PathBuf>, Change),
     /// A check laid out the first pages of its revision.
     First(Box<First>),
     /// A check finished.
@@ -55,6 +73,18 @@ enum Input {
     Stop,
 }
 
+/// What a file-system event says about the paths it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Change {
+    /// A file was truncated or written, and may still be open for writing.
+    Written,
+    /// A file open for writing was closed.
+    Closed,
+    /// Anything else: a file created, removed or renamed, or a change
+    /// reported without saying what it was.
+    Other,
+}
+
 /// A handle on the engine's thread.
 #[derive(Clone)]
 pub(crate) struct Handle(Sender<Input>);
@@ -62,7 +92,12 @@ pub(crate) struct Handle(Sender<Input>);
 impl Handle {
     /// Tells the engine that the paths changed.
     pub(crate) fn changed(&self, paths: Vec<PathBuf>) {
-        let _ = self.0.send(Input::Paths(paths));
+        self.event(paths, Change::Other);
+    }
+
+    /// Tells the engine what an event says about the paths.
+    pub(crate) fn event(&self, paths: Vec<PathBuf>, change: Change) {
+        let _ = self.0.send(Input::Paths(paths, change));
     }
 
     /// Stops the engine.
@@ -379,13 +414,23 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         ids: 0,
         current: Arc::new(AtomicU64::new(0)),
         visible: visible.clone(),
+        // inotify reports closes; other systems' watchers say so by
+        // reporting one.
+        closes: cfg!(any(target_os = "linux", target_os = "android")),
+        open: BTreeSet::new(),
+        held: BTreeMap::new(),
+        running: None,
+        lagging: None,
+        deferred: Vec::new(),
+        released: BTreeSet::new(),
+        rx,
+        queue: VecDeque::new(),
     };
     Ok(Pending {
         handle: Handle(tx),
         published,
         visible,
         engine,
-        rx,
     })
 }
 
@@ -398,19 +443,18 @@ pub(crate) struct Pending {
     /// The pages the clients show, which the server records.
     pub(crate) visible: Arc<Visible>,
     engine: Engine,
-    rx: Receiver<Input>,
 }
 
 impl Pending {
     /// Starts the engine's thread, which reads the project, checks it,
     /// and then applies the changes that queued meanwhile.
     pub(crate) fn spawn(self) -> Result<JoinHandle<()>, Error> {
-        let Self { mut engine, rx, .. } = self;
+        let Self { mut engine, .. } = self;
         thread::Builder::new()
             .name("folio-preview".into())
             .spawn(move || {
                 engine.load();
-                engine.run(&rx);
+                engine.run();
             })
             .map_err(|e| Error(format!("cannot start the preview: {e}")))
     }
@@ -455,34 +499,73 @@ struct Engine {
     current: Arc<AtomicU64>,
     /// The pages the clients show.
     visible: Arc<Visible>,
+    /// Whether the watcher reports when a file open for writing is
+    /// closed, which a source that reads shorter is held for.
+    closes: bool,
+    /// The paths truncated or written and not closed since.
+    open: BTreeSet<PathBuf>,
+    /// The sources that read shorter while they were written, and when
+    /// they are read anyway if their writer has not closed them.
+    held: BTreeMap<PathBuf, Instant>,
+    /// The revision of the check running, if one is.
+    running: Option<u64>,
+    /// Since when the pages have lagged behind the world: since the first
+    /// revision after the last one whose pages were sent.
+    lagging: Option<Instant>,
+    /// The changes that wait for the running check ([`MAX_LAG`]).
+    deferred: Vec<PathBuf>,
+    /// The held sources whose time ran out, read as they are when next
+    /// applied.
+    released: BTreeSet<PathBuf>,
+    /// What the engine is told.
+    rx: Receiver<Input>,
+    /// Inputs taken from `rx` to see whether events wait, handled before
+    /// the inputs after them.
+    queue: VecDeque<Input>,
 }
 
 impl Engine {
-    fn run(mut self, rx: &Receiver<Input>) {
+    fn run(mut self) {
         loop {
+            if !self.deferred.is_empty() && !self.lagging_behind() {
+                let paths = std::mem::take(&mut self.deferred);
+                self.apply(&paths);
+            }
             if self.dirty {
                 self.check();
             }
-            let input = match self.idle_at {
-                Some(at) => match rx.recv_deadline(at) {
-                    Ok(input) => input,
-                    Err(RecvTimeoutError::Timeout) => {
+            let release = self.held.values().min().copied();
+            let deadline = match (self.idle_at, release) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            let input = match self.recv(deadline) {
+                Ok(input) => input,
+                Err(RecvTimeoutError::Timeout) => {
+                    if release.is_some() && release == deadline {
+                        self.release();
+                    } else {
                         self.idle_at = None;
                         self.write_outputs();
-                        continue;
                     }
-                    Err(RecvTimeoutError::Disconnected) => return,
-                },
-                None => match rx.recv() {
-                    Ok(input) => input,
-                    Err(_) => return,
-                },
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => return,
             };
             match input {
-                Input::Paths(paths) => {
-                    let Some(paths) = self.debounce(rx, paths) else {
+                Input::Paths(paths, change) => {
+                    self.note(&paths, change);
+                    let Some(paths) = self.debounce(paths) else {
                         return;
                     };
+                    if self.lagging_behind() {
+                        // Applied once the running check sends its first
+                        // pages, which applying them now would cancel.
+                        self.deferred.extend(paths);
+                        continue;
+                    }
+                    let mut paths = paths;
+                    paths.append(&mut self.deferred);
                     self.apply(&paths);
                 }
                 other => {
@@ -497,7 +580,7 @@ impl Engine {
     /// Handles an input other than changed paths; `false` to stop.
     fn handle(&mut self, input: Input) -> bool {
         match input {
-            Input::Paths(_) => unreachable!("handled by the caller"),
+            Input::Paths(..) => unreachable!("handled by the caller"),
             Input::First(first) => self.first(*first),
             Input::Done(done) => self.done(*done),
             Input::Indexed(indexed) => self.indexed(*indexed),
@@ -511,12 +594,15 @@ impl Engine {
 
     /// Collects the paths of events that follow within the debounce
     /// interval of each other; `None` to stop.
-    fn debounce(&mut self, rx: &Receiver<Input>, mut paths: Vec<PathBuf>) -> Option<Vec<PathBuf>> {
+    fn debounce(&mut self, mut paths: Vec<PathBuf>) -> Option<Vec<PathBuf>> {
         let until = Instant::now() + MAX_DEBOUNCE;
         loop {
             let deadline = (Instant::now() + self.settings.debounce).min(until);
-            match rx.recv_deadline(deadline) {
-                Ok(Input::Paths(more)) => paths.extend(more),
+            match self.recv(Some(deadline)) {
+                Ok(Input::Paths(more, change)) => {
+                    self.note(&more, change);
+                    paths.extend(more);
+                }
                 Ok(other) => {
                     if !self.handle(other) {
                         return None;
@@ -525,6 +611,140 @@ impl Engine {
                 Err(RecvTimeoutError::Timeout) => return Some(paths),
                 Err(RecvTimeoutError::Disconnected) => return None,
             }
+        }
+    }
+
+    /// The next input: those queued first, then those from the channel,
+    /// waiting until `deadline` if there is one.
+    fn recv(&mut self, deadline: Option<Instant>) -> Result<Input, RecvTimeoutError> {
+        if let Some(input) = self.queue.pop_front() {
+            return Ok(input);
+        }
+        match deadline {
+            Some(at) => self.rx.recv_deadline(at),
+            None => self.rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+        }
+    }
+
+    /// Whether an event about `path` waits to be handled.
+    fn waiting(&mut self, path: &Path) -> bool {
+        self.queue.extend(self.rx.try_iter());
+        self.queue
+            .iter()
+            .any(|input| matches!(input, Input::Paths(paths, _) if paths.iter().any(|p| p == path)))
+    }
+
+    /// Records which paths are open for writing after an event.
+    fn note(&mut self, paths: &[PathBuf], change: Change) {
+        match change {
+            Change::Written => self.open.extend(paths.iter().cloned()),
+            Change::Closed => {
+                self.closes = true;
+                for path in paths {
+                    self.open.remove(path);
+                    // Read with the rest of the event's batch.
+                    self.held.remove(path);
+                }
+            }
+            Change::Other => {}
+        }
+    }
+
+    /// Whether the pages have lagged behind the world for so long that
+    /// changes wait for the running check ([`MAX_LAG`]).
+    fn lagging_behind(&self) -> bool {
+        self.running.is_some() && self.lagging.is_some_and(|since| since.elapsed() >= MAX_LAG)
+    }
+
+    /// Reads the held sources whose writers have not closed them in time.
+    fn release(&mut self) {
+        let now = Instant::now();
+        let due: Vec<PathBuf> = self
+            .held
+            .iter()
+            .filter(|(_, at)| **at <= now)
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in &due {
+            self.held.remove(path);
+            // Read as it is from now on, even if it is not closed.
+            self.open.remove(path);
+            self.released.insert(path.clone());
+        }
+        if self.lagging_behind() {
+            self.deferred.extend(due);
+        } else {
+            self.apply(&due);
+        }
+    }
+
+    /// Takes out of `paths` the sources that may be read between the
+    /// truncate and the write of a save in place ([`torn`]), and
+    /// holds them until their writers close them, [`MAX_HOLD`] at most.
+    /// Returns the sources left in `paths` with the world's text of each,
+    /// which [`Self::recheck`] checks again once they are read.
+    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Vec<(PathBuf, String, Source)> {
+        let released = std::mem::take(&mut self.released);
+        let mut left = Vec::new();
+        if !self.closes {
+            return left;
+        }
+        let Some(world) = &self.world else {
+            return left;
+        };
+        let mut held = Vec::new();
+        paths.retain(|path| {
+            if released.contains(path) {
+                return true;
+            }
+            let Some((rel, source)) = self
+                .loader_path(path)
+                .and_then(|rel| Some((rel.clone(), world.source(&rel)?)))
+            else {
+                return true;
+            };
+            let len = std::fs::metadata(path).map_or(0, |meta| meta.len());
+            let hold = torn(source.text().len() as u64, len, self.open.contains(path));
+            if hold {
+                held.push(path.clone());
+            } else {
+                left.push((path.clone(), rel, source));
+            }
+            !hold
+        });
+        let until = Instant::now() + MAX_HOLD;
+        for path in held {
+            self.held.entry(path).or_insert(until);
+        }
+        left
+    }
+
+    /// Puts back the world's text of the sources that read torn
+    /// ([`torn`]) after the loader read them, as their truncate or
+    /// write may have come between the check of [`Self::hold`] and the
+    /// read, and holds them; takes them out of `changed`.
+    fn recheck(&mut self, sources: Vec<(PathBuf, String, Source)>, changed: &mut BTreeSet<String>) {
+        let mut held = Vec::new();
+        for (path, rel, old) in sources {
+            if !changed.contains(&rel) {
+                continue;
+            }
+            let Some(new) = self.world.as_ref().and_then(|world| world.source(&rel)) else {
+                continue;
+            };
+            let (old_len, new_len) = (old.text().len() as u64, new.text().len() as u64);
+            let writing = new_len < old_len && (self.open.contains(&path) || self.waiting(&path));
+            if torn(old_len, new_len, writing)
+                && let Some(world) = &mut self.world
+                && world.set_source(&rel, old.text()).is_ok()
+            {
+                changed.remove(&rel);
+                held.push(path);
+            }
+        }
+        let until = Instant::now() + MAX_HOLD;
+        for path in held {
+            self.held.entry(path).or_insert(until);
         }
     }
 
@@ -566,6 +786,12 @@ impl Engine {
 
     /// Brings the world in step with the disk at the paths that changed.
     fn apply(&mut self, paths: &[PathBuf]) {
+        let mut paths = paths.to_vec();
+        let sources = self.hold(&mut paths);
+        if paths.is_empty() {
+            return;
+        }
+        let paths = &paths[..];
         let names = |name: &str| {
             paths
                 .iter()
@@ -592,7 +818,7 @@ impl Engine {
             paths.push(self.root.join(loader::MANIFEST));
             paths.push(self.root.join(loader::LOCKFILE));
         }
-        let update = match self.loader.update(world, &paths, &mut self.warnings) {
+        let mut update = match self.loader.update(world, &paths, &mut self.warnings) {
             Ok(update) => update,
             Err(e) => {
                 self.warnings.push(error(e.to_string()));
@@ -600,6 +826,7 @@ impl Engine {
                 return;
             }
         };
+        self.recheck(sources, &mut update.changed);
         if project_file {
             // Cleared only here, where the change is a new revision
             // (`edited` below), whose check schedules the writes that the
@@ -637,6 +864,7 @@ impl Engine {
 
     /// Marks the world as changed: a new revision, checked next.
     fn edited(&mut self) {
+        self.lagging.get_or_insert_with(Instant::now);
         self.revision += 1;
         self.current.store(self.revision, Ordering::Relaxed);
         self.dirty = true;
@@ -650,6 +878,7 @@ impl Engine {
     fn check(&mut self) {
         self.dirty = false;
         let revision = self.revision;
+        self.running = Some(revision);
         let warnings = std::mem::take(&mut self.warnings);
         let project = self.errors.clone();
         let tx = self.tx.clone();
@@ -726,6 +955,7 @@ impl Engine {
             });
         if spawned.is_err() {
             // Checked again with the next change.
+            self.running = None;
             self.dirty = true;
         }
     }
@@ -733,6 +963,9 @@ impl Engine {
     /// Sends what a check found, unless an edit has overtaken it.
     fn done(&mut self, done: Done) {
         let revision = done.revision;
+        if self.running == Some(revision) {
+            self.running = None;
+        }
         let Some(frame) = done.frame else {
             // Cancelled by an edit, whose revision is checked next.
             return;
@@ -741,6 +974,8 @@ impl Engine {
             self.settings.emit(Event::Stale { revision });
             return;
         }
+        // The pages are those of the world again.
+        self.lagging = None;
         let old = self.publish.borrow().clone();
         let mut pages = old.pages.clone();
         let mut lists = Vec::new();
@@ -863,6 +1098,7 @@ impl Engine {
             // The check's end is stale too, and says so.
             return;
         }
+        self.lagging = None;
         let old = self.publish.borrow().clone();
         let mut pages = old.pages.clone();
         let (lists, spans) = self.place(&mut pages, first.lists);
@@ -1274,6 +1510,17 @@ impl Files for Layered {
             .lines(id)
             .or_else(|| self.world.as_ref()?.lines(id))
     }
+}
+
+/// Whether a source whose world's text is `old` bytes long and which
+/// reads `new` bytes long may have been read between the truncate and the
+/// write of a save in place: it reads shorter while it is `writing` (open
+/// for writing, or with an event about it waiting); or it reads empty
+/// while the world's text is not, since its truncate may come after the
+/// close that the read follows. A file emptied on purpose is therefore
+/// read [`MAX_HOLD`] late.
+fn torn(old: u64, new: u64, writing: bool) -> bool {
+    (new == 0 && old > 0) || (new < old && writing)
 }
 
 /// An error that points at no source.
