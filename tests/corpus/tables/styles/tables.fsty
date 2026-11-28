@@ -1,0 +1,11 @@
+page { page-size: A5; margin-top: 15mm; margin-bottom: 15mm; margin-inner: 15mm; margin-outer: 15mm; }
+doc { font: "Source Serif 4"; font-size: 10pt; justify: true; hyphenate: true; }
+heading { font-size: 13pt; space-before: 8pt; space-after: 5pt; keep-with-next: true; }
+paragraph { space-after: 3pt; }
+grid { space-before: 4pt; space-after: 8pt; }
+cell { padding: 2pt 4pt; border-bottom: 0.4pt solid #808080; justify: false; }
+grid.results cell { align: end; }
+grid.results > cell:first { font-weight: bold; }
+grid.errors cell { border: 0.4pt solid #808080; }
+grid.notes { row-breakable: true; }
+grid.notes cell { padding: 0pt 6pt; border-bottom: none; justify: true; }

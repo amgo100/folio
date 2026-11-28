@@ -59,8 +59,8 @@ use folio_syntax::Span;
 use super::cache::Cache;
 use super::codes;
 use super::flow::{
-    BlockObject, Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin, ParagraphInfo,
-    Part, Shared, Sizes, Walk,
+    Band, BlockObject, Boundary, Caches, Constraint, Flow, Fx, Item, KEEP, Leaf, Origin,
+    ParagraphInfo, Part, Shared, Sizes, UNBREAKABLE, Walk,
 };
 use super::footnote::{self, Carried, NOTE_SPLIT, NoteSet, Placement};
 use super::master::{BlockBox, PageMaster};
@@ -229,7 +229,7 @@ pub struct LineRef {
 /// the first slice of the layout part of the flow state (SPEC §2.3), which
 /// the queue of notes carried over completes ([`Carried`]). It is small,
 /// `Eq` and hashes stably, so that it can key the page cache.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(super) struct State {
     /// The leaf of the flow the page starts in.
     item: usize,
@@ -240,6 +240,53 @@ pub(super) struct State {
     /// starts inside it, else zero: a paragraph keeps the breaks of the
     /// region it starts in.
     width: Abs,
+    /// When the page starts inside a band of a grid (SPEC §7.4), where
+    /// each of its cells continues; else empty.
+    band: EcoVec<CellAt>,
+}
+
+/// Where a cell of a band continues on the next page: where in its flow,
+/// and how far below the top of the band's part there it starts, for a
+/// cell of a later row that has not started yet.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct CellAt {
+    state: State,
+    wait: Abs,
+}
+
+impl CellAt {
+    /// How tall a cell is through each leaf of `run`, its flow read from
+    /// where it stands, from the top of the read: below what it waits,
+    /// from the top of its box or where it continues, to the bottom of the
+    /// leaf with what ends there. A break inside the cell drops the
+    /// spaces and leading there; its own box's padding and border stay at
+    /// its ends.
+    fn wait_heights(&self, run: &mut Run<'_>) -> Vec<Abs> {
+        let mut n = 0;
+        while run.get(n).is_some() {
+            n += 1;
+        }
+        if n == 0 {
+            return Vec::new();
+        }
+        let start = if self.state == State::START {
+            Walk::Start
+        } else {
+            Walk::Top
+        };
+        let mut y = self.wait + run.leaves[0].before.walk(start, |_, _| {});
+        let mut out = Vec::with_capacity(n);
+        for j in 0..n {
+            y += run.leaves[j].height();
+            let after = run.boundary(j + 1);
+            let how = if j + 1 == n { Walk::End } else { Walk::Bottom };
+            out.push(y + after.walk(how, |_, _| {}));
+            if j + 1 < n {
+                y += after.gap();
+            }
+        }
+        out
+    }
 }
 
 impl State {
@@ -248,7 +295,16 @@ impl State {
         item: 0,
         line: 0,
         width: Abs::zero(),
+        band: EcoVec::new(),
     };
+
+    /// The end of a flow of `len` leaves.
+    fn end(len: usize) -> Self {
+        Self {
+            item: len,
+            ..Self::START
+        }
+    }
 }
 
 /// A page as its builder made it: it does not depend on where in the flow
@@ -541,6 +597,7 @@ fn build_pages(
             block: regions.block,
             maths: &lines.maths,
         },
+        &lines.grids,
     );
     let paragraph = |item: usize| match flow.origins[item] {
         Origin::Paragraph(p) => p,
@@ -603,7 +660,7 @@ fn build_pages(
             flow: &flow,
             caches,
             master,
-            state,
+            state: state.clone(),
             queue: &queue,
             width,
             reserve,
@@ -627,7 +684,7 @@ fn build_pages(
         pages.push(Page { fragment, lines });
         state = State {
             item: state.item + out.next.item,
-            ..out.next
+            ..out.next.clone()
         };
         queue = out.queue.clone();
     }
@@ -832,6 +889,18 @@ fn report(db: &dyn Db, out: &PageOut) {
                  a page",
                 "no better break was found; set more or fewer `rule-lines`",
             ),
+            Constraint::UnbreakableRow(span) => (
+                span,
+                codes::BROKEN_UNBREAKABLE,
+                "a page break falls inside a row of this grid, which does not fit on one page",
+                "let its rows break with `row-breakable: true`, or shorten the row",
+            ),
+            Constraint::HeaderRows(span) => (
+                span,
+                codes::BROKEN_KEEP_WITH_NEXT,
+                "a page break falls inside this grid's header rows or directly after them",
+                "the header rows and the row after them do not fit on one page",
+            ),
         };
         diag::report(
             db,
@@ -900,11 +969,50 @@ pub(super) struct Placed {
     /// Whether the paragraph was broken at a width other than the flow's,
     /// or with sized objects: other breaks than [`lines`] reported.
     rebroken: bool,
+    /// For a part of a band of a grid, the part (SPEC §7.4).
+    pub(super) piece: Option<Piece>,
+}
+
+/// A part of a band of a grid, between two heights at which a page may
+/// break it: from the top of the band, or from where the page before broke
+/// it, each cell of the band breaking at the last boundary of its flow
+/// that fits (SPEC §7.4). The parts of a band that a page reads one after
+/// another are a *read* of it.
+#[derive(Debug, Clone)]
+pub(super) struct Piece {
+    /// The band.
+    pub(super) band: Arc<Band>,
+    /// Where each cell starts in the read: its state, and how far below
+    /// the read's top.
+    starts: EcoVec<CellAt>,
+    /// Whether the read starts at the band's top.
+    fresh: bool,
+    /// Which read of the run it is part of: the index of its first part.
+    read: usize,
+    /// Where the part starts and ends, from the top of the read.
+    from: Abs,
+    to: Abs,
+    /// How many leaves of each cell's flow the read has placed by the end
+    /// of the part, and how many it has in all.
+    kept: EcoVec<usize>,
+    total: EcoVec<usize>,
+    /// Where each cell stands at the start of the part.
+    at: EcoVec<CellAt>,
+    /// Whether it is a header band set again at the top of a page, which
+    /// is drawn as a copy and anchors no footnotes.
+    pub(super) repeat: bool,
+    /// The lines of the cells that the part places: each its cell, the
+    /// leaf of the cell's flow and the line, so that their footnotes are
+    /// placed at the page's foot (SPEC §7.4, §7.8).
+    pub(super) lines: EcoVec<(usize, usize, usize)>,
 }
 
 impl Placed {
     /// How tall it is: a line from its ascent to its descent.
     pub(super) fn height(&self) -> Abs {
+        if let Some(piece) = &self.piece {
+            return piece.to - piece.from;
+        }
         match &self.line {
             Some((paragraph, line)) => {
                 let line = &paragraph.layout.lines[*line];
@@ -930,10 +1038,16 @@ pub(super) struct Run<'a> {
     pub(super) leaves: Vec<Placed>,
     /// The next leaf of the flow to read.
     next: usize,
+    /// How many of the first leaves are the header bands of a grid set
+    /// again (SPEC §7.4): a page does not end among them, nor directly
+    /// after them, so it takes at least one leaf more.
+    pub(super) fixed: usize,
 }
 
 impl<'a> Run<'a> {
-    /// The leaves of `flow` from `state` on, in the region of `page`.
+    /// The leaves of `flow` from `state` on, in the region of `page`. A
+    /// run that starts at a band after a grid's header bands starts with
+    /// those bands, set again (SPEC §7.4).
     pub(super) fn new(page: &'a PageRequest<'a>, flow: &'a Flow, state: State, main: bool) -> Self {
         let mut run = Self {
             page,
@@ -941,12 +1055,196 @@ impl<'a> Run<'a> {
             main,
             leaves: Vec::new(),
             next: state.item,
+            fixed: 0,
         };
-        if state.line > 0 {
+        if let Some(item) = flow.items.get(state.item)
+            && let Leaf::Band(band) = &item.leaf
+        {
+            let starts = (!state.band.is_empty()).then(|| state.band.clone());
+            let mut before = match starts {
+                None => item.before.clone(),
+                Some(_) => Boundary::default(),
+            };
+            for header in &band.headers {
+                run.read_band(state.item, header, None, before, true);
+                before = Boundary::default();
+            }
+            if !band.headers.is_empty() {
+                before.penalty += KEEP;
+                before.constraints.push(Constraint::HeaderRows(band.span));
+            }
+            run.fixed = run.leaves.len();
+            run.read_band(state.item, band, starts, before, false);
+            run.next += 1;
+        } else if state.line > 0 {
             run.read(state.item, state.width, state.line);
             run.next += 1;
         }
         run
+    }
+
+    /// The region cells are laid out in: the master's body, whatever the
+    /// page's width, as their tracks were sized in it.
+    fn cell_page(&self) -> PageRequest<'a> {
+        let page = self.page;
+        PageRequest {
+            flow: page.flow,
+            caches: page.caches,
+            master: page.master,
+            state: State::START,
+            queue: &[],
+            width: page.master.body.size.width,
+            reserve: None,
+        }
+    }
+
+    /// Adds the parts of band `band`, leaf `k` of the flow, from where its
+    /// cells stand, `starts`, or from its top: the first part after
+    /// `before`, the others after a break inside the band, which costs
+    /// what each cell's break costs, plus [`UNBREAKABLE`] without
+    /// `row-breakable: true`. A header band set again, `repeat`, is one
+    /// part.
+    fn read_band(
+        &mut self,
+        k: usize,
+        band: &Arc<Band>,
+        starts: Option<EcoVec<CellAt>>,
+        before: Boundary,
+        repeat: bool,
+    ) {
+        let fresh = starts.is_none();
+        let starts = starts.unwrap_or_else(|| {
+            band.cells
+                .iter()
+                .map(|c| CellAt {
+                    state: State::START,
+                    wait: c.top,
+                })
+                .collect()
+        });
+        let page = self.cell_page();
+        let mut runs: Vec<Run<'_>> = band
+            .cells
+            .iter()
+            .zip(&starts)
+            .map(|(cell, at)| Run::new(&page, &cell.flow, at.state.clone(), false))
+            .collect();
+        // How tall each cell is through each of its leaves, from the top
+        // of the read.
+        let heights: Vec<Vec<Abs>> = runs
+            .iter_mut()
+            .zip(&starts)
+            .map(|(run, at)| at.wait_heights(run))
+            .collect();
+        let floor = if fresh { band.height } else { Abs::zero() };
+        let full = heights
+            .iter()
+            .filter_map(|h| h.last().copied())
+            .fold(floor, Abs::max);
+        let mut cuts: Vec<Abs> = if repeat {
+            Vec::new()
+        } else {
+            heights
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|&c| c.to_pt() > EPSILON && c.to_pt() < full.to_pt() - EPSILON)
+                .collect()
+        };
+        cuts.push(full);
+        cuts.sort_by(|a, b| a.to_pt().total_cmp(&b.to_pt()));
+        cuts.dedup_by(|a, b| (a.to_pt() - b.to_pt()).abs() <= EPSILON);
+
+        let item = &self.flow.items[k];
+        let read = self.leaves.len();
+        let total: EcoVec<usize> = heights.iter().map(Vec::len).collect();
+        let mut at: Vec<CellAt> = starts.iter().cloned().collect();
+        let mut kept_before: Vec<usize> = vec![0; heights.len()];
+        let mut from = Abs::zero();
+        let mut before = Some(before);
+        for (index, &cut) in cuts.iter().enumerate() {
+            let last = index + 1 == cuts.len();
+            let kept: EcoVec<usize> = heights
+                .iter()
+                .map(|h| {
+                    if last {
+                        h.len()
+                    } else {
+                        h.partition_point(|&y| y.to_pt() <= cut.to_pt() + EPSILON)
+                    }
+                })
+                .collect();
+            let mut lines = EcoVec::new();
+            if !repeat {
+                for (c, run) in runs.iter().enumerate() {
+                    for leaf in &run.leaves[kept_before[c]..kept[c]] {
+                        if let Some((_, line)) = &leaf.line {
+                            lines.push((c, leaf.item, *line));
+                        }
+                    }
+                }
+            }
+            let boundary = match before.take() {
+                Some(boundary) => boundary,
+                None => Boundary::default(),
+            };
+            self.leaves.push(Placed {
+                before: boundary,
+                item: k,
+                line: None,
+                object: None,
+                rebroken: false,
+                piece: Some(Piece {
+                    band: band.clone(),
+                    starts: starts.clone(),
+                    fresh,
+                    read,
+                    from,
+                    to: cut,
+                    kept: kept.clone(),
+                    total: total.clone(),
+                    at: at.iter().cloned().collect(),
+                    repeat,
+                    lines,
+                }),
+            });
+            if last {
+                break;
+            }
+            // What a break after this part costs, and where each cell
+            // continues.
+            let mut next = Boundary::default();
+            if !band.breakable {
+                next.penalty += UNBREAKABLE;
+                next.constraints.push(Constraint::UnbreakableRow(band.span));
+            }
+            next.penalty += item.inside.penalty;
+            next.constraints
+                .extend(item.inside.constraints.iter().copied());
+            for (c, run) in runs.iter().enumerate() {
+                let start = &starts[c];
+                let m = kept[c];
+                at[c] = if m == 0 {
+                    CellAt {
+                        state: start.state.clone(),
+                        wait: (start.wait - cut).max(Abs::zero()),
+                    }
+                } else {
+                    if m < total[c] {
+                        let b = run.boundary(m);
+                        next.penalty += b.penalty;
+                        next.constraints.extend(b.constraints.iter().copied());
+                    }
+                    CellAt {
+                        state: run.state_at(m, &start.state),
+                        wait: Abs::zero(),
+                    }
+                };
+            }
+            before = Some(next);
+            kept_before = kept.into_iter().collect();
+            from = cut;
+        }
     }
 
     /// Leaf `i`, if the flow has it.
@@ -971,8 +1269,21 @@ impl<'a> Run<'a> {
     /// run that started at `from`: the leaf of the flow and the line of its
     /// paragraph, with the width the paragraph was broken at when that is
     /// inside it; or the end of the flow.
-    pub(super) fn state_at(&self, end: usize, from: State) -> State {
+    pub(super) fn state_at(&self, end: usize, from: &State) -> State {
         match self.leaves.get(end) {
+            Some(Placed {
+                item,
+                piece: Some(piece),
+                ..
+            }) => State {
+                item: *item,
+                band: if piece.fresh && piece.from == Abs::zero() {
+                    EcoVec::new()
+                } else {
+                    piece.at.clone()
+                },
+                ..State::START
+            },
             Some(leaf) => {
                 let line = leaf.line.as_ref().map_or(0, |(_, line)| *line);
                 let width = if line == 0 {
@@ -986,12 +1297,10 @@ impl<'a> Run<'a> {
                     item: leaf.item,
                     line,
                     width,
+                    band: EcoVec::new(),
                 }
             }
-            None => State {
-                item: self.flow.items.len(),
-                ..State::START
-            },
+            None => State::end(self.flow.items.len()),
         }
     }
 
@@ -1013,6 +1322,7 @@ impl<'a> Run<'a> {
                 line: Some((mark.clone(), 0)),
                 object: None,
                 rebroken: false,
+                piece: None,
             },
         );
     }
@@ -1028,9 +1338,14 @@ impl<'a> Run<'a> {
             line: None,
             object: None,
             rebroken: false,
+            piece: None,
         };
         match &item.leaf {
             Leaf::Empty => self.leaves.push(empty(&item.before)),
+            Leaf::Band(band) => {
+                let before = item.before.clone();
+                self.read_band(k, band, None, before, false);
+            }
             Leaf::Box(object) => {
                 let body = page.master.body.size.width;
                 self.leaves.push(Placed {
@@ -1061,6 +1376,7 @@ impl<'a> Run<'a> {
                         line: Some((paragraph.clone(), line)),
                         object: None,
                         rebroken,
+                        piece: None,
                     });
                 }
             }
@@ -1105,6 +1421,9 @@ fn break_page<'a>(run: &mut Run<'a>, notes: &mut NoteSet<'a>, height: Abs, first
     };
     let mut reserved = Abs::zero();
     let mut best: Option<(usize, f64, Placement)> = None;
+    // A page takes its first leaf, and the leaf after a grid's header
+    // bands set again.
+    let must = run.fixed;
     let mut k = 0;
     loop {
         y += run.leaves[k].height();
@@ -1116,9 +1435,9 @@ fn break_page<'a>(run: &mut Run<'a>, notes: &mut NoteSet<'a>, height: Abs, first
         let bottom = y + boundary.walk(Walk::Bottom, |_, _| {});
         // The notes take what the body's content leaves, and a page must
         // take its first leaf.
-        let placed = notes.place(space - bottom, k == 0);
+        let placed = notes.place(space - bottom, k <= must);
         let fits = bottom.to_pt() <= space.to_pt() + EPSILON && placed.ok;
-        if !fits && k > 0 {
+        if !fits && k > must {
             let (end, _, notes) = best.expect("a break before the leaf that overflows");
             return Break {
                 end,
@@ -1142,8 +1461,15 @@ fn break_page<'a>(run: &mut Run<'a>, notes: &mut NoteSet<'a>, height: Abs, first
         let empty = ((space - used).to_pt() / height.to_pt()).max(0.0);
         let split = if placed.split { NOTE_SPLIT } else { 0.0 };
         let cost = FILL * empty * empty + boundary.penalty + split;
-        if best.as_ref().is_none_or(|(_, c, _)| cost <= *c) {
+        if k >= must && best.as_ref().is_none_or(|(_, c, _)| cost <= *c) {
             best = Some((k + 1, cost, placed.clone()));
+        }
+        if !fits && k < must {
+            // The header bands set again overflow the page: the leaf after
+            // them still goes on it.
+            y += boundary.gap();
+            k += 1;
+            continue;
         }
         if !fits {
             // The first leaf alone overflows the page.
@@ -1155,10 +1481,11 @@ fn break_page<'a>(run: &mut Run<'a>, notes: &mut NoteSet<'a>, height: Abs, first
                 notes: placed,
             };
         }
-        if placed.split {
+        if placed.split
+            && let Some((end, _, notes)) = best.clone()
+        {
             // The notes fill the page: a later break would only split
             // them further (SPEC §7.8).
-            let (end, _, notes) = best.expect("this break at least");
             return Break {
                 end,
                 read: k + 1,
@@ -1175,7 +1502,7 @@ fn break_page<'a>(run: &mut Run<'a>, notes: &mut NoteSet<'a>, height: Abs, first
 /// Breaks and assembles a page; returns it with the run it read and the
 /// leaf of the run after the last whose boundary after it was read.
 fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
-    let mut run = Run::new(page, page.flow, page.state, true);
+    let mut run = Run::new(page, page.flow, page.state.clone(), true);
     let mut notes = NoteSet::new(page);
     let first = page.state == State::START && page.queue.is_empty();
     let height = page.master.body.size.height;
@@ -1241,7 +1568,7 @@ fn layout_page<'a>(page: &'a PageRequest<'a>) -> (PageOut, Run<'a>, usize) {
             _ => None,
         })
         .collect();
-    let next = run.state_at(found.end, page.state);
+    let next = run.state_at(found.end, &page.state);
     let next = State {
         item: next.item - start,
         ..next
@@ -1288,6 +1615,9 @@ struct Assembler {
     /// How much wider the page's body is than the master's, and so every
     /// block on it.
     widen: Abs,
+    /// Where the outermost box ends at the least, from the top of the
+    /// body: the foot of a cell's row (SPEC §7.4); else zero.
+    floor: Abs,
 }
 
 impl Assembler {
@@ -1312,6 +1642,11 @@ impl Assembler {
     fn close(&mut self, y: Abs, continues: bool) {
         let Some(open) = self.open.pop() else {
             return;
+        };
+        let y = if self.open.is_empty() {
+            y.max(self.floor)
+        } else {
+            y
         };
         let block = &open.block;
         let top = open.top;
@@ -1365,6 +1700,7 @@ fn assemble(run: &Run<'_>, notes: &NoteSet<'_>, found: &Break, first: bool) -> F
         items: Vec::new(),
         baselines: None,
         widen,
+        floor: Abs::zero(),
     };
 
     // The notes, set from the top of their area at the foot of the body:
@@ -1386,7 +1722,15 @@ fn assemble(run: &Run<'_>, notes: &NoteSet<'_>, found: &Break, first: bool) -> F
         }
         last = Some(i);
         let mut asm = new_asm();
-        y = lay(&note.run, m, false, &mut asm, y, &mut |_, _| {});
+        y = lay(
+            &note.run,
+            m,
+            Walk::Top,
+            Walk::Bottom,
+            &mut asm,
+            y,
+            &mut |_, _| {},
+        );
         while !asm.open.is_empty() {
             asm.close(y, true);
         }
@@ -1404,7 +1748,16 @@ fn assemble(run: &Run<'_>, notes: &NoteSet<'_>, found: &Break, first: bool) -> F
                 }
             }
         };
-        let y = lay(run, found.end, first, &mut asm, Abs::zero(), &mut attach);
+        let start = if first { Walk::Through } else { Walk::Top };
+        let y = lay(
+            run,
+            found.end,
+            start,
+            Walk::Bottom,
+            &mut asm,
+            Abs::zero(),
+            &mut attach,
+        );
         while !asm.open.is_empty() {
             asm.close(y, true);
         }
@@ -1443,17 +1796,16 @@ fn assemble(run: &Run<'_>, notes: &NoteSet<'_>, found: &Break, first: bool) -> F
 fn lay(
     run: &Run<'_>,
     end: usize,
-    first: bool,
+    start: Walk,
+    end_walk: Walk,
     asm: &mut Assembler,
     mut y: Abs,
     after: &mut dyn FnMut(usize, &mut Assembler),
 ) -> Abs {
     let head = &run.leaves[0];
-    if first {
+    if matches!(start, Walk::Through | Walk::Start) {
         let base = y;
-        y += head
-            .before
-            .walk(Walk::Through, |p, at| asm.event(p, base + at));
+        y += head.before.walk(start, |p, at| asm.event(p, base + at));
     } else {
         let stack = &run.flow.items[head.item].stack;
         let continued = stack.len().saturating_sub(head.before.opens());
@@ -1470,9 +1822,24 @@ fn lay(
         let base = y;
         y += head.before.walk(Walk::Top, |p, at| asm.event(p, base + at));
     }
+    // The top of the read of a band whose parts are being laid.
+    let mut band_top: Option<Abs> = None;
     for k in 0..end {
         let leaf = &run.leaves[k];
-        if let Some((paragraph, line)) = &leaf.line {
+        if let Some(piece) = &leaf.piece {
+            // A read of a band is drawn once its last part on the page is
+            // reached.
+            let top = *band_top.get_or_insert(y);
+            let ends = k + 1 == end
+                || run.leaves[k + 1]
+                    .piece
+                    .as_ref()
+                    .is_none_or(|next| next.read != piece.read);
+            if ends {
+                draw_band(run, piece, top, asm);
+                band_top = None;
+            }
+        } else if let Some((paragraph, line)) = &leaf.line {
             let baseline = y + paragraph.layout.lines[*line].ascent;
             let mut runs = Vec::new();
             set_line(paragraph, *line, baseline, &mut runs);
@@ -1541,8 +1908,84 @@ fn lay(
     let base = y;
     y += run
         .boundary(end)
-        .walk(Walk::Bottom, |p, at| asm.event(p, base + at));
+        .walk(end_walk, |p, at| asm.event(p, base + at));
     y
+}
+
+/// Draws the cells of a read of a band through `piece`, its last part on
+/// the page, from `top` (SPEC §7.4): each cell's leaves placed, in its box,
+/// which reaches the foot of the band's part where the cell continues or
+/// its last row is the band's last, and the bottom of its last row where
+/// the read is the band's whole. A header band set again is drawn as a
+/// copy, whose boxes name no element instance.
+fn draw_band(run: &Run<'_>, piece: &Piece, top: Abs, asm: &mut Assembler) {
+    let page = run.cell_page();
+    let height = piece.to;
+    for (c, cell) in piece.band.cells.iter().enumerate() {
+        let kept = piece.kept[c];
+        if kept == 0 {
+            continue;
+        }
+        let start = &piece.starts[c];
+        let mut cell_run = Run::new(&page, &cell.flow, start.state.clone(), false);
+        cell_run.get(kept - 1);
+        let complete = kept == piece.total[c];
+        let floor = if !complete || (cell.last && !piece.fresh) {
+            top + height
+        } else if piece.fresh {
+            top + cell.bottom.min(height)
+        } else {
+            Abs::zero()
+        };
+        let mut sub = Assembler {
+            open: Vec::new(),
+            items: Vec::new(),
+            baselines: None,
+            widen: asm.widen,
+            floor,
+        };
+        let begin = if start.state == State::START {
+            Walk::Start
+        } else {
+            Walk::Top
+        };
+        let finish = if complete { Walk::End } else { Walk::Bottom };
+        let y = lay(
+            &cell_run,
+            kept,
+            begin,
+            finish,
+            &mut sub,
+            top + start.wait,
+            &mut |_, _| {},
+        );
+        while !sub.open.is_empty() {
+            sub.close(y, true);
+        }
+        let mut items = sub.items;
+        if piece.repeat {
+            detach(&mut items);
+        }
+        for (pos, item) in items {
+            asm.add(pos, item);
+        }
+        if let Some((first, last)) = sub.baselines {
+            asm.baseline(first);
+            asm.baseline(last);
+        }
+    }
+}
+
+/// Makes the boxes among `items` name no element instance: they are a
+/// copy, such as a header band set again (SPEC §7.4).
+fn detach(items: &mut [(Point, FragmentItem)]) {
+    for (_, item) in items {
+        if let FragmentItem::Group(group) = item {
+            group.source = Location::DETACHED.source;
+            group.instance = Location::DETACHED.instance;
+            detach(group.items.make_mut());
+        }
+    }
 }
 
 /// Draws a block's background and borders into its fragment: the top
@@ -1627,8 +2070,8 @@ type PageKey = (PageMaster, Abs, bool, u64);
 type Reserves = Arc<[(usize, usize, Abs)]>;
 
 struct Entry {
-    /// The line and width of the state the page started at.
-    state: (usize, Abs),
+    /// The state the page started at, but for its leaf.
+    state: State,
     /// The notes carried over to the page (SPEC §7.8).
     queue: EcoVec<Carried>,
     /// The leaves of the flow the builder read.
@@ -1687,7 +2130,7 @@ impl PageCache {
     /// A page: memoised, or made now; with its fragment dressed as a box
     /// of `root`.
     fn page(&self, page: &PageRequest<'_>, root: Location) -> (Arc<PageOut>, Fragment) {
-        let (flow, state, now) = (page.flow, page.state, page.caches.now);
+        let (flow, state, now) = (page.flow, &page.state, page.caches.now);
         let mut start = Fx::default();
         // A page of notes carried over past the end of the flow starts at
         // no leaf.
@@ -1697,11 +2140,12 @@ impl PageCache {
                 .map_or(0, |i| i.leaf.fingerprint()),
         );
         start.write_usize(state.line);
+        state.band.hash(&mut start);
         start.write_usize(page.queue.len());
         let key = (
             page.master,
             page.width,
-            state == State::START,
+            *state == State::START,
             start.finish(),
         );
         if let Some(hit) = self.find(&key, page, root) {
@@ -1724,7 +2168,10 @@ impl PageCache {
                 .collect()
         });
         let entry = Entry {
-            state: (state.line, state.width),
+            state: State {
+                item: 0,
+                ..state.clone()
+            },
             queue: page.queue.iter().cloned().collect(),
             items: flow.items[state.item..stop].to_vec(),
             end: run.leaves.get(read).is_none().then(|| flow.end.clone()),
@@ -1808,8 +2255,11 @@ impl Entry {
     /// has, from there on, what this page's builder read, but for what its
     /// lines reserve.
     fn matches(&self, page: &PageRequest<'_>) -> bool {
-        let (flow, state) = (page.flow, page.state);
-        if self.state != (state.line, state.width) || self.queue[..] != *page.queue {
+        let (flow, state) = (page.flow, &page.state);
+        let same = self.state.line == state.line
+            && self.state.width == state.width
+            && self.state.band == state.band;
+        if !same || self.queue[..] != *page.queue {
             return false;
         }
         let stop = state.item + self.items.len();

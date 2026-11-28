@@ -19,8 +19,8 @@ use folio_text::{Glyph, Lang, Paragraph, Segment, SegmentKind, Shaped, TextFont}
 
 use super::flow::Fx;
 use super::paragraph::{
-    LineSlot, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle, SegmentMetrics,
-    hyphen_glyphs, layout_paragraph,
+    LineSlot, Measures, ObjectMetrics, ParagraphInput, ParagraphLayout, ParagraphStyle,
+    SegmentMetrics, hyphen_glyphs, layout_paragraph, measure_paragraph,
 };
 
 /// How many calls of [`Cache::layout_all`] a paragraph's lines are kept
@@ -62,6 +62,9 @@ pub struct Cache {
     numbers: Mutex<HashMap<NumberKey, (Option<SetText>, u64)>>,
     /// The math fonts, by their face, each read once.
     math_fonts: Mutex<HashMap<(usize, Font), (MathFont, u64)>>,
+    /// Paragraphs' min-content and max-content widths (SPEC §7.4), keyed
+    /// as their lines are but without widths, forgotten like paragraphs.
+    measures: Mutex<HashMap<Key, (Measures, u64)>>,
 }
 
 /// An equation's number: its text, what it is set with, and its source.
@@ -325,10 +328,26 @@ impl Cache {
             lock(&self.maths).retain(|_, (_, used)| *used + MAX_AGE >= now);
             lock(&self.numbers).retain(|_, (_, used)| *used + MAX_AGE >= now);
             lock(&self.math_fonts).retain(|_, (_, used)| *used + MAX_AGE >= now);
+            lock(&self.measures).retain(|_, (_, used)| *used + MAX_AGE >= now);
         }
         out.into_iter()
             .map(|layout| layout.expect("every paragraph is broken"))
             .collect()
+    }
+
+    /// A paragraph's min-content and max-content widths
+    /// ([`measure_paragraph`]), memoised with its content and the style
+    /// values the paragraph builder reads (SPEC §7.4).
+    pub fn measures(&self, input: &ParagraphInput<'_>) -> Measures {
+        let now = self.clock.load(Ordering::Relaxed);
+        let key = Key::new(input, &[]);
+        if let Some((found, used)) = lock(&self.measures).get_mut(&key) {
+            *used = now;
+            return *found;
+        }
+        let measured = measure_paragraph(input);
+        lock(&self.measures).insert(key, (measured, now));
+        measured
     }
 
     /// The glyphs of a hyphen `c` in a segment's font, features and

@@ -178,7 +178,43 @@ pub struct TextBlock {
     pub part: Option<Name>,
     /// What it holds, in order.
     pub children: EcoVec<TextFlow>,
+    /// What the element's own block is in a table (SPEC §7.4): a grid or
+    /// a cell, with the fields layout reads; `None` for any other block
+    /// and for parts.
+    pub table: Option<TableRole>,
 }
+
+/// What a block is in a table (SPEC §7.4).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum TableRole {
+    /// A `grid`, whose blocks are its cells.
+    Grid {
+        /// How many of its first rows are header rows, which are set again
+        /// at the top of every page that continues it.
+        header_rows: usize,
+    },
+    /// A `cell` of a grid.
+    Cell(CellSpec),
+}
+
+/// Where a cell stands in its grid and how far it spans, as its fields
+/// give them: spans of at least one track, and positions counted from 1.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct CellSpec {
+    /// The columns it spans.
+    pub colspan: usize,
+    /// The rows it spans.
+    pub rowspan: usize,
+    /// Its first column, from 1, where it is placed explicitly.
+    pub column: Option<usize>,
+    /// Its first row, from 1, where it is placed explicitly.
+    pub row: Option<usize>,
+}
+
+/// The most tracks a span or position of a cell counts: more is taken as
+/// this many, with a warning, so that a mistyped number cannot make a
+/// grid of millions of tracks.
+pub const MAX_TRACKS: usize = 1000;
 
 /// What a block holds.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -533,14 +569,61 @@ impl Collector<'_> {
     /// Opens a block of a style: the box of an element, or of its part
     /// `part`.
     fn open(&mut self, style: &ComputedStyle, element: &Element, part: Option<Name>) {
+        let table = if part.is_none() {
+            self.table_role(element)
+        } else {
+            None
+        };
         self.blocks.push(TextBlock {
             style: style.clone(),
             span: element.span,
             location: element.location,
             element: element.name.clone(),
+            table,
             part,
             children: EcoVec::new(),
         });
+    }
+
+    /// What an element's block is in a table, with its fields checked: a
+    /// span or position below 1, or above [`MAX_TRACKS`], is a warning, and
+    /// taken as the nearest it may be.
+    fn table_role(&mut self, element: &Element) -> Option<TableRole> {
+        let mut int = |field: &str, min: i64| -> Option<usize> {
+            let eval::Value::Int(n) = element.field(field)? else {
+                return None;
+            };
+            let max = MAX_TRACKS as i64;
+            if *n < min || *n > max {
+                self.report_once(
+                    eco_format!("table-field:{:?}:{field}", element.location),
+                    Diagnostic::warning(
+                        element.span,
+                        eco_format!(
+                            "`{field}` of `{}` is {n}; it is taken as {}",
+                            element.name,
+                            (*n).clamp(min, max)
+                        ),
+                    )
+                    .with_hint(eco_format!("it counts from {min} to {max}")),
+                );
+            }
+            usize::try_from((*n).clamp(min, max)).ok()
+        };
+        if is_builtin(&element.name, "grid") {
+            return Some(TableRole::Grid {
+                header_rows: int("header-rows", 0).unwrap_or(0),
+            });
+        }
+        if is_builtin(&element.name, "cell") {
+            return Some(TableRole::Cell(CellSpec {
+                colspan: int("colspan", 1).unwrap_or(1),
+                rowspan: int("rowspan", 1).unwrap_or(1),
+                column: int("column", 1),
+                row: int("row", 1),
+            }));
+        }
+        None
     }
 
     /// Closes the innermost block and adds it to its parent.
@@ -655,6 +738,10 @@ impl Collector<'_> {
             }
             if is_builtin(&element.name, "math") {
                 self.not_laid_out(element);
+                return;
+            }
+            // An empty grid or cell is laid out as such (SPEC §7.4).
+            if is_builtin(&element.name, "grid") || is_builtin(&element.name, "cell") {
                 return;
             }
             self.report_once(

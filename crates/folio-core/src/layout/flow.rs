@@ -50,7 +50,8 @@ use folio_syntax::Span;
 use folio_text::{Glyph, ItemKind, Shaped};
 
 use super::cache::Cache;
-use super::master::{BlockBox, BreakBefore, Rules, length};
+use super::grid::{GridLayout, Measurer, Place, bands, total};
+use super::master::{BlockBox, BreakBefore, Rules, Sides, length};
 use super::math::{Display, Lead, Maths, display_content, laid_image};
 use super::page::{SizeBlock, SizeObject};
 use super::paragraph::{
@@ -60,7 +61,7 @@ use super::set::set_line;
 use super::{FaceMetrics, input_with, paragraph_style};
 use crate::fonts::Fonts;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{Text, TextBlock, TextFlow, TextImage, TextSource};
+use crate::text::{TableRole, Text, TextBlock, TextFlow, TextImage, TextSource};
 
 /// The cost of a break that leaves a widow or an orphan (TeX's
 /// `\widowpenalty` and `\clubpenalty`).
@@ -77,6 +78,11 @@ pub const UNBREAKABLE: f64 = 100_000.0;
 /// content width of the block of each display, by its index in
 /// [`Text::maths`](crate::text::Text::maths). One walk of the blocks gives
 /// both.
+///
+/// Without a [`Measurer`], the cells of a grid are as wide as the grid:
+/// what the sizing of images reads before paragraphs are shaped. With one,
+/// grids are laid out (SPEC §7.4), each cell's content is as wide as its
+/// tracks, and the third value holds the grids laid out.
 pub(super) fn slots(
     root: &TextBlock,
     notes: &[TextBlock],
@@ -85,18 +91,57 @@ pub(super) fn slots(
     count: usize,
     maths: &[crate::text::TextMath],
 ) -> (Vec<LineSlot>, Vec<(usize, Abs)>) {
-    struct Walk<'a> {
+    let (slots, widths, _) = slots_with(root, notes, props, width, count, maths, None);
+    (slots, widths)
+}
+
+/// The slots of [`slots`], with grids laid out by `measurer` where it is
+/// given, and the grids laid out.
+pub(super) fn slots_with(
+    root: &TextBlock,
+    notes: &[TextBlock],
+    props: &Properties,
+    width: Abs,
+    count: usize,
+    maths: &[crate::text::TextMath],
+    measurer: Option<&mut Measurer<'_>>,
+) -> (Vec<LineSlot>, Vec<(usize, Abs)>, Vec<GridLayout>) {
+    struct Walk<'a, 'm, 'p> {
         props: &'a Properties,
         displays: HashMap<Location, usize>,
         slots: Vec<LineSlot>,
         widths: Vec<(usize, Abs)>,
+        measurer: Option<&'m mut Measurer<'p>>,
+        grids: Vec<GridLayout>,
     }
-    fn walk(block: &TextBlock, boxed: &BlockBox, w: &mut Walk<'_>) {
+    fn walk(block: &TextBlock, boxed: &BlockBox, w: &mut Walk<'_, '_, '_>) {
         let (offset, width) = boxed.content();
         if block.part.is_none()
             && let Some(&i) = w.displays.get(&block.location)
         {
             w.widths.push((i, width));
+        }
+        let grid = match (&block.table, w.measurer.as_deref_mut()) {
+            (Some(TableRole::Grid { .. }), Some(measurer)) => Some(measurer.grid(block, boxed)),
+            _ => None,
+        };
+        if let Some(layout) = grid {
+            for (child, place) in block.children.iter().zip(layout.places.iter()) {
+                let (x, width) = layout.cell_box(place, offset);
+                match child {
+                    TextFlow::Paragraph(i) => {
+                        if let Some(slot) = w.slots.get_mut(*i) {
+                            *slot = LineSlot { offset: x, width };
+                        }
+                    }
+                    TextFlow::Block(b) => {
+                        let cell = BlockBox::of(&b.style, w.props, b.span, x, width);
+                        walk(b, &cell, w);
+                    }
+                }
+            }
+            w.grids.push(layout);
+            return;
         }
         for child in &block.children {
             match child {
@@ -110,6 +155,8 @@ pub(super) fn slots(
         }
     }
     let mut w = Walk {
+        measurer,
+        grids: Vec::new(),
         props,
         displays: maths
             .iter()
@@ -133,7 +180,7 @@ pub(super) fn slots(
         let note_box = BlockBox::of(&note.style, props, note.span, Abs::zero(), width);
         walk(note, &note_box, &mut w);
     }
-    (w.slots, w.widths)
+    (w.slots, w.widths, w.grids)
 }
 
 /// A paragraph broken into lines, with what breaking it at another width
@@ -415,6 +462,48 @@ pub(super) enum Leaf {
     Empty,
     /// The sized content of a block that holds no paragraphs.
     Box(Arc<BlockObject>),
+    /// A band of a grid (SPEC §7.4): a row, or rows that a cell spans,
+    /// with its cells side by side.
+    Band(Arc<Band>),
+}
+
+/// A band of a grid (SPEC §7.4): one row, or the rows that cells spanning
+/// rows join, with its cells side by side, each a flow of its own. It is
+/// one leaf of the flow; the page builder breaks inside it only where its
+/// grid has `row-breakable: true`, or where it fits on no page.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct Band {
+    /// The cells that start in it, in the order of the grid's blocks.
+    pub cells: EcoVec<BandCell>,
+    /// How tall it is, unbroken: its rows' heights added up.
+    pub height: Abs,
+    /// Whether a page break may fall inside it at no extra cost.
+    pub breakable: bool,
+    /// The grid's element.
+    pub span: Span,
+    /// Whether it is a header band, set again on every page that
+    /// continues its grid.
+    pub header: bool,
+    /// For a band after a grid's header bands, the header bands, which the
+    /// page builder sets again at the top of a page that starts with it.
+    pub headers: EcoVec<Arc<Band>>,
+    /// A hash of the rest, for the page cache's lookups.
+    pub hash: u64,
+}
+
+/// A cell of a band: its flow, and where its box lies in the band.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(super) struct BandCell {
+    /// Its blocks flattened, its own box the outermost.
+    pub flow: Flow,
+    /// The top of its box, from the top of the band: the top of its first
+    /// row.
+    pub top: Abs,
+    /// The bottom of its box: the bottom of its last row.
+    pub bottom: Abs,
+    /// Whether its last row is the band's last, so that its box reaches
+    /// the foot of the band wherever the band is broken.
+    pub last: bool,
 }
 
 impl Leaf {
@@ -429,6 +518,7 @@ impl Leaf {
             }
             Self::Empty => 0u8.hash(&mut hasher),
             Self::Box(object) => object.hash(&mut hasher),
+            Self::Band(band) => band.hash.hash(&mut hasher),
         }
         hasher.finish()
     }
@@ -471,6 +561,11 @@ pub(super) enum Constraint {
     RulesWidow(Span),
     /// It leaves fewer than two of a block's ruled lines on the page.
     RulesOrphan(Span),
+    /// It falls inside a row of a grid without `row-breakable: true`
+    /// (SPEC §7.4).
+    UnbreakableRow(Span),
+    /// It falls inside a grid's header rows or directly after them.
+    HeaderRows(Span),
 }
 
 /// What lies before a leaf, or after the last, and what a page break there
@@ -515,6 +610,10 @@ pub(super) enum Walk {
     /// At the top of the next page: the padding and borders of the blocks
     /// that start.
     Top,
+    /// At the top of a cell of a grid: everything but spaces.
+    Start,
+    /// At the foot of a cell of a grid: everything but spaces.
+    End,
 }
 
 impl Boundary {
@@ -534,7 +633,7 @@ impl Boundary {
             .position(|p| matches!(p, Part::Open(..)))
             .unwrap_or(self.parts.len());
         let parts = match how {
-            Walk::Through => &self.parts[..],
+            Walk::Through | Walk::Start | Walk::End => &self.parts[..],
             Walk::Bottom => &self.parts[..first_open],
             Walk::Top => &self.parts[first_open..],
         };
@@ -556,7 +655,8 @@ impl Boundary {
                     }
                 }
                 Part::Lead(h) => {
-                    if how == Walk::Through && *h != Abs::zero() {
+                    let kept = matches!(how, Walk::Through | Walk::Start | Walk::End);
+                    if kept && *h != Abs::zero() {
                         settle(&mut y, &mut pending, &mut opening, &mut f);
                         y += *h;
                     }
@@ -668,8 +768,11 @@ impl Flow {
         width: Abs,
         height: Abs,
         sizes: Sizes<'_>,
+        grids: &[GridLayout],
     ) -> Self {
         let Caches { cache, shared, now } = caches;
+        let grids: HashMap<Location, GridLayout> =
+            grids.iter().map(|g| (g.location, g.clone())).collect();
         let displays = text
             .maths
             .iter()
@@ -697,7 +800,9 @@ impl Flow {
             items: Vec::new(),
             origins: Vec::new(),
             in_note: false,
+            in_cell: false,
             fills: Vec::new(),
+            grids: &grids,
         };
         builder.flow(&text.root)
     }
@@ -981,7 +1086,23 @@ fn leaf_height(leaf: &Leaf) -> Abs {
         }
         Leaf::Empty => Abs::zero(),
         Leaf::Box(object) => object.size.height,
+        Leaf::Band(band) => band.height,
     }
+}
+
+/// How tall a flow is, unbroken, from the top of its outermost box to the
+/// bottom: what a cell of a band needs.
+pub(super) fn flow_height(flow: &Flow) -> Abs {
+    let mut height = Abs::zero();
+    for (i, item) in flow.items.iter().enumerate() {
+        height += if i == 0 {
+            item.before.walk(Walk::Start, |_, _| {})
+        } else {
+            item.before.gap()
+        };
+        height += leaf_height(&item.leaf);
+    }
+    height + flow.end.walk(Walk::End, |_, _| {})
 }
 
 /// What the boundary being built has seen since the last leaf.
@@ -1036,6 +1157,11 @@ struct Builder<'a> {
     in_note: bool,
     /// The blocks with a `min-height`, to grow once the flow is built.
     fills: Vec<Fill>,
+    /// Whether it builds a cell of a grid, whose paragraphs' images are
+    /// sized in the cell's width.
+    in_cell: bool,
+    /// The grids laid out, by location (SPEC §7.4).
+    grids: &'a HashMap<Location, GridLayout>,
 }
 
 /// A block with a `min-height` (SPEC §6.3): the leaves it holds, and how
@@ -1105,7 +1231,9 @@ impl Builder<'_> {
             items: Vec::new(),
             origins: Vec::new(),
             in_note: true,
+            in_cell: false,
             fills: Vec::new(),
+            grids: self.grids,
         };
         let mark = continued.and_then(|i| builder.paragraph_info(i));
         let mut flow = builder.flow(block);
@@ -1131,7 +1259,14 @@ impl Builder<'_> {
         self.pending
             .push(Event::Open(boxed.clone(), block.location));
         let before = self.items.len();
-        for child in &block.children {
+        let grid = match block.table {
+            Some(TableRole::Grid { .. }) => self.grids.get(&block.location),
+            _ => None,
+        };
+        if let Some(layout) = grid {
+            self.grid(block, &boxed, layout);
+        }
+        for child in block.children.iter().filter(|_| grid.is_none()) {
             match child {
                 TextFlow::Paragraph(i) => self.paragraph(*i),
                 TextFlow::Block(b) => {
@@ -1184,6 +1319,162 @@ impl Builder<'_> {
         }
         self.stack.pop();
         self.pending.push(Event::Close(boxed));
+    }
+
+    /// The bands of grid `block`, laid out as `layout` (SPEC §7.4): each
+    /// cell a flow of its own, as wide as the tracks it spans; each band
+    /// its rows, as tall as their tallest cells, the last row of a cell
+    /// that spans rows growing until the cell fits. A break inside the
+    /// header bands, or directly after them, costs [`KEEP`].
+    fn grid(&mut self, block: &TextBlock, boxed: &BlockBox, layout: &GridLayout) {
+        let (x, _) = boxed.content();
+        let cells: Vec<(Place, Flow)> = block
+            .children
+            .iter()
+            .zip(layout.places.iter())
+            .map(|(child, place)| {
+                let (cx, width) = layout.cell_box(place, x);
+                (*place, self.cell_flow(child, cx, width, block))
+            })
+            .collect();
+        let heights: Vec<Abs> = cells.iter().map(|(_, flow)| flow_height(flow)).collect();
+        let breakable = matches!(
+            block
+                .style
+                .value(self.props, self.props.builtin("row-breakable")),
+            Some(Value::Bool(true))
+        );
+        let first = self.items.len();
+        let mut headers: EcoVec<Arc<Band>> = EcoVec::new();
+        for (start, end) in bands(layout) {
+            let rows = start..end + 1;
+            // Rows as tall as their cells, a spanning cell's last row
+            // growing until the cell fits, fewest rows first.
+            let mut heights_of: Vec<Abs> = rows
+                .clone()
+                .map(|r| layout.row_mins.get(r).copied().unwrap_or_default())
+                .collect();
+            let mut members: Vec<usize> = (0..cells.len())
+                .filter(|&i| rows.contains(&cells[i].0.row))
+                .collect();
+            members.sort_by_key(|&i| cells[i].0.rowspan);
+            for &i in &members {
+                let place = &cells[i].0;
+                let from = place.row - start;
+                let to = (place.row + place.rowspan - 1).min(end) - start;
+                let have = total(&heights_of[from..=to]);
+                if heights[i] > have {
+                    heights_of[to] += heights[i] - have;
+                }
+            }
+            members.sort();
+            let band_cells: EcoVec<BandCell> = members
+                .iter()
+                .map(|&i| {
+                    let place = &cells[i].0;
+                    let from = place.row - start;
+                    let to = (place.row + place.rowspan - 1).min(end) - start;
+                    BandCell {
+                        flow: cells[i].1.clone(),
+                        top: total(&heights_of[..from]),
+                        bottom: total(&heights_of[..=to]),
+                        last: to + start == end,
+                    }
+                })
+                .collect();
+            let header = start < layout.header_rows;
+            let mut band = Band {
+                cells: band_cells,
+                height: total(&heights_of),
+                breakable,
+                span: block.span,
+                header,
+                headers: if header {
+                    EcoVec::new()
+                } else {
+                    headers.clone()
+                },
+                hash: 0,
+            };
+            let mut hasher = Fx::default();
+            band.hash(&mut hasher);
+            band.hash = hasher.finish();
+            let band = Arc::new(band);
+            if header {
+                headers.push(band.clone());
+            }
+            self.leaf(Leaf::Band(band), Origin::Empty);
+        }
+        // A break between the header bands, or directly after them, costs
+        // a keep.
+        for k in 1..=headers.len() {
+            if let Some(item) = self.items.get_mut(first + k) {
+                item.before.penalty += KEEP;
+                item.before
+                    .constraints
+                    .push(Constraint::HeaderRows(block.span));
+            }
+        }
+    }
+
+    /// The flow of a cell of a grid, whose box is `width` wide at `x` from
+    /// the left of the body: a `cell`'s, or another block's standing for a
+    /// cell; or a box without decoration around a paragraph.
+    fn cell_flow(&self, child: &TextFlow, x: Abs, width: Abs, grid: &TextBlock) -> Flow {
+        let mut builder = Builder {
+            sizes: self.sizes,
+            displays: self.displays.clone(),
+            text: self.text,
+            cache: self.cache,
+            shared: self.shared,
+            now: self.now,
+            layouts: self.layouts,
+            slots: self.slots,
+            props: self.props,
+            fonts: self.fonts,
+            width: self.width,
+            height: self.height,
+            metrics: FaceMetrics::new(self.fonts),
+            stack: EcoVec::new(),
+            pending: Vec::new(),
+            prev: None,
+            items: Vec::new(),
+            origins: Vec::new(),
+            in_note: self.in_note,
+            in_cell: true,
+            fills: Vec::new(),
+            grids: self.grids,
+        };
+        match child {
+            TextFlow::Block(b) => {
+                let boxed = Arc::new(BlockBox::of(&b.style, self.props, b.span, x, width));
+                let boxed = self.shared.block(boxed, self.now);
+                builder.block(b, boxed);
+            }
+            TextFlow::Paragraph(i) => {
+                let boxed = Arc::new(plain_box(grid.span, x, width));
+                builder.stack.push((boxed.clone(), Location::DETACHED));
+                builder
+                    .pending
+                    .push(Event::Open(boxed.clone(), Location::DETACHED));
+                builder.paragraph(*i);
+                if builder.items.is_empty() {
+                    builder.leaf(Leaf::Empty, Origin::Empty);
+                }
+                builder.stack.pop();
+                builder.pending.push(Event::Close(boxed));
+            }
+        }
+        let end = builder.boundary(None);
+        let mut flow = Flow {
+            items: builder.items,
+            end,
+            origins: builder.origins,
+        };
+        for fill in &builder.fills {
+            flow.fill(fill);
+        }
+        flow
     }
 
     /// The content of the block of a display, as wide as the block's
@@ -1358,7 +1649,28 @@ impl Builder<'_> {
                 })
                 .collect();
         }
-        let layout = if !hooked {
+        // The images of a cell's paragraph are sized in the cell's width,
+        // which the sizing of images before shaping does not know (SPEC
+        // §7.4).
+        let resized = self.in_cell && !hooked && objects.iter().any(|o| o.image.is_some());
+        if resized {
+            let width = self.slots[index].width;
+            objects = objects
+                .iter()
+                .map(|o| match &o.image {
+                    Some(image) => {
+                        let laid = laid_image(image, o.location, width, style.indent);
+                        InlineObject {
+                            metrics: Some(laid.metrics),
+                            content: Some(laid.items),
+                            ..o.clone()
+                        }
+                    }
+                    None => o.clone(),
+                })
+                .collect();
+        }
+        let layout = if !hooked && !resized {
             layout
         } else {
             // Sized objects change the breaks the paragraph had without.
@@ -1431,7 +1743,7 @@ impl Builder<'_> {
     fn leaf(&mut self, leaf: Leaf, origin: Origin) {
         let before = self.boundary(Some(&leaf));
         let mut inside = Boundary::default();
-        if let Leaf::Paragraph(_) = leaf {
+        if let Leaf::Paragraph(_) | Leaf::Band(_) = leaf {
             for (b, _) in &self.stack {
                 breaking(b, &mut inside);
             }
@@ -1600,5 +1912,27 @@ pub(super) fn glyphs(kind: &ItemKind) -> Option<(&EcoVec<Glyph>, u16)> {
             units_per_em,
         } => Some((glyphs, *units_per_em)),
         _ => None,
+    }
+}
+
+/// A box without spaces, padding, borders or constraints, `width` wide at
+/// `x` from the left of the body: the cell of a paragraph that stands in a
+/// grid without a block of its own.
+fn plain_box(span: Span, x: Abs, width: Abs) -> BlockBox {
+    BlockBox {
+        span,
+        x,
+        width,
+        space_before: Abs::zero(),
+        space_after: Abs::zero(),
+        padding: Sides::default(),
+        border: Sides::default(),
+        background: None,
+        keep_with_next: false,
+        keep_together: false,
+        breakable: true,
+        break_before: BreakBefore::Auto,
+        min_height: Abs::zero(),
+        rules: None,
     }
 }
