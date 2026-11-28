@@ -12,7 +12,8 @@ pub const MARKSCHEME_BOX: &str = "markscheme-box";
 /// The name of the template that sets a mark code as a badge.
 pub const BADGE: &str = "badge";
 /// The name of the template that sets a question or part as a row of the
-/// mark scheme's table: number, answer, notes, marks.
+/// mark scheme's table: its number, what the variant shows of its body
+/// (its answers and notes, with `show-only`), and its marks.
 pub const MARKSCHEME_TABLE: &str = "markscheme-table";
 
 /// A question: its number beside its body, and after it the trailer with

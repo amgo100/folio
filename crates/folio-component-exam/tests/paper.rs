@@ -260,3 +260,20 @@ fn a_project_can_disable_the_exam() {
         "{diagnostics:?}"
     );
 }
+
+#[test]
+fn fractions_of_marks_show_rounded() {
+    let text = "Total: #exam.total-marks().\n\n\
+                #question(marks: 1)[\n  #part(marks: 0.1)[A.]\n  #part(marks: 0.2)[B.]\n]\n\n\
+                #question[#part(marks: 0.1)[C.] #part(marks: 0.2)[D.]]\n";
+    let world = world(MANIFEST, "", text);
+    let messages: Vec<String> = diagnostics(&world, "exam")
+        .into_iter()
+        .map(|d| d.message.to_string())
+        .collect();
+    assert_eq!(
+        messages,
+        ["the question has 1 mark, but its parts have 0.3 marks (field `marks`)"]
+    );
+    assert_eq!(paragraphs(&world, "exam")[0], "Total: 1.3.");
+}

@@ -51,11 +51,25 @@ impl Marks {
         }
     }
 
+    /// The marks as a value: an integer where they are whole, else a
+    /// number rounded to millionths, so that a sum such as 0.1 + 0.2 shows
+    /// as 0.3. `round` is exact, so the value is the same on every
+    /// platform (SPEC §2.4).
     fn value(self) -> Value {
         match self {
             Self::Int(n) => Value::Int(n),
-            Self::Float(x) if x.fract() == 0.0 && x.abs() < 9.0e15 => Value::Int(x as i64),
-            Self::Float(x) => Value::Number(Scalar::new(x)),
+            Self::Float(x) => {
+                let rounded = if x.abs() < 1.0e9 {
+                    (x * 1.0e6).round() / 1.0e6
+                } else {
+                    x
+                };
+                if rounded.fract() == 0.0 && rounded.abs() < 9.0e15 {
+                    Value::Int(rounded as i64)
+                } else {
+                    Value::Number(Scalar::new(rounded))
+                }
+            }
         }
     }
 
@@ -161,9 +175,10 @@ fn marks_sum(instance: &Instance, out: &mut EcoVec<LintDiagnostic>) {
         sum.text()
     ));
     for part in parts(instance) {
+        let what = part.name.name.as_str();
         let message = match marks(part) {
-            Some(m) => eco_format!("this part has {} {}", m.text(), plural(m)),
-            None => "this part has no marks".into(),
+            Some(m) => eco_format!("this {what} has {} {}", m.text(), plural(m)),
+            None => eco_format!("this {what} has no marks"),
         };
         diagnostic = diagnostic.with_related(part.location, message);
     }

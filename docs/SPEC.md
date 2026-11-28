@@ -715,7 +715,7 @@ mark   { display: none; }
 }
 ```
 
-The exam component's default stylesheet (§13.1) holds the first five of these rules, so a paper needs no stylesheet to hide its answers; the last is a project's choice.
+The exam component's default stylesheet (§13.1) holds the first four of these rules, so a paper needs no stylesheet to hide its answers; the last is a project's choice.
 
 2. **By condition, in content**, for one-off text: `#in-variant("markscheme")[Accept 7.2 to 7.4 m.]` and `#except-variant("exam")[...]`. These are elements, so they stay stylable and visible to the tools.
 3. **By script**, for generated content: `#if variant == "slides" { ... }`. The linter suggests mechanism 1 or 2 where possible.
@@ -1614,6 +1614,7 @@ M0's tested tasks took about an hour each, which calibrates that class; the othe
 - **Release key.** Folio has published no release, so no release key exists and `folio toolchain install` refuses to install anything. The first release creates the key, compiles its public half into the compiler and records where the private half is kept and who can sign. Several keys may be trusted at once, so a key can be rotated by one release that trusts both.
 - **LaTeX input for a whole project.** LaTeX is written per formula (`$:tex …$`, §8.1). Open is whether a project should be able to read every `$…$` as LaTeX, and where that switch lives: a `folio.toml` key such as `[math] input = "tex"`, with a `$:native …$` mode back to native math, or a directive per file. The switch changes how a file is parsed, so a stylesheet cannot hold it. To revisit if teachers want to migrate whole LaTeX projects.
 - **Computed totals in templates.** An aggregate is a value of the whole build (§3.2), so a question's trailer shows the marks the question gives, not those computed from its parts when it gives none. Open is whether aggregates should be callable per instance, such as a question's own total, or templates should read a computed field.
+- **Words in templates.** A template's text is written as is, and only `term()` follows the language of its element's text (§5.3), so in a Polish paper the exam's trailer reads *(Total for zad. 2: 4 marks)*. Open is a primitive that shows a component's locale string by key, such as `word(total-for)`.
 - **The notes column of the mark-scheme table.** A template places only its element's own fields and slots (§5.3), so `markscheme-table` sets a part's answers and notes in one cell rather than notes in a column of their own. Open is a primitive that places the instances of one element in a body, such as `slot(body, markscheme-note)`.
 - **Licence.** Folio's own licence is not chosen yet, so the workspace crates have no `license` field and are not published. It must allow the Apache-2.0 code derived from Typst (§2.2); `NOTICE` records that attribution.
 

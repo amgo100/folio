@@ -74,7 +74,7 @@ pub fn locale_strings() -> EcoVec<LocaleString> {
     EcoVec::from([
         LocaleString::new("en", name(QUESTION), "Question"),
         LocaleString::new("pl", name(QUESTION), "zad."),
-        LocaleString::new("en", name(PART), "part"),
+        LocaleString::new("en", name(PART), "Part"),
         LocaleString::new("pl", name(PART), "cz."),
     ])
 }

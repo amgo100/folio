@@ -11,7 +11,8 @@
 //!   which content shows with `#exam.total-marks()`. A question or part
 //!   without marks of its own counts the marks of its parts.
 //! - **Lints** ([`marks`]): a question's or part's marks must equal the sum
-//!   of its parts' (`exam.marks-sum`).
+//!   of its parts' (`exam.marks-sum`), and an answer has 1 to
+//!   [`MAX_LINES`] ruled lines (`exam.answer-lines`).
 //! - **Templates** ([`templates`]): `markscheme-box` for answers, `badge`
 //!   for mark codes and `markscheme-table` for questions and parts, and the
 //!   default templates that set a question's trailer and a part's marks.
