@@ -2008,28 +2008,29 @@ fn draw_band(run: &Run<'_>, piece: &Piece, top: Abs, asm: &mut Assembler) {
             // the band's last row, or one whose next leaf does not fit.
             let finished = piece.total[c] == 0;
             let started = start.state != State::START;
-            if !piece.fresh && started && (cell.last || !finished) {
-                if let Some((block, location)) =
+            if !piece.fresh
+                && started
+                && (cell.last || !finished)
+                && let Some((block, location)) =
                     cell.flow.items.first().and_then(|i| i.stack.first())
-                {
-                    let mut sub = Assembler {
-                        open: vec![OpenBox {
-                            block: block.clone(),
-                            location: *location,
-                            top: top + start.wait,
-                            continued: true,
-                            items: Vec::new(),
-                            baselines: None,
-                        }],
+            {
+                let mut sub = Assembler {
+                    open: vec![OpenBox {
+                        block: block.clone(),
+                        location: *location,
+                        top: top + start.wait,
+                        continued: true,
                         items: Vec::new(),
                         baselines: None,
-                        widen: Abs::zero(),
-                        floor: top + height,
-                    };
-                    sub.close(top + height, !(finished && piece.ends));
-                    for (pos, item) in sub.items {
-                        asm.add(pos, item);
-                    }
+                    }],
+                    items: Vec::new(),
+                    baselines: None,
+                    widen: Abs::zero(),
+                    floor: top + height,
+                };
+                sub.close(top + height, !(finished && piece.ends));
+                for (pos, item) in sub.items {
+                    asm.add(pos, item);
                 }
             }
             continue;
