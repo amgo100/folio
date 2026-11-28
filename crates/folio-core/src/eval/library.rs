@@ -108,11 +108,13 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("float", float),
     ("int", int),
     ("json", json),
+    ("minmax", minmax),
     ("num", num_func),
     ("panic", panic),
     ("qty", qty_func),
     ("range", range),
     ("read", read),
+    ("repeat", repeat),
     ("repr", repr),
     ("rgb", rgb),
     ("shuffle", shuffle),
@@ -122,6 +124,65 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("unit", unit_func),
     ("yaml", yaml),
 ];
+
+/// `minmax(2cm, 1fr)` in a `column-tracks` hint: a track at least `min`
+/// and at most `max` wide, as a stylesheet writes it (SPEC §7.4). `min` is
+/// a length, a ratio or `auto`; `max` may also be a fraction.
+fn minmax(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    let min = args.expect::<Value>("the least size")?;
+    let max = args.expect::<Value>("the greatest size")?;
+    let span = args.span;
+    let min = fixed_or_auto(min, false).at(span)?;
+    let max = fixed_or_auto(max, true).at(span)?;
+    Ok(Value::Call(
+        track_name("minmax"),
+        [min, max].into_iter().collect(),
+    ))
+}
+
+/// `repeat(3, auto)` or `repeat(2, 1fr, 2cm)` in a `column-tracks` hint:
+/// the tracks given, `n` times over, as a stylesheet writes it (SPEC §7.4).
+fn repeat(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    let span = args.span;
+    let n = args.expect::<i64>("how many times")?;
+    if n < 0 {
+        bail!(span, "`repeat` takes a count of zero or more, not {n}");
+    }
+    let mut items = vec![Value::Int(n)];
+    while let Some(arg) = args.eat() {
+        let track = match arg.value {
+            Value::Call(name, call) if name.as_str() == "minmax" => Value::Call(name, call),
+            value => fixed_or_auto(value, true).at(arg.span)?,
+        };
+        items.push(track);
+    }
+    if items.len() == 1 {
+        bail!(span, "missing argument: the tracks to repeat");
+    }
+    Ok(Value::Call(
+        track_name("repeat"),
+        items.into_iter().collect(),
+    ))
+}
+
+/// A size of a track: a length, a ratio, `auto`, or with `fraction` a
+/// fraction too.
+fn fixed_or_auto(value: Value, fraction: bool) -> StrResult<Value> {
+    match value {
+        Value::Length(_) | Value::Ratio(_) | Value::Auto => Ok(value),
+        Value::Fraction(_) if fraction => Ok(value),
+        other => Err(eco_format!(
+            "expected a length, a ratio{} or `auto`, found {}",
+            if fraction { ", a fraction" } else { "" },
+            a_type(other.type_name())
+        )),
+    }
+}
+
+/// The name of a track function.
+fn track_name(name: &str) -> folio_component::Name {
+    folio_component::Name::new(name).expect("track functions have names")
+}
 
 /// `qty(9.81, "m s^-2", pm: 0.02, digits: 3)` in text: an inline formula
 /// of the quantity, as `$qty(..)$` makes it (SPEC §8.1). A value is an

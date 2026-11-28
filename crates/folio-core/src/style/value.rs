@@ -104,6 +104,14 @@ fn plain(value: &eval::Value, font_size: Abs) -> Result<Value, EcoString> {
             }
             Value::Dict(pairs)
         }
+        // A keyword call from content, as a stylesheet writes it:
+        // `minmax(2cm, 1fr)` in a `column-tracks` hint (SPEC §7.4).
+        V::Call(name, args) => Value::Call(
+            name.clone(),
+            args.iter()
+                .map(|v| plain(v, font_size))
+                .collect::<Result<_, _>>()?,
+        ),
         // Resolved only as a whole value or an item of a list (SPEC §5.4).
         V::Token(name) => {
             return Err(eco_format!(
