@@ -74,12 +74,23 @@ pub struct Schema {
     /// The element's schema, with names in `within` and `scoped`
     /// unqualified when they name a project element or a built-in one.
     pub schema: ElementSchema,
-    /// The words of `words: (..)`, or the core's English word when the
-    /// reference key is one of the core's and no words are given.
+    /// The words of `words: (..)`.
     pub words: EcoVec<LocaleString>,
-    /// The unqualified element names in `within` and `scoped`, with their
-    /// spans: each must be a built-in element or a project element.
-    pub names: EcoVec<(Name, Span)>,
+    /// The unqualified element names in `within` and `scoped`: each must
+    /// be a built-in element or a project element.
+    pub names: EcoVec<NamedElement>,
+}
+
+/// An unqualified element name in a counter, with the fields and values a
+/// `within` asks its instances to have.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct NamedElement {
+    /// The name.
+    pub name: Name,
+    /// Its span.
+    pub span: Span,
+    /// The fields `within` names, with their spans and values.
+    pub fields: EcoVec<(Name, Span, Constant)>,
 }
 
 /// The elements a project declares, checked across its files.
@@ -174,13 +185,18 @@ pub fn project_elements(db: &dyn Db, project: Project) -> ProjectElements {
         }
     }
 
+    let registry = project.components(db);
+    let components = &project.manifest(db).components;
     let mut out = ProjectElements::default();
     let mut elements = Vec::new();
     let mut words: Vec<LocaleString> = Vec::new();
     let mut checks = Vec::new();
-    for (path, decl) in declared {
+    // Every declared name, with its file, whether its declaration has
+    // errors or not.
+    let mut names: Vec<(&Name, &ProjectPath)> = Vec::new();
+    for (path, decl) in &declared {
         let (name, name_span) = &decl.name;
-        if let Some((first, ..)) = out.accepted.iter().find(|(_, _, n)| n == name) {
+        if let Some((_, first)) = names.iter().find(|(n, _)| *n == name) {
             diag::report(
                 db,
                 Diagnostic::error(
@@ -194,10 +210,30 @@ pub fn project_elements(db: &dyn Db, project: Project) -> ProjectElements {
             );
             continue;
         }
-        let Some(schema) = decl.schema.clone() else {
+        names.push((name, path));
+        // An unqualified name would resolve to two elements.
+        if let Some(component) = registry
+            .components()
+            .filter(|c| components.is_enabled(c.name().as_str()))
+            .find(|c| c.element(name.as_str()).is_some())
+        {
+            diag::report(
+                db,
+                Diagnostic::error(
+                    *name_span,
+                    eco_format!(
+                        "component `{}` already has an element `{name}`",
+                        component.name()
+                    ),
+                )
+                .with_hint("give the element another name"),
+            );
+            continue;
+        }
+        let Some(schema) = &decl.schema else {
             continue;
         };
-        for word in schema.words {
+        for word in &schema.words {
             match words
                 .iter()
                 .find(|w| w.key == word.key && w.lang.eq_ignore_ascii_case(&word.lang))
@@ -216,24 +252,58 @@ pub fn project_elements(db: &dyn Db, project: Project) -> ProjectElements {
                     .with_hint("elements that share a reference key share its words"),
                 ),
                 Some(_) => {}
-                None => words.push(word),
+                None => words.push(word.clone()),
             }
         }
-        checks.extend(schema.names);
-        out.accepted.push((path, decl.span, name.clone()));
-        elements.push(schema.schema);
+        checks.extend(schema.names.iter().cloned());
+        out.accepted.push((path.clone(), decl.span, name.clone()));
+        elements.push(schema.schema.clone());
     }
-    for (name, span) in checks {
-        let known = builtin(name.as_str()).is_some() || elements.iter().any(|e| e.name == name);
-        if !known {
-            diag::report(
-                db,
-                Diagnostic::error(span, eco_format!("unknown element `{name}`")).with_hint(
-                    "a counter names built-in elements or elements this project declares",
+
+    // The names in counters, and the fields `within` asks for.
+    for named in checks {
+        let target = builtin(named.name.as_str())
+            .map(|b| &b.schema)
+            .or_else(|| elements.iter().find(|e| e.name == named.name));
+        let Some(target) = target else {
+            if !names.iter().any(|(n, _)| **n == named.name) {
+                diag::report(
+                    db,
+                    Diagnostic::error(named.span, eco_format!("unknown element `{}`", named.name))
+                        .with_hint(
+                            "a counter names built-in elements or elements this project declares",
+                        ),
+                );
+            }
+            continue;
+        };
+        for (field, span, value) in &named.fields {
+            let message = match target.field(field.as_str()) {
+                None => eco_format!("`{}` has no field `{field}`", named.name),
+                Some(decl) if !decl.ty.accepts(value) || *value == Constant::None => eco_format!(
+                    "field `{field}` of `{}` has type `{}`, not `{}`",
+                    named.name,
+                    decl.ty,
+                    value.type_name()
                 ),
-            );
+                Some(_) => continue,
+            };
+            diag::report(db, Diagnostic::error(*span, message));
         }
     }
+
+    // A reference key the core has words for and no element gives English
+    // words for takes the core's English, which the registry asks for.
+    let english = Lang::new("en").expect("a language tag");
+    for key in elements.iter().filter_map(|e| e.ref_key.as_ref()) {
+        let has_english = words
+            .iter()
+            .any(|w| &w.key == key && w.lang.eq_ignore_ascii_case("en"));
+        if !has_english && let Some(word) = locale::word(&english, key.as_str()) {
+            words.push(LocaleString::new("en", key.clone(), word.text));
+        }
+    }
+
     out.declarations.elements = elements.into_iter().collect();
     out.declarations.locale_strings = words.into_iter().collect();
     out
@@ -390,18 +460,16 @@ impl Checker {
                 EcoVec::new()
             }
             (Some((key, span)), None) => {
+                // The core's words serve a key it knows ([`project_elements`]).
                 let english = Lang::new("en").expect("a language tag");
-                match locale::word(&english, key.as_str()) {
-                    Some(word) => EcoVec::from([LocaleString::new("en", key.clone(), word.text)]),
-                    None => {
-                        self.error_hint(
-                            *span,
-                            eco_format!("the reference key `{key}` has no words"),
-                            "give them as `words: (en: \"..\")`, English at least",
-                        );
-                        EcoVec::new()
-                    }
+                if locale::word(&english, key.as_str()).is_none() {
+                    self.error_hint(
+                        *span,
+                        eco_format!("the reference key `{key}` has no words"),
+                        "give them as `words: (en: \"..\")`, English at least",
+                    );
                 }
+                EcoVec::new()
             }
             (None, None) => EcoVec::new(),
         };
@@ -608,6 +676,14 @@ impl Checker {
                     Constant::Number(v) => Constant::Number(folio_component::Scalar::new(-v.get())),
                     Constant::Length(v) => Constant::Length(-v),
                     Constant::Em(v) => Constant::Em(-v),
+                    Constant::Ratio(v) => Constant::Ratio(-v),
+                    Constant::Angle(v) => Constant::Angle(folio_component::Scalar::new(-v.get())),
+                    Constant::Duration(v) => {
+                        Constant::Duration(folio_component::Scalar::new(-v.get()))
+                    }
+                    Constant::Fraction(v) => {
+                        Constant::Fraction(folio_component::Scalar::new(-v.get()))
+                    }
                     _ => return self.not_literal(expr),
                 }
             }
@@ -645,8 +721,9 @@ impl Checker {
         self.error_hint(
             expr.span(),
             "expected a literal value",
-            "the defaults of an element's fields are written out, so the element is known \
-             before any script runs",
+            "the defaults of an element's fields are written out (`none`, `true`, `3`, `1.5`, \
+             `\"text\"`, `2mm`, arrays and dictionaries of them), so the element is known before \
+             any script runs; colour and `ref` fields default to `none`",
         );
         None
     }
@@ -738,7 +815,7 @@ impl Checker {
     fn counter(
         &mut self,
         values: &[ast::Expr<'_>],
-        names: &mut EcoVec<(Name, Span)>,
+        names: &mut EcoVec<NamedElement>,
     ) -> Option<CounterDecl> {
         const HINT: &str = "a counter is `auto`, `within element(..)`, `scoped(element, ..)`, \
                             or `within` and `scoped` together";
@@ -773,7 +850,14 @@ impl Checker {
                             return None;
                         };
                         let field = Name::new(named.name().get())?;
-                        fields.push((field, self.literal(named.expr())?));
+                        let value = self.literal(named.expr())?;
+                        if element.namespace.is_none()
+                            && let Some(last) = names.make_mut().last_mut()
+                        {
+                            last.fields
+                                .push((field.clone(), named.name().span(), value.clone()));
+                        }
+                        fields.push((field, value));
                     }
                     counter.within = Some(Within::new(element, fields));
                 }
@@ -811,12 +895,16 @@ impl Checker {
     fn element_name(
         &mut self,
         expr: ast::Expr<'_>,
-        names: &mut EcoVec<(Name, Span)>,
+        names: &mut EcoVec<NamedElement>,
     ) -> Option<QualifiedName> {
         match expr {
             ast::Expr::Ident(ident) => {
                 let name = Name::new(ident.get())?;
-                names.push((name.clone(), ident.span()));
+                names.push(NamedElement {
+                    name: name.clone(),
+                    span: ident.span(),
+                    fields: EcoVec::new(),
+                });
                 Some(QualifiedName::unqualified(name))
             }
             ast::Expr::FieldAccess(access) => match access.target() {

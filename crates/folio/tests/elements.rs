@@ -349,6 +349,18 @@ fn declaration_errors() {
         "slot `x` has the name of a field",
     );
     check(
+        "#element a(x: lenght) {}\n#element a() {}\n",
+        "element `a` is already declared",
+    );
+    check(
+        "#element a() { counter: within heading(levle: 1) }\n",
+        "`heading` has no field `levle`",
+    );
+    check(
+        "#element a() { counter: within heading(level: \"one\") }\n",
+        "field `level` of `heading` has type `int`, not `string`",
+    );
+    check(
         "#if true {\n  element a() {}\n}\n",
         "an element is declared at the top level of a file",
     );
@@ -380,4 +392,89 @@ fn counters_scoped_to_declared_elements() {
     ]);
     assert_eq!(messages(&world), Vec::<String>::new());
     assert_eq!(references(&world), ["part~i", "part~b"]);
+}
+
+#[test]
+fn shared_reference_keys_share_words() {
+    // One element relies on the core's words for `figure`, another gives
+    // its own: the given English word wins, without a conflict.
+    let blocks = "\
+#element diagram() {
+  counter: auto
+  ref-key: \"figure\"
+}
+#element photo() {
+  counter: auto
+  ref-key: \"figure\"
+  words: (en: \"Fig.\")
+}
+";
+    let main = "#import \"lib/blocks.fol\": diagram\n\n#diagram[A.] <d>\n\nSee @d.\n";
+    let world = world_with(&[
+        ("main.fol", main),
+        ("lib/blocks.fol", blocks),
+        ("styles/main.fsty", ""),
+    ]);
+    assert_eq!(messages(&world), Vec::<String>::new());
+    assert_eq!(references(&world), ["Fig.~1"]);
+}
+
+#[test]
+fn use_before_declaration_says_so() {
+    let world = world_with(&[
+        ("main.fol", &format!("#example[#statement[A.]]\n\n{BLOCKS}")),
+        ("styles/main.fsty", ""),
+    ]);
+    let found = diagnostics(&world);
+    assert!(
+        found
+            .iter()
+            .any(|d| d.contains("declared later in this file")),
+        "{found:?}"
+    );
+}
+
+/// A component with a `question` element.
+struct Exam;
+
+impl folio_component::Component for Exam {
+    fn manifest(&self) -> folio_component::ComponentManifest {
+        folio_component::ComponentManifest::new(
+            folio_component::ComponentName::new("exam").unwrap(),
+            semver::Version::new(0, 0, 0),
+            [Target::Pdf],
+        )
+    }
+
+    fn declarations(&self) -> folio_component::Declarations {
+        let mut question = folio_component::ElementSchema::new(
+            folio::Name::new("question").unwrap(),
+            folio_component::ElementKind::Block,
+        );
+        question.body = folio_component::Body::Content(folio_component::ContentKind::Blocks);
+        let mut declarations = folio_component::Declarations::new();
+        declarations.elements = [question].into_iter().collect();
+        declarations
+    }
+}
+
+#[test]
+fn a_component_element_keeps_its_name() {
+    let mut registry = folio::Registry::new();
+    registry.register(Exam).unwrap();
+    let mut world = World::builder()
+        .components(registry)
+        .build(MANIFEST, None)
+        .unwrap();
+    world
+        .set_source("main.fol", "#element question() {}\n\n#question[A.]\n")
+        .unwrap();
+    world
+        .set_source("styles/main.fsty", "question { indent: 1pt; }\n")
+        .unwrap();
+    let found = diagnostics(&world);
+    assert_eq!(
+        found,
+        ["component `exam` already has an element `question` | give the element another name"]
+    );
 }

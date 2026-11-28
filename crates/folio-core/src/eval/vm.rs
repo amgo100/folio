@@ -968,6 +968,16 @@ impl<'a> Vm<'a> {
         // An element the project declares is imported from the file that
         // declares it.
         if let Some(file) = decl::project_elements(self.db, self.project).file_of(name) {
+            if *file == self.file {
+                return Err(
+                    EvalError::new(ident.span(), eco_format!("unknown variable: {name}"))
+                        .with_hint(eco_format!(
+                            "`{name}` is an element declared later in this file; move its \
+                         declaration above its first use"
+                        ))
+                        .into(),
+                );
+            }
             return Err(
                 EvalError::new(ident.span(), eco_format!("unknown variable: {name}"))
                     .with_hint(eco_format!(
