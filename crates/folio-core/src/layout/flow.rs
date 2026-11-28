@@ -1282,10 +1282,13 @@ fn blanks_of(flow: &Flow) -> Blanks {
 }
 
 /// The blank leaves of answer space that may break across pages (SPEC
-/// §6.3): `height` in slices `spacing` tall, the last what is left, where
-/// a break that leaves fewer than two on either side costs [`WIDOW`], as
-/// between ruled lines with `rule-breakable: true`.
-fn slices(height: Abs, spacing: Abs) -> Blanks {
+/// §6.3): `height` in slices `spacing` tall, but no taller than the body,
+/// `body`, the last what is left, where a break that leaves fewer than two
+/// on either side costs [`WIDOW`], as between ruled lines with
+/// `rule-breakable: true`. Past [`MAX_RULE_LINES`] slices, the space is
+/// cut short.
+fn slices(height: Abs, spacing: Abs, body: Abs) -> Blanks {
+    let spacing = spacing.min(body).max(Abs::pt(1.0));
     // A height a whole number of slices tall is that many, not one more.
     let slices = height.to_pt() / spacing.to_pt() - 1e-9;
     let count = (slices.ceil().max(1.0) as usize).min(MAX_RULE_LINES);
@@ -1301,7 +1304,7 @@ fn slices(height: Abs, spacing: Abs) -> Blanks {
             }
             Blank {
                 height: if i + 1 == count {
-                    (height - below).max(Abs::zero())
+                    (height - below).max(Abs::zero()).min(spacing)
                 } else {
                     spacing
                 },
@@ -1919,9 +1922,9 @@ impl Builder<'_> {
                     // ruled lines with `rule-breakable: true`.
                     let spacing =
                         length(&block.style, self.props, "rule-spacing").max(Abs::pt(1.0));
-                    blanks = slices(full, spacing);
+                    blanks = slices(full, spacing, self.height);
                     sized.min_height = Abs::zero();
-                    full
+                    blanks.height()
                 } else {
                     sized.min_height = full;
                     full.min(self.height)

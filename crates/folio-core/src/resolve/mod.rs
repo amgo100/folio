@@ -59,8 +59,10 @@
 //!   `answer-space` block measures, which Select keeps out of the tree, is
 //!   resolved where the block stands, as where it is shown, so that its
 //!   markers and references have their text when layout measures it. The
-//!   rest of the build does not count it, its labels are seen only by its
-//!   own references, and it reports nothing.
+//!   rest of the build does not count it, its labels are seen only by
+//!   references in measured content, and it reports nothing. Page-number
+//!   references in it to targets in it show [`UNRESOLVED`], as those
+//!   targets are on no page.
 //!
 //! Counters are resolved per build, on the variant's own tree, except the
 //! shared counters of a numbering group (SPEC §6.1), whose values come from
@@ -891,9 +893,15 @@ impl Walk<'_> {
     /// go on from those of the space, so that its markers and references
     /// have the text they would have there. The rest of the document does
     /// not count it: the counters, lists and labels are restored after
-    /// it, its footnotes are not numbered, its labels are seen only by its
-    /// own references, and it reports nothing.
+    /// it, its footnotes are not numbered and its queries not answered,
+    /// its labels are seen only by references in measured content, and it
+    /// reports nothing.
     fn measured(&mut self, location: Location, part: Option<Name>) {
+        // A numbering group's common tree holds the content where a
+        // variant shows it, so it is counted there already.
+        if self.quiet {
+            return;
+        }
         let Some(measure) = self
             .spaces
             .get(&(location, part))
@@ -904,10 +912,11 @@ impl Walk<'_> {
         let counters = self.counters.clone();
         let lists = self.lists.clone();
         let seen = self.seen.clone();
-        let (labels, footnotes, refs) = (
+        let (labels, footnotes, refs, queries) = (
             self.out.labels.len(),
             self.out.footnotes.len(),
             self.refs.len(),
+            self.pending_queries.len(),
         );
         let measuring = std::mem::replace(&mut self.measuring, true);
         // The space's own element was counted where it stands; only what
@@ -944,6 +953,9 @@ impl Walk<'_> {
             .extend(self.out.labels[labels..].iter().cloned());
         self.out.labels.truncate(labels);
         self.out.footnotes.truncate(footnotes);
+        // Its queries are not answered: their text is left out of what
+        // layout measures.
+        self.pending_queries.truncate(queries);
         for r in &mut self.refs[refs..] {
             r.quiet = true;
         }

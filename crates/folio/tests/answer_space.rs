@@ -673,3 +673,59 @@ fn hidden_content_is_measured_with_its_numbers_and_references() {
         "Last",
     );
 }
+
+#[test]
+fn breakable_answer_space_has_no_slice_taller_than_the_body() {
+    // 300mm slices on a 180mm body are cut to the body's height.
+    let world = world(
+        "figure.answer { display: answer-space; answer-breakable: true; \
+         rule-spacing: 300mm; answer-height: 400mm; space-before: 0pt; }\n",
+        SHOWN,
+        "#figure(class: \"answer\")[Answer.]\n\nAfter.\n",
+    );
+    let exam = pages(&world, "exam");
+    assert!(close(exam.spaces[0].height, Abs::mm(400.0)));
+    let found = diagnostics(&world, "exam");
+    assert!(
+        found.iter().all(|m| !m.contains("does not fit")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn shared_numbers_do_not_count_measured_content_twice() {
+    // In a numbering group the common tree counts what one variant hides
+    // and the other shows, once.
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\nstyles = [\"styles/main.fsty\"]\n\n\
+                    [variants.exam]\ntargets = [\"pdf\"]\n\n\
+                    [variants.markscheme]\ntargets = [\"pdf\"]\n\
+                    styles = [\"styles/markscheme.fsty\"]\n\n\
+                    [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
+                    shared-counters = [\"figure\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            &format!("{PAGE}figure.h {{ display: hidden; }}\n"),
+        )
+        .unwrap();
+    world
+        .set_source("styles/markscheme.fsty", "figure.h { display: block; }\n")
+        .unwrap();
+    world
+        .set_source(
+            "main.fol",
+            "#figure[A.] <a>\n\n#figure(class: \"h\")[#figure[Inner.] <inner>\n\nSee @inner.]\n\n\
+             #figure[Last.] <last>\n\nSee @inner and @last.\n",
+        )
+        .unwrap();
+    let markscheme = shown(&pages(&world, "markscheme")).replace('\u{a0}', " ");
+    assert!(
+        markscheme.contains("Figure 3") && markscheme.contains("Figure 4"),
+        "{markscheme}"
+    );
+    assert!(!markscheme.contains("Figure 5"), "{markscheme}");
+    let exam = measured_text(&world, "exam").join(" | ");
+    assert!(exam.contains("See Figure 3."), "{exam}");
+}

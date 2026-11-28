@@ -55,8 +55,9 @@
 //!   flow is built at the block's width and discarded: hidden content
 //!   keeps that height with nothing drawn; answer space keeps its box and
 //!   takes its ruled lines, its `answer-height`, or the content's height
-//!   times `answer-scale`. [`Pages::spaces`] holds the heights, which the
-//!   Office writers will take.
+//!   times `answer-scale`, whole, or, with `answer-breakable: true`, in
+//!   slices a page break may fall between. [`Pages::spaces`] holds the
+//!   heights, which the Office writers will take.
 //! - **Fragments**: each page a [`Fragment`](folio_component::Fragment)
 //!   of the master's size, holding its body, which holds a fragment for
 //!   each block with its background, borders, glyph runs, baselines and
