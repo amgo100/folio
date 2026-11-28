@@ -461,7 +461,10 @@ impl World {
     /// Sets the text of a `.fol` or `.fsty` file, adding the file if it is
     /// new. A file that exists is reparsed only where its text changed. The
     /// text replaces a file at the path that the loader could not take
-    /// ([`Self::unreadable_sources`]), as an editor's buffer does.
+    /// ([`Self::unreadable_sources`]), as an editor's buffer does. New text
+    /// no longer follows a byte order mark of the file on disk, so byte
+    /// ranges in the file ([`Files::text_start`]) count from its start
+    /// until the loader reads the file again.
     pub fn set_source(&mut self, path: &str, text: &str) -> Result<FileId, WorldError> {
         let path = project_path(path)?;
         let stylesheet = match path.extension() {
@@ -477,6 +480,7 @@ impl World {
                 source.replace(text);
                 set_source(&mut self.db, file, source.clone());
                 Arc::make_mut(&mut self.nodes).update(old.root(), source.root());
+                self.set_text_start(old.id(), 0);
             }
             return Ok(old.id());
         }
@@ -557,6 +561,8 @@ impl World {
         let reparsed = source.edit(range, with);
         set_source(&mut self.db, file, source.clone());
         Arc::make_mut(&mut self.nodes).update(old.root(), source.root());
+        // The text is no longer the file's, as in `set_source`.
+        self.set_text_start(old.id(), 0);
         Ok(reparsed)
     }
 

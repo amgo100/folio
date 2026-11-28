@@ -83,8 +83,8 @@ Most diagnostics have no code yet. These have one:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `path` | string | The file, relative to the project directory, with `/` between directories. |
-| `bytes` | `{ "start", "end" }` | The byte range in the file, UTF-8, end exclusive, counted from the file's first byte. A byte order mark at the start of a file counts (3 bytes), so an edit of a fix applies to the file as it is on disk. |
-| `start`, `end` | `{ "line", "column" }` | Where the range starts and ends. Lines and columns count from 1; columns count Unicode scalar values, not bytes or UTF-16 code units, and a byte order mark is not counted in the first line, as an editor shows it. The byte range is exact for any other measure. |
+| `bytes` | `{ "start", "end" }` | The byte range in the file, UTF-8, end exclusive, counted from the file's first byte, so an edit of a fix applies to the file as it is on disk. A byte order mark at the start of a `.fol` or `.fsty` file, which Folio leaves out of the source's text, counts (3 bytes). |
+| `start`, `end` | `{ "line", "column" }` | Where the range starts and ends. Lines and columns count from 1; columns count Unicode scalar values, not bytes or UTF-16 code units, and the byte order mark of a `.fol` or `.fsty` file is not counted in the first line, as an editor shows it. The byte range is exact for any other measure. |
 
 ### A build
 
