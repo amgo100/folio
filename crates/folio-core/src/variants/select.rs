@@ -355,9 +355,7 @@ impl Select<'_> {
                     // An element that the style stage gave no node is
                     // shown as it is, if its condition and `show-only`
                     // keep it.
-                    None => self
-                        .keeps_unstyled(child, only)
-                        .then(|| (node.clone(), false)),
+                    None => self.unstyled(child, only),
                     Some(child_node) => self.child(child, child_node, only, edits),
                 },
                 Node::Rule(_) => Some((node.clone(), false)),
@@ -415,12 +413,56 @@ impl Select<'_> {
         }
     }
 
-    /// Whether an element without a styled node is kept: its variant
-    /// condition shows it, and `show-only`, if any, names it or something
-    /// in it.
-    fn keeps_unstyled(&mut self, element: &Element, only: Option<&Only>) -> bool {
-        self.condition(element)
-            && only.is_none_or(|only| only.element(&element.name) || only.holds(element))
+    /// Selects an element without a styled node, which has no style to
+    /// hide it by: it is kept if its variant condition shows it and
+    /// `show-only`, if any, names it or something in it, and the
+    /// conditions of the elements inside it are applied the same way.
+    /// `None` if it is left out, else the node and whether it changed.
+    fn unstyled(&mut self, element: &Element, only: Option<&Only>) -> Option<(Node, bool)> {
+        let kept = self.condition(element)
+            && only.is_none_or(|only| only.element(&element.name) || only.holds(element));
+        if !kept {
+            return None;
+        }
+        let mut fields = None;
+        for (key, value) in element.fields.iter() {
+            let Value::Content(content) = value else {
+                continue;
+            };
+            let mut changed = false;
+            let nodes: Vec<Node> = content
+                .nodes()
+                .iter()
+                .filter_map(|node| match node {
+                    Node::Element(child) => match self.unstyled(child, None) {
+                        None => {
+                            changed = true;
+                            None
+                        }
+                        Some((new, edited)) => {
+                            changed |= edited;
+                            Some(new)
+                        }
+                    },
+                    _ => Some(node.clone()),
+                })
+                .collect();
+            if changed {
+                fields
+                    .get_or_insert_with(|| element.fields.clone())
+                    .insert(key.clone(), Value::Content(tidy(nodes)));
+            }
+        }
+        Some(match fields {
+            None => (Node::Element(element.clone()), false),
+            Some(fields) => (
+                Node::Element(Element {
+                    fields,
+                    ..element.clone()
+                }),
+                true,
+            ),
+        })
     }
 
     /// What Select does with an element (`None` for a part) whose styled
