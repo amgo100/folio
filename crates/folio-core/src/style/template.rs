@@ -888,6 +888,37 @@ pub struct Expansion {
     pub body: Option<EcoVec<Piece>>,
 }
 
+impl Expansion {
+    /// The content fields the expansion places: the body ([`BODY`]),
+    /// slots and content fields that its `slot` and `field` pieces show.
+    /// `None` where the template has no body, so the element's content is
+    /// shown as it would be without one. Content it does not place is not
+    /// shown (SPEC §5.3), and Select leaves it out, so that no later stage
+    /// counts, numbers or labels it.
+    pub fn placed(&self) -> Option<Vec<Name>> {
+        fn walk(pieces: &[Piece], out: &mut Vec<Name>) {
+            for piece in pieces {
+                match piece {
+                    Piece::Slot { name, .. } | Piece::Field { name, .. } => {
+                        if !out.contains(name) {
+                            out.push(name.clone());
+                        }
+                    }
+                    Piece::Block(block) => walk(&block.children, out),
+                    Piece::Text { .. } | Piece::Counter { .. } | Piece::Image { .. } => {}
+                }
+            }
+        }
+        let body = self.body.as_ref()?;
+        let mut out = Vec::new();
+        if let Some(header) = &self.header {
+            walk(&header.items, &mut out);
+        }
+        walk(body, &mut out);
+        Some(out)
+    }
+}
+
 /// A block of pieces in a style.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Arranged {

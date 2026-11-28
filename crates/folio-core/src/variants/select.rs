@@ -20,6 +20,9 @@
 //!   names, whole, and the children that hold one, condensed in the same
 //!   way; text and every other child are left out.
 //! - **Shown**: `block`, `inline` and `auto` show the node as it is.
+//! - **Not placed**: an element shown with a render template whose body
+//!   leaves out its body, a slot or a content field (SPEC §5.3) has that
+//!   content left out of both trees, as `display: none` leaves it out.
 //!
 //! - **Spaces**: `hidden` and `answer-space` keep a block element or part,
 //!   which is still counted and styled, and leave all of its content out,
@@ -358,10 +361,31 @@ impl Select<'_> {
         let mut edits = Edits::default();
         let mut body_kids = StyledChildren::new(node);
         let mut part_kids = StyledChildren::new(node);
+        // What the element's render template does not place is not shown
+        // (SPEC §5.3), so it is left out like content `display: none`
+        // removes.
+        let placed = node.template.as_ref().and_then(|t| t.placed());
         for (key, value) in element.fields.iter() {
             let Value::Content(content) = value else {
                 continue;
             };
+            if let Some(placed) = &placed
+                && !placed.iter().any(|name| name.as_str() == key.as_str())
+            {
+                let fields = fields.get_or_insert_with(|| element.fields.clone());
+                if key == BODY {
+                    for child in content.nodes() {
+                        if let Node::Element(child) = child {
+                            edits.removed.insert(child.location);
+                        }
+                    }
+                    fields.insert(key.clone(), Value::Content(Content::new()));
+                } else {
+                    edits.parts.insert(key.clone(), None);
+                    fields.remove(key);
+                }
+                continue;
+            }
             let new = if key == BODY {
                 self.content(content, &mut body_kids, only, &mut edits)
                     .map(Some)

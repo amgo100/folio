@@ -559,3 +559,53 @@ fn a_slot_shown_as_answer_space_keeps_its_space_where_the_template_places_it() {
         text.spaces.iter().map(|s| &s.part).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn content_a_template_leaves_out_is_not_counted() {
+    // `compact` shows the statement only: the equation in the solution it
+    // leaves out is neither numbered nor referable, so the next one is
+    // number 1 (#446).
+    let content = r#"#element example() {
+  kind: block
+  body: slots(statement: blocks, solution: blocks)
+}
+
+#example(class: "short")[
+  #statement[A ball is dropped.]
+  #solution[$ s = 1/2 g t^2 $ <eq:dropped>]
+]
+
+$ v = u + a t $ <eq:speed>
+
+See @eq:speed.
+"#;
+    let style = "math { numbering: \"(1)\"; }\n\
+                 render example as compact { body: slot(statement); }\n\
+                 example.short { template: compact; }\n";
+    let world = world(style, content);
+    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    let numbers: Vec<String> = resolution
+        .numbers
+        .iter()
+        .filter(|n| n.counter == "equation")
+        .filter_map(|n| n.number.as_ref().map(|s| s.to_string()))
+        .collect();
+    assert_eq!(numbers, ["(1)"]);
+    assert!(resolution.label("eq:dropped").is_none());
+    assert!(resolution.label("eq:speed").is_some());
+    // Without the template the solution is shown, and counted.
+    let world = world("math { numbering: \"(1)\"; }\n", content);
+    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resolution
+            .numbers
+            .iter()
+            .filter(|n| n.counter == "equation")
+            .count(),
+        2
+    );
+}
