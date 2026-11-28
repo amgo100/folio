@@ -513,6 +513,52 @@ fn template_id(template: &TemplateDecl) -> EcoString {
     }
 }
 
+/// Checks the aggregates: each named once, and not like one of the
+/// component's elements, whose names share the namespace; each reading
+/// fields of the component's elements, each once. The fields lints read
+/// are checked the same way.
+fn check_aggregates(cx: &mut Checker, decls: &Declarations) {
+    let names: Vec<&Name> = decls.aggregates.iter().map(|a| &a.name).collect();
+    check_unique(cx, &names, |name| {
+        eco_format!("aggregate `{name}` is declared twice")
+    });
+    let fields = |field: &Name| {
+        decls
+            .elements
+            .iter()
+            .any(|e| e.fields.iter().any(|f| f.name == *field))
+    };
+    for aggregate in &decls.aggregates {
+        if decls.elements.iter().any(|e| e.name == aggregate.name) {
+            cx.error(eco_format!(
+                "aggregate `{}` has the name of one of the component's elements",
+                aggregate.name
+            ));
+        }
+        let reads: Vec<&Name> = aggregate.reads.iter().collect();
+        check_unique(cx, &reads, |field| {
+            eco_format!("aggregate `{}` reads `{field}` twice", aggregate.name)
+        });
+        for field in &aggregate.reads {
+            if !fields(field) {
+                cx.error(eco_format!(
+                    "aggregate `{}` reads `{field}`, which no element of the component has",
+                    aggregate.name
+                ));
+            }
+        }
+    }
+    if let LintReads::Fields(reads) = &decls.lint_reads {
+        for field in reads {
+            if !fields(field) {
+                cx.error(eco_format!(
+                    "the lints read `{field}`, which no element of the component has"
+                ));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use ecow::EcoVec;
@@ -735,51 +781,5 @@ mod tests {
                 "template `figure as wide` has no parts",
             ]
         );
-    }
-}
-
-/// Checks the aggregates: each named once, and not like one of the
-/// component's elements, whose names share the namespace; each reading
-/// fields of the component's elements, each once. The fields lints read
-/// are checked the same way.
-fn check_aggregates(cx: &mut Checker, decls: &Declarations) {
-    let names: Vec<&Name> = decls.aggregates.iter().map(|a| &a.name).collect();
-    check_unique(cx, &names, |name| {
-        eco_format!("aggregate `{name}` is declared twice")
-    });
-    let fields = |field: &Name| {
-        decls
-            .elements
-            .iter()
-            .any(|e| e.fields.iter().any(|f| f.name == *field))
-    };
-    for aggregate in &decls.aggregates {
-        if decls.elements.iter().any(|e| e.name == aggregate.name) {
-            cx.error(eco_format!(
-                "aggregate `{}` has the name of one of the component's elements",
-                aggregate.name
-            ));
-        }
-        let reads: Vec<&Name> = aggregate.reads.iter().collect();
-        check_unique(cx, &reads, |field| {
-            eco_format!("aggregate `{}` reads `{field}` twice", aggregate.name)
-        });
-        for field in &aggregate.reads {
-            if !fields(field) {
-                cx.error(eco_format!(
-                    "aggregate `{}` reads `{field}`, which no element of the component has",
-                    aggregate.name
-                ));
-            }
-        }
-    }
-    if let LintReads::Fields(reads) = &decls.lint_reads {
-        for field in reads {
-            if !fields(field) {
-                cx.error(eco_format!(
-                    "the lints read `{field}`, which no element of the component has"
-                ));
-            }
-        }
     }
 }
