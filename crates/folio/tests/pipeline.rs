@@ -103,9 +103,10 @@ fn counts(items: &[(&str, usize)]) -> BTreeMap<String, usize> {
 }
 
 /// The stages a build runs from Style to Emit (SPEC §2.1), and the build
-/// queries around them.
-const STAGES: &str = "styles select sequence resolve_counters resolve step_style collect_text text lines pages \
-                      pdf_input pdf_check emit";
+/// queries around them; `lint_variant` makes the view of the first-party
+/// components' instances that their lints read.
+const STAGES: &str = "styles select lint_variant sequence resolve_counters resolve step_style collect_text \
+                      text lines pages pdf_input pdf_check emit";
 
 #[test]
 fn compiles_end_to_end_to_pdf() {

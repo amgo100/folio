@@ -437,6 +437,7 @@ dependencies = [
  "ecow",
  "ed25519-dalek",
  "folio-component",
+ "folio-component-exam",
  "folio-core",
  "folio-fonts",
  "folio-pdf",
@@ -458,6 +459,15 @@ dependencies = [
  "ecow",
  "semver",
  "unicode-ident",
+]
+
+[[package]]
+name = "folio-component-exam"
+version = "0.0.0"
+dependencies = [
+ "ecow",
+ "folio-component",
+ "semver",
 ]
 
 [[package]]

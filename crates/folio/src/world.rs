@@ -158,12 +158,13 @@ pub struct WorldBuilder {
     long_lived: bool,
 }
 
-/// No components, the bundled fonts ([`folio_fonts::bundled`]), a build
-/// that writes output, and the default limits.
+/// The first-party components ([`WorldBuilder::first_party`]), the bundled
+/// fonts ([`folio_fonts::bundled`]), a build that writes output, and the
+/// default limits.
 impl Default for WorldBuilder {
     fn default() -> Self {
         Self {
-            components: Registry::default(),
+            components: Self::first_party(),
             bundled_fonts: folio_fonts::bundled(),
             mode: BuildMode::default(),
             limits: Limits::default(),
@@ -174,7 +175,20 @@ impl Default for WorldBuilder {
 }
 
 impl WorldBuilder {
-    /// The components the compiler hosts. Marked as rarely changing.
+    /// The first-party components (SPEC §13), registered in the order
+    /// their default stylesheets apply: those that exist so far, the exam
+    /// (`folio-component-exam`). A project uses each of them unless its
+    /// `[components]` disables it (SPEC §3.6).
+    pub fn first_party() -> Registry {
+        let mut registry = Registry::new();
+        registry
+            .register(folio_component_exam::Exam::new())
+            .expect("the first-party components register cleanly");
+        registry
+    }
+
+    /// The components the compiler hosts, in place of the first-party
+    /// ones. Marked as rarely changing.
     pub fn components(mut self, registry: Registry) -> Self {
         self.components = registry;
         self
@@ -318,8 +332,8 @@ impl World {
         WorldBuilder::default()
     }
 
-    /// A world with no components, the bundled fonts and no lockfile, from
-    /// the text of `folio.toml`.
+    /// A world with the first-party components, the bundled fonts and no
+    /// lockfile, from the text of `folio.toml`.
     pub fn new(manifest: &str) -> Result<Self, Vec<ProjectError>> {
         Self::builder().build(manifest, None)
     }

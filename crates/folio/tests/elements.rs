@@ -5,7 +5,7 @@
 //! component's elements.
 
 use folio::style::{NodeName, Styled, StyledNode};
-use folio::{Target, World};
+use folio::{Registry, Target, World};
 use folio_component::{Abs, Value};
 
 const MANIFEST: &str = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\n\
@@ -57,8 +57,14 @@ example { numbering: \"1.1\"; }
 example > solution { indent: 1pt; }
 ";
 
+/// A world without the first-party components: these projects declare
+/// elements of their own, such as `question`, which the exam component
+/// would also provide.
 fn world_with(files: &[(&str, &str)]) -> World {
-    let mut world = World::builder().build(MANIFEST, None).unwrap();
+    let mut world = World::builder()
+        .components(Registry::new())
+        .build(MANIFEST, None)
+        .unwrap();
     for (path, text) in files {
         world.set_source(path, text).unwrap();
     }
@@ -460,7 +466,7 @@ impl folio_component::Component for Exam {
 
 #[test]
 fn a_component_element_keeps_its_name() {
-    let mut registry = folio::Registry::new();
+    let mut registry = Registry::new();
     registry.register(Exam).unwrap();
     let mut world = World::builder()
         .components(registry)

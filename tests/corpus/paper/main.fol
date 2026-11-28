@@ -1,0 +1,60 @@
+#doc(title: [Physics: Forces and motion], subject: "Year 12 test")
+
+// A paper written with the exam component (SPEC §13.1): the exam shows
+// answer space where the mark scheme shows answers, mark codes and notes.
+
+Answer *all* questions. The total mark for this paper is #exam.total-marks().
+
+= Section A
+
+#question[
+  A ball is thrown vertically upwards at $12 "m/s"$. Take $g = 9.81 "m/s"^2$.
+
+  #part(marks: 2)[
+    Calculate the greatest height the ball reaches.
+    #answer(lines: 3)[
+      $h = u^2 / (2 g) = 7.3 "m"$ #mark("M1") #mark("A1")
+    ]
+  ]
+  #part(marks: 3)[
+    Calculate the time it takes to return to the thrower's hand.
+    #answer(lines: 4)[
+      $t = 2 u / g = 2.4 "s"$ #mark("M1") #mark("A1") #mark("A1")
+      #markscheme-note[Accept 2.5 s from $g = 9.8 "m/s"^2$.]
+    ]
+  ]
+] <q:ball>
+
+#question(marks: 4)[
+  A trolley of mass $2.0 "kg"$ is pushed along a smooth track. Its speed doubles from $1.5 "m/s"$ to $3.0 "m/s"$ in $4.0 "s"$.
+
+  #part(marks: 2)[
+    Find the resultant force on the trolley.
+    #answer(lines: 3)[
+      $F = m Delta v / t = 0.75 "N"$ #mark("M1") #mark("A1")
+    ]
+  ]
+  #part[
+    Find the work done on it.
+
+    #part(marks: 1)[
+      State the change in its kinetic energy.
+      #answer(lines: 2)[$Delta E_k = 6.75 "J"$ #mark("B1")]
+    ]
+    #part(marks: 1)[
+      Explain why it equals the work done.
+      #answer(lines: 2)[The track is smooth, so no energy is transferred as heat. #mark("B1")]
+    ]
+  ]
+]
+
+= Section B
+
+#question(marks: 1)[
+  State Newton's third law of motion.
+  #answer(lines: 2)[
+    The forces two bodies exert on each other are equal and opposite. #mark("B1")
+  ]
+]
+
+In @q:ball, the ball is a particle.

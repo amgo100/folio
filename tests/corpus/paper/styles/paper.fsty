@@ -1,0 +1,2 @@
+page { page-size: A4; margin-top: 20mm; margin-bottom: 20mm; margin-inner: 20mm; margin-outer: 20mm; }
+doc { font: "Source Serif 4"; font-size: 11pt; }

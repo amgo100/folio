@@ -18,6 +18,7 @@ publish = false
 [workspace.dependencies]
 folio-syntax = { path = "crates/folio-syntax" }
 folio-component = { path = "crates/folio-component" }
+folio-component-exam = { path = "crates/folio-component-exam" }
 folio-core = { path = "crates/folio-core" }
 folio-fonts = { path = "crates/folio-fonts" }
 folio-text = { path = "crates/folio-text" }

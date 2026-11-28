@@ -1,0 +1,23 @@
+[package]
+name = "folio-component-exam"
+description = "The exam component of Folio: questions, parts, answers, mark codes and mark schemes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# A first-party component reaches the compiler only through
+# `folio-component` (SPEC §2.2, §3): tests/dependency_direction.rs checks
+# that it depends on no other workspace crate. Dev-dependencies are exempt:
+# the tests build papers with `folio`.
+[dependencies]
+folio-component.workspace = true
+ecow.workspace = true
+semver.workspace = true
+
+[dev-dependencies]
+folio.workspace = true
+
+[lints]
+workspace = true

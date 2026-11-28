@@ -174,11 +174,11 @@ fn loop_iterations_pair_across_the_group() {
 /// A shared counter that names no counter is a warning at its name.
 #[test]
 fn an_unknown_shared_counter_warns() {
-    let world = world("\"figure\", \"question\"", "#figure[A.]\n");
+    let world = world("\"figure\", \"problem\"", "#figure[A.]\n");
     let found = diagnostics(&world, "exam");
     assert!(
         found.iter().any(|(s, m)| *s == Severity::Warning
-            && m == "there is no counter `question`, so numbering group `paper` cannot share it"),
+            && m == "there is no counter `problem`, so numbering group `paper` cannot share it"),
         "{found:?}"
     );
     assert!(
