@@ -747,10 +747,11 @@ fn a_body_of_pipe_rows_gives_the_grid_its_columns() {
         "#grid[\n  | A | B |\n  |---|---|\n  | 1 | 2 | 3 |\n]\n",
         &[],
     );
-    // Data rows and then the body's rows, with wider tracks.
+    // Data rows and then the body's rows, with wider tracks: each row
+    // starts a row of the grid.
     same_pages(
         "#grid(column-tracks: 3)[\n\
-         \x20 #cell[1] #cell[2] #cell[]\n  #cell[3] #cell[4] #cell[]\n  #cell[a] #cell[b] #cell[c]\n]\n",
+         \x20 #cell[1] #cell[2]\n  #cell(column: 1)[3] #cell[4]\n  #cell(column: 1)[a] #cell[b] #cell[c]\n]\n",
         "#grid(column-tracks: 3, rows: ((1, 2), (3, 4)))[\n  | a | b | c |\n]\n",
         &[],
     );
@@ -766,12 +767,21 @@ fn more_pipe_row_errors() {
             .collect()
     };
     assert_eq!(
-        errors("#grid(rows: ((1,),))[\n  #cell[a]\n]\n"),
-        ["the body of a grid with `rows` or `header` holds pipe rows only"]
+        errors("#let t = grid.with(rows: ((1, 2),))\n#t(rows: ((3, 4, 5),))\n"),
+        ["duplicate field `rows`"]
     );
+    for text in [
+        "#grid(column-tracks: 2)[\n  | #cell[a] #cell[b] |\n]\n",
+        "#grid[\n  | a | x #cell(colspan: 2)[b] |\n]\n",
+    ] {
+        assert_eq!(
+            errors(text),
+            ["a cell of a pipe row that holds `#cell(..)[..]` holds nothing else"]
+        );
+    }
     assert_eq!(
-        errors("#grid(column-tracks: 2)[\n  | #cell[a] #cell[b] |\n]\n"),
-        ["a cell of a pipe row holds one `#cell(..)[..]` at most"]
+        errors("#grid[\n  | a | #cell(column: 3)[b] |\n  #cell[c]\n]\n"),
+        ["a cell of a row gives its place by both `row` and `column`, or by neither"]
     );
     // Strong text in a cell keeps a pipe inside brackets.
     assert!(errors("#grid(column-tracks: 2)[\n  | *a [x | y]* | b |\n]\n").is_empty());
@@ -780,4 +790,31 @@ fn more_pipe_row_errors() {
         errors("#for i in (1, 2) {\n  grid[\n| #if i == 1 { break } | #undefined |\n]\n}\n")
             .is_empty()
     );
+}
+
+#[test]
+fn pipe_rows_among_other_blocks_keep_their_rows() {
+    same_pages(
+        "#grid(column-tracks: 3, header-rows: 1)[\n\
+         \x20 #cell[Name] #cell[Mass] #cell[Unit]\n  #cell[Ann] #cell[3] #cell[kg]\n\
+         \x20 #cell(colspan: 3)[Total]\n]\n",
+        "#grid[\n  | Name | Mass | Unit |\n  |---|---|---|\n  | Ann | 3 | kg |\n\
+         \x20 #cell(colspan: 3)[Total]\n]\n",
+        &[],
+    );
+}
+
+#[test]
+fn more_than_a_thousand_data_rows() {
+    let world = world("", "#grid(rows: range(1005).map(i => (str(i), \"x\")))\n");
+    let messages: Vec<String> = diagnostics(&world)
+        .iter()
+        .map(|d| d.message.to_string())
+        .collect();
+    assert!(messages.is_empty(), "{messages:?}");
+    // The last row is below the one before it.
+    let pages = pages(&world);
+    let last = pages.pages.last().unwrap();
+    let (a, b) = (find(last, "1003").unwrap(), find(last, "1004").unwrap());
+    assert!(b.y > a.y, "{a:?} {b:?}");
 }

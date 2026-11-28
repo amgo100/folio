@@ -387,7 +387,13 @@ impl<'a> Vm<'a> {
         let rows = std::mem::replace(&mut self.rows, false);
         let mut out = Content::new();
         let items: Vec<ast::MarkupItem<'s>> = markup.items().collect();
+        // In a grid's body, the pipe rows of consecutive lines are evaluated
+        // together, as one run; `skip` passes over the rest of a run.
+        let mut skip = 0;
         for (i, &item) in items.iter().enumerate() {
+            if i < skip {
+                continue;
+            }
             let expr = match item {
                 ast::MarkupItem::Expr(expr) => expr,
                 // `check_source` reports the error.
@@ -426,7 +432,11 @@ impl<'a> Vm<'a> {
                 continue;
             }
             let evaluated = match expr {
-                ast::Expr::TableRow(row) if rows => self.nest(|vm| vm.table_row(row)),
+                ast::Expr::TableRow(_) if rows => {
+                    let run = row_run(&items[i..]);
+                    skip = i + run.1;
+                    self.nest(|vm| vm.row_run(&run.0))
+                }
                 _ => self.markup_expr(expr),
             };
             let content = match evaluated {
@@ -1459,22 +1469,18 @@ impl<'a> Vm<'a> {
         // cells; the calls nested in its arguments are not grid calls.
         let grid = std::mem::replace(&mut self.grid_call, false);
         let mut header = None;
-        let mut pipe_rows = None;
         let mut items = EcoVec::new();
         for arg in args.items() {
             match arg {
                 ast::Arg::Pos(ast::Expr::ContentBlock(block)) if grid => {
                     self.step(block.span())?;
-                    let body = self.nest(|vm| vm.grid_body(block))?;
-                    header = header.or(body.header);
-                    if let Some(rows) = body.rows {
-                        pipe_rows = Some(grid::pipe_rows_arg(rows, block.span()));
-                    }
+                    let (body, rows) = self.nest(|vm| vm.grid_body(block))?;
+                    header = header.or(rows);
                     items.push(Arg {
                         span: block.span(),
                         name: None,
                         scope: None,
-                        value: Value::Content(body.body),
+                        value: Value::Content(body),
                         spelling: None,
                     });
                 }
@@ -1502,12 +1508,9 @@ impl<'a> Vm<'a> {
                             if grid && name == "body" && named.scope().is_none() =>
                         {
                             self.step(block.span())?;
-                            let body = self.nest(|vm| vm.grid_body(block))?;
-                            header = header.or(body.header);
-                            if let Some(rows) = body.rows {
-                                pipe_rows = Some(grid::pipe_rows_arg(rows, block.span()));
-                            }
-                            Value::Content(body.body)
+                            let (body, rows) = self.nest(|vm| vm.grid_body(block))?;
+                            header = header.or(rows);
+                            Value::Content(body)
                         }
                         expr => self.expr(expr)?,
                     };
@@ -1558,7 +1561,6 @@ impl<'a> Vm<'a> {
         if let Some((rows, at)) = header {
             items.push(grid::separator_arg(rows, at));
         }
-        items.extend(pipe_rows);
         Ok(Args::new(span, items))
     }
 
@@ -2121,6 +2123,24 @@ fn descend<R>(
             )
         }
     }
+}
+
+/// The pipe rows on consecutive lines from the first of `items`, a table
+/// row, and how many items they and the spaces between them take.
+fn row_run<'s>(items: &[ast::MarkupItem<'s>]) -> (Vec<ast::TableRow<'s>>, usize) {
+    let mut rows = Vec::new();
+    let mut taken = 0;
+    for (i, item) in items.iter().enumerate() {
+        match item {
+            ast::MarkupItem::Expr(ast::Expr::TableRow(row)) => {
+                rows.push(*row);
+                taken = i + 1;
+            }
+            ast::MarkupItem::Expr(ast::Expr::Space(_) | ast::Expr::Parbreak(_)) => {}
+            _ => break,
+        }
+    }
+    (rows, taken)
 }
 
 /// The element a function makes, directly or with arguments applied.

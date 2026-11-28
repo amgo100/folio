@@ -446,7 +446,7 @@ struct Walk {
     /// The table rows, inner rows before the rows whose cells hold them
     /// (SPEC §7.4).
     rows: Vec<Row>,
-    /// For each token, whether it is in a table row.
+    /// For each token, whether it is on the first line of a table row.
     row_tokens: Vec<bool>,
 }
 
@@ -475,10 +475,21 @@ impl Walk {
             row_tokens: Vec::new(),
         };
         this.walk(root, root.kind(), 0);
+        // The tokens on the first line of each row: a content block opened
+        // there is a cell's, which closes indented under the row.
         this.row_tokens = vec![false; this.tokens.len()];
         for row in &this.rows {
-            for token in &mut this.row_tokens[row.tokens.clone()] {
-                *token = true;
+            let Some(first) = this.tokens.get(row.tokens.start) else {
+                continue;
+            };
+            let start = first.range.0;
+            let end = this.text[start..]
+                .find(crate::is_newline)
+                .map_or(this.text.len(), |at| start + at);
+            for t in row.tokens.clone() {
+                if this.tokens[t].range.0 < end {
+                    this.row_tokens[t] = true;
+                }
             }
         }
         this.find_markup_lines();
@@ -927,7 +938,7 @@ impl Walk {
         edits
     }
 
-    /// Whether token `i` is in a table row.
+    /// Whether token `i` is on the first line of a table row.
     fn in_row(&self, i: usize) -> bool {
         self.row_tokens.get(i).copied().unwrap_or(false)
     }
@@ -1575,6 +1586,11 @@ mod tests {
         markup(
             "| a |  #cell[- x\n    - y] |\n",
             "| a |  #cell[- x\n    - y] |\n",
+        );
+        // A block nested in a cell's block closes as any other.
+        markup(
+            "#grid[\n  | a | #cell[\n      #f[\n        x\n      ]\n    ] | 2 |\n]\n",
+            "#grid[\n  | a | #cell[\n      #f[\n        x\n      ]\n    ] | 2 |\n]\n",
         );
     }
 
