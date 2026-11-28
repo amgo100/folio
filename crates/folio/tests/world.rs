@@ -488,8 +488,15 @@ fn a_panic_in_a_query_is_a_diagnostic_in_a_long_lived_world() {
 #[test]
 fn a_panic_in_a_shared_query_is_a_diagnostic_in_every_parallel_build() {
     // Every build reads the files' dependencies, whichever thread runs
-    // them first: the others wait for it, and see its panic.
-    let (world, armed) = panicking(true, "dependencies");
+    // them first: the others wait for it, and see its panic. Each names
+    // its cause, whichever build ran the query; several worlds, since
+    // which build that is depends on scheduling.
+    for _ in 0..10 {
+        a_panic_in_a_shared_query(panicking(true, "dependencies"));
+    }
+}
+
+fn a_panic_in_a_shared_query((world, armed): (World, Arc<AtomicBool>)) {
     armed.store(true, Ordering::SeqCst);
     let outputs = folio::compile_all(&world);
     assert_eq!(outputs.len(), 3);
@@ -499,6 +506,10 @@ fn a_panic_in_a_shared_query_is_a_diagnostic_in_every_parallel_build() {
         assert_eq!(
             compiled.diagnostics[0].code.as_deref(),
             Some("internal-error")
+        );
+        assert_eq!(
+            compiled.diagnostics[0].message,
+            "internal error: the compiler panicked: injected into `dependencies`"
         );
         // Nothing compiled before, so there is no output to keep; a watcher
         // watches every file of the world, so the edit that works around

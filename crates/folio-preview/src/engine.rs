@@ -1475,7 +1475,11 @@ fn check(
     // these most likely: laying them out first would only add work.
     if let Some(last) = visible
         && last < published.pages.len().saturating_sub(1)
-        && let Some(laid) = folio::pages_through(world, target, variant.as_ref(), last).ok()?
+        && let Some(laid) = match folio::pages_through(world, target, variant.as_ref(), last) {
+            Err(folio::Failed::Cancelled) => return None,
+            // A panic: the check reports it.
+            laid => laid.ok().flatten(),
+        }
         && !laid.complete
     {
         let pages = laid.pages;

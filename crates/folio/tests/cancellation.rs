@@ -169,8 +169,15 @@ fn an_edit_stops_a_long_query_within_milliseconds() {
         .into_iter()
         .find(|(query, ..)| *query == "pages")
         .unwrap();
-    let waited = wait_for(&source, "lines", delay, |world| {
-        folio::pages_through(world, Target::Pdf, None, usize::MAX).map(drop)
+    let waited = wait_for(&source, "lines", delay, |world| match folio::pages_through(
+        world,
+        Target::Pdf,
+        None,
+        usize::MAX,
+    ) {
+        Ok(_) => Ok(()),
+        Err(folio::Failed::Cancelled) => Err(Cancelled),
+        Err(e) => panic!("{e}"),
     });
     eprintln!("the first pages: took {took:?}, an edit in the middle waited {waited:?}");
     assert!(
