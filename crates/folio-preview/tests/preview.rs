@@ -1304,3 +1304,104 @@ fn saves_faster_than_a_check_still_update_the_pages() {
     eprintln!("first revision sent after {sent:?} of saves");
     preview.stop();
 }
+
+/// `paint.cjs` running against a preview: its lines arrive on a channel,
+/// and dropping it closes its standard input, which stops it.
+struct Painter {
+    child: std::process::Child,
+    lines: Receiver<String>,
+}
+
+impl Painter {
+    /// Starts `paint.cjs` showing page `page` and waits until it is ready;
+    /// returns it with the revision it shows.
+    fn start(url: &str, page: usize) -> (Self, u64) {
+        let mut child = std::process::Command::new("node")
+            .current_dir(tests_dir())
+            .args(["paint.cjs", url, &page.to_string()])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, lines) = unbounded();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut painter = Self { child, lines };
+        let revision = painter.until("ready", 0).0;
+        (painter, revision)
+    }
+
+    /// Waits for a line `<word> <revision>` with a revision after `after`;
+    /// returns it with the lines of holes seen before it.
+    fn until(&mut self, word: &str, after: u64) -> (u64, Vec<String>) {
+        let deadline = Instant::now() + TIMEOUT;
+        let mut holes = Vec::new();
+        loop {
+            let line = self
+                .lines
+                .recv_deadline(deadline)
+                .unwrap_or_else(|_| panic!("no `{word}` from paint.cjs in time"));
+            let (w, r) = line.split_once(' ').expect("a word and a revision");
+            let r: u64 = r.parse().unwrap();
+            if w == "holes" {
+                holes.push(line.clone());
+            }
+            if w == word && r > after {
+                return (r, holes);
+            }
+        }
+    }
+}
+
+impl Drop for Painter {
+    fn drop(&mut self) {
+        drop(self.child.stdin.take());
+        let deadline = Instant::now() + TIMEOUT;
+        while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.child.kill();
+    }
+}
+
+#[test]
+fn edits_never_paint_text_with_holes() {
+    // Each edit reflows the first page, so its glyphs land on quarter-pixel
+    // offsets the viewer has not fetched yet: the old pixels stay, or a
+    // fetched offset stands in, until they arrive, and no frame shows text
+    // with holes. Needs Node.js with Playwright, as above.
+    if !playwright() {
+        eprintln!("skipped: Node.js with Playwright is not installed");
+        return;
+    }
+    let dir = long_project(3);
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    updated(&events, |u| u.pages > 0);
+    let (mut painter, mut revision) = Painter::start(&preview.url(), 0);
+    let file = dir.path().join("main.fol");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let mut times = Vec::new();
+    for i in 1..=5 {
+        let words = "reflowed ".repeat(i * 3);
+        let new = text.replacen("Sentence 0 ", &format!("{words}Sentence 0 "), 1);
+        std::fs::write(&file, new).unwrap();
+        let start = Instant::now();
+        preview.changed([&file]);
+        let (painted, holes) = painter.until("painted", revision);
+        times.push(start.elapsed());
+        assert!(holes.is_empty(), "edit {i}: {holes:?}");
+        revision = painted;
+    }
+    eprintln!("edit to the completed canvas: {times:?}");
+    drop(painter);
+    preview.stop();
+}
