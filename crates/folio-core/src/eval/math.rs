@@ -78,6 +78,7 @@ impl Vm<'_> {
         let mut label: Option<math::Label> = None;
         let mut start: Option<Span> = None;
         let exprs: Vec<ast::Expr<'_>> = body.exprs().collect();
+        let pieces = Piece::pieces(&exprs);
         for (k, &expr) in exprs.iter().enumerate() {
             match expr {
                 ast::Expr::Space(_) => continue,
@@ -106,7 +107,7 @@ impl Vm<'_> {
                 return Err(label_not_at_end(label.span).into());
             }
             start.get_or_insert(expr.span());
-            if decimal_comma_at(&exprs, k) {
+            if decimal_comma_at(&pieces, k) {
                 self.step(expr.span())?;
                 nodes.push(math::Node::decimal_comma(expr.span()));
                 continue;
@@ -237,8 +238,9 @@ impl Vm<'_> {
             // A group: what parentheses held, or a base and its arguments.
             ast::Expr::Math(group) => {
                 let children: Vec<ast::Expr<'_>> = group.exprs().collect();
+                let pieces = Piece::pieces(&children);
                 for (k, &child) in children.iter().enumerate() {
-                    if decimal_comma_at(&children, k) {
+                    if decimal_comma_at(&pieces, k) {
                         self.step(child.span())?;
                         out.push(math::Node::decimal_comma(child.span()));
                         continue;
@@ -436,8 +438,22 @@ impl Vm<'_> {
         out: &mut Vec<math::Node>,
     ) -> EvalResult<()> {
         let mut body = Vec::new();
-        for item in args.content_items() {
+        let items: Vec<ast::MathArgItem<'_>> = args.content_items().collect();
+        // `sin(0,5)` is `sin` of the number 0,5 where that is one.
+        let pieces: Vec<Piece> = items
+            .iter()
+            .map(|item| match item {
+                ast::MathArgItem::Arg(ast::Arg::Pos(expr)) => Piece::of(*expr),
+                ast::MathArgItem::Comma(..) => Piece::Comma,
+                _ => Piece::Other,
+            })
+            .collect();
+        for (k, item) in items.into_iter().enumerate() {
             match item {
+                ast::MathArgItem::Comma(_, node) if decimal_comma_at(&pieces, k) => {
+                    self.step(node.span())?;
+                    body.push(math::Node::decimal_comma(node.span()));
+                }
                 ast::MathArgItem::Arg(ast::Arg::Pos(expr)) => {
                     self.math_expr(expr, Level::Nested, &mut body)?
                 }
@@ -1196,7 +1212,17 @@ pub(super) fn quantity(
         None => number,
     });
     let value = value.map(|(number, _)| match (figures, &pm) {
-        (Some(figures), Some(pm)) => number.round_to_place(pm.figure_place(figures)),
+        (Some(figures), Some(pm)) => {
+            let rounded = number.round_to_place(pm.figure_place(figures));
+            // A power of ten the two shared stays shared, though a carry
+            // raised the value's: `(10.0 ± 0.5) × 10³`.
+            match (number.exponent, pm.exponent) {
+                (Some(a), Some(b)) if a == b && rounded.exponent != Some(b) => {
+                    rounded.with_exponent(b)
+                }
+                _ => rounded,
+            }
+        }
         (Some(figures), None) => number.round(figures),
         (None, _) => number,
     });
@@ -1232,52 +1258,65 @@ fn is_math(expr: ast::Expr<'_>) -> bool {
     )
 }
 
-/// Whether the `k`th of a row's expressions is a comma written between two
-/// integers without spaces, `9,81`, which is the decimal marker where the
-/// formula's text writes a decimal comma (SPEC §8.1). The integer after it
-/// may carry scripts (`9,81^2`). Three or more integers joined so are a
-/// list, and none of the commas of `1,2,3` is a marker; `1,5, 2,5` is two
-/// numbers.
-fn decimal_comma_at(exprs: &[ast::Expr<'_>], k: usize) -> bool {
-    // A run goes on past integers with scripts: `1,2^2,3` is a list too.
-    joins_integers(exprs, k, false)
-        && !k
-            .checked_sub(2)
-            .is_some_and(|j| joins_integers(exprs, j, true))
-        && !joins_integers(exprs, k + 2, true)
+/// What the decimal-comma rule sees of a row's expressions.
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum Piece {
+    /// An integer: `81`.
+    Int,
+    /// An integer with scripts: `81^2`.
+    ScriptedInt,
+    /// A comma.
+    Comma,
+    /// Anything else, a space included.
+    Other,
 }
 
-/// Whether the `k`th of a row's expressions is a comma between two integers
-/// without spaces. The second may carry scripts, and the first too where
-/// `scripted`.
-fn joins_integers<'a>(exprs: &[ast::Expr<'a>], k: usize, scripted: bool) -> bool {
-    fn integer(expr: ast::Expr<'_>) -> bool {
-        matches!(
-            expr,
-            ast::Expr::MathText(text) if matches!(
-                text.get(),
-                MathTextKind::Number(n) if n.bytes().all(|b| b.is_ascii_digit())
+impl Piece {
+    fn of(expr: ast::Expr<'_>) -> Self {
+        let integer = |expr: ast::Expr<'_>| {
+            matches!(
+                expr,
+                ast::Expr::MathText(text) if matches!(
+                    text.get(),
+                    MathTextKind::Number(n) if n.bytes().all(|b| b.is_ascii_digit())
+                )
             )
-        )
+        };
+        match expr {
+            ast::Expr::MathText(text) if matches!(text.get(), MathTextKind::Grapheme(g) if g == ",") => {
+                Self::Comma
+            }
+            ast::Expr::MathAttach(attach) if integer(attach.base()) => Self::ScriptedInt,
+            other if integer(other) => Self::Int,
+            _ => Self::Other,
+        }
     }
-    fn comma(expr: ast::Expr<'_>) -> bool {
-        matches!(
-            expr,
-            ast::Expr::MathText(text) if matches!(text.get(), MathTextKind::Grapheme(g) if g == ",")
-        )
+
+    fn pieces(exprs: &[ast::Expr<'_>]) -> Vec<Self> {
+        exprs.iter().map(|&expr| Self::of(expr)).collect()
     }
-    let (Some(&before), Some(&after)) = (
-        k.checked_sub(1).and_then(|i| exprs.get(i)),
-        exprs.get(k + 1),
-    ) else {
-        return false;
+}
+
+/// Whether the `k`th of a row's pieces is a comma written between two
+/// integers without spaces, `9,81`, which is the decimal marker where the
+/// formula's text writes a decimal comma (SPEC §8.1). The integer after it
+/// may carry scripts (`9,81^2`). Three or more integers joined so, with
+/// scripts or without, are a list: none of the commas of `1,2,3` or
+/// `1,2^2,3` is a marker, while `1,5, 2,5` is two numbers.
+fn decimal_comma_at(pieces: &[Piece], k: usize) -> bool {
+    // Whether the comma at `k` joins two integers; the first may carry
+    // scripts where `scripted`.
+    let joins = |k: usize, scripted: bool| {
+        k >= 1
+            && pieces.get(k) == Some(&Piece::Comma)
+            && match pieces[k - 1] {
+                Piece::Int => true,
+                Piece::ScriptedInt => scripted,
+                _ => false,
+            }
+            && matches!(pieces.get(k + 1), Some(Piece::Int | Piece::ScriptedInt))
     };
-    let base = |expr: ast::Expr<'a>| match expr {
-        ast::Expr::MathAttach(attach) => attach.base(),
-        other => other,
-    };
-    let before = if scripted { base(before) } else { before };
-    exprs.get(k).is_some_and(|&c| comma(c)) && integer(before) && integer(base(after))
+    joins(k, false) && !(k >= 2 && joins(k - 2, true)) && !joins(k + 2, true)
 }
 
 /// A number, with a minus sign before it when it is negative.

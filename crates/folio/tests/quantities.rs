@@ -416,6 +416,14 @@ fn commas_between_numbers() {
             "[num(1), punct(,), attach([num(2)], sup: [num(2)]), punct(,), num(3)]",
         ]
     );
+    // A name of math called with a number reads it as `(0,5)` does.
+    assert_eq!(
+        formulas("$sin(0,5)$ $sin(0, 5)$"),
+        [
+            "[op(sin), delim('(', [num(0), num(,), num(5)], ')')]",
+            "[op(sin), delim('(', [num(0), punct(,), num(5)], ')')]",
+        ]
+    );
 }
 
 /// With an uncertainty, `digits` is the uncertainty's significant figures,
@@ -444,8 +452,8 @@ fn digits_round_the_uncertainty_and_the_value_follows() {
     );
     // A value that rounds to zero needs no power of ten.
     assert_eq!(
-        formulas("$num(1.5e3, pm: 2e4, digits: 1)$"),
-        ["[qty(0, pm: 2e4)]"]
+        formulas("$num(1.5e3, pm: 2e4, digits: 1)$ $num(9.96e3, pm: 0.5e3, digits: 1)$"),
+        ["[qty(0, pm: 2e4)]", "[qty(10.0e3, pm: 0.5e3)]"]
     );
     // Without an uncertainty, `digits` rounds the value as before.
     assert_eq!(formulas("$num(1.25, digits: 1)$"), ["[qty(1)]"]);

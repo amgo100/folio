@@ -619,6 +619,35 @@ impl Number {
         }
     }
 
+    /// The same number written with a lower power of ten, its marker moved
+    /// to the right: `1.00e4` with `3` is `10.0e3`. A number with a power
+    /// no higher than `exponent`, or none, stays as it is.
+    pub fn with_exponent(&self, exponent: i32) -> Self {
+        let Some(own) = self.exponent.filter(|&own| own > exponent) else {
+            return self.clone();
+        };
+        let shift = usize::try_from(i64::from(own) - i64::from(exponent))
+            .unwrap_or(usize::MAX)
+            .min(MAX_DIGITS);
+        let mut int: String = self.int.to_string();
+        let mut frac: String = self.frac.to_string();
+        let moved = shift.min(frac.len());
+        int.push_str(&frac[..moved]);
+        frac.drain(..moved);
+        int.push_str(&"0".repeat(shift - moved));
+        let int = int.trim_start_matches('0');
+        Self {
+            negative: self.negative,
+            int: if int.is_empty() {
+                "0".into()
+            } else {
+                int.into()
+            },
+            frac: frac.into(),
+            exponent: Some(exponent),
+        }
+    }
+
     /// The mantissa as it is written in a format: `12 345.678`, `9,81`,
     /// without the sign and the power of ten.
     pub fn format_mantissa(&self, format: &NumberFormat) -> EcoString {
