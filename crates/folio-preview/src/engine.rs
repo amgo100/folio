@@ -552,8 +552,7 @@ impl Engine {
                 self.release();
             }
             if self.deferred_since.is_some() && !self.lagging_behind() {
-                let paths = self.take_deferred();
-                self.apply(&paths);
+                self.apply_with_deferred(Vec::new());
             }
             if self.dirty {
                 self.check();
@@ -588,9 +587,7 @@ impl Engine {
                         self.defer(paths);
                         continue;
                     }
-                    let mut paths = paths;
-                    paths.append(&mut self.take_deferred());
-                    self.apply(&paths);
+                    self.apply_with_deferred(paths);
                 }
                 other => {
                     if !self.handle(other) {
@@ -702,20 +699,25 @@ impl Engine {
                 .is_none_or(|since| since.elapsed() < self.defer_limit)
     }
 
-    /// Takes the changes that waited for the running check, to be applied
-    /// now. When their time ran out, they cancel a check that took too
-    /// long: the next one gets the same grace before changes wait for it,
-    /// and twice as long to send pages.
-    fn take_deferred(&mut self) -> Vec<PathBuf> {
-        let timed_out = self
-            .deferred_since
-            .take()
-            .is_some_and(|since| since.elapsed() >= self.defer_limit);
-        if timed_out && self.running.is_some() {
+    /// Applies `paths` with the changes that waited for the running check.
+    /// When their time ran out while the pages still lagged, and they make
+    /// a new revision, they cancel a check that took too long: the next
+    /// one gets the same grace before changes wait for it, and twice as
+    /// long to send pages.
+    fn apply_with_deferred(&mut self, mut paths: Vec<PathBuf>) {
+        let timed_out = self.running.is_some()
+            && self.lagging.is_some()
+            && self
+                .deferred_since
+                .is_some_and(|since| since.elapsed() >= self.defer_limit);
+        self.deferred_since = None;
+        paths.extend(std::mem::take(&mut self.deferred));
+        let before = self.revision;
+        self.apply(&paths);
+        if timed_out && self.revision != before {
             self.lagging = Some(Instant::now());
             self.defer_limit = (self.defer_limit * 2).min(MAX_DEFER_LIMIT);
         }
-        std::mem::take(&mut self.deferred).into_iter().collect()
     }
 
     /// Lets changes wait for the running check.
@@ -745,9 +747,7 @@ impl Engine {
         if self.lagging_behind() {
             self.defer(due);
         } else {
-            let mut paths = self.take_deferred();
-            paths.extend(due);
-            self.apply(&paths);
+            self.apply_with_deferred(due);
         }
     }
 
@@ -1128,7 +1128,13 @@ impl Engine {
             self.running = None;
         }
         let Some(frame) = done.frame else {
-            // Cancelled by an edit, whose revision is checked next.
+            // Cancelled by an edit, whose revision is checked next; or, if
+            // no edit overtook it, the check panicked, and the pages that
+            // stay are no longer counted as lagging behind a check.
+            if revision == self.revision {
+                self.lagging = None;
+                self.defer_limit = MAX_DEFER;
+            }
             return;
         };
         if revision != self.revision {
