@@ -466,7 +466,9 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
     // Numbers and labels are looked up as references resolve.
     walk.out.reindex();
     walk.references();
-    walk.queries(root);
+    // Titles show the references' text.
+    walk.out.reindex();
+    walk.queries(root, &styled.root);
     let mut out = walk.out;
     out.reindex();
     out
@@ -1035,35 +1037,80 @@ impl Walk<'_> {
     /// outlines and figure lists from `root`, the variant's own tree, with
     /// the markers the walk set; totals from the numbering group's common
     /// tree, or from `root` outside a group.
-    fn queries(&mut self, root: &Element) {
+    fn queries(&mut self, root: &Element, styled: &StyledNode) {
         let pending = std::mem::take(&mut self.pending_queries);
         if pending.is_empty() {
             return;
         }
-        let common = crate::variants::common::group_build(self.db, self.build)
-            .and_then(|group| crate::variants::common::common_tree(self.db, group).as_ref());
+        let group = crate::variants::common::group_build(self.db, self.build);
+        let common =
+            group.and_then(|group| crate::variants::common::common_tree(self.db, group).as_ref());
+        // Only the instances the build styled are shown, so only they are
+        // listed.
+        let mut shown = HashSet::new();
+        if pending.iter().any(|q| matches!(q.kind, query::Kind::List)) {
+            fn collect(node: &StyledNode, out: &mut HashSet<Location>) {
+                out.insert(node.location);
+                for child in &node.children {
+                    collect(child, out);
+                }
+            }
+            collect(styled, &mut shown);
+        }
         let mut out = Vec::with_capacity(pending.len());
         for q in pending {
             let result = match &q.kind {
-                query::Kind::List => QueryResult::List(
-                    query::instances(root, &q.target)
+                query::Kind::List => {
+                    let resolution = &self.out;
+                    // A reference in a title shows the text Resolve gave it.
+                    let text = |element: &Element| {
+                        is_builtin(&element.name, "ref").then(|| {
+                            resolution
+                                .reference(element.location)
+                                .map_or(UNRESOLVED.into(), |r| r.text.clone())
+                        })
+                    };
+                    let entries = query::instances(root, &q.target)
                         .into_iter()
-                        .map(|element| Entry {
-                            target: element.location,
-                            level: query::level(element),
-                            marker: self.out.marker(element.location).and_then(|m| {
+                        .filter(|element| shown.contains(&element.location))
+                        .filter_map(|element| {
+                            let marker = resolution.marker(element.location).and_then(|m| {
                                 // A marker in a part other than the caption
                                 // is not the entry's.
                                 (m.part.is_none()
                                     || m.part.as_ref().is_some_and(|p| p.as_str() == "caption"))
                                 .then(|| m.text.clone())
-                            }),
-                            title: query::title(element),
-                            page: UNRESOLVED.into(),
+                            });
+                            let title = query::title(element, &text);
+                            // An instance with neither, such as a figure
+                            // without a caption, has nothing to list.
+                            if marker.is_none() && title.is_empty() {
+                                return None;
+                            }
+                            Some(Entry {
+                                target: element.location,
+                                level: query::level(element),
+                                marker,
+                                title,
+                                page: UNRESOLVED.into(),
+                            })
                         })
-                        .collect(),
-                ),
+                        .collect();
+                    QueryResult::List(entries)
+                }
                 query::Kind::Total { field, marker } => {
+                    if common.is_none()
+                        && let Some(variant) = self.build.variant(self.db)
+                        && group.is_some()
+                        && let Some(decl) = self
+                            .build
+                            .project(self.db)
+                            .manifest(self.db)
+                            .numbering_group(variant.as_str())
+                    {
+                        let name = decl.name.v.to_string();
+                        self.report(query::group_unavailable(q.span, &name));
+                    }
                     let tree = common.map_or(root, |c| &c.root);
                     let (sum, wrong) = query::sum(query::instances(tree, &q.target), field);
                     if let Some(element) = wrong {

@@ -19,11 +19,11 @@
 //! element in a tree, and [`sum`] totals a field over them.
 
 use ecow::{EcoString, EcoVec, eco_format};
-use folio_component::{BODY, Location};
+use folio_component::{BODY, ElementKind, Location, QualifiedName};
 use folio_syntax::Span;
 
 use crate::diag::Diagnostic;
-use crate::eval::{Element, Node, Value};
+use crate::eval::{Content, Element, Node, Value};
 
 /// What a query element resolved to.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -93,17 +93,18 @@ pub(super) enum Kind {
     Total { field: EcoString, marker: char },
 }
 
-/// Whether an element is the one a query names: by qualified name, or by
-/// name alone when the query names it without a namespace.
-fn is(element: &Element, target: &str) -> bool {
-    let name = element.name.to_string();
-    name == target || (!target.contains('.') && element.name.name.as_str() == target)
+/// Whether an element is the one a query names. A query stores the
+/// element's qualified name, so a built-in `figure` never matches a
+/// component's `plot.figure`.
+fn is(element: &Element, target: &QualifiedName) -> bool {
+    element.name == *target
 }
 
 /// The instances of an element in a tree, in document order, with the
-/// instances inside them.
+/// instances inside them. `target` is the element's qualified name, as a
+/// query stores it; a name that names no element finds none.
 pub fn instances<'a>(root: &'a Element, target: &str) -> Vec<&'a Element> {
-    fn walk<'a>(element: &'a Element, target: &str, out: &mut Vec<&'a Element>) {
+    fn walk<'a>(element: &'a Element, target: &QualifiedName, out: &mut Vec<&'a Element>) {
         if is(element, target) {
             out.push(element);
         }
@@ -118,21 +119,53 @@ pub fn instances<'a>(root: &'a Element, target: &str) -> Vec<&'a Element> {
         }
     }
     let mut out = Vec::new();
-    walk(root, target, &mut out);
+    if let Some(target) = QualifiedName::new(target) {
+        walk(root, &target, &mut out);
+    }
     out
 }
 
-/// The title of an entry: its caption, or else the text of its body,
-/// trimmed.
-pub(super) fn title(element: &Element) -> EcoString {
-    let text = |field: &str| match element.field(field) {
-        Some(Value::Content(content)) => Some(content.plain_text()),
-        _ => None,
+/// The title of an entry: its caption, or else its body, as the
+/// document shows the text: `shown` gives the text of an element that
+/// shows text of its own (a reference's), notes and floats are left out,
+/// and the rest gives its text. Trimmed.
+pub(super) fn title(element: &Element, shown: &dyn Fn(&Element) -> Option<EcoString>) -> EcoString {
+    fn write(
+        content: &Content,
+        shown: &dyn Fn(&Element) -> Option<EcoString>,
+        out: &mut EcoString,
+    ) {
+        for node in content.nodes() {
+            match node {
+                Node::Text { text, .. } => out.push_str(text),
+                Node::Space(_) | Node::Parbreak(_) | Node::Linebreak(_) => out.push(' '),
+                Node::Quote { double, .. } => out.push(if *double { '"' } else { '\'' }),
+                Node::Element(child) => {
+                    if matches!(child.kind, ElementKind::Note | ElementKind::Float) {
+                        continue;
+                    }
+                    if let Some(text) = shown(child) {
+                        out.push_str(&text);
+                    } else if let Some(Value::Content(body)) = child.field(BODY) {
+                        write(body, shown, out);
+                    }
+                }
+                Node::Slot(_) | Node::Rule(_) => {}
+            }
+        }
+    }
+    let field = match element.field("caption") {
+        Some(Value::Content(content)) => Some(content),
+        _ => match element.field(BODY) {
+            Some(Value::Content(content)) => Some(content),
+            _ => None,
+        },
     };
-    text("caption")
-        .or_else(|| text(BODY))
-        .map(|t| t.trim().into())
-        .unwrap_or_default()
+    let mut out = EcoString::new();
+    if let Some(content) = field {
+        write(content, shown, &mut out);
+    }
+    out.trim().into()
 }
 
 /// The level of an entry: a heading's level, and 1 for every other
@@ -170,7 +203,11 @@ pub fn sum<'a>(
             None | Some(Value::None) => {}
             Some(Value::Int(n)) => match float.as_mut() {
                 Some(f) => *f += *n as f64,
-                None => int = int.saturating_add(*n),
+                // A sum too large for an integer goes on as a float.
+                None => match int.checked_add(*n) {
+                    Some(sum) => int = sum,
+                    None => float = Some(int as f64 + *n as f64),
+                },
             },
             Some(Value::Float(x)) => {
                 let f = float.get_or_insert(int as f64);
@@ -188,19 +225,37 @@ pub fn sum<'a>(
     (sum, wrong)
 }
 
-/// A sum as a total shows it: an integer as it is, a float in its
-/// shortest form with the decimal marker.
+/// A sum as a total shows it: an integer as it is; a float rounded to
+/// nine decimal places, so that the binary sum of decimals such as 0.1 and
+/// 0.2 shows as 0.3, without trailing zeros, with the decimal marker.
 pub fn format(sum: Sum, marker: char) -> EcoString {
     match sum {
         Sum::Int(n) => eco_format!("{n}"),
-        Sum::Float(f) if f.is_finite() && f == f.trunc() && f.abs() < 1e15 => {
-            eco_format!("{}", f as i64)
-        }
         Sum::Float(f) => {
-            let text = eco_format!("{f}");
-            text.replace(".", marker.encode_utf8(&mut [0; 4]))
+            let text = eco_format!("{f:.9}");
+            let text = if text.contains('.') {
+                text.trim_end_matches('0').trim_end_matches('.')
+            } else {
+                text.as_str()
+            };
+            let text = if text == "-0" { "0" } else { text };
+            text.replace('.', marker.encode_utf8(&mut [0; 4])).into()
         }
     }
+}
+
+/// The warning for a total in a numbering group whose common tree could
+/// not be made, as a variant of the group cannot be styled: it counts only
+/// what its own variant shows.
+pub(super) fn group_unavailable(query: Span, group: &str) -> Diagnostic {
+    Diagnostic::warning(
+        query,
+        eco_format!(
+            "a variant of numbering group `{group}` could not be styled, so this total counts \
+             only what this variant shows"
+        ),
+    )
+    .with_hint("fix the errors of the group's other variants")
 }
 
 /// The warning for a total whose field holds a value that is no number at

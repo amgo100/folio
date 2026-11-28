@@ -55,7 +55,7 @@ fn results(world: &World, variant: &str) -> Vec<Vec<String>> {
                         "{} {}|{}",
                         e.level,
                         e.marker.as_deref().unwrap_or("").replace('\u{a0}', "~"),
-                        e.title
+                        e.title.replace("\u{a0}", "~")
                     )
                 })
                 .collect(),
@@ -267,4 +267,34 @@ fn entries_are_links() {
     assert_eq!(text.matches("/S/Link").count(), 2);
     assert_eq!(text.matches("/Dest(sec:forces)").count(), 1);
     assert_eq!(text.matches("/Dest(entry 1)").count(), 1);
+}
+
+/// A total of decimals shows the decimal the marks add up to, not the
+/// binary sum's noise.
+#[test]
+fn a_total_of_decimals_is_rounded() {
+    let world = world(
+        false,
+        "#element part(marks: number = none) { kind: block }\n\
+         #total(part, \"marks\")\n\n#part(marks: 0.1)[A.]\n\n#part(marks: 0.2)[B.]\n\n#part(marks: 1)[C.]\n",
+    );
+    assert_eq!(results(&world, "exam"), [["1.3"]]);
+}
+
+/// A title reads as the document shows it: a reference's text, no
+/// footnote; an instance with neither a marker nor a title is not listed.
+#[test]
+fn titles_read_as_shown_and_empty_entries_are_left_out() {
+    let world = world(
+        false,
+        "#list-of(figure)\n\n\
+         #figure(caption: [Path#footnote[Air ignored.] of @fig:b])[A.] <fig:a>\n\n\
+         #figure(caption: [Second])[B.] <fig:b>\n\n\
+         #figure[]\n",
+    );
+    // The figure without a caption has no marker either.
+    assert_eq!(
+        results(&world, "exam"),
+        [vec!["1 Figure~1: |Path of Figure~2", "1 Figure~2: |Second"]]
+    );
 }
