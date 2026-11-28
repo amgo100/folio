@@ -689,12 +689,6 @@ impl Engine {
                     let at = location(path);
                     self.open.retain(|open| !open.starts_with(&at));
                     self.released.retain(|released| !released.starts_with(&at));
-                    // A link to a file, replaced: the file it led to.
-                    if path.is_file() {
-                        let file = resolved(path);
-                        self.open.remove(&file);
-                        self.released.remove(&file);
-                    }
                 }
             }
             Change::Other => {}
@@ -875,13 +869,11 @@ impl Engine {
         for rel in sources {
             let path = self.root.join(&rel);
             let file = resolved(&path);
-            // Read as it is, its hold over.
-            if before.released.contains(&file) {
+            // Read as it is, once, its hold over.
+            if self.released.remove(&file) || before.released.contains(&file) {
                 continue;
             }
             let writing = written.contains(&file);
-            // Released files are read as they are once.
-            self.released.remove(&file);
             let old = self.texts.get(&rel).cloned();
             let old_len = old.as_ref().map_or(0, |old| old.text().len() as u64);
             // Removed by the loader: gone, or not UTF-8, as when the read
@@ -924,6 +916,19 @@ impl Engine {
             self.held.entry(file).or_insert(until);
         }
         restored
+    }
+
+    /// Records the world's texts of all its sources ([`Self::texts`]).
+    fn record_all(&mut self) {
+        self.texts = self.world.as_ref().map_or_else(HashMap::new, |world| {
+            world
+                .source_paths()
+                .filter_map(|path| {
+                    let path = path.as_str();
+                    Some((path.to_owned(), world.source(path)?))
+                })
+                .collect()
+        });
     }
 
     /// Records the world's texts of the sources at the paths that changed
@@ -971,14 +976,8 @@ impl Engine {
             world.set_system_fonts(folio::system_fonts());
         }
         world.set_today(self.settings.today);
-        self.texts = world
-            .source_paths()
-            .filter_map(|path| {
-                let path = path.as_str();
-                Some((path.to_owned(), world.source(path)?))
-            })
-            .collect();
         self.world = Some(world);
+        self.record_all();
         self.redraw = true;
         self.edited();
     }
@@ -1022,6 +1021,8 @@ impl Engine {
             Ok(update) => update,
             Err(e) => {
                 self.warnings.push(error(e.to_string()));
+                // What it changed before the error is not known.
+                self.record_all();
                 self.edited();
                 return;
             }
