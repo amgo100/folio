@@ -644,18 +644,25 @@ fn hidden_content_is_measured_with_its_numbers_and_references() {
         "= Forces <forces>\n\n#figure(caption: [A ball.])[Ball.] <ball>\n\n\
          #figure(class: \"h\")[See @ball and @forces, and @step.\n\n\
          + First step. <step>\n+ Second step.\n\n#figure(caption: [Inner.])[In.] <inner>\n\n\
-         As @inner shows.]\n\n#figure(caption: [After.])[Last.]\n",
+         As @inner shows.]\n\n#figure(caption: [After.])[Last.] <last>\n\nClosing @last.\n",
     );
     let measured = measured_text(&world, "exam");
     let joined = measured.join(" | ");
     assert!(!joined.contains("??"), "{joined}");
-    assert!(joined.contains("See Figure 1 and Section 1, and 1."), "{joined}");
-    assert!(joined.contains("2.") && joined.contains("Figure 2"), "{joined}");
-    // The figure after the hidden content is numbered as if it were not
-    // there: the paper shows no gap in its numbers.
+    assert!(
+        joined.contains("See Figure 1 and Section 1, and 1."),
+        "{joined}"
+    );
+    // The hidden figure is still counted (2), and the one inside it is
+    // numbered after it, as where it is shown.
+    assert!(joined.contains("2. Second step"), "{joined}");
+    assert!(joined.contains("As Figure 3 shows"), "{joined}");
+    // What the paper shows after it is numbered without what it only
+    // measures.
     let exam = pages(&world, "exam");
-    assert!(shown(&exam).contains("Figure 2"), "{}", shown(&exam));
-    assert!(!shown(&exam).contains("Figure 3"));
+    let text = shown(&exam).replace('\u{a0}', " ");
+    assert!(text.contains("Figure 3"), "{text}");
+    assert!(!text.contains("Figure 4"), "{text}");
     // And nothing reports on what only measures.
     let found = diagnostics(&world, "exam");
     assert!(found.is_empty(), "{found:?}");

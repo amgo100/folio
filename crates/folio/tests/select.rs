@@ -467,7 +467,8 @@ fn the_lint_reads_only_names_and_lists() {
     let world = world(
         "",
         "",
-        "#if variant in \"markscheme\" [Sub.]\n\n#if variant == (\"exam\",) [Odd.]\n",
+        "#if variant in \"markscheme\" [Sub.]\n\n#if variant == (\"exam\",) [Odd.]\n\n\
+         #if variant in () [Never.]\n",
     );
     assert!(
         diagnostics(&world, "exam")

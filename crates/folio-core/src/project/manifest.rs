@@ -401,10 +401,11 @@ impl Manifest {
     /// reads but does not act on yet, at each one that is given: strict
     /// mode, which checks no overrides yet (SPEC §5.5), the other keys of
     /// strict mode (`strict-paths` at its first path, as an empty list means
-    /// the same as none), and the numbering group the variant belongs to
-    /// (SPEC §6.1). A declared component that cannot be hosted is reported
-    /// with the components ([`crate::component::unhosted`]).
-    pub fn not_implemented(&self, variant: Option<&Name>) -> Vec<Diagnostic> {
+    /// the same as none). None depends on the variant any more, which the
+    /// signature keeps for its callers. A declared component that cannot be
+    /// hosted is reported with the components
+    /// ([`crate::component::unhosted`]).
+    pub fn not_implemented(&self, _variant: Option<&Name>) -> Vec<Diagnostic> {
         let given = |span: DiagSpan| !matches!(span.get(), DiagSpanKind::Detached);
         let mut out = Vec::new();
         let formatting = &self.formatting;
@@ -430,20 +431,6 @@ impl Manifest {
             if given(value.span) {
                 out.push(unread(value.span, key));
             }
-        }
-        let group = variant.and_then(|v| self.numbering_group(v.as_str()));
-        if let Some(group) = group {
-            out.push(
-                Diagnostic::warning(
-                    group.name.span,
-                    eco_format!(
-                        "numbering groups are not implemented yet, so the variants of `{}` \
-                         number their content separately",
-                        group.name.v
-                    ),
-                )
-                .with_hint("each variant counts only the content it shows"),
-            );
         }
         out
     }

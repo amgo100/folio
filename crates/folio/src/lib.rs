@@ -60,7 +60,8 @@ pub use folio_core::locate;
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, OutputPattern, ProjectError, ProjectPath};
 pub use folio_core::resolve::{
-    Labelled, Marker, Number, Reference, Resolution, Target as ResolveTarget,
+    Entry, Labelled, Marker, Number, Query, QueryResult, Reference, Resolution,
+    Target as ResolveTarget,
 };
 pub use folio_core::style;
 pub use folio_core::text::{SegmentStyle, Text, TextBlock, TextFlow, TextParagraph, TextSource};
@@ -139,7 +140,11 @@ fn compile_now(world: &World, target: Target, variant: Option<&Name>) -> Compile
     let db = world.db();
     let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
     let built = pipeline::compile_build(db, build);
-    let mut diagnostics = collect(pipeline::compile_build::accumulated::<Reported>(db, build));
+    let mut diagnostics = own(
+        world,
+        build,
+        collect(pipeline::compile_build::accumulated::<Reported>(db, build)),
+    );
     diagnostics.extend(pairing(world, variant));
     let mut read = pipeline::compile_build::accumulated::<Read>(db, build);
     read.extend(pairing_reads(world, variant));
@@ -259,7 +264,11 @@ fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
     let db = world.db();
     let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
     let checked = pipeline::check_build(db, build);
-    let mut diagnostics = collect(pipeline::check_build::accumulated::<Reported>(db, build));
+    let mut diagnostics = own(
+        world,
+        build,
+        collect(pipeline::check_build::accumulated::<Reported>(db, build)),
+    );
     diagnostics.extend(pairing(world, variant));
     Checked {
         sources: checked.sources.clone(),
@@ -271,6 +280,77 @@ fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
         writes: checked.writes,
         diagnostics,
     }
+}
+
+/// The diagnostics of a build without those that only the other variants
+/// of its numbering group report. Its shared counters and totals are
+/// counted on the group's common tree (SPEC §6.1, §4.5), so the build
+/// selects each of the group's variants when it has either, and
+/// collects what evaluating, styling and selecting them reports; that
+/// belongs to their own builds. A diagnostic the build's own variant also
+/// reports up to Select stays.
+fn own(
+    world: &World,
+    build: folio_core::db::Build<'_>,
+    diagnostics: EcoVec<Diagnostic>,
+) -> EcoVec<Diagnostic> {
+    let db = world.db();
+    if !reads_common_tree(world, build) {
+        return diagnostics;
+    }
+    let project = world.project();
+    let target = build.target(db);
+    let variant = build.variant(db).clone();
+    let selected = |name: Option<Name>| {
+        let each = folio_core::db::Build::new(db, project, target, name);
+        folio_core::pipeline::select::accumulated::<Reported>(db, each)
+    };
+    let mine: HashSet<&Diagnostic> = selected(variant.clone())
+        .into_iter()
+        .map(|r| &r.0)
+        .collect();
+    let mut foreign: HashSet<&Diagnostic> = HashSet::new();
+    for name in world
+        .manifest()
+        .numbering_group(variant.as_ref().map_or("", Name::as_str))
+        .map(|g| g.variants.iter().map(|v| v.v.clone()).collect::<Vec<_>>())
+        .unwrap_or_default()
+    {
+        if Some(&name) == variant.as_ref() {
+            continue;
+        }
+        foreign.extend(
+            selected(Some(name))
+                .into_iter()
+                .map(|r| &r.0)
+                .filter(|d| !mine.contains(d)),
+        );
+    }
+    if foreign.is_empty() {
+        return diagnostics;
+    }
+    diagnostics
+        .into_iter()
+        .filter(|d| !foreign.contains(d))
+        .collect()
+}
+
+/// Whether a build read its numbering group's common tree: it shares
+/// counters, or shows a total (SPEC §6.1, §4.5).
+fn reads_common_tree(world: &World, build: folio_core::db::Build<'_>) -> bool {
+    let db = world.db();
+    let Some(variant) = build.variant(db) else {
+        return false;
+    };
+    let Some(group) = world.manifest().numbering_group(variant.as_str()) else {
+        return false;
+    };
+    !group.shared_counters.is_empty()
+        || folio_core::pipeline::resolution(db, build).is_some_and(|r| {
+            r.queries
+                .iter()
+                .any(|q| matches!(q.result, QueryResult::Total(_)))
+        })
 }
 
 /// The problems of pairing a variant's instances with those of the other
