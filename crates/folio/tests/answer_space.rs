@@ -436,3 +436,25 @@ fn hidden_footnotes_are_not_placed() {
         "After",
     );
 }
+
+#[test]
+fn hidden_cells_size_their_columns() {
+    // An `auto` column is as wide as the content of its cells as the
+    // variant that shows them sets it.
+    let text = "Before.\n\n#grid(column-tracks: (auto, 1fr))[\n#cell[A] #cell[Note]\n\
+                #cell(class: \"h\")[SECRET a long cell that sets the column wide] \
+                #cell[x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x]\n\
+                ]\n\nAfter.\n";
+    let world = world(
+        "cell.h { display: hidden; }\n",
+        "cell.h { display: block; }\n",
+        text,
+    );
+    let exam = pages(&world, "exam");
+    assert!(!shown(&exam).contains("SECRET"));
+    assert_same(
+        find(&exam, "After"),
+        find(&pages(&world, "markscheme"), "After"),
+        "After",
+    );
+}

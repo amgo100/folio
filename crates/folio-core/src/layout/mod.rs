@@ -119,7 +119,7 @@ use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
 use crate::pipeline::step_styled;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{Text, TextBlock, TextFlow, TextParagraph, TextSource, text};
+use crate::text::{Text, TextBlock, TextFlow, TextParagraph, TextSource, TextSpace, text};
 
 /// How long total fit may take for a paragraph on the editor's typing path
 /// before the paragraph is broken greedily instead (SPEC §7.2): pass
@@ -213,8 +213,17 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         display: &display,
         grids: HashMap::new(),
     };
+    // Grids are sized from the content that their hidden cells measure,
+    // as the variant that shows it sizes them (SPEC §6.3).
+    let substituted;
+    let root = if text.spaces.iter().any(|s| s.measure.is_some()) {
+        substituted = with_measured(&text.root, &text.spaces);
+        &substituted
+    } else {
+        &text.root
+    };
     let (slots, display_widths, grids) = flow::slots_with(
-        &text.root,
+        root,
         &text.notes,
         &text.spaces,
         props,
@@ -280,7 +289,7 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
         return Some(lines);
     }
     // The content that spaces measure is not shown (SPEC §6.3).
-    let measured = measured_paragraphs(text);
+    let (measured, measured_blocks) = measured_content(text);
     for (i, (paragraph, layout)) in text.paragraphs.iter().zip(&lines.paragraphs).enumerate() {
         if !measured.contains(&i) {
             report_lines(db, build.project(db), paragraph, layout);
@@ -309,6 +318,9 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     }
     // A display wider than its block is an overfull line (SPEC §7.9).
     for (i, content) in display_widths {
+        if measured_blocks.contains(&text.maths[i].location) {
+            continue;
+        }
         let maths = &lines.maths;
         let Some(display) = maths.display(i) else {
             continue;
@@ -338,25 +350,51 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
 }
 
 /// The paragraphs of the content that spaces measure (SPEC §6.3), by index
-/// into the build's text: they are laid out only to be measured.
-fn measured_paragraphs(text: &Text) -> HashSet<usize> {
-    fn walk(block: &TextBlock, out: &mut HashSet<usize>) {
+/// into the build's text, and the element instances of its blocks: they
+/// are laid out only to be measured.
+fn measured_content(text: &Text) -> (HashSet<usize>, HashSet<Location>) {
+    fn walk(block: &TextBlock, out: &mut (HashSet<usize>, HashSet<Location>)) {
+        out.1.insert(block.location);
         for child in &block.children {
             match child {
                 TextFlow::Paragraph(i) => {
-                    out.insert(*i);
+                    out.0.insert(*i);
                 }
                 TextFlow::Block(b) => walk(b, out),
             }
         }
     }
-    let mut out = HashSet::new();
+    let mut out = (HashSet::new(), HashSet::new());
     for space in &text.spaces {
         if let Some(block) = &space.measure {
             walk(block, &mut out);
         }
     }
     out
+}
+
+/// `block` with each space's block holding the content it measures (SPEC
+/// §6.3): what grids are sized from. It is never drawn.
+fn with_measured(block: &TextBlock, spaces: &[TextSpace]) -> TextBlock {
+    let measure = spaces
+        .iter()
+        .find(|s| s.location == block.location && s.part == block.part)
+        .and_then(|s| s.measure.as_ref())
+        .filter(|m| !std::ptr::eq(*m, block));
+    let children = match measure {
+        Some(measure) => &measure.children,
+        None => &block.children,
+    };
+    TextBlock {
+        children: children
+            .iter()
+            .map(|child| match child {
+                TextFlow::Block(b) => TextFlow::Block(with_measured(b, spaces)),
+                paragraph => paragraph.clone(),
+            })
+            .collect(),
+        ..block.clone()
+    }
 }
 
 /// What the paragraph builder reads of a paragraph of the text stage: its
