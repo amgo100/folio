@@ -44,28 +44,34 @@ pub struct CommonNumbers {
 
 /// The build that stands for a numbering group and a target: the build of
 /// its first variant, so that every variant of the group asks for one
-/// common count. `None` when the build's variant is in no group or its
-/// group shares no counters.
+/// common tree. `None` when the build's variant is in no group.
 pub fn group_build<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<Build<'db>> {
     let build = build.base(db);
     let project = build.project(db);
     let variant = build.variant(db).as_ref()?;
     let group = project.manifest(db).numbering_group(variant.as_str())?;
-    if group.shared_counters.is_empty() {
-        return None;
-    }
     let first = group.variants.first()?.v.clone();
     Some(Build::new(db, project, build.target(db), Some(first)))
 }
 
-/// Counts the common tree of the numbering group that `build` stands for
-/// ([`group_build`]): the values of every counter, of which its variants
-/// keep those they share; `None` when a variant of the group cannot be
-/// styled, so that each variant counts its own content. Warns at an
-/// instance whose `counter-reset` the variants that show it style
-/// differently: the common tree counts it with one of their styles.
+/// The common tree of a numbering group: the `doc` element and its styled
+/// node, merged from what each variant shows, and the instances whose
+/// versions restart counters differently.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct CommonTree {
+    /// The `doc` element.
+    pub root: Element,
+    /// Its styled node.
+    pub styled: StyledNode,
+    /// The instances whose versions differ in `counter-reset`.
+    differ: Vec<Span>,
+}
+
+/// The common tree of the numbering group that `build` stands for
+/// ([`group_build`]), or `None` when a variant of the group cannot be
+/// styled.
 #[salsa::tracked(returns(ref))]
-pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> Option<CommonNumbers> {
+pub fn common_tree(db: &dyn Db, build: Build<'_>) -> Option<CommonTree> {
     let project = build.project(db);
     let variant = build.variant(db).as_ref()?;
     let group = project.manifest(db).numbering_group(variant.as_str())?;
@@ -85,7 +91,26 @@ pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> Option<CommonNumbers> {
         differ: Vec::new(),
     };
     let (root, styled) = merger.merge(&trees);
-    for span in merger.differ {
+    Some(CommonTree {
+        root,
+        styled,
+        differ: merger.differ,
+    })
+}
+
+/// Counts the common tree of the numbering group that `build` stands for
+/// ([`group_build`]): the values of every counter, of which its variants
+/// keep those they share; `None` when a variant of the group cannot be
+/// styled, so that each variant counts its own content. Warns at an
+/// instance whose `counter-reset` the variants that show it style
+/// differently: the common tree counts it with one of their styles.
+#[salsa::tracked(returns(ref))]
+pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> Option<CommonNumbers> {
+    let project = build.project(db);
+    let variant = build.variant(db).as_ref()?;
+    let group = project.manifest(db).numbering_group(variant.as_str())?;
+    let tree = common_tree(db, build).as_ref()?;
+    for &span in &tree.differ {
         diag::report(
             db,
             Diagnostic::warning(
@@ -102,7 +127,7 @@ pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> Option<CommonNumbers> {
             ),
         );
     }
-    let numbers = count_common(db, build, &root, &styled);
+    let numbers = count_common(db, build, &tree.root, &tree.styled);
     Some(CommonNumbers {
         numbers: numbers
             .into_iter()

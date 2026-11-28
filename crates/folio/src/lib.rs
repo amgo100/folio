@@ -60,7 +60,8 @@ pub use folio_core::locate;
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, OutputPattern, ProjectError, ProjectPath};
 pub use folio_core::resolve::{
-    Labelled, Marker, Number, Reference, Resolution, Target as ResolveTarget,
+    Entry, Labelled, Marker, Number, Query, QueryResult, Reference, Resolution,
+    Target as ResolveTarget,
 };
 pub use folio_core::style;
 pub use folio_core::text::{SegmentStyle, Text, TextBlock, TextFlow, TextParagraph, TextSource};
@@ -282,8 +283,9 @@ fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
 }
 
 /// The diagnostics of a build without those that only the other variants
-/// of its numbering group report. Their shared counters are counted on the
-/// group's common tree (SPEC §6.1), so the build selects each of them, and
+/// of its numbering group report. Its shared counters and totals are
+/// counted on the group's common tree (SPEC §6.1, §4.5), so the build
+/// selects each of the group's variants when it has either, and
 /// collects what evaluating, styling and selecting them reports; that
 /// belongs to their own builds. A diagnostic the build's own variant also
 /// reports up to Select stays.
@@ -293,7 +295,7 @@ fn own(
     diagnostics: EcoVec<Diagnostic>,
 ) -> EcoVec<Diagnostic> {
     let db = world.db();
-    if folio_core::variants::common::group_build(db, build).is_none() {
+    if !reads_common_tree(world, build) {
         return diagnostics;
     }
     let project = world.project();
@@ -331,6 +333,24 @@ fn own(
         .into_iter()
         .filter(|d| !foreign.contains(d))
         .collect()
+}
+
+/// Whether a build read its numbering group's common tree: it shares
+/// counters, or shows a total (SPEC §6.1, §4.5).
+fn reads_common_tree(world: &World, build: folio_core::db::Build<'_>) -> bool {
+    let db = world.db();
+    let Some(variant) = build.variant(db) else {
+        return false;
+    };
+    let Some(group) = world.manifest().numbering_group(variant.as_str()) else {
+        return false;
+    };
+    !group.shared_counters.is_empty()
+        || folio_core::pipeline::resolution(db, build).is_some_and(|r| {
+            r.queries
+                .iter()
+                .any(|q| matches!(q.result, QueryResult::Total(_)))
+        })
 }
 
 /// The problems of pairing a variant's instances with those of the other

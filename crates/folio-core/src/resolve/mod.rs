@@ -62,6 +62,7 @@
 
 mod numbering;
 pub mod page_refs;
+pub mod query;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -76,6 +77,7 @@ use folio_text::Lang;
 
 pub use self::numbering::Pattern;
 pub use self::page_refs::PageNumbers;
+pub use self::query::{Entry, Query, QueryResult};
 
 use crate::component::Reason;
 use crate::db::{Build, Db, component_host};
@@ -207,6 +209,9 @@ pub struct Resolution {
     /// Whether footnotes are numbered from 1 on every page: `page {
     /// counter-reset: footnote; }`.
     pub footnotes_per_page: bool,
+    /// The queries: totals, outlines and figure lists (SPEC §4.5), in
+    /// document order.
+    pub queries: EcoVec<Query>,
     index: Index,
 }
 
@@ -235,6 +240,7 @@ struct Index {
     markers: HashMap<Location, usize>,
     labels: HashMap<EcoString, usize>,
     references: HashMap<Location, usize>,
+    queries: HashMap<Location, usize>,
 }
 
 impl PartialEq for Resolution {
@@ -247,6 +253,7 @@ impl PartialEq for Resolution {
             && self.pages == other.pages
             && self.footnotes == other.footnotes
             && self.footnotes_per_page == other.footnotes_per_page
+            && self.queries == other.queries
     }
 }
 
@@ -261,6 +268,7 @@ impl Hash for Resolution {
         self.pages.hash(state);
         self.footnotes.hash(state);
         self.footnotes_per_page.hash(state);
+        self.queries.hash(state);
     }
 }
 
@@ -287,6 +295,12 @@ impl Resolution {
         Some(&self.labels[*self.index.labels.get(label)?])
     }
 
+    /// The result of a query element instance: a total, an outline or a
+    /// figure list.
+    pub fn query(&self, location: Location) -> Option<&Query> {
+        Some(&self.queries[*self.index.queries.get(&location)?])
+    }
+
     /// The reference that a `ref` element instance is.
     pub fn reference(&self, location: Location) -> Option<&Reference> {
         Some(&self.references[*self.index.references.get(&location)?])
@@ -294,7 +308,8 @@ impl Resolution {
 
     /// What layout must find the pages of: the targets of the page-number
     /// references, each once, in the order they are first referred to,
-    /// then, when footnotes are numbered per page, the footnotes.
+    /// then, when footnotes are numbered per page, the footnotes, then the
+    /// instances that outlines and figure lists list.
     pub fn page_targets(&self) -> Vec<Location> {
         let mut seen = HashSet::new();
         let footnotes = self
@@ -302,12 +317,17 @@ impl Resolution {
             .iter()
             .filter(|_| self.footnotes_per_page)
             .map(|f| f.location);
+        let entries = self.queries.iter().flat_map(|q| match &q.result {
+            QueryResult::List(entries) => entries.iter().map(|e| e.target).collect(),
+            QueryResult::Total(_) => Vec::new(),
+        });
         self.references
             .iter()
             .filter(|r| r.page.is_some())
             .filter_map(|r| r.target)
             .map(|t| t.location)
             .chain(footnotes)
+            .chain(entries)
             .filter(|l| seen.insert(*l))
             .collect()
     }
@@ -336,6 +356,17 @@ impl Resolution {
             } else {
                 eco_format!("{word}{NBSP}{page}")
             };
+        }
+        for q in self.queries.make_mut() {
+            let QueryResult::List(entries) = &mut q.result else {
+                continue;
+            };
+            for entry in entries.make_mut() {
+                entry.page = match numbers.page(entry.target) {
+                    Some(page) => eco_format!("{page}"),
+                    None => UNRESOLVED.into(),
+                };
+            }
         }
         self.pages = numbers;
     }
@@ -413,6 +444,9 @@ impl Resolution {
         for (i, r) in self.references.iter().enumerate() {
             index.references.entry(r.location).or_insert(i);
         }
+        for (i, q) in self.queries.iter().enumerate() {
+            index.queries.entry(q.location).or_insert(i);
+        }
         self.index = index;
     }
 }
@@ -432,6 +466,9 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
     // Numbers and labels are looked up as references resolve.
     walk.out.reindex();
     walk.references();
+    // Titles show the references' text.
+    walk.out.reindex();
+    walk.queries(root, &styled.root);
     let mut out = walk.out;
     out.reindex();
     out
@@ -465,6 +502,9 @@ fn shared(db: &dyn Db, build: Build<'_>, walk: &mut Walk<'_>) -> Option<Shared> 
     let project = build.project(db);
     let variant = build.variant(db).as_ref()?;
     let group = project.manifest(db).numbering_group(variant.as_str())?;
+    if group.shared_counters.is_empty() {
+        return None;
+    }
     let mut counters = HashSet::new();
     for name in &group.shared_counters {
         let written: EcoString = name.v.to_string().into();
@@ -575,6 +615,7 @@ struct Ids {
     marker: PropId,
     ref_format: PropId,
     lang: PropId,
+    decimal_marker: PropId,
 }
 
 impl Ids {
@@ -585,6 +626,7 @@ impl Ids {
             marker: props.builtin("marker"),
             ref_format: props.builtin("ref-format"),
             lang: props.builtin("lang"),
+            decimal_marker: props.builtin("decimal-marker"),
         }
     }
 }
@@ -669,6 +711,8 @@ struct Walk<'a> {
     shared: Option<Shared>,
     /// Whether the walk reports nothing: the walk of a common tree.
     quiet: bool,
+    /// The queries waiting for the whole tree.
+    pending_queries: Vec<query::Pending>,
 }
 
 /// The counters that components' elements declare `within` another
@@ -761,6 +805,7 @@ impl<'a> Walk<'a> {
             patterns: HashMap::new(),
             shared: None,
             quiet: false,
+            pending_queries: Vec::new(),
         }
     }
 
@@ -934,6 +979,8 @@ impl Walk<'_> {
         }
         self.restart_within(element);
 
+        self.query(element, style);
+
         if is_builtin(&element.name, "ref")
             && let Some(Value::Label(label)) = element.field("target")
         {
@@ -950,6 +997,134 @@ impl Walk<'_> {
                 page: is_page_form(element),
             });
         }
+    }
+
+    /// Takes a query element, to resolve once the whole tree is walked.
+    fn query(&mut self, element: &Element, style: &ComputedStyle) {
+        let list = is_builtin(&element.name, "outline") || is_builtin(&element.name, "list-of");
+        let total = is_builtin(&element.name, "total");
+        if !list && !total {
+            return;
+        }
+        let Some(Value::Str(target)) = element.field("target") else {
+            return;
+        };
+        let kind = if total {
+            let Some(Value::Str(field)) = element.field("field") else {
+                return;
+            };
+            let marker = locale::number_format(
+                &self.lang(style),
+                style.value(self.props, self.ids.decimal_marker),
+            )
+            .decimal_marker;
+            query::Kind::Total {
+                field: field.clone(),
+                marker,
+            }
+        } else {
+            query::Kind::List
+        };
+        self.pending_queries.push(query::Pending {
+            location: element.location,
+            span: element.span,
+            target: target.clone(),
+            kind,
+        });
+    }
+
+    /// Resolves the queries the walk took (SPEC §4.5): the entries of
+    /// outlines and figure lists from `root`, the variant's own tree, with
+    /// the markers the walk set; totals from the numbering group's common
+    /// tree, or from `root` outside a group.
+    fn queries(&mut self, root: &Element, styled: &StyledNode) {
+        let pending = std::mem::take(&mut self.pending_queries);
+        if pending.is_empty() {
+            return;
+        }
+        let group = crate::variants::common::group_build(self.db, self.build);
+        let common =
+            group.and_then(|group| crate::variants::common::common_tree(self.db, group).as_ref());
+        // Only the instances the build styled are shown, so only they are
+        // listed.
+        let mut shown = HashSet::new();
+        if pending.iter().any(|q| matches!(q.kind, query::Kind::List)) {
+            fn collect(node: &StyledNode, out: &mut HashSet<Location>) {
+                out.insert(node.location);
+                for child in &node.children {
+                    collect(child, out);
+                }
+            }
+            collect(styled, &mut shown);
+        }
+        let mut out = Vec::with_capacity(pending.len());
+        for q in pending {
+            let result = match &q.kind {
+                query::Kind::List => {
+                    let resolution = &self.out;
+                    // A reference in a title shows the text Resolve gave it.
+                    let text = |element: &Element| {
+                        is_builtin(&element.name, "ref").then(|| {
+                            resolution
+                                .reference(element.location)
+                                .map_or(UNRESOLVED.into(), |r| r.text.clone())
+                        })
+                    };
+                    let entries = query::instances(root, &q.target)
+                        .into_iter()
+                        .filter(|element| shown.contains(&element.location))
+                        .filter_map(|element| {
+                            let marker = resolution.marker(element.location).and_then(|m| {
+                                // A marker in a part other than the caption
+                                // is not the entry's.
+                                (m.part.is_none()
+                                    || m.part.as_ref().is_some_and(|p| p.as_str() == "caption"))
+                                .then(|| m.text.clone())
+                            });
+                            let title = query::title(element, &text);
+                            // An instance with neither, such as a figure
+                            // without a caption, has nothing to list.
+                            if marker.is_none() && title.is_empty() {
+                                return None;
+                            }
+                            Some(Entry {
+                                target: element.location,
+                                level: query::level(element),
+                                marker,
+                                title,
+                                page: UNRESOLVED.into(),
+                            })
+                        })
+                        .collect();
+                    QueryResult::List(entries)
+                }
+                query::Kind::Total { field, marker } => {
+                    if common.is_none()
+                        && let Some(variant) = self.build.variant(self.db)
+                        && group.is_some()
+                        && let Some(decl) = self
+                            .build
+                            .project(self.db)
+                            .manifest(self.db)
+                            .numbering_group(variant.as_str())
+                    {
+                        let name = decl.name.v.to_string();
+                        self.report(query::group_unavailable(q.span, &name));
+                    }
+                    let tree = common.map_or(root, |c| &c.root);
+                    let (sum, wrong) = query::sum(query::instances(tree, &q.target), field);
+                    if let Some(element) = wrong {
+                        self.report(query::not_a_number(q.span, field, element));
+                    }
+                    QueryResult::Total(query::format(sum, *marker))
+                }
+            };
+            out.push(Query {
+                location: q.location,
+                result,
+            });
+        }
+        self.out.queries = out.into_iter().collect();
     }
 
     fn label(&mut self, label: EcoString, target: Target, element: &Element) {

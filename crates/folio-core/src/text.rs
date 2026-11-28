@@ -727,6 +727,26 @@ impl Collector<'_> {
                 self.maths[index].lead = self.lead();
                 return;
             }
+            // An outline or figure list (SPEC §4.5): a paragraph for each
+            // entry Resolve listed, in the list's style.
+            if is_builtin(&element.name, "outline") || is_builtin(&element.name, "list-of") {
+                if let Some(crate::resolve::QueryResult::List(entries)) =
+                    self.resolution.query(element.location).map(|q| &q.result)
+                {
+                    for entry in entries {
+                        let mut builder = self.builder();
+                        builder.push_part(
+                            &entry.text(),
+                            &node.style,
+                            element.span,
+                            TextSource::WHOLE,
+                            false,
+                        );
+                        self.finish(builder, &node.style, element);
+                    }
+                }
+                return;
+            }
             // An image where blocks stand is a paragraph of its own.
             if is_builtin(&element.name, "image") {
                 let mut builder = self.builder();
@@ -1031,6 +1051,15 @@ impl Collector<'_> {
         }
         if let Some(text) = raw_text(element) {
             out.raw(text, style, element.span);
+            return;
+        }
+        // A total shows the sum Resolve gave it (SPEC §4.5).
+        if is_builtin(&element.name, "total") {
+            let text = match self.resolution.query(element.location).map(|q| &q.result) {
+                Some(crate::resolve::QueryResult::Total(text)) => text.as_str(),
+                _ => UNRESOLVED,
+            };
+            out.push_part(text, style, element.span, TextSource::WHOLE, false);
             return;
         }
         // A reference shows the text Resolve gave it.
