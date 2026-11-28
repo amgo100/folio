@@ -285,7 +285,21 @@ fn bad_signatures_are_rejected() {
     .unwrap();
     rejected(install(&channel, "77.0.0", &toolchains), "channel.toml");
 
-    assert_eq!(files(cache.path()), Vec::<PathBuf>::new());
+    // No binary was installed; only the verified channel file was stored,
+    // with its lock file.
+    let stored = |cache: &Path| {
+        let mut names: Vec<_> = files(cache)
+            .iter()
+            .map(|f| f.strip_prefix(cache).unwrap().to_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let channel_only = vec![
+        PathBuf::from("toolchains/.channel.lock"),
+        PathBuf::from("toolchains/channel.toml.signed"),
+    ];
+    assert_eq!(stored(cache.path()), channel_only);
     assert_eq!(toolchains.get(&Version::new(77, 0, 0)), None);
 
     // A missing signature is a failed download.
@@ -300,6 +314,18 @@ fn bad_signatures_are_rejected() {
         install(&channel, "77.0.0", &toolchains),
         Err(InstallError::Download { .. })
     ));
+    assert_eq!(stored(cache.path()), channel_only);
+
+    // A channel file that does not verify stores nothing.
+    let cache = tempfile::tempdir().unwrap();
+    let toolchains = Toolchains::new(cache.path().join("toolchains"));
+    let info = channel.dir.path().join(Channel::info_path());
+    fs::write(
+        &info,
+        "version = 1\nserial = 2\nsecurity-fixes-from = \"0.0.1\"\n",
+    )
+    .unwrap();
+    rejected(install(&channel, "77.0.0", &toolchains), "channel.toml");
     assert_eq!(files(cache.path()), Vec::<PathBuf>::new());
 }
 
@@ -316,6 +342,182 @@ fn replaces_what_is_left_of_a_version() {
     assert!(!installed.already);
     assert_eq!(fs::read(&installed.path).unwrap(), FAKE_COMPILER);
     assert!(!left.join("notes.txt").exists());
+}
+
+#[test]
+fn refreshes_the_channel_file_of_an_installed_version() {
+    let channel = FakeChannel::new("0.0.0");
+    channel.release("77.0.0", FAKE_COMPILER);
+    let cache = tempfile::tempdir().unwrap();
+    let toolchains = Toolchains::new(cache.path().join("toolchains"));
+    let keys = [key().verifying_key()];
+    install(&channel, "77.0.0", &toolchains).unwrap();
+
+    // Installing the version again downloads no binary, but stores the
+    // newer channel file and its floor.
+    channel.publish(2, "78.0.0");
+    let binary = channel
+        .dir
+        .path()
+        .join(Channel::binary_path(&Version::new(77, 0, 0)));
+    fs::remove_file(&binary).unwrap();
+    let installed = install(&channel, "77.0.0", &toolchains).unwrap();
+    assert!(installed.already);
+    let info = ChannelInfo {
+        serial: 2,
+        security_fixes_from: Version::new(78, 0, 0),
+    };
+    assert_eq!(installed.info.as_ref(), Some(&info));
+    assert_eq!(toolchains.channel_info(&keys), Some(info.clone()));
+
+    // An older copy is still refused for an installed version.
+    channel.publish(1, "0.0.0");
+    assert!(matches!(
+        install(&channel, "77.0.0", &toolchains),
+        Err(InstallError::ChannelReplayed {
+            serial: 1,
+            stored: 2
+        })
+    ));
+    assert_eq!(toolchains.channel_info(&keys), Some(info.clone()));
+
+    // A channel file that cannot be downloaded leaves the installed version
+    // and the stored floor as they were.
+    fs::remove_file(channel.dir.path().join(Channel::info_path())).unwrap();
+    let installed = install(&channel, "77.0.0", &toolchains).unwrap();
+    assert!(installed.already);
+    assert_eq!(installed.info, None);
+    assert_eq!(toolchains.channel_info(&keys), Some(info));
+    assert_eq!(
+        fs::read(toolchains.get(&Version::new(77, 0, 0)).unwrap()).unwrap(),
+        FAKE_COMPILER
+    );
+}
+
+#[test]
+fn keeps_the_channel_file_when_the_binary_fails() {
+    let channel = FakeChannel::new("0.0.0");
+    channel.release("77.0.0", FAKE_COMPILER);
+    let cache = tempfile::tempdir().unwrap();
+    let toolchains = Toolchains::new(cache.path().join("toolchains"));
+    let keys = [key().verifying_key()];
+    install(&channel, "77.0.0", &toolchains).unwrap();
+
+    // 78.0.0 has no binary for this platform, but the newer channel file
+    // that was verified before is kept.
+    channel.publish(3, "78.0.0");
+    assert!(matches!(
+        install(&channel, "78.0.0", &toolchains),
+        Err(InstallError::Download { .. })
+    ));
+    assert_eq!(toolchains.get(&Version::new(78, 0, 0)), None);
+    let info = toolchains.channel_info(&keys).unwrap();
+    assert_eq!(
+        (info.serial, info.security_fixes_from),
+        (3, Version::new(78, 0, 0))
+    );
+
+    // So is one whose binary's signature does not verify.
+    channel.publish(4, "79.0.0");
+    channel.put(
+        &Channel::binary_path(&Version::new(78, 0, 0)),
+        FAKE_COMPILER,
+        &SigningKey::from_bytes(&[8; 32]),
+    );
+    assert!(matches!(
+        install(&channel, "78.0.0", &toolchains),
+        Err(InstallError::Signature { .. })
+    ));
+    assert_eq!(toolchains.get(&Version::new(78, 0, 0)), None);
+    assert_eq!(toolchains.channel_info(&keys).unwrap().serial, 4);
+}
+
+/// Reads `file://` URLs as [`Local`] does, and runs `before` when it
+/// downloads a binary.
+struct Hooked<F>(F);
+
+impl<F: Fn()> Fetch for Hooked<F> {
+    fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
+        if url.ends_with(&toolchain::asset_name()) {
+            (self.0)();
+        }
+        Local.fetch(url)
+    }
+}
+
+#[test]
+fn keeps_a_binary_another_install_put_in_place() {
+    let channel = FakeChannel::new("0.0.0");
+    channel.release("77.0.0", FAKE_COMPILER);
+    let cache = tempfile::tempdir().unwrap();
+    let toolchains = Toolchains::new(cache.path().join("toolchains"));
+    let version = Version::new(77, 0, 0);
+    // Another install finishes while this one downloads the binary, and
+    // marks its binary.
+    let other = || {
+        let installed = install(&channel, "77.0.0", &toolchains).unwrap();
+        assert!(!installed.already);
+        fs::write(installed.path.parent().unwrap().join("mark"), "").unwrap();
+    };
+    let installed =
+        toolchain::install(&version, &channel.channel(), &Hooked(other), &toolchains).unwrap();
+    assert!(installed.already);
+    assert_eq!(fs::read(&installed.path).unwrap(), FAKE_COMPILER);
+    assert!(
+        installed.path.parent().unwrap().join("mark").exists(),
+        "the other install's directory was replaced"
+    );
+    // No staging directory is left.
+    let names: Vec<_> = fs::read_dir(toolchains.dir())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.starts_with(".install-"))
+        .collect();
+    assert_eq!(names, Vec::<String>::new());
+}
+
+#[test]
+fn concurrent_installs_of_one_version() {
+    use std::sync::Barrier;
+
+    let channel = FakeChannel::new("0.0.0");
+    channel.release("77.0.0", FAKE_COMPILER);
+    let url = channel.url();
+    let keys = [key().verifying_key().to_bytes()];
+    for _ in 0..20 {
+        let cache = tempfile::tempdir().unwrap();
+        let toolchains = Toolchains::new(cache.path().join("toolchains"));
+        let version = Version::new(77, 0, 0);
+        // Both downloads finish before either install moves its binary.
+        let barrier = Barrier::new(2);
+        let hook = || {
+            barrier.wait();
+        };
+        let results: Vec<_> = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let channel = Channel::new(&url, &keys).unwrap();
+                        let installed =
+                            toolchain::install(&version, &channel, &Hooked(hook), &toolchains);
+                        // A build that hands over to the pin now finds it.
+                        let binary = toolchains.get(&version);
+                        (installed, binary)
+                    })
+                })
+                .collect();
+            threads.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        let mut already = Vec::new();
+        for (installed, binary) in results {
+            let installed = installed.unwrap();
+            assert_eq!(fs::read(&installed.path).unwrap(), FAKE_COMPILER);
+            assert_eq!(binary, Some(installed.path));
+            already.push(installed.already);
+        }
+        already.sort();
+        assert_eq!(already, [false, true]);
+    }
 }
 
 #[test]
