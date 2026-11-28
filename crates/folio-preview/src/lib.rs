@@ -7,11 +7,15 @@
 //! events are debounced (10 ms by default) and mapped to updates of the
 //! world; each batch that changes it starts a check of the previewed build
 //! ([`folio::check`]) on a thread of its own, and an edit that arrives
-//! meanwhile cancels it through the query database (SPEC §2.3). The pages
-//! of a finished check are compared with the last ones sent by their
-//! content hashes (`folio::Pages::changed` and `remapped`), and only the
-//! display lists of pages that changed, or the span maps of pages whose
-//! sources moved, are encoded and sent.
+//! meanwhile cancels it through the query database (SPEC §2.3), unless the
+//! pages have lagged behind the world for a quarter of a second, when it
+//! waits for the check's first pages or its end, for a limited time. Where
+//! the watcher reports closes, as on Linux, a file that reads as if caught
+//! between the truncate and the write of a save in place is held until its
+//! writer closes it. The pages of a finished check are compared with the
+//! last ones sent by their content hashes (`folio::Pages::changed` and
+//! `remapped`), and only the display lists of pages that changed, or the
+//! span maps of pages whose sources moved, are encoded and sent.
 //!
 //! Compilation is partial: a construct that fails is an error marker on
 //! its page and the rest is shown. Only when nothing can be laid out, as

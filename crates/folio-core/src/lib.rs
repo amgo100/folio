@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aggregate;
 pub mod component;
 pub mod db;
 pub mod diag;

@@ -55,6 +55,15 @@
 //!   ([`Resolution::set_pages`]), in the bounded fixpoint of
 //!   [`page_refs`].
 //!
+//! - **Measured content** (SPEC §6.3): the content that a `hidden` or
+//!   `answer-space` block measures, which Select keeps out of the tree, is
+//!   resolved where the block stands, as where it is shown, so that its
+//!   markers and references have their text when layout measures it. The
+//!   rest of the build does not count it, its labels are seen only by
+//!   references in measured content, and it reports nothing. Page-number
+//!   references in it to targets in it show [`UNRESOLVED`], as those
+//!   targets are on no page.
+//!
 //! Counters are resolved per build, on the variant's own tree, except the
 //! shared counters of a numbering group (SPEC §6.1), whose values come from
 //! the group's common tree ([`crate::variants::common`]), counted by the
@@ -89,6 +98,7 @@ use crate::model::{document, schema};
 use crate::style::{
     Child, ComputedStyle, PropId, Properties, Styled, StyledNode, content_elements, styled_children,
 };
+use crate::variants::select::{Measure, Space};
 
 /// The no-break space between a word and its number, and after a marker,
 /// so that neither is left alone at the end of a line.
@@ -673,6 +683,10 @@ struct PendingRef {
     lang: Lang,
     /// Whether it refers to its target's page.
     page: bool,
+    /// Whether it is in content that a space only measures (SPEC §6.3):
+    /// it shows what it would where the content is shown, and reports
+    /// nothing.
+    quiet: bool,
 }
 
 struct Walk<'a> {
@@ -713,6 +727,33 @@ struct Walk<'a> {
     quiet: bool,
     /// The queries waiting for the whole tree.
     pending_queries: Vec<query::Pending>,
+    /// The spaces of `hidden` and `answer-space` whose content layout
+    /// measures, by element instance and part (SPEC §6.3).
+    spaces: HashMap<(Location, Option<Name>), &'a Space>,
+    /// Whether the walk is in content that a space only measures, which
+    /// reports nothing.
+    measuring: bool,
+    /// The labels of that content, which only its own references see.
+    measured_labels: Vec<Labelled>,
+    /// The elements of components' aggregates (D-72-1), by qualified name.
+    aggregates: HashSet<QualifiedName>,
+}
+
+/// The elements of the components' aggregates (D-72-1), by qualified
+/// name.
+fn aggregate_elements(db: &dyn Db, build: Build<'_>) -> HashSet<QualifiedName> {
+    let Some(host) = component_host(db, build.project(db)).as_ref() else {
+        return HashSet::new();
+    };
+    host.components()
+        .flat_map(|c| {
+            let namespace = c.manifest.namespace();
+            c.declarations
+                .aggregates
+                .iter()
+                .map(move |a| QualifiedName::qualified(namespace.clone(), a.name.clone()))
+        })
+        .collect()
 }
 
 /// The counters that components' elements declare `within` another
@@ -806,6 +847,20 @@ impl<'a> Walk<'a> {
             shared: None,
             quiet: false,
             pending_queries: Vec::new(),
+            spaces: crate::pipeline::select(db, build.base(db))
+                .as_ref()
+                .map(|selected| {
+                    selected
+                        .spaces
+                        .iter()
+                        .filter(|space| space.measure.is_some())
+                        .map(|space| ((space.location, space.part.clone()), space))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            measuring: false,
+            measured_labels: Vec::new(),
+            aggregates: aggregate_elements(db, build),
         }
     }
 
@@ -835,20 +890,98 @@ impl Walk<'_> {
         for (child, child_node) in styled_children(element, node) {
             match child {
                 Child::Element(child) => self.element(child, child_node),
-                Child::Part(_, content) => {
+                Child::Part(name, content) => {
                     let mut kids = StyledChildren::new(child_node);
                     for child in content_elements(content) {
                         if let Some(child_node) = kids.element(child) {
                             self.element(child, child_node);
                         }
                     }
+                    self.measured(element.location, Name::new(name));
                 }
             }
         }
+        self.measured(element.location, None);
         if list {
             self.lists.pop();
         }
         self.close_scopes(scoped);
+    }
+
+    /// Resolves the content that the space of an element instance, or of
+    /// its part, measures (SPEC §6.3), as where it is shown: its counters
+    /// go on from those of the space, so that its markers and references
+    /// have the text they would have there. The rest of the document does
+    /// not count it: the counters, lists and labels are restored after
+    /// it, its footnotes are not numbered and its queries not answered,
+    /// its labels are seen only by references in measured content, and it
+    /// reports nothing.
+    fn measured(&mut self, location: Location, part: Option<Name>) {
+        // A numbering group's common tree holds the content where a
+        // variant shows it, so it is counted there already.
+        if self.quiet {
+            return;
+        }
+        let Some(measure) = self
+            .spaces
+            .get(&(location, part))
+            .and_then(|space| space.measure.as_ref())
+        else {
+            return;
+        };
+        let counters = self.counters.clone();
+        let lists = self.lists.clone();
+        let seen = self.seen.clone();
+        let (labels, footnotes, refs, queries) = (
+            self.out.labels.len(),
+            self.out.footnotes.len(),
+            self.refs.len(),
+            self.pending_queries.len(),
+        );
+        let measuring = std::mem::replace(&mut self.measuring, true);
+        // The space's own element was counted where it stands; only what
+        // it held is walked.
+        let (content, node): (Vec<&Element>, &StyledNode) = match measure {
+            Measure::Element(shown, node) => {
+                let children = styled_children(shown, node);
+                for (child, child_node) in children {
+                    match child {
+                        Child::Element(child) => self.element(child, child_node),
+                        Child::Part(name, content) => {
+                            let mut kids = StyledChildren::new(child_node);
+                            for child in content_elements(content) {
+                                if let Some(child_node) = kids.element(child) {
+                                    self.element(child, child_node);
+                                }
+                            }
+                            self.measured(shown.location, Name::new(name));
+                        }
+                    }
+                }
+                (Vec::new(), node)
+            }
+            Measure::Part(content, node) => (content_elements(content).collect(), node),
+        };
+        let mut kids = StyledChildren::new(node);
+        for child in content {
+            if let Some(child_node) = kids.element(child) {
+                self.element(child, child_node);
+            }
+        }
+        self.measuring = measuring;
+        self.measured_labels
+            .extend(self.out.labels[labels..].iter().cloned());
+        self.out.labels.truncate(labels);
+        self.out.footnotes.truncate(footnotes);
+        // Its queries are not answered: their text is left out of what
+        // layout measures.
+        self.pending_queries.truncate(queries);
+        for r in &mut self.refs[refs..] {
+            r.quiet = true;
+        }
+        self.counters = counters;
+        self.lists = lists;
+        self.seen = seen;
     }
 
     /// Opens a new level of each counter scoped to an element, after the
@@ -995,6 +1128,7 @@ impl Walk<'_> {
                 supplement,
                 lang: self.lang(style),
                 page: is_page_form(element),
+                quiet: self.measuring,
             });
         }
     }
@@ -1004,6 +1138,7 @@ impl Walk<'_> {
         let list = is_builtin(&element.name, "outline") || is_builtin(&element.name, "list-of");
         let total = is_builtin(&element.name, "total");
         if !list && !total {
+            self.aggregate_query(element, style);
             return;
         }
         let Some(Value::Str(target)) = element.field("target") else {
@@ -1030,6 +1165,32 @@ impl Walk<'_> {
             span: element.span,
             target: target.clone(),
             kind,
+        });
+    }
+
+    /// Takes the element of a component's aggregate (D-72-1), to resolve
+    /// once the whole tree is walked.
+    fn aggregate_query(&mut self, element: &Element, style: &ComputedStyle) {
+        let Some(namespace) = &element.name.namespace else {
+            return;
+        };
+        if !self.aggregates.contains(&element.name) {
+            return;
+        }
+        let marker = locale::number_format(
+            &self.lang(style),
+            style.value(self.props, self.ids.decimal_marker),
+        )
+        .decimal_marker;
+        self.pending_queries.push(query::Pending {
+            location: element.location,
+            span: element.span,
+            target: element.name.to_string().into(),
+            kind: query::Kind::Aggregate {
+                namespace: namespace.clone(),
+                name: element.name.name.clone(),
+                marker,
+            },
         });
     }
 
@@ -1098,19 +1259,30 @@ impl Walk<'_> {
                         .collect();
                     QueryResult::List(entries)
                 }
-                query::Kind::Total { field, marker } => {
-                    if common.is_none()
-                        && let Some(variant) = self.build.variant(self.db)
-                        && group.is_some()
-                        && let Some(decl) = self
-                            .build
-                            .project(self.db)
-                            .manifest(self.db)
-                            .numbering_group(variant.as_str())
-                    {
-                        let name = decl.name.v.to_string();
-                        self.report(query::group_unavailable(q.span, &name));
+                query::Kind::Aggregate {
+                    namespace,
+                    name,
+                    marker,
+                } => {
+                    self.warn_group_unavailable(group.is_some() && common.is_none(), q.span);
+                    let value = crate::aggregate::aggregate(
+                        self.db,
+                        self.build,
+                        namespace.clone(),
+                        name.clone(),
+                    );
+                    match value.as_ref().and_then(|v| query::show(v, *marker)) {
+                        Some(text) => QueryResult::Total(text),
+                        None => {
+                            let qualified =
+                                QualifiedName::qualified(namespace.clone(), name.clone());
+                            self.report(query::no_value(q.span, &qualified));
+                            QueryResult::Total(UNRESOLVED.into())
+                        }
                     }
+                }
+                query::Kind::Total { field, marker } => {
+                    self.warn_group_unavailable(group.is_some() && common.is_none(), q.span);
                     let tree = common.map_or(root, |c| &c.root);
                     let (sum, wrong) = query::sum(query::instances(tree, &q.target), field);
                     if let Some(element) = wrong {
@@ -1125,6 +1297,22 @@ impl Walk<'_> {
             });
         }
         self.out.queries = out.into_iter().collect();
+    }
+
+    /// Warns at a total or aggregate that counts only what its variant
+    /// shows, as its numbering group's common tree could not be made.
+    fn warn_group_unavailable(&mut self, unavailable: bool, span: Span) {
+        if !unavailable {
+            return;
+        }
+        let Some(variant) = self.build.variant(self.db) else {
+            return;
+        };
+        let manifest = self.build.project(self.db).manifest(self.db);
+        if let Some(decl) = manifest.numbering_group(variant.as_str()) {
+            let name = decl.name.v.to_string();
+            self.report(query::group_unavailable(span, &name));
+        }
     }
 
     fn label(&mut self, label: EcoString, target: Target, element: &Element) {
@@ -1376,11 +1564,20 @@ impl Walk<'_> {
         let refs = std::mem::take(&mut self.refs);
         let mut resolved = Vec::with_capacity(refs.len());
         for r in refs {
-            let labelled = self.out.label(&r.label).cloned();
+            // A reference in measured content also sees the labels there.
+            let labelled = self.out.label(&r.label).cloned().or_else(|| {
+                self.measured_labels
+                    .iter()
+                    .find(|l| r.quiet && l.label == r.label)
+                    .cloned()
+            });
             let page = r.page.then(|| self.page_word(&r));
+            self.measuring = r.quiet;
             let (target, text) = match labelled {
                 None => {
-                    self.missing(&r);
+                    if !r.quiet {
+                        self.missing(&r);
+                    }
                     (None, EcoString::from(UNRESOLVED))
                 }
                 // The page is set once a pass has measured it.
@@ -1396,6 +1593,7 @@ impl Walk<'_> {
                 span: r.span,
             });
         }
+        self.measuring = false;
         self.out.references = resolved.into_iter().collect();
     }
 
@@ -1584,13 +1782,13 @@ impl Walk<'_> {
     }
 
     fn report(&self, diagnostic: Diagnostic) {
-        if !self.quiet {
+        if !self.quiet && !self.measuring {
             diag::report(self.db, diagnostic);
         }
     }
 
     fn report_once(&mut self, key: EcoString, diagnostic: Diagnostic) {
-        if !self.quiet && self.reported.insert(key) {
+        if !self.quiet && !self.measuring && self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
     }
