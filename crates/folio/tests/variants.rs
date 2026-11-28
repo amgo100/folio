@@ -63,6 +63,50 @@ fn hidden_content_and_formula_source_do_not_reach_the_exam_pdf() {
     assert!(!holds(&markscheme, "ANSWERCOMMENT"), "comments never do");
 }
 
+/// A title the variant hides or replaces reaches neither its pages nor
+/// its metadata: the Info dictionary and XMP are read from the selected
+/// document tree (#431).
+#[test]
+fn a_hidden_title_does_not_reach_the_metadata() {
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\n\
+                    compiler = \"0.0.0\"\nlang = \"en\"\n\
+                    styles = [\"styles/main.fsty\"]\n\n\
+                    [variants.exam]\ntargets = [\"pdf\"]\n\n\
+                    [variants.cover]\ntargets = [\"pdf\"]\n\n\
+                    [variants.markscheme]\ntargets = [\"pdf\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            "@variant exam { doc > title { display: none; } }\n\
+             @variant cover { doc > title { display: placeholder(\"PLACEHOLDERTITLE\"); } }\n",
+        )
+        .unwrap();
+    world
+        .set_source(
+            "main.fol",
+            "#doc(title: [SECRETTITLE], subject: \"Mechanics\")\n\nQuestion one.\n",
+        )
+        .unwrap();
+    let exam = searchable(&pdf(&world, "exam"));
+    assert!(!holds(&exam, "SECRETTITLE"), "the exam PDF holds the title");
+    assert!(holds(&exam, "Mechanics"), "the subject is still written");
+    let cover = searchable(&pdf(&world, "cover"));
+    assert!(
+        !holds(&cover, "SECRETTITLE"),
+        "the cover PDF holds the title"
+    );
+    assert!(
+        holds(&cover, "PLACEHOLDERTITLE"),
+        "the placeholder is the title"
+    );
+    let markscheme = searchable(&pdf(&world, "markscheme"));
+    assert!(
+        holds(&markscheme, "SECRETTITLE"),
+        "the mark scheme shows it"
+    );
+}
+
 /// Each instance of a formula that a loop makes reads as evaluation made
 /// it, not as the first instance does.
 #[test]
