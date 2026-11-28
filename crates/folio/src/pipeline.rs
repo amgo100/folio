@@ -30,9 +30,8 @@ use folio_core::diag::{self, Diagnostic};
 use folio_core::eval::Value;
 use folio_core::fonts::{Fonts, fonts};
 use folio_core::layout::{GridLayout, Pages, lines, pages};
-use folio_core::model::document;
-use folio_core::pipeline::resolution;
 use folio_core::pipeline::step_styled;
+use folio_core::pipeline::{resolution, selected_root};
 use folio_core::project::ProjectPath;
 use folio_core::resolve::Resolution;
 use folio_core::span_map::{source_ref, span};
@@ -174,19 +173,15 @@ impl PdfInput {
 pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let text = text(db, build).as_ref()?;
     let project = build.project(db);
-    let doc = document(
-        db,
-        project,
-        build.variant(db).clone(),
-        build.version(db).clone(),
-    )
-    .as_ref()?;
+    // The document tree as the variant shows it: a field Select left out
+    // or replaced never reaches the metadata (SPEC §6.4).
+    let root = selected_root(db, build)?;
     let grids: Vec<GridLayout> = lines(db, build)
         .as_ref()
         .map(|l| l.grids.iter().cloned().collect())
         .unwrap_or_default();
     let structure = structure(&text.root, text, &grids);
-    let plain = |field: &str| match doc.root.field(field) {
+    let plain = |field: &str| match root.field(field) {
         Some(Value::Content(content)) => Some(content.plain_text()),
         Some(Value::Str(text)) => Some(text.clone()),
         _ => None,
@@ -207,7 +202,7 @@ pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     };
     let navigation = resolution(db, build).map(navigation).unwrap_or_default();
     // Problems without a source of their own concern the document.
-    let whole = document_span(db, build, doc.root.span);
+    let whole = document_span(db, build, root.span);
     Some(PdfInput {
         structure,
         info,
