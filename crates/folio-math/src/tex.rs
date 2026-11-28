@@ -44,8 +44,8 @@ use ecow::{EcoString, eco_format};
 use folio_syntax::Span;
 
 use crate::{
-    Accent, Attach, Cases, Decoration, DecorationKind, Delimited, Formula, Frac, Label, Line,
-    MathClass, MathVariant, Matrix, Node, Operator, Root, Row, Styled, Vector,
+    Accent, Attach, Cases, ColumnAlign, Decoration, DecorationKind, Delimited, Formula, Frac,
+    Label, Line, MathClass, MathVariant, Matrix, Node, Operator, Root, Row, Styled, Vector,
 };
 
 /// An error in LaTeX input.
@@ -174,7 +174,46 @@ struct Items {
 
 impl Items {
     fn push(&mut self, node: Node) {
-        self.items.push(Item::Node(node));
+        if node.is_nucleus() && self.takes_nucleus() {
+            self.fold(Row::new([node]));
+        } else {
+            self.items.push(Item::Node(node));
+        }
+    }
+
+    /// A group, which is a nucleus when it holds nuclei: `{}^{4}_{2}{He}`.
+    fn push_group(&mut self, row: Row) {
+        if !row.nodes().is_empty()
+            && row.nodes().iter().all(Node::is_nucleus)
+            && self.takes_nucleus()
+        {
+            self.fold(row);
+        } else {
+            self.items.push(Item::Group(row));
+        }
+    }
+
+    /// Whether the last item is scripts on an empty base that a nucleus
+    /// takes as its pre-scripts: `{}^{14}_{6}\mathrm{C}`.
+    fn takes_nucleus(&self) -> bool {
+        matches!(self.items.last(), Some(Item::Node(Node::Attach(attach))) if attach.is_pre_script())
+    }
+
+    /// Makes the last item's scripts the pre-scripts of `base`.
+    fn fold(&mut self, base: Row) {
+        let Some(Item::Node(Node::Attach(pre))) = self.items.last() else {
+            unreachable!("takes_nucleus checked it");
+        };
+        let attach = Attach {
+            base,
+            sub: None,
+            sup: None,
+            primes: 0,
+            pre_sub: pre.sub.clone(),
+            pre_sup: pre.sup.clone(),
+            span: pre.span,
+        };
+        *self.items.last_mut().expect("an item") = Item::Node(Node::Attach(Arc::new(attach)));
     }
 
     fn into_nodes(self) -> Vec<Node> {
@@ -527,10 +566,11 @@ impl<'s> Parser<'s> {
             _ => None,
         };
         if let Some((open, close)) = delims {
-            if name == "array" {
-                self.array_columns(whole.clone())?;
-            }
-            return self.matrix(&name, open, close, whole);
+            let align = match name.as_str() {
+                "array" => self.array_columns(whole.clone())?,
+                _ => Vec::new(),
+            };
+            return self.matrix(&name, open, close, align, whole);
         }
         match name.as_str() {
             "cases" | "dcases" => self.cases(&name, whole),
@@ -547,8 +587,9 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// The column specification of `array`, which may only align columns.
-    fn array_columns(&mut self, begin: Range<usize>) -> TexResult<()> {
+    /// The column specification of `array`, which may only align columns:
+    /// the alignment of each.
+    fn array_columns(&mut self, begin: Range<usize>) -> TexResult<Vec<ColumnAlign>> {
         let (spec, range) = self.raw_arg(begin, "its columns")?;
         if let Some((i, c)) = spec
             .char_indices()
@@ -561,7 +602,21 @@ impl<'s> Parser<'s> {
             )
             .with_hint("the columns of an array can be `l`, `c` or `r`; rules between them are not supported"));
         }
-        Ok(())
+        let mut align: Vec<ColumnAlign> = spec
+            .chars()
+            .filter_map(|c| match c {
+                'l' => Some(ColumnAlign::Left),
+                'c' => Some(ColumnAlign::Center),
+                'r' => Some(ColumnAlign::Right),
+                _ => None,
+            })
+            .collect();
+        // A column past the list is centred, so that an array of centred
+        // columns is the matrix native math builds.
+        while align.last() == Some(&ColumnAlign::Center) {
+            align.pop();
+        }
+        Ok(align)
     }
 
     /// The cells of a matrix, up to `\end{name}`. Short rows are filled
@@ -571,6 +626,7 @@ impl<'s> Parser<'s> {
         name: &str,
         open: Option<char>,
         close: Option<char>,
+        align: Vec<ColumnAlign>,
         begin: Range<usize>,
     ) -> TexResult<Node> {
         let mut rows: Vec<Vec<Row>> = vec![Vec::new()];
@@ -616,6 +672,7 @@ impl<'s> Parser<'s> {
             rows,
             open,
             close,
+            align,
             span: self.span,
         })))
     }
@@ -725,7 +782,7 @@ impl<'s> Parser<'s> {
             Tok::Eof | Tok::Close => unreachable!("rows end there"),
             Tok::Open => {
                 let row = self.group(range)?;
-                items.items.push(Item::Group(row));
+                items.push_group(row);
             }
             Tok::Sup | Tok::Sub => self.script(tok == Tok::Sup, range, items)?,
             Tok::Primes(count) => self.primes(count, range, items)?,
@@ -1149,6 +1206,8 @@ impl<'s> Parser<'s> {
                     sub,
                     sup,
                     primes: 0,
+                    pre_sub: None,
+                    pre_sup: None,
                     span,
                 })));
             }
@@ -2019,6 +2078,62 @@ mod tests {
         assert_eq!(
             repr("\\imath + \\jmath + \\hbar"),
             "[ı, vary(+), ȷ, vary(+), ℏ]"
+        );
+    }
+
+    #[test]
+    fn pre_scripts_on_an_empty_base() {
+        // Isotope notation (#352): the scripts belong to the nucleus.
+        assert_eq!(
+            repr("{}^{14}_{6}C"),
+            "[attach([C], pre-sub: [num(6)], pre-sup: [num(14)])]"
+        );
+        assert_eq!(
+            repr("{}_{92}^{235}\\mathrm{U} + {}^1_0 n"),
+            "[attach([upright([U])], pre-sub: [num(92)], pre-sup: [num(235)]), vary(+), \
+             attach([n], pre-sub: [num(0)], pre-sup: [num(1)])]"
+        );
+        // Scripts after the nucleus too, and a pre-script alone.
+        assert_eq!(
+            repr("{}^{238}U^{2+}"),
+            "[attach([U], sup: [num(2), vary(+)], pre-sup: [num(238)])]"
+        );
+        // A group, an accent or a vector is a nucleus too.
+        assert_eq!(
+            repr("{}^{4}_{2}{He}"),
+            "[attach([H, e], pre-sub: [num(2)], pre-sup: [num(4)])]"
+        );
+        assert_eq!(
+            repr("{}^{0}_{0}\\bar{\\nu}"),
+            "[attach([accent(\u{304}, [ν])], pre-sub: [num(0)], pre-sup: [num(0)])]"
+        );
+        // A degree sign is no pre-script, nor is a group of relations.
+        assert_eq!(
+            repr("25{}^\\circ\\mathrm{C}"),
+            "[num(25), attach([], sup: [bin(∘)]), upright([C])]"
+        );
+        assert_eq!(repr("{}^{n}{=}"), "[attach([], sup: [n]), rel(=)]");
+        // Before an operator or a relation, an empty base stays a base.
+        assert_eq!(repr("{}^2 = x"), "[attach([], sup: [num(2)]), rel(=), x]");
+    }
+
+    #[test]
+    fn array_columns_keep_their_alignment() {
+        assert_eq!(
+            repr("\\begin{array}{lcr} a & b & c \\end{array}"),
+            "[mat(none, [[a], [b], [c]], none, align: lcr)]"
+        );
+        assert_eq!(
+            repr("\\begin{array}{rc} a & b \\end{array}"),
+            "[mat(none, [[a], [b]], none, align: r)]"
+        );
+        assert_eq!(
+            repr("\\begin{array}{cc} a & b \\end{array}"),
+            "[mat(none, [[a], [b]], none)]"
+        );
+        assert_eq!(
+            repr("\\begin{pmatrix} a \\end{pmatrix}"),
+            "[mat('(', [[a]], ')')]"
         );
     }
 

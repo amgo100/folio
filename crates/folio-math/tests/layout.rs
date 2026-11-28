@@ -190,3 +190,62 @@ fn units_are_upright_with_raised_powers_and_follow_the_alphabet() {
     let texts: Vec<&str> = bold.iter().map(|r| r.0.as_str()).collect();
     assert_eq!(texts, ["𝟗.𝟖𝟏", "𝐦"], "{bold:?}");
 }
+
+/// The runs of a LaTeX formula set in display style at 10pt.
+fn display_runs(src: &str) -> Vec<Run> {
+    let opts = options(font("NewCMMath-Regular.otf"));
+    let laid = layout_display(&formula(src), &opts, &|_| {
+        folio_component::SourceRef::DETACHED
+    });
+    assert!(laid.missing.is_empty(), "{src}: {:?}", laid.missing);
+    runs(&laid.items)
+}
+
+#[test]
+fn pre_scripts_are_right_aligned_against_their_base() {
+    // ²³⁵₉₂U: the mass and atomic numbers end where the symbol starts,
+    // above and below its baseline (#352).
+    let runs = display_runs(r"{}^{235}_{92}\mathrm{U}");
+    let find = |text: &str| runs.iter().find(|r| r.0 == text).unwrap().clone();
+    let (mass, atomic, symbol) = (find("235"), find("92"), find("U"));
+    assert!((mass.2 - atomic.2).abs() < 0.01, "{runs:?}");
+    assert!(
+        mass.2 <= symbol.1 + 0.01 && symbol.1 - mass.2 < 1.0,
+        "{runs:?}"
+    );
+    assert!(mass.3 < symbol.3 && atomic.3 > symbol.3, "{runs:?}");
+    assert!(
+        atomic.1 > mass.1,
+        "the shorter number starts later: {runs:?}"
+    );
+}
+
+#[test]
+fn array_columns_align_as_their_specification_says() {
+    // Two rows of a wide and a narrow cell, in a column aligned left,
+    // centred and right: the narrow cell starts, centres on or ends with
+    // the wide one.
+    let narrow = |spec: &str| {
+        let runs = display_runs(&format!(
+            r"\begin{{array}}{{{spec}}} 1000 \\ 1 \end{{array}}"
+        ));
+        let wide = runs.iter().find(|r| r.0 == "1000").unwrap().clone();
+        let one = runs.iter().find(|r| r.0 == "1").unwrap().clone();
+        (one.1 - wide.1, wide.2 - one.2)
+    };
+    let (left, _) = narrow("l");
+    assert!(left.abs() < 0.01, "{left}");
+    let (_, right) = narrow("r");
+    assert!(right.abs() < 0.01, "{right}");
+    let (start, end) = narrow("c");
+    assert!((start - end).abs() < 0.01 && start > 1.0, "{start} {end}");
+}
+
+#[test]
+fn scripts_on_both_sides_share_their_baselines() {
+    // ²³⁸₉₂U²⁺: the mass number and the charge stand level (#352).
+    let runs = display_runs(r"{}^{238}_{92}\mathrm{U}^{2+}");
+    let find = |text: &str| runs.iter().find(|r| r.0 == text).unwrap().clone();
+    let (mass, charge) = (find("238"), find("2"));
+    assert!((mass.3 - charge.3).abs() < 0.01, "{runs:?}");
+}

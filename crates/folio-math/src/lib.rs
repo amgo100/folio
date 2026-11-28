@@ -10,11 +10,11 @@
 //! | Node | OMML |
 //! | --- | --- |
 //! | [`Node::Frac`] | `m:f` |
-//! | [`Node::Attach`] | `m:sSub`, `m:sSup`, `m:sSubSup`; `m:limLow`, `m:limUpp` under an [`Operator`] with limits |
+//! | [`Node::Attach`] | `m:sSub`, `m:sSup`, `m:sSubSup`; `m:limLow`, `m:limUpp` under an [`Operator`] with limits; `m:sPre` for pre-scripts, around an `m:sSub`, `m:sSup` or `m:sSubSup` when it has scripts after the base too |
 //! | [`Node::Nary`] | `m:nary`, whose `m:e` is the operand that follows it |
 //! | [`Node::Root`] | `m:rad` |
 //! | [`Node::Delimited`] | `m:d` |
-//! | [`Node::Matrix`] | `m:m`, in an `m:d` for its delimiters |
+//! | [`Node::Matrix`] | `m:m`, in an `m:d` for its delimiters, with `m:mcJc` for the alignment of each column |
 //! | [`Node::Cases`] | `m:eqArr` in an `m:d` with an opening brace |
 //! | [`Node::Accent`], [`Node::Vector`] | `m:acc` (or bold `m:r`, as the stylesheet chooses for vectors) |
 //! | [`Node::Decoration`] | `m:bar` (lines), `m:groupChr` with an `m:limLow` or `m:limUpp` (braces) |
@@ -438,7 +438,10 @@ impl Node {
             | Self::AlignPoint(_)
             | Self::Quantity(_) => vec![],
             Self::Frac(frac) => vec![&frac.num, &frac.den],
-            Self::Attach(attach) => std::iter::once(&attach.base)
+            Self::Attach(attach) => opt(&attach.pre_sub)
+                .into_iter()
+                .chain(opt(&attach.pre_sup))
+                .chain([&attach.base])
                 .chain(opt(&attach.sub))
                 .chain(opt(&attach.sup))
                 .collect(),
@@ -562,8 +565,24 @@ impl Node {
             sub,
             sup,
             primes: u8::try_from(primes).unwrap_or(u8::MAX),
+            pre_sub: None,
+            pre_sup: None,
             span,
         }))
+    }
+
+    /// Whether it can carry pre-scripts: a letter, a number, text, an
+    /// accent, a vector or a body in an alphabet.
+    pub fn is_nucleus(&self) -> bool {
+        matches!(
+            self,
+            Self::Ident(_)
+                | Self::Number(_)
+                | Self::Text(_)
+                | Self::Styled(_)
+                | Self::Accent(_)
+                | Self::Vector(_)
+        )
     }
 
     /// How deeply the node nests: as deeply as its deepest row, or `0` for
@@ -615,6 +634,8 @@ impl Node {
                 if attach.primes > 0 {
                     write!(out, ", primes: {}", attach.primes).unwrap();
                 }
+                opt(out, "pre-sub", &attach.pre_sub);
+                opt(out, "pre-sup", &attach.pre_sup);
                 out.push(')');
             }
             Self::Nary(nary) => {
@@ -658,6 +679,16 @@ impl Node {
                 }
                 out.push_str(", ");
                 write_delim(out, matrix.close);
+                if !matrix.align.is_empty() {
+                    out.push_str(", align: ");
+                    for align in &matrix.align {
+                        out.push(match align {
+                            ColumnAlign::Left => 'l',
+                            ColumnAlign::Center => 'c',
+                            ColumnAlign::Right => 'r',
+                        });
+                    }
+                }
                 out.push(')');
             }
             Self::Cases(cases) => {
@@ -780,8 +811,36 @@ pub struct Attach {
     /// The number of primes after the base: `f''` has 2. They come before
     /// the superscript.
     pub primes: u8,
+    /// The subscript before the base: the atomic number `92` of
+    /// ²³⁵₉₂U. Set right-aligned against the base.
+    pub pre_sub: Option<Row>,
+    /// The superscript before the base: the mass number `235` of ²³⁵₉₂U.
+    pub pre_sup: Option<Row>,
     /// Where it was written.
     pub span: Span,
+}
+
+impl Attach {
+    /// Whether its scripts are the pre-scripts of a nucleus that follows
+    /// it, as in ²³⁵₉₂U (SPEC §8.1): it has an empty base, no primes and no
+    /// pre-scripts, and each script holds a letter or a number, so that
+    /// `{}^\circ\mathrm{C}` stays a degree sign.
+    pub fn is_pre_script(&self) -> bool {
+        let holds_atom = |row: &Option<Row>| {
+            row.as_ref().is_none_or(|row| {
+                row.nodes()
+                    .iter()
+                    .any(|node| matches!(node, Node::Number(_) | Node::Ident(_) | Node::Text(_)))
+            })
+        };
+        self.base.nodes().is_empty()
+            && self.primes == 0
+            && self.pre_sub.is_none()
+            && self.pre_sup.is_none()
+            && (self.sub.is_some() || self.sup.is_some())
+            && holds_atom(&self.sub)
+            && holds_atom(&self.sup)
+    }
 }
 
 /// An n-ary operator such as a sum, a product or an integral, with its
@@ -833,8 +892,24 @@ pub struct Matrix {
     pub open: Option<char>,
     /// The closing delimiter: `)` by default.
     pub close: Option<char>,
+    /// How each column aligns its cells, from the first; a column past
+    /// the end centres them, so an empty list centres every column.
+    pub align: Vec<ColumnAlign>,
     /// Where it was written.
     pub span: Span,
+}
+
+/// How the cells of a matrix's column align: the `l`, `c` and `r` of
+/// LaTeX's `array`.
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum ColumnAlign {
+    /// At the start.
+    Left,
+    /// Centred.
+    #[default]
+    Center,
+    /// At the end.
+    Right,
 }
 
 /// Cases behind an opening brace, one row each. A case's top level may hold

@@ -232,6 +232,46 @@ fn accents_decorations_styles_and_symbols() {
 }
 
 #[test]
+fn pre_scripts_on_an_empty_text() {
+    // Isotope notation (D-352-1): the scripts of `""` belong to what
+    // follows, as LaTeX's `{}^a_b X` does.
+    assert_eq!(
+        tree("$\"\"_92^235 \"U\" + \"\"_0^1 n$"),
+        "[attach([text(\"U\")], pre-sub: [num(92)], pre-sup: [num(235)]), vary(+), \
+         attach([n], pre-sub: [num(0)], pre-sup: [num(1)])]"
+    );
+    assert_eq!(
+        tree("$\"\"^14_6 upright(C)$"),
+        "[attach([upright([C])], pre-sub: [num(6)], pre-sup: [num(14)])]"
+    );
+    // Scripts after the nucleus stay its own; a number before the empty
+    // text keeps its place.
+    assert_eq!(
+        tree("$\"\"_92^238 \"U\"^(2+)$"),
+        "[attach([text(\"U\")], sup: [num(2), vary(+)], pre-sub: [num(92)], pre-sup: [num(238)])]"
+    );
+    assert_eq!(
+        tree("$3 \"\"_0^1 \"n\"$"),
+        "[num(3), attach([text(\"n\")], pre-sub: [num(0)], pre-sup: [num(1)])]"
+    );
+    // Native and LaTeX input give one tree.
+    assert_eq!(
+        tree("$\"\"^14_6 upright(C)$"),
+        tree("$:tex {}^{14}_{6}\\mathrm{C}$")
+    );
+    // A degree sign on an empty text is no pre-script.
+    assert_eq!(
+        tree("$25 \"\"^degree \"C\"$"),
+        "[num(25), attach([], sup: [sym(°)]), text(\"C\")]"
+    );
+    // Before a relation an empty text stays a base.
+    assert_eq!(
+        tree("$\"\"^2 = x$"),
+        "[attach([], sup: [num(2)]), rel(=), x]"
+    );
+}
+
+#[test]
 fn text_numbers_and_embedded_values() {
     assert_eq!(
         tree("$\"kg\" #(1 + 2) #(-3.5) #\"text\" #none$"),
