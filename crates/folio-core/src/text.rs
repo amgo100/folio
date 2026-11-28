@@ -21,6 +21,14 @@
 //!   list item's bullet, a figure's word and number) starts its first
 //!   paragraph, or its caption, in the element's style
 //!   ([`crate::resolve`]). Both stand for the whole node in the span map.
+//! - **Render templates** (SPEC §5.3): an element the Style stage gave a
+//!   template is collected from its expansion: its header, a block of the
+//!   part `header`, then its body in the element's own block. Text,
+//!   numbers and inline fields run into paragraphs; slots are the blocks
+//!   of their parts; rows and grids are grids of cells, rules and spaces
+//!   empty blocks that layout draws with their borders and heights. The
+//!   element's marker is not set: the template places its number with
+//!   `counter()`.
 //! - **Quotation marks**: a quote in markup becomes its language's mark,
 //!   opening or closing by the characters around it ([`Lang::quotes`]).
 //! - **Fonts**: each run of one style is set in its `font` chain, split by
@@ -58,7 +66,8 @@ use crate::locate::StyledChildren;
 use crate::pipeline::{resolution, step_styled};
 use crate::resolve::{Resolution, UNRESOLVED};
 use crate::style::{
-    Child, ComputedStyle, Properties, StyledNode, content_elements, styled_children,
+    BlockKind, Child, ComputedStyle, Expansion, HEADER_PART, Piece as TemplatePiece, Properties, StyledNode,
+    TemplateBlock, content_elements, styled_children,
 };
 
 pub use folio_text::Cache;
@@ -452,6 +461,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         notes: Vec::new(),
         in_note: false,
         continued: Vec::new(),
+        template_grids: 0,
     };
     collector.element(root, &styled.root);
 
@@ -515,6 +525,9 @@ struct Collector<'a> {
     /// The paragraph of each footnote's continuation mark, as
     /// [`Text::continued`].
     continued: Vec<Option<usize>>,
+    /// How many grids render templates have made, which tells their
+    /// locations apart.
+    template_grids: u64,
 }
 
 /// An element anchored in a paragraph whose content is blocks, and for a
@@ -642,6 +655,12 @@ impl Collector<'_> {
         }
         self.open(&node.style, element, None);
         let owner = self.own(element);
+        if let Some(expansion) = &node.template {
+            self.templated(element, node, expansion);
+            self.owner = owner;
+            self.close();
+            return;
+        }
         // A marker that no paragraph of the element takes is dropped with
         // it.
         let markers = self.markers.len();
@@ -671,6 +690,217 @@ impl Collector<'_> {
         self.markers.truncate(markers);
         self.owner = owner;
         self.close();
+    }
+
+    /// Collects an element shown with a render template (SPEC §5.3): its
+    /// header, a block of the part [`HEADER_PART`], then its body, or its
+    /// content where the template has no body, in its own block, which is
+    /// open.
+    fn templated(&mut self, element: &Element, node: &StyledNode, expansion: &Expansion) {
+        if let Some(header) = &expansion.header {
+            self.blocks.push(TextBlock {
+                style: header.style.clone(),
+                span: element.span,
+                location: element.location,
+                element: element.name.clone(),
+                part: Name::new(HEADER_PART),
+                children: EcoVec::new(),
+                table: None,
+            });
+            self.pieces(element, node, &header.items, &header.style);
+            self.close();
+        }
+        match &expansion.body {
+            Some(body) => self.pieces(element, node, body, &node.style),
+            None => self.element_content(element, node),
+        }
+    }
+
+    /// Collects the pieces of an expanded template into the innermost open
+    /// block, whose style is `style`: runs of text, numbers, inline fields
+    /// and images become paragraphs, and the other pieces blocks.
+    fn pieces(
+        &mut self,
+        element: &Element,
+        node: &StyledNode,
+        pieces: &[TemplatePiece],
+        style: &ComputedStyle,
+    ) {
+        let mut builder: Option<Builder> = None;
+        let mut anchored = Vec::new();
+        for piece in pieces {
+            match piece {
+                TemplatePiece::Text { text, style } => {
+                    let b = builder.get_or_insert_with(|| self.builder());
+                    b.push_part(text, style, element.span, TextSource::WHOLE, false);
+                }
+                TemplatePiece::Counter { style } => {
+                    let number = self
+                        .resolution
+                        .number(crate::resolve::Target::element(element.location))
+                        .map(|n| match &n.number {
+                            Some(number) => number.clone(),
+                            None => n
+                                .values
+                                .iter()
+                                .map(|v| v.to_string())
+                                .collect::<Vec<_>>()
+                                .join(".")
+                                .into(),
+                        });
+                    if let Some(number) = number {
+                        let b = builder.get_or_insert_with(|| self.builder());
+                        b.push_part(&number, style, element.span, TextSource::WHOLE, false);
+                    }
+                }
+                TemplatePiece::Field { name, style } => {
+                    let Some(eval::Value::Content(content)) = element.field(name.as_str()) else {
+                        continue;
+                    };
+                    let Some(part) = part_node(node, name) else {
+                        continue;
+                    };
+                    let mut kids = StyledChildren::new(part);
+                    if is_inline(content) {
+                        let b = builder.get_or_insert_with(|| self.builder());
+                        self.inline(content, style, element.span, &mut kids, b, &mut anchored);
+                    } else {
+                        self.flush(builder.take(), style, element, &mut anchored);
+                        self.slot(element, node, name, content);
+                    }
+                }
+                TemplatePiece::Image {
+                    path,
+                    width,
+                    style,
+                    span,
+                } => {
+                    let image = self.template_image(path, width, *span);
+                    let b = builder.get_or_insert_with(|| self.builder());
+                    b.object_with(style, element, element.location, None, image);
+                }
+                TemplatePiece::Slot { name } => {
+                    self.flush(builder.take(), style, element, &mut anchored);
+                    if let Some(eval::Value::Content(content)) = element.field(name.as_str()) {
+                        self.slot(element, node, name, content);
+                    }
+                }
+                TemplatePiece::Block(block) => {
+                    self.flush(builder.take(), style, element, &mut anchored);
+                    self.template_block(element, node, block);
+                }
+            }
+        }
+        self.flush(builder, style, element, &mut anchored);
+    }
+
+    /// Finishes a paragraph of a template's pieces, if one was started,
+    /// and collects the notes and floats anchored in it.
+    fn flush<'a>(
+        &mut self,
+        builder: Option<Builder>,
+        style: &ComputedStyle,
+        element: &Element,
+        anchored: &mut Vec<Anchored<'a>>,
+    ) {
+        let Some(builder) = builder else {
+            return;
+        };
+        self.finish(builder, style, element);
+        for (element, node, note) in std::mem::take(anchored) {
+            match note {
+                Some(index) => self.note(element, node, index),
+                None => self.element(element, node),
+            }
+        }
+    }
+
+    /// Collects the body or a part of an element where a template places
+    /// it: the body in the element's block, a part in a block of its own
+    /// in the part's style.
+    fn slot(&mut self, element: &Element, node: &StyledNode, name: &Name, content: &Content) {
+        if name.as_str() == BODY {
+            let mut kids = StyledChildren::new(node);
+            self.content(content, &node.style, element, &mut kids);
+            return;
+        }
+        let Some(part) = part_node(node, name) else {
+            return;
+        };
+        let mut kids = StyledChildren::new(part);
+        self.open(&part.style, element, Some(name.clone()));
+        self.content(content, &part.style, element, &mut kids);
+        self.close();
+    }
+
+    /// Collects a block of a template: a row or grid as a grid of cells
+    /// (SPEC §7.4), the others as blocks of their part.
+    fn template_block(&mut self, element: &Element, node: &StyledNode, block: &TemplateBlock) {
+        let table = match block.kind {
+            BlockKind::Row | BlockKind::Grid => Some(TableRole::Grid { header_rows: 0 }),
+            BlockKind::Cell => Some(TableRole::Cell(CellSpec {
+                colspan: 1,
+                rowspan: 1,
+                column: None,
+                row: None,
+            })),
+            _ => None,
+        };
+        // Layout lays a grid out by its location, so each grid of an
+        // instance has one of its own, made from the instance's.
+        let location = if block.kind.is_grid() {
+            self.template_grids += 1;
+            Location {
+                source: element.location.source,
+                instance: element.location.instance
+                    ^ 0x9e37_79b9_7f4a_7c15_u64.wrapping_mul(self.template_grids),
+            }
+        } else {
+            element.location
+        };
+        self.blocks.push(TextBlock {
+            style: block.style.clone(),
+            span: element.span,
+            location,
+            element: element.name.clone(),
+            part: Name::new(block.kind.part()),
+            children: EcoVec::new(),
+            table,
+        });
+        self.pieces(element, node, &block.children, &block.style);
+        self.close();
+    }
+
+    /// The image a template's `image(..)` names, read; `None`, with an
+    /// error at the primitive, for a file that is missing or not an image
+    /// Folio reads.
+    fn template_image(&mut self, path: &str, width: &Value, span: Span) -> Option<TextImage> {
+        let report = |db: &dyn Db, message: EcoString| {
+            diag::report(db, Diagnostic::error(span, message));
+        };
+        let Some(project_path) = crate::project::ProjectPath::new(path) else {
+            report(self.db, eco_format!("`{path}` is not a path in the project"));
+            return None;
+        };
+        let Some(file) = data_file(self.db, self.project, project_path) else {
+            if self.laid_out {
+                report(self.db, eco_format!("the image `{path}` does not exist"));
+            }
+            return None;
+        };
+        match load_image(self.db, file) {
+            Ok(loaded) => Some(TextImage {
+                loaded: loaded.clone(),
+                width: width.clone(),
+                alt: None,
+            }),
+            Err(message) => {
+                if self.laid_out {
+                    report(self.db, message.clone());
+                }
+                None
+            }
+        }
     }
 
     /// The paragraph of the markers waiting for one, beside a display: in
@@ -1536,6 +1766,13 @@ impl Builder {
 }
 
 /// The text of a `raw` element without the line breaks it ends with.
+/// The node of an element's part `name`, if it has one.
+fn part_node<'a>(node: &'a StyledNode, name: &Name) -> Option<&'a StyledNode> {
+    node.children
+        .iter()
+        .find(|child| matches!(&child.name, crate::style::NodeName::Part(n) if n == name))
+}
+
 fn raw_text(element: &Element) -> Option<&str> {
     if !is_builtin(&element.name, "raw") {
         return None;

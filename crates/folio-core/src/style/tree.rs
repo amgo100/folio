@@ -22,6 +22,7 @@ use super::computed::{ComputedStyle, Styler};
 use super::props::Properties;
 use super::rules::{Cascade, Compiler, Decl, DeclValue, Origin, Rule, StepRule, cascade};
 use super::selector::{Attr, Needs, NodeName, NodeView, Position, Role, Subject};
+use super::template::{self, Expansion, Restyle, Template};
 use super::value::{Declared, Values, check};
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
@@ -82,6 +83,10 @@ pub struct StyledNode {
     pub style: ComputedStyle,
     /// Its children.
     pub children: EcoVec<StyledNode>,
+    /// The render template the element is shown with (SPEC §5.3),
+    /// expanded: what the text stage collects in place of its content.
+    /// `None` for an element without one, and for a part.
+    pub template: Option<Arc<Expansion>>,
 }
 
 /// The name of the part of a `math` element that holds the style of its
@@ -211,6 +216,8 @@ pub fn styles(db: &dyn Db, build: Build<'_>) -> Option<Styled> {
         },
         variant: build.variant(db).clone(),
         target: build.target(db),
+        expansions: HashMap::new(),
+        unknown_templates: std::collections::HashSet::new(),
     };
 
     // Scoped rules in content are rare: when there are none, matching them
@@ -378,7 +385,21 @@ struct Walker<'a> {
     default_lang: Lang,
     variant: Option<Name>,
     target: Target,
+    /// Expanded templates, by template, element context, style and the
+    /// values of the fields the template reads.
+    expansions: HashMap<ExpansionKey<'a>, Arc<Expansion>>,
+    /// The templates asked for by a name no template of the element has,
+    /// reported once each: element and name.
+    unknown_templates: std::collections::HashSet<(QualifiedName, EcoString)>,
 }
+
+/// What an expansion depends on.
+type ExpansionKey<'a> = (
+    *const Template,
+    Option<ContextKey<'a>>,
+    ComputedStyle,
+    EcoVec<Value>,
+);
 
 impl<'a> Walker<'a> {
     fn root(&mut self, root: &Element) -> StyledNode {
@@ -503,8 +524,13 @@ impl<'a> Walker<'a> {
                 location,
                 style: note,
                 children: EcoVec::new(),
+                template: None,
             });
         }
+        let template = match child {
+            Child::Element(element) => self.template(element, siblings, i, context, &style),
+            Child::Part(..) => None,
+        };
 
         StyledNode {
             name: name_of(child),
@@ -512,7 +538,71 @@ impl<'a> Walker<'a> {
             location,
             style,
             children,
+            template,
         }
+    }
+
+    /// The render template of an element whose style is `style`, expanded
+    /// (SPEC §5.3): the one its computed `template` chooses, if any.
+    fn template(
+        &mut self,
+        element: &Element,
+        siblings: &[Child<'_>],
+        i: usize,
+        context: Option<ContextKey<'a>>,
+        style: &ComputedStyle,
+    ) -> Option<Arc<Expansion>> {
+        let cascade = self.cascade;
+        if cascade.templates.is_empty() {
+            return None;
+        }
+        let props = &cascade.properties;
+        let name = match style.value(props, props.builtin("template")) {
+            Some(folio_component::Value::Auto) | None => None,
+            Some(folio_component::Value::Keyword(name)) => Some(name.as_str().into()),
+            Some(folio_component::Value::Str(name)) => Some(name.clone()),
+            Some(_) => return None,
+        };
+        let Some(chosen) = template::choose(&cascade.templates, &element.name, name.as_deref())
+        else {
+            if let Some(name) = name
+                && self
+                    .unknown_templates
+                    .insert((element.name.clone(), name.clone()))
+            {
+                diag::report(
+                    self.db,
+                    Diagnostic::warning(
+                        element.span,
+                        eco_format!(
+                            "no template `{name}` renders `{}`, so it is shown without a template",
+                            element.name
+                        ),
+                    )
+                    .with_hint(eco_format!(
+                        "declare one with `render {} as {name} {{ .. }}`",
+                        element.name.name
+                    )),
+                );
+            }
+            return None;
+        };
+        let chosen = chosen.clone();
+        // The element as its parts see it.
+        let view = self.view(siblings, i, Role::Context, &cascade.needs);
+        let cx = Some(ContextKey::new(self.db, view, context));
+        let key = (
+            Arc::as_ptr(&chosen),
+            cx,
+            style.clone(),
+            template::read_fields(&chosen, element),
+        );
+        if let Some(expansion) = self.expansions.get(&key) {
+            return Some(expansion.clone());
+        }
+        let expansion = Arc::new(template::expand(self, &chosen, element, style, cx));
+        self.expansions.insert(key, expansion.clone());
+        Some(expansion)
     }
 
     /// The part that styles the vectors of the `math` element at child `i`
@@ -562,6 +652,7 @@ impl<'a> Walker<'a> {
             location,
             style: self.compute(Some(style), &matched, &local),
             children: EcoVec::new(),
+            template: None,
         }
     }
 
@@ -793,6 +884,59 @@ impl<'a> Walker<'a> {
             children,
             subject: subject(siblings[i], name, &own.fields),
         }
+    }
+}
+
+impl<'a> Restyle for Walker<'a> {
+    type Cx = Option<ContextKey<'a>>;
+
+    fn restyle(
+        &mut self,
+        name: NodeName,
+        cx: Self::Cx,
+        parent: &ComputedStyle,
+        extra: EcoVec<Decl>,
+    ) -> (ComputedStyle, Self::Cx) {
+        let view = NodeView {
+            subject: Subject {
+                name,
+                classes: EcoVec::new(),
+                label: None,
+                fields: EcoVec::new(),
+            },
+            pos: Position::default(),
+            prev: EcoVec::new(),
+            children: EcoVec::new(),
+        };
+        let key = MatchKey::new(self.db, self.build, view.clone(), cx);
+        let matched = match_node(self.db, key).clone();
+        let style = self.compute(Some(parent), &matched, &extra);
+        (style, Some(ContextKey::new(self.db, view, cx)))
+    }
+
+    fn plain(&mut self, parent: &ComputedStyle, extra: EcoVec<Decl>) -> ComputedStyle {
+        self.compute(Some(parent), &EcoVec::new(), &extra)
+    }
+
+    fn term(&mut self, element: &QualifiedName, style: &ComputedStyle) -> Option<EcoString> {
+        let project = self.build.project(self.db);
+        let key = crate::model::schema(self.db, project, element)?
+            .ref_key
+            .clone()?;
+        let lang = self.language(style);
+        let word = match &element.namespace {
+            None => crate::locale::word(&lang, key.as_str())?,
+            Some(_) => {
+                let host = crate::db::component_host(self.db, project).as_ref()?;
+                let component = host.element(element).ok()?.component;
+                crate::locale::component_word(component, &lang, key.as_str())?
+            }
+        };
+        Some(word.text.into())
+    }
+
+    fn props(&self) -> &Properties {
+        &self.cascade.properties
     }
 }
 

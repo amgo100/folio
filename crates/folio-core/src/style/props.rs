@@ -240,8 +240,8 @@ impl Properties {
 /// Its initial value, and `placement: here`, which is where layout puts
 /// every float, ask for nothing, nor does `marker-position: inside`, which
 /// is where the text stage sets every marker. Each entry goes with the work
-/// that reads the property: hanging markers with layout, `template` with render
-/// templates (§5.3), and the others with pages and running elements
+/// that reads the property: hanging markers with layout, and the others with
+/// pages and running elements
 /// (§7.1, §7.8), the baseline grid (§7.3), floats (§7.5),
 /// margin notes (§7.6) and text wrap (§7.7). Properties of other targets
 /// (slides, animation, export) and of drawings are not listed: a static or
@@ -268,7 +268,6 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
         "grid-snap" | "baseline-grid" => "the baseline grid",
         "header" | "footer" | "content" => "page headers, footers and content",
         "margin-column" => "margin columns",
-        "template" => "render templates",
         "placement" | "side" | "float-order" | "wrap" | "wrap-gap" | "wrap-shape" => {
             "placing floats and notes other than in the flow"
         }
