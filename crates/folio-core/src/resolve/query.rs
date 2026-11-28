@@ -178,7 +178,7 @@ pub fn format(sum: Sum, marker: char) -> EcoString {
         }
         Sum::Float(f) => {
             let text = eco_format!("{f}");
-            text.replace(".", marker.encode_utf8(&mut [0; 4])).into()
+            text.replace(".", marker.encode_utf8(&mut [0; 4]))
         }
     }
 }
