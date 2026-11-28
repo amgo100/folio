@@ -1,6 +1,6 @@
 # Table syntax: options
 
-Status: decided. D-62-3 = B: pipe rows, with `#cell[..]` for rich cells and spans, and `rows:`/`header: auto` for data. This note is the design record. Option A is implemented (#62); pipe rows and data rows follow in #440, which settles the open sub-points listed at the end.
+Status: decided. D-62-3 = B: pipe rows, with `#cell[..]` for rich cells and spans, and `rows:`/`header: auto` for data. This note is the design record. Option A is implemented (#62), and pipe rows and data rows are (#440), which settled the open sub-points listed at the end: a `|---|` line marks header rows (D-440-1 = A), `\|` escapes a pipe only in plain text (D-440-2 = A), and spans are written only through `#cell(colspan:, rowspan:)` (D-440-3 = A). SPEC §7.4 is normative where it differs from the sketches below.
 
 The layout engine of SPEC §7.4 (the `grid` element, track sizing, placement, page breaking, repeated headers, footnotes in cells, PDF table tags) does not depend on how cells are written. It sees a `grid` element whose body is a sequence of cells, each with `colspan`, `rowspan` and optional `column` and `row`. Every option below produces that same tree, so the choice is only about the surface syntax.
 

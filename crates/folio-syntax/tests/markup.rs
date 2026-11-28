@@ -754,7 +754,7 @@ fn rows(text: &str) -> Vec<Vec<String>> {
     let root = root(text);
     nodes(&root)
         .into_iter()
-        .filter_map(SyntaxNode::cast::<ast::TableRow>)
+        .filter_map(SyntaxNode::cast::<ast::TableRow<'_>>)
         .map(|row| {
             row.cells()
                 .map(|cell| cell.to_untyped().full_text().to_string())
@@ -812,7 +812,7 @@ fn separator_rows() {
     let root = root("| a | b |\n|---|:--:|\n| - | : |\n| --- x |\n");
     let rows: Vec<bool> = nodes(&root)
         .into_iter()
-        .filter_map(SyntaxNode::cast::<ast::TableRow>)
+        .filter_map(SyntaxNode::cast::<ast::TableRow<'_>>)
         .map(ast::TableRow::is_separator)
         .collect();
     assert_eq!(rows, [false, true, true, false]);
