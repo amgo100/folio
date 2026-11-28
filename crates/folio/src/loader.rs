@@ -269,14 +269,21 @@ impl Loader {
         Ok(world)
     }
 
-    /// Leaves out the files that the builds of the world's manifest write
-    /// ([`World::builds`]). [`Self::world`] and [`Self::update`] do this
-    /// for their worlds' manifests.
+    /// Leaves out the files that the builds of the world's manifest write,
+    /// each version of a shuffled paper among them
+    /// ([`World::versioned_builds`]). [`Self::world`] and [`Self::update`]
+    /// do this for their worlds' manifests.
     pub fn set_outputs(&mut self, world: &World) {
         self.outputs = world
-            .builds()
+            .versioned_builds()
             .iter()
-            .filter_map(|(variant, target)| world.manifest().output_path(variant.as_ref(), *target))
+            .filter_map(|build| {
+                world.manifest().versioned_output_path(
+                    build.variant.as_ref(),
+                    build.version.as_ref(),
+                    build.target,
+                )
+            })
             .filter_map(|path| ProjectPath::new(&path))
             .map(|path| path.as_str().to_owned())
             .collect();

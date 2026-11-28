@@ -680,11 +680,20 @@ pub fn pages_through(
     }
 }
 
-/// Compiles every variant and target the manifest declares
-/// ([`World::builds`]), in parallel, each on its own handle of the world.
-/// Queries that do not read the variant or target run once and are shared.
+/// Compiles every build the manifest declares, each variant and target in
+/// each version of a shuffled paper ([`World::versioned_builds`]), in
+/// parallel, each on its own handle of the world. Queries that do not read
+/// the variant, version or target run once and are shared.
 pub fn compile_all(world: &World) -> Vec<Output> {
-    compile_builds(world, world.builds())
+    compile_versioned_builds(world, world.versioned_builds())
+        .into_iter()
+        .map(|output| Output {
+            variant: output.build.variant,
+            version: output.build.version,
+            target: output.build.target,
+            result: output.result,
+        })
+        .collect()
 }
 
 /// Compiles builds of the world's document, each a variant (`None` only
@@ -725,6 +734,7 @@ fn run_builds<T: Send>(
             let result = run(&world, target, variant.as_ref());
             Output {
                 variant,
+                version: None,
                 target,
                 result,
             }
@@ -738,6 +748,10 @@ fn run_builds<T: Send>(
 pub struct Output<T = Compiled> {
     /// The variant, or `None` for a project without variants.
     pub variant: Option<Name>,
+    /// The version of a shuffled paper: `None` for a project without
+    /// versions, and for every build of [`compile_builds`] and
+    /// [`check_builds`], which keep the source order.
+    pub version: Option<Name>,
     /// The target.
     pub target: Target,
     /// What compiling or checking it produced.

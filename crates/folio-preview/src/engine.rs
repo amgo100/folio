@@ -1370,9 +1370,10 @@ impl Engine {
         let _ = thread::Builder::new()
             .name("folio-preview-write".into())
             .spawn(move || {
-                let builds = handle.builds();
+                // Every build, each version of a shuffled paper among them,
+                // as `folio build` writes them (SPEC §6.4).
                 let manifest = handle.manifest().clone();
-                let outputs = folio::compile_builds(&handle, builds);
+                let outputs = folio::compile_all(&handle);
                 drop(handle);
                 // An edit overtook it, and its revision is written instead
                 // if it can be. A manifest that does not parse leaves the
@@ -1387,7 +1388,7 @@ impl Engine {
                     .into_iter()
                     .map(|o| {
                         let path = manifest
-                            .output_path(o.variant.as_ref(), o.target)
+                            .versioned_output_path(o.variant.as_ref(), o.version.as_ref(), o.target)
                             .map(String::from);
                         (o, path)
                     })

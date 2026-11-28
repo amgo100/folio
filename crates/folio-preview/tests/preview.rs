@@ -1556,3 +1556,48 @@ fn images_are_sent_once_to_clients_that_keep_them() {
 fn raw_frames_revision(read: &[(u64, Vec<Vec<u8>>)]) -> u64 {
     read.last().map_or(0, |(revision, _)| *revision)
 }
+
+#[test]
+fn every_version_is_written() {
+    // A shuffled paper writes each variant in each version (SPEC §6.4),
+    // never the paper in source order.
+    let dir = project("versions");
+    // Each output's path, and whether it compiled to a file.
+    type Written = Vec<(Option<String>, bool)>;
+    let written: Arc<Mutex<Written>> = Arc::default();
+    let sink = written.clone();
+    let (_preview, events) = start(dir.path(), |o| {
+        o.watch(false)
+            .idle(Duration::from_millis(200))
+            .on_outputs(move |outputs: &Outputs| {
+                // Asserted on the test's thread, not the writer's.
+                let mut sink = sink.lock().unwrap();
+                sink.clear();
+                for (output, path) in &outputs.outputs {
+                    let compiled = output.result.as_ref().is_ok_and(|c| c.output.is_some());
+                    sink.push((path.clone(), compiled));
+                }
+            })
+    });
+    updated(&events, |u| u.pages > 0);
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match events.recv_deadline(deadline) {
+            Ok(Event::Written { .. }) => break,
+            Ok(_) => {}
+            Err(_) => panic!("nothing was written"),
+        }
+    }
+    let written = written.lock().unwrap().clone();
+    assert!(written.iter().all(|(_, compiled)| *compiled), "{written:?}");
+    let paths: Vec<_> = written.into_iter().filter_map(|(path, _)| path).collect();
+    assert_eq!(
+        paths,
+        [
+            "out/main-exam-A.pdf",
+            "out/main-markscheme-A.pdf",
+            "out/main-exam-B.pdf",
+            "out/main-markscheme-B.pdf"
+        ]
+    );
+}

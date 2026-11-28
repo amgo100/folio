@@ -333,8 +333,9 @@ pub type OutputsHook = Arc<dyn Fn(&Outputs) + Send + Sync>;
 pub struct Outputs {
     /// The revision they were compiled from.
     pub revision: u64,
-    /// Each build the manifest declares, in its order, with the project
-    /// path the manifest writes its output to, if any. When an edit
+    /// Each build the manifest declares, in each version of a shuffled
+    /// paper ([`folio::compile_all`]), in its order, with the project path
+    /// the manifest writes its output to, if any. When an edit
     /// cancels any of them, none is handed over: the next revision is
     /// compiled once the project is quiet again.
     pub outputs: Vec<(Output, Option<String>)>,
