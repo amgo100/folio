@@ -207,6 +207,15 @@ fn reports_a_source_link_out_of_the_project() {
         "{text}"
     );
     assert!(text.contains("main.fol:1:10"), "{text}");
+
+    // So is reading it as text.
+    fs::write(dir.path().join("main.fol"), "#read(\"q1.fol\")\n").unwrap();
+    let text = stderr(&folio(dir.path(), &["check"]));
+    assert!(
+        text.contains("error: cannot read `q1.fol`: it is a link that leads out of the project"),
+        "{text}"
+    );
+    assert!(text.contains("main.fol:1:7"), "{text}");
 }
 
 #[test]
