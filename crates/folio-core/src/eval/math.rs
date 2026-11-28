@@ -346,6 +346,14 @@ impl Vm<'_> {
             // Code embedded with `#`.
             _ => {
                 let value = self.expr(expr)?;
+                // A float literal keeps its spelling: `#3.00e8`.
+                if let Value::Float(_) = value
+                    && let Some(spelling) = float_spelling(expr)
+                    && let Ok(number) = Number::parse(&spelling)
+                {
+                    number_nodes(&number, span, out);
+                    return Ok(());
+                }
                 self.place_in_math(value, level, span, out)?;
             }
         }
@@ -787,7 +795,7 @@ impl Vm<'_> {
             }
         }
         // A float literal in code keeps its spelling too: `#3.00e8`.
-        if let Some(spelling) = super::float_spelling(expr) {
+        if let Some(spelling) = float_spelling(expr) {
             return Number::parse(&spelling)
                 .map_err(|message| EvalError::new(span, message).into());
         }
@@ -1088,8 +1096,18 @@ fn literal_text(expr: ast::Expr<'_>) -> Option<String> {
 fn math_spelling(expr: ast::Expr<'_>) -> Option<EcoString> {
     match literal_text(expr) {
         Some(text) => looks_like_literal(&text).then(|| text.into()),
-        None => super::float_spelling(expr),
+        None => float_spelling(expr),
     }
+}
+
+/// The spelling of a float literal of code, with its sign, in as many
+/// parentheses as an equation needs to embed a negative one: `#3.00e8`,
+/// `#(-1.60e-19)`.
+fn float_spelling(mut expr: ast::Expr<'_>) -> Option<EcoString> {
+    while let ast::Expr::Parenthesized(inner) = expr {
+        expr = inner.expr();
+    }
+    super::float_spelling(expr)
 }
 
 /// Whether the text of a math expression is shaped like a decimal literal,
@@ -1421,28 +1439,43 @@ fn misplaced_align_point(span: Span) -> EvalError {
     )
 }
 
-/// A float as it is set: its digits, or a mantissa times a power of ten
-/// for one that Rust writes with an exponent (`6.02e23`), or infinity.
+/// A float as it is set: in the shorter of its decimal and scientific
+/// forms, plain on a tie (D-324-2), as text sets a computed float, or
+/// infinity.
 fn float(value: f64, span: Span, out: &mut Vec<math::Node>) -> EvalResult<()> {
     if value.is_nan() {
         bail!(span, "NaN cannot be placed in an equation");
     }
-    if value.is_infinite() {
-        if value < 0.0 {
-            out.push(math::Node::symbol('−', span));
+    match Number::from_float(value) {
+        Some(number) => number_nodes(&number, span, out),
+        None => {
+            if value < 0.0 {
+                out.push(math::Node::symbol('−', span));
+            }
+            out.push(math::Node::symbol('∞', span));
         }
-        out.push(math::Node::symbol('∞', span));
-        return Ok(());
     }
-    let text = format!("{value:?}");
-    let Some((mantissa, exponent)) = text.split_once('e') else {
-        number(&text, span, out);
-        return Ok(());
+    Ok(())
+}
+
+/// The nodes of a number in a formula: a minus sign, its mantissa as a
+/// literal that layout writes in the text's number format (D-349-1), and
+/// `× 10ⁿ` when it has a power of ten.
+fn number_nodes(value: &Number, span: Span, out: &mut Vec<math::Node>) {
+    if value.negative {
+        out.push(math::Node::symbol('−', span));
+    }
+    let mantissa = match value.frac.is_empty() {
+        true => value.int.clone(),
+        false => eco_format!("{}.{}", value.int, value.frac),
     };
-    number(mantissa, span, out);
+    number(&mantissa, span, out);
+    let Some(exponent) = value.exponent else {
+        return;
+    };
     out.push(math::Node::symbol('×', span));
     let mut power = Vec::new();
-    number(exponent, span, &mut power);
+    number(&exponent.to_string(), span, &mut power);
     out.push(math::Node::Attach(Arc::new(math::Attach {
         base: Row::new([math::Node::Number(Atom {
             text: "10".into(),
@@ -1454,7 +1487,6 @@ fn float(value: f64, span: Span, out: &mut Vec<math::Node>) -> EvalResult<()> {
         primes: 0,
         span,
     })));
-    Ok(())
 }
 
 /// Whether a character is a combining mark of the blocks that hold accents.
