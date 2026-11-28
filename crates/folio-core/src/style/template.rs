@@ -223,7 +223,9 @@ impl Cond {
 pub(super) struct Fields<'e> {
     /// The element.
     pub(super) element: &'e Element,
-    /// The parts the variant hides.
+    /// The parts the variant removes: those with `display: none`, those
+    /// `show-only` leaves out, and those shown as `hidden` or
+    /// `answer-space` where the element keeps no block for them.
     pub(super) hidden: Vec<Name>,
 }
 

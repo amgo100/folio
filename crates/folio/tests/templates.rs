@@ -741,3 +741,25 @@ fn a_field_in_a_line_shows_nothing_of_a_space() {
          solution[]]"
     );
 }
+
+#[test]
+fn a_space_a_template_shows_only_in_a_line_keeps_its_space() {
+    // The solution is placed by `field` alone: in the exam its answer
+    // space follows the body, so the answer lines are not lost.
+    let style = "render example {\n  \
+                   header: strong(\"Answer: \" field(solution));\n  \
+                   body: slot(statement);\n}\n\
+                 @variant exam { example > solution { display: answer-space; } }\n";
+    let world = world(style, CONTENT);
+    assert_eq!(
+        example_outlines(&world)[0],
+        "-[header[\"Answer: \"] statement[-[\"A particle is projected up a slope.\"]] \
+         solution[]]"
+    );
+    assert!(
+        text(&world)
+            .spaces
+            .iter()
+            .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution"))
+    );
+}

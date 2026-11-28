@@ -370,21 +370,39 @@ impl Select<'_> {
                 continue;
             };
             // An inline element's template sets only inline content in its
-            // line, so blocks it names are not placed either.
+            // line, so blocks it names are not placed either. Empty content
+            // has nothing to leave out.
             let blocks_in_line =
                 element.kind == ElementKind::Inline && !crate::text::is_inline(content);
             if let Some(placed) = &placed
+                && !content.is_empty()
                 && (blocks_in_line || !placed.iter().any(|name| name.as_str() == key.as_str()))
             {
                 let fields = fields.get_or_insert_with(|| element.fields.clone());
                 if key == BODY {
+                    // Scoped rules apply to the element wherever they are
+                    // written, so they stay (SPEC §5.4).
+                    let mut rules = Vec::new();
                     for child in content.nodes() {
-                        if let Node::Element(child) = child {
-                            edits.removed.insert(child.location);
+                        match child {
+                            Node::Element(child) => {
+                                edits.removed.insert(child.location);
+                            }
+                            Node::Rule(_) => rules.push(child.clone()),
+                            _ => {}
                         }
                     }
-                    fields.insert(key.clone(), Value::Content(Content::new()));
+                    fields.insert(key.clone(), Value::Content(tidy(rules)));
                 } else {
+                    // A part an inline element cannot keep the block of is
+                    // reported as where it is placed.
+                    if let Some(name) = Name::new(key)
+                        && let Some(part) = part_kids.part(&name)
+                        && let Shown::Space(kind) = self.shown(None, part)
+                        && !is_block(element)
+                    {
+                        self.warn_inline(kind, part.span);
+                    }
                     edits.parts.insert(key.clone(), None);
                     fields.remove(key);
                 }
@@ -764,7 +782,7 @@ impl Select<'_> {
 
 /// Whether an element is a block, whose box `hidden` and `answer-space`
 /// keep ([`crate::model::is_block`]), but not the `doc` element.
-fn is_block(element: &Element) -> bool {
+pub(crate) fn is_block(element: &Element) -> bool {
     crate::model::is_block(element.kind)
         && !(element.name.namespace.is_none() && element.name.name.as_str() == "doc")
 }

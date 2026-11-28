@@ -849,7 +849,33 @@ impl Collector<'_> {
             self.close();
         }
         match &expansion.body {
-            Some(body) => self.pieces(element, node, body, &node.style),
+            Some(body) => {
+                self.pieces(element, node, body, &node.style);
+                // A part shown as a space that the template shows only in a
+                // line, with `field`, keeps its space after the body, so
+                // that no answer space is lost (SPEC §6.3).
+                let unplaced: Vec<Name> = self
+                    .spaces
+                    .keys()
+                    .filter(|(location, _)| *location == element.location)
+                    .filter_map(|(_, part)| part.clone())
+                    .filter(|name| !self.placed.contains(name))
+                    .collect();
+                let mut unplaced = unplaced;
+                unplaced.sort_by_key(|name| {
+                    element
+                        .fields
+                        .iter()
+                        .position(|(key, _)| key.as_str() == name.as_str())
+                });
+                for name in unplaced {
+                    if let Some(eval::Value::Content(content)) = element.field(name.as_str())
+                        && self.place(&name)
+                    {
+                        self.slot(element, node, &name, content);
+                    }
+                }
+            }
             None => self.element_content(element, node),
         }
     }

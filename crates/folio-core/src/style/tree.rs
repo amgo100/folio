@@ -985,6 +985,9 @@ fn hidden_parts(
         Some(V::Array(items)) => Some(items.iter().filter_map(word).collect()),
         Some(other) => Some(word(other).into_iter().collect()),
     };
+    // Only a block keeps the block of a part shown as `hidden` or
+    // `answer-space`; elsewhere Select leaves the part out.
+    let block = crate::variants::select::is_block(element);
     children
         .iter()
         .filter_map(|child| match &child.name {
@@ -992,9 +995,6 @@ fn hidden_parts(
             _ => None,
         })
         .filter(|(name, child)| {
-            // Only a block keeps the block of a part shown as `hidden` or
-            // `answer-space`; elsewhere Select leaves the part out.
-            let block = crate::model::is_block(element.kind) && !is_doc(element);
             let left_out = match child.style.value(props, display) {
                 Some(V::None) => true,
                 Some(V::Keyword(k)) => !block && matches!(k.as_str(), "hidden" | "answer-space"),
@@ -1081,11 +1081,6 @@ fn same_language(a: &Lang, b: &Lang) -> bool {
             (Some(x), Some(y)) => x == y,
             _ => true,
         }
-}
-
-/// Whether an element is the built-in `doc`.
-fn is_doc(element: &Element) -> bool {
-    element.name.namespace.is_none() && element.name.name.as_str() == "doc"
 }
 
 /// Whether an element is a built-in `footnote`.
