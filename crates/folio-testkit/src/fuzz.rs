@@ -78,7 +78,10 @@ pub fn markup(data: &[u8]) {
 /// when it is odd, and checks that formatting is sound and idempotent: a
 /// file without syntax errors formats (it does not fail as
 /// [`FormatError::Unsound`]) to a file without syntax errors that is
-/// [`fmt::equivalent`] to it and is formatted already.
+/// [`fmt::equivalent`] to it and is formatted already. [`fmt::format`]
+/// checks the result's syntax and equivalence itself and answers `Unsound`
+/// when they fail; the target checks them again, so that it still catches
+/// an unsound result if that check is ever weakened.
 pub fn fmt(data: &[u8]) {
     let Some((&kind, rest)) = data.split_first() else {
         return;

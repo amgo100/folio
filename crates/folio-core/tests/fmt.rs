@@ -149,7 +149,14 @@ proptest! {
         let twice = fmt::format(&reparsed).unwrap().apply(&once);
         prop_assert_eq!(&twice, &once, "{}: not idempotent", file.path.display());
         prop_assert!(!once.contains('\r'));
-        prop_assert!(once.ends_with('\n') && !once.ends_with("\n\n"));
+        if file.stylesheet {
+            prop_assert!(once.ends_with('\n') && !once.ends_with("\n\n"));
+        } else {
+            // Content keeps the kind of whitespace it ends with: none, a
+            // space (a line break or one space) or a paragraph break.
+            let end = &once[once.trim_end().len()..];
+            prop_assert!(matches!(end, "" | " " | "\n" | "\n\n"), "{:?}", end);
+        }
     }
 }
 

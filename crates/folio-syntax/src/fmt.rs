@@ -34,9 +34,8 @@
 //! - Within a line, a run of spaces becomes one space, before comments
 //!   too: columns are not aligned. In markup, the spaces before the last
 //!   list, enum or term marker of a line and those after the comments that
-//!   start a line
-//!   stay as written: they set a column that the lines below, whose
-//!   indentation stays, nest by. In code and stylesheets a space follows
+//!   start a line stay as written: they set a column that the lines below,
+//!   whose indentation stays, nest by. In code and stylesheets a space follows
 //!   `,` (in the step lists of selectors, `:step(1,3-4)`, it stays as
 //!   written), `;` and the `:` of a named argument, declaration, field or
 //!   import, surrounds `=` in a binding, `=>`, and the combinators `>` and
@@ -814,8 +813,8 @@ impl Walk {
                 (Some(_), Some(_)) if frozen => None,
                 // Spaces that set the column of a marker later on the line,
                 // or of what follows a comment that starts a line, stay as
-                // written: the lines
-                // below nest by that column, and their indentation stays.
+                // written: the lines below nest by that column, and their
+                // indentation stays.
                 (Some(_), Some(_)) if gap.markup && (comments_only || self.marker_ahead[i]) => None,
                 (Some(_), Some(_)) if gap.markup => Some(inline_markup(text)),
                 (Some(prev), Some(next)) => Some(inline_code(text, prev, next)),
