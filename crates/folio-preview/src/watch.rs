@@ -47,13 +47,16 @@ fn change(kind: &EventKind) -> Option<Change> {
         EventKind::Access(_) => None,
         // A truncate or a write, which a close may follow.
         EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Any) => Some(Change::Written),
+        EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)) => {
+            Some(Change::Moved)
+        }
         _ => Some(Change::Other),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use notify::event::{CreateKind, DataChange};
+    use notify::event::{CreateKind, DataChange, MetadataKind};
 
     use super::*;
 
@@ -66,6 +69,8 @@ mod tests {
         let read = EventKind::Access(AccessKind::Close(AccessMode::Read));
         assert_eq!(change(&read), None);
         let create = EventKind::Create(CreateKind::File);
-        assert_eq!(change(&create), Some(Change::Other));
+        assert_eq!(change(&create), Some(Change::Moved));
+        let chmod = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions));
+        assert_eq!(change(&chmod), Some(Change::Other));
     }
 }

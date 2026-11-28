@@ -18,7 +18,7 @@
 //! writer closes it ([`MAX_HOLD`] at most), so that the preview never shows
 //! the file half saved. And once the pages have lagged behind the world for
 //! [`MAX_LAG`], changes wait for the running check to send its first pages,
-//! or to finish, [`MAX_DEFER`] at most, so that saves faster than a check
+//! or to finish, [`MAX_DEFER`] at first, so that saves faster than a check
 //! still update the preview.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -46,8 +46,8 @@ use crate::{Error, Event, Hook, Options, Outputs, OutputsHook, Update};
 /// The longest a stream of file-system events postpones reading them.
 const MAX_DEBOUNCE: Duration = Duration::from_millis(100);
 
-/// The longest a source that reads shorter while it is written waits for
-/// its writer to close it.
+/// The longest a file held as perhaps read in the middle of a save in
+/// place ([`torn`]) waits for its writer to close it.
 const MAX_HOLD: Duration = Duration::from_millis(500);
 
 /// How long the pages may lag behind the world before changes wait for
@@ -86,7 +86,9 @@ pub(crate) enum Change {
     Written,
     /// A file open for writing was closed.
     Closed,
-    /// Anything else: a file created, removed or renamed, or a change
+    /// A file created, removed or renamed.
+    Moved,
+    /// Anything else, such as a change of permissions, or a change
     /// reported without saying what it was.
     Other,
 }
@@ -421,10 +423,11 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         current: Arc::new(AtomicU64::new(0)),
         visible: visible.clone(),
         // inotify reports closes; other systems' watchers say so by
-        // reporting one.
-        closes: cfg!(any(target_os = "linux", target_os = "android")),
+        // reporting one. Without a watcher, nothing does.
+        closes: options.watch && cfg!(any(target_os = "linux", target_os = "android")),
         open: BTreeSet::new(),
         held: BTreeMap::new(),
+        defer_limit: MAX_DEFER,
         running: None,
         lagging: None,
         deferred: Vec::new(),
@@ -506,14 +509,19 @@ struct Engine {
     current: Arc<AtomicU64>,
     /// The pages the clients show.
     visible: Arc<Visible>,
-    /// Whether the watcher reports when a file open for writing is
-    /// closed, which a source that reads shorter is held for.
+    /// Whether a watcher runs that reports when a file open for writing
+    /// is closed, which files are held for ([`torn`]).
     closes: bool,
     /// The paths truncated or written and not closed since.
     open: BTreeSet<PathBuf>,
-    /// The sources that read shorter while they were written, and when
-    /// they are read anyway if their writer has not closed them.
+    /// The files held as perhaps read in the middle of a save in place
+    /// ([`torn`]), and when they are read anyway if their writer has not
+    /// closed them.
     held: BTreeMap<PathBuf, Instant>,
+    /// How long changes may wait for the running check: [`MAX_DEFER`],
+    /// doubled each time a check is cancelled for taking longer, until
+    /// pages are sent.
+    defer_limit: Duration,
     /// The revision of the check running, if one is.
     running: Option<u64>,
     /// Since when the pages have lagged behind the world: since the first
@@ -540,8 +548,10 @@ impl Engine {
                 let paths = std::mem::take(&mut self.deferred);
                 if self.running.is_some() {
                     // Cancels the check that took too long: the next one
-                    // gets the same grace before changes wait for it.
+                    // gets the same grace before changes wait for it, and
+                    // twice as long to send pages.
                     self.lagging = Some(Instant::now());
+                    self.defer_limit = self.defer_limit.saturating_mul(2);
                 }
                 self.deferred_since = None;
                 self.apply(&paths);
@@ -550,7 +560,7 @@ impl Engine {
                 self.check();
             }
             let release = self.held.values().min().copied();
-            let defer = self.deferred_since.map(|since| since + MAX_DEFER);
+            let defer = self.deferred_since.map(|since| since + self.defer_limit);
             let deadline = [self.idle_at, release, defer].into_iter().flatten().min();
             let input = match self.recv(deadline) {
                 Ok(input) => input,
@@ -647,7 +657,7 @@ impl Engine {
         self.queue.extend(self.rx.try_iter());
         self.queue
             .iter()
-            .any(|input| matches!(input, Input::Paths(paths, _) if paths.iter().any(|p| p == path)))
+            .any(|input| matches!(input, Input::Paths(paths, change) if *change != Change::Closed && paths.iter().any(|p| p == path)))
     }
 
     /// Records which paths are open for writing after an event.
@@ -665,19 +675,20 @@ impl Engine {
             Change::Closed => {
                 self.closes = true;
                 for path in paths {
+                    // Read with the rest of the event's batch, which takes
+                    // it out of `held` unless it still reads torn.
                     self.open.remove(path);
-                    // Read with the rest of the event's batch.
-                    self.held.remove(path);
                 }
             }
             // Removed, renamed or created: whatever writes it now has
             // opened it again.
-            Change::Other => {
+            Change::Moved => {
                 for path in paths {
                     self.open.remove(path);
                     self.released.remove(path);
                 }
             }
+            Change::Other => {}
         }
     }
 
@@ -689,7 +700,7 @@ impl Engine {
             && self.lagging.is_some_and(|since| since.elapsed() >= MAX_LAG)
             && self
                 .deferred_since
-                .is_none_or(|since| since.elapsed() < MAX_DEFER)
+                .is_none_or(|since| since.elapsed() < self.defer_limit)
     }
 
     /// Lets changes wait for the running check.
@@ -716,8 +727,11 @@ impl Engine {
             self.open.remove(path);
             self.released.insert(path.clone());
         }
-        // Held long enough already: not deferred as well.
-        self.apply(&due);
+        if self.lagging_behind() {
+            self.defer(due);
+        } else {
+            self.apply(&due);
+        }
     }
 
     /// Takes out of `paths` the files that may be read between the
@@ -769,6 +783,18 @@ impl Engine {
             }
             !hold
         });
+        // A directory read again reads the files under it: those still
+        // open for writing are checked once read.
+        for dir in paths.iter().filter(|path| path.is_dir()) {
+            for path in self.open.iter().filter(|path| path.starts_with(dir)) {
+                if let Some(rel) = self.loader_path(path)
+                    && let Some(source) = world.source(&rel)
+                    && !left.iter().any(|(p, _, _)| p == path)
+                {
+                    left.push((path.clone(), rel, source));
+                }
+            }
+        }
         // Read whole, or gone: no longer held.
         for path in read {
             self.held.remove(&path);
@@ -809,12 +835,19 @@ impl Engine {
                 }
                 None => path.exists() && (self.open.contains(&path) || self.waiting(&path)),
             };
-            if torn
-                && let Some(world) = &mut self.world
-                && world.set_source(&rel, old.text()).is_ok()
-            {
+            if !torn {
+                continue;
+            }
+            // Read again on its close either way.
+            let put_back = self
+                .world
+                .as_mut()
+                .is_some_and(|world| world.set_source(&rel, old.text()).is_ok());
+            if put_back {
                 changed.remove(&rel);
                 held.push((path, rel));
+            } else {
+                self.held.entry(path).or_insert(Instant::now() + MAX_HOLD);
             }
         }
         let restored = !held.is_empty();
@@ -1061,6 +1094,7 @@ impl Engine {
         }
         // The pages are those of the world again.
         self.lagging = None;
+        self.defer_limit = MAX_DEFER;
         let old = self.publish.borrow().clone();
         let mut pages = old.pages.clone();
         let mut lists = Vec::new();
@@ -1184,6 +1218,7 @@ impl Engine {
             return;
         }
         self.lagging = None;
+        self.defer_limit = MAX_DEFER;
         let old = self.publish.borrow().clone();
         let mut pages = old.pages.clone();
         let (lists, spans) = self.place(&mut pages, first.lists);

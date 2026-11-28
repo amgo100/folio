@@ -1279,12 +1279,12 @@ fn saves_faster_than_a_check_still_update_the_pages() {
     let first = updated(&events, |u| u.pages > 0);
     let file = dir.path().join("main.fol");
     let text = std::fs::read_to_string(&file).unwrap();
-    // A save every 20 ms for three seconds, each reflowing every page and
-    // cancelling the check of the save before if nothing else did.
+    // A save every 20 ms, each reflowing every page and cancelling the
+    // check of the save before if nothing else did.
     let start = Instant::now();
     let mut i = 0;
     let mut sent = None;
-    while start.elapsed() < Duration::from_secs(3) {
+    while sent.is_none() && start.elapsed() < Duration::from_secs(10) {
         let words = "word ".repeat(i * 7);
         let new = text.replacen("Sentence 0 ", &format!("{words}Sentence 0 "), 1);
         std::fs::write(&file, new).unwrap();
