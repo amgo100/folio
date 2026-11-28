@@ -1184,8 +1184,8 @@ impl Walk<'_> {
     fn missing(&mut self, r: &PendingRef) {
         if let Some(hidden) = self.hidden(&r.label) {
             let project = self.build.project(self.db);
-            let strict =
-                project.manifest(self.db).formatting.mode.v == crate::project::FormattingMode::Strict;
+            let strict = project.manifest(self.db).formatting.mode.v
+                == crate::project::FormattingMode::Strict;
             let message = eco_format!(
                 "`<{}>` names {} that {} does not show, so the reference has nothing to refer to",
                 r.label,

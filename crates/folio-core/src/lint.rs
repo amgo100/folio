@@ -96,7 +96,8 @@ fn variant_condition(conditional: ast::Conditional<'_>) -> Option<Diagnostic> {
     let Expr::Binary(binary) = condition else {
         return None;
     };
-    let is_variant = |expr: Expr<'_>| matches!(expr, Expr::Ident(ident) if ident.as_str() == "variant");
+    let is_variant =
+        |expr: Expr<'_>| matches!(expr, Expr::Ident(ident) if ident.as_str() == "variant");
     let names = |expr: Expr<'_>| -> Option<Vec<EcoString>> {
         match expr {
             Expr::Str(text) => Some(vec![text.get()]),

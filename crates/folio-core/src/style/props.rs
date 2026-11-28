@@ -262,7 +262,6 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
         return None;
     }
     Some(match property.name.name.as_str() {
-
         // Markers are set inside the first line until layout hangs them.
         "marker-position" => "hanging markers",
         "trailer" => "block trailers",

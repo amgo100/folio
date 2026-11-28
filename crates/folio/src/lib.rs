@@ -436,9 +436,8 @@ pub fn select(
     catch(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
-        folio_core::pipeline::selected_root(db, build).map(|root| model::Document {
-            root: root.clone(),
-        })
+        folio_core::pipeline::selected_root(db, build)
+            .map(|root| model::Document { root: root.clone() })
     })
 }
 

@@ -96,7 +96,11 @@ fn the_overlay_decides_what_each_variant_shows() {
         ]
     );
     assert!(!selected(&world, "exam").contains("SOLUTION"));
-    assert!(diagnostics(&world, "exam").is_empty(), "{:?}", diagnostics(&world, "exam"));
+    assert!(
+        diagnostics(&world, "exam").is_empty(),
+        "{:?}",
+        diagnostics(&world, "exam")
+    );
     assert!(diagnostics(&world, "markscheme").is_empty());
 }
 
@@ -177,7 +181,11 @@ fn variant_conditions_are_stylable() {
 /// A condition that names no declared variant is a warning.
 #[test]
 fn a_condition_naming_no_variant_warns() {
-    let world = world("", "", "#in-variant(\"slides\")[Only on slides.]\n\nText.\n");
+    let world = world(
+        "",
+        "",
+        "#in-variant(\"slides\")[Only on slides.]\n\nText.\n",
+    );
     let found = diagnostics(&world, "exam");
     assert!(
         found.iter().any(|(s, _, m)| *s == Severity::Warning
@@ -246,7 +254,10 @@ fn show_only_condenses_an_element() {
         markscheme.iter().all(|p| !p.contains("STEM")),
         "{markscheme:?}"
     );
-    assert!(markscheme.iter().any(|p| p.contains("[3]")), "{markscheme:?}");
+    assert!(
+        markscheme.iter().any(|p| p.contains("[3]")),
+        "{markscheme:?}"
+    );
     assert!(markscheme.iter().any(|p| p.contains("Answer one.")));
     assert!(markscheme.iter().any(|p| p.contains("Answer two.")));
 }
@@ -264,10 +275,15 @@ fn modes_not_laid_out_leave_the_content_out() {
     assert_eq!(paragraphs(&world, "exam"), ["Text."]);
     let found = diagnostics(&world, "exam");
     let count = |what: &str| found.iter().filter(|(_, _, m)| m.contains(what)).count();
-    assert_eq!(count("`display: answer-space` does not draw answer space yet"), 1);
+    assert_eq!(
+        count("`display: answer-space` does not draw answer space yet"),
+        1
+    );
     assert_eq!(count("`display: hidden` does not keep the space"), 1);
     assert!(
-        found.iter().all(|(_, _, m)| !m.contains("is not implemented yet")),
+        found
+            .iter()
+            .all(|(_, _, m)| !m.contains("is not implemented yet")),
         "{found:?}"
     );
 }
@@ -287,7 +303,9 @@ fn a_placeholder_takes_one_string() {
         "{found:?}"
     );
     assert!(
-        found.iter().any(|(_, _, m)| m.contains("`placeholder` needs the text to show")),
+        found
+            .iter()
+            .any(|(_, _, m)| m.contains("`placeholder` needs the text to show")),
         "{found:?}"
     );
     assert_eq!(paragraphs(&world, "exam"), ["Kept."]);
@@ -314,7 +332,9 @@ fn a_reference_to_hidden_content() {
          nothing to refer to"
     );
     assert!(
-        found.iter().all(|(_, _, m)| !m.contains("no element has the label")),
+        found
+            .iter()
+            .all(|(_, _, m)| !m.contains("no element has the label")),
         "{found:?}"
     );
     assert!(diagnostics(&world, "markscheme").is_empty());
@@ -387,8 +407,16 @@ fn the_lint_suggests_mechanisms_one_and_two() {
         .filter(|d| d.code.as_deref() == Some("variant-condition"))
         .flat_map(|d| d.hints.iter().map(ToString::to_string))
         .collect();
-    assert!(hints[0].contains("`#in-variant(\"markscheme\")[..]`"), "{hints:?}");
-    assert!(hints[1].contains("`#except-variant(\"exam\")[..]`"), "{hints:?}");
-    assert!(hints[3].contains("`@variant exam, markscheme`"), "{hints:?}");
+    assert!(
+        hints[0].contains("`#in-variant(\"markscheme\")[..]`"),
+        "{hints:?}"
+    );
+    assert!(
+        hints[1].contains("`#except-variant(\"exam\")[..]`"),
+        "{hints:?}"
+    );
+    assert!(
+        hints[3].contains("`@variant exam, markscheme`"),
+        "{hints:?}"
+    );
 }
-

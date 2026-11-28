@@ -140,9 +140,7 @@ impl Only {
     /// Whether an element holds one of the names, at any depth.
     fn holds(&self, element: &Element) -> bool {
         element.fields.iter().any(|(key, value)| match value {
-            Value::Content(content) => {
-                (key != BODY && self.part(key)) || self.within(content)
-            }
+            Value::Content(content) => (key != BODY && self.part(key)) || self.within(content),
             _ => false,
         })
     }
@@ -168,12 +166,9 @@ impl Edits {
             .iter()
             .filter_map(|child| match &child.name {
                 NodeName::Element(_) if self.removed.contains(&child.location) => None,
-                NodeName::Element(_) => Some(
-                    self.replaced
-                        .get(&child.location)
-                        .unwrap_or(child)
-                        .clone(),
-                ),
+                NodeName::Element(_) => {
+                    Some(self.replaced.get(&child.location).unwrap_or(child).clone())
+                }
                 NodeName::Part(name) => match self.parts.get(name.as_str()) {
                     Some(None) => None,
                     Some(Some(new)) => Some(new.clone()),
@@ -283,7 +278,9 @@ impl Select<'_> {
                 Some(None)
             }
             Shown::Placeholder(text) => {
-                edits.parts.insert(key.clone(), Some(placeholder_node(node)));
+                edits
+                    .parts
+                    .insert(key.clone(), Some(placeholder_node(node)));
                 Some(Some(text_content(text)))
             }
             Shown::Kept => {
@@ -333,7 +330,10 @@ impl Select<'_> {
                 continue;
             };
             changed |= edited;
-            if after_removed && !matches!(kept, Node::Space(_)) && matches!(out.last(), Some(Node::Space(_))) {
+            if after_removed
+                && !matches!(kept, Node::Space(_))
+                && matches!(out.last(), Some(Node::Space(_)))
+            {
                 out.pop();
             }
             after_removed = false;
@@ -461,18 +461,21 @@ impl Select<'_> {
                 eco_format!(
                     "no variant `{name}` is declared, so this `{}` is {}",
                     element.name,
-                    if inside { "never shown" } else { "always shown" }
+                    if inside {
+                        "never shown"
+                    } else {
+                        "always shown"
+                    }
                 ),
             );
             diag::report(
                 self.db,
                 if declared.is_empty() {
-                    diagnostic.with_hint("variants are declared as `[variants.<name>]` in folio.toml")
+                    diagnostic
+                        .with_hint("variants are declared as `[variants.<name>]` in folio.toml")
                 } else {
-                    diagnostic.with_hint(eco_format!(
-                        "the manifest declares {}",
-                        declared.join(", ")
-                    ))
+                    diagnostic
+                        .with_hint(eco_format!("the manifest declares {}", declared.join(", ")))
                 },
             );
         }

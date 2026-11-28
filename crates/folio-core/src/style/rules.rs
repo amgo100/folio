@@ -804,7 +804,9 @@ impl<'a> Compiler<'a> {
                             span,
                             eco_format!("wrong value for `{}`: {message}", property.name),
                         )
-                        .with_hint("write the text in quotes: `placeholder(\"See the mark scheme\")`"),
+                        .with_hint(
+                            "write the text in quotes: `placeholder(\"See the mark scheme\")`",
+                        ),
                     );
                     continue;
                 }
