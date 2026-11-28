@@ -245,6 +245,9 @@ impl Selector {
 
     fn match_at(&self, i: usize, at: At, chain: &[&NodeView], failed: &mut Failures) -> bool {
         let (combinator, compound) = &self.steps[i];
+        if failed.contains(i, at) {
+            return false;
+        }
         let Some(view) = at.view(chain) else {
             return false;
         };
@@ -253,11 +256,6 @@ impl Selector {
         }
         if i == 0 {
             return true;
-        }
-        // Only the steps before a descendant combinator can be reached
-        // in more than one way; a place found there once stays failed.
-        if failed.contains(i, at) {
-            return false;
         }
         let found = match combinator.expect("compounds after the first have a combinator") {
             Combinator::Child => at
@@ -279,7 +277,16 @@ impl Selector {
                 .prev(chain)
                 .is_some_and(|p| self.match_at(i - 1, p, chain, failed)),
         };
-        if !found {
+        // Only a compound that a descendant combinator joins to the next
+        // can be reached from more than one place, so only its failures
+        // are worth remembering: through `>` and `+` each place has one
+        // way in, and that way in is remembered if it can recur.
+        if !found
+            && self
+                .steps
+                .get(i + 1)
+                .is_some_and(|(c, _)| *c == Some(Combinator::Descendant))
+        {
             failed.insert(i, at);
         }
         found
@@ -287,8 +294,10 @@ impl Selector {
 }
 
 /// The places in a chain of views from which the compounds up to a step
-/// failed to match: `(step, level, offset)`. Most selectors never record
-/// one, so the set is allocated only when it is first needed.
+/// failed to match although the step's own compound matched there:
+/// `(step, level, offset)`. Only a selector with a descendant combinator
+/// before its third compound, or a later one, records any, so the set is
+/// allocated only when it is first needed.
 #[derive(Default)]
 struct Failures(Option<HashSet<(usize, usize, usize)>>);
 
