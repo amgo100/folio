@@ -13,8 +13,8 @@
 //! which lays out the rest, and sends the rest with the diagnostics.
 //!
 //! Two guards keep a stream of saves from showing what no save meant. A
-//! source saved in place is truncated and then written: when it is read
-//! while it is still open for writing, or reads empty, it is held until the
+//! file saved in place is truncated and then written: when it is read
+//! while it is still open for writing, or a source reads empty, it is held until the
 //! writer closes it ([`MAX_HOLD`] at most), so that the preview never shows
 //! the file half saved. And once the pages have lagged behind the world for
 //! [`MAX_LAG`], changes wait for the running check to send its first pages,
@@ -536,8 +536,13 @@ struct Engine {
 impl Engine {
     fn run(mut self) {
         loop {
-            if !self.deferred.is_empty() && !self.lagging_behind() {
+            if self.deferred_since.is_some() && !self.lagging_behind() {
                 let paths = std::mem::take(&mut self.deferred);
+                if self.running.is_some() {
+                    // Cancels the check that took too long: the next one
+                    // gets the same grace before changes wait for it.
+                    self.lagging = Some(Instant::now());
+                }
                 self.deferred_since = None;
                 self.apply(&paths);
             }
@@ -649,7 +654,13 @@ impl Engine {
     fn note(&mut self, paths: &[PathBuf], change: Change) {
         match change {
             // Without closes, nothing would take them out again.
-            Change::Written if self.closes => self.open.extend(paths.iter().cloned()),
+            Change::Written if self.closes => {
+                for path in paths {
+                    // A new save: guarded again.
+                    self.released.remove(path);
+                    self.open.insert(path.clone());
+                }
+            }
             Change::Written => {}
             Change::Closed => {
                 self.closes = true;
@@ -664,6 +675,7 @@ impl Engine {
             Change::Other => {
                 for path in paths {
                     self.open.remove(path);
+                    self.released.remove(path);
                 }
             }
         }
@@ -682,6 +694,9 @@ impl Engine {
 
     /// Lets changes wait for the running check.
     fn defer(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
         self.deferred_since.get_or_insert_with(Instant::now);
         self.deferred.extend(paths);
     }
@@ -701,15 +716,13 @@ impl Engine {
             self.open.remove(path);
             self.released.insert(path.clone());
         }
-        if self.lagging_behind() {
-            self.defer(due);
-        } else {
-            self.apply(&due);
-        }
+        // Held long enough already: not deferred as well.
+        self.apply(&due);
     }
 
-    /// Takes out of `paths` the sources that may be read between the
-    /// truncate and the write of a save in place ([`torn`]), and
+    /// Takes out of `paths` the files that may be read between the
+    /// truncate and the end of the write of a save in place: any file
+    /// still open for writing, and the sources that read [`torn`]; and
     /// holds them until their writers close them, [`MAX_HOLD`] at most.
     /// Returns the sources left in `paths` with the world's text of each,
     /// which [`Self::recheck`] checks again once they are read.
@@ -727,6 +740,12 @@ impl Engine {
         paths.retain(|path| {
             if released.contains(path) {
                 return true;
+            }
+            // Any file still open for writing, new ones and data files
+            // among them, waits for its close.
+            if self.open.contains(path) && path.is_file() {
+                held.push(path.clone());
+                return false;
             }
             // A file that is gone is removed at once.
             let Some(((rel, source), meta)) = self
