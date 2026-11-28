@@ -724,3 +724,20 @@ $ y = 2 $
         1
     );
 }
+
+#[test]
+fn a_field_in_a_line_shows_nothing_of_a_space() {
+    // In the exam the solution is answer space: the header's line shows
+    // its text and nothing of the space, which stands where `slot` places
+    // it.
+    let style = "render example {\n  \
+                   header: strong(\"Answer: \" field(solution));\n  \
+                   body: slot(statement) slot(solution);\n}\n\
+                 @variant exam { example > solution { display: answer-space; } }\n";
+    let world = world(style, CONTENT);
+    assert_eq!(
+        example_outlines(&world)[0],
+        "-[header[\"Answer: \"] statement[-[\"A particle is projected up a slope.\"]] \
+         solution[]]"
+    );
+}

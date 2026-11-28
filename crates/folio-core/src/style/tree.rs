@@ -612,7 +612,7 @@ impl<'a> Walker<'a> {
         let chosen = chosen.clone();
         let fields = template::Fields {
             element,
-            hidden: hidden_parts(props, style, children),
+            hidden: hidden_parts(props, style, children, element),
         };
         // The element as its parts see it.
         let view = self.view(siblings, i, Role::Context, &cascade.needs);
@@ -968,10 +968,16 @@ impl<'a> Restyle for Walker<'a> {
 
 /// The parts of an element that the variant removes, which its template
 /// reads as unset: those with `display: none`, and, where the element has
-/// `show-only`, those it does not keep (SPEC §6.2). A part shown as
-/// `hidden` or `answer-space` keeps its block, is counted and is placed
-/// where the template places it, so it reads as set (SPEC §6.3).
-fn hidden_parts(props: &Properties, style: &ComputedStyle, children: &[StyledNode]) -> Vec<Name> {
+/// `show-only`, those it does not keep (SPEC §6.2). A part of a block shown
+/// as `hidden` or `answer-space` keeps its block and is placed where the
+/// template places it, so it reads as set (SPEC §6.3); a part of an
+/// element of another kind is left out, so it reads as unset.
+fn hidden_parts(
+    props: &Properties,
+    style: &ComputedStyle,
+    children: &[StyledNode],
+    element: &Element,
+) -> Vec<Name> {
     use folio_component::Value as V;
     let display = props.builtin("display");
     let kept: Option<Vec<EcoString>> = match style.value(props, props.builtin("show-only")) {
@@ -986,7 +992,14 @@ fn hidden_parts(props: &Properties, style: &ComputedStyle, children: &[StyledNod
             _ => None,
         })
         .filter(|(name, child)| {
-            let left_out = matches!(child.style.value(props, display), Some(V::None));
+            // Only a block keeps the block of a part shown as `hidden` or
+            // `answer-space`; elsewhere Select leaves the part out.
+            let block = crate::model::is_block(element.kind) && !is_doc(element);
+            let left_out = match child.style.value(props, display) {
+                Some(V::None) => true,
+                Some(V::Keyword(k)) => !block && matches!(k.as_str(), "hidden" | "answer-space"),
+                _ => false,
+            };
             // `show-only` keeps the children it names and, condensed, those
             // that hold one.
             left_out
@@ -1068,6 +1081,11 @@ fn same_language(a: &Lang, b: &Lang) -> bool {
             (Some(x), Some(y)) => x == y,
             _ => true,
         }
+}
+
+/// Whether an element is the built-in `doc`.
+fn is_doc(element: &Element) -> bool {
+    element.name.namespace.is_none() && element.name.name.as_str() == "doc"
 }
 
 /// Whether an element is a built-in `footnote`.

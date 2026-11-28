@@ -879,12 +879,15 @@ impl Collector<'_> {
                     }
                 }
                 TemplatePiece::Field { name, style } => {
-                    if !self.place(name) {
-                        continue;
-                    }
                     let Some(eval::Value::Content(content)) = element.field(name.as_str()) else {
                         continue;
                     };
+                    // A field in a line shows its content there; one whose
+                    // content a space replaced shows nothing in the line,
+                    // and its space stands where a `slot` places it.
+                    if content.is_empty() || !self.place(name) {
+                        continue;
+                    }
                     let Some(part) = part_node(node, name) else {
                         continue;
                     };

@@ -887,6 +887,9 @@ pub struct Expansion {
     /// no body, so the element's content is shown as it would be without
     /// one.
     pub body: Option<EcoVec<Piece>>,
+    /// The content fields it places ([`Expansion::placed`]), worked out
+    /// once.
+    placed: Option<EcoVec<Name>>,
 }
 
 impl Expansion {
@@ -896,8 +899,13 @@ impl Expansion {
     /// shown as it would be without one. Content it does not place is not
     /// shown (SPEC §5.3), and Select leaves it out, so that no later stage
     /// counts, numbers or labels it.
-    pub fn placed(&self) -> Option<Vec<Name>> {
-        fn walk(pieces: &[Piece], out: &mut Vec<Name>) {
+    pub fn placed(&self) -> Option<&[Name]> {
+        self.placed.as_deref()
+    }
+
+    /// Works out [`Expansion::placed`].
+    fn find_placed(&mut self) {
+        fn walk(pieces: &[Piece], out: &mut EcoVec<Name>) {
             for piece in pieces {
                 match piece {
                     Piece::Slot { name, .. } | Piece::Field { name, .. } => {
@@ -910,13 +918,16 @@ impl Expansion {
                 }
             }
         }
-        let body = self.body.as_ref()?;
-        let mut out = Vec::new();
+        let Some(body) = &self.body else {
+            self.placed = None;
+            return;
+        };
+        let mut out = EcoVec::new();
         if let Some(header) = &self.header {
             walk(&header.items, &mut out);
         }
         walk(body, &mut out);
-        Some(out)
+        self.placed = Some(out);
     }
 }
 
@@ -1098,13 +1109,16 @@ pub(super) fn expand<R: Restyle>(
         };
         ex.items(items, &at)
     });
-    trim(Expansion {
+    let mut expansion = trim(Expansion {
         name: template.name.clone(),
         span: template.span,
         office: template.office,
         header,
         body,
-    })
+        placed: None,
+    });
+    expansion.find_placed();
+    expansion
 }
 
 /// An expansion whose header holds nothing, as when its conditions all
