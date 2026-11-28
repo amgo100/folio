@@ -801,3 +801,44 @@ fn snapshots_resolve_diagnostics_after_edits() {
     );
     assert!(before.contains("main.fol"), "{before}");
 }
+
+/// A file on disk is read the first time something asks for it, and then
+/// kept until it is set again (SPEC §12.1).
+#[test]
+fn reads_a_file_on_disk_on_demand() {
+    let dir = tempfile::tempdir().unwrap();
+    let disk = dir.path().join("points.csv");
+    let mut world = World::new(MANIFEST).unwrap();
+    world.set_file_on_disk("data/points.csv", &disk).unwrap();
+    // Not there yet: nothing has read it.
+    std::fs::write(&disk, "x,y\n").unwrap();
+    assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n");
+    std::fs::write(&disk, "x,y\n1,2\n").unwrap();
+    assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n");
+    world.set_file_on_disk("data/points.csv", &disk).unwrap();
+    assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n1,2\n");
+
+    // A file that cannot be read is not there.
+    world
+        .set_file_on_disk("data/none.csv", dir.path().join("none.csv"))
+        .unwrap();
+    assert!(world.file_paths().any(|p| p.as_str() == "data/none.csv"));
+    assert!(world.file("data/none.csv").is_none());
+    assert!(world.set_file_on_disk("main.fol", &disk).is_err());
+}
+
+/// Adding many files one by one takes time linear in their number (#342).
+#[test]
+fn adds_many_files() {
+    let mut world = World::new(MANIFEST).unwrap();
+    for i in 0..20_000 {
+        world
+            .set_file(&format!("data/{i}.csv"), b"x".to_vec())
+            .unwrap();
+    }
+    assert_eq!(world.file_paths().count(), 20_000);
+    for i in 0..20_000 {
+        assert!(world.remove_file(&format!("data/{i}.csv")));
+    }
+    assert_eq!(world.file_paths().count(), 0);
+}

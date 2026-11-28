@@ -21,7 +21,9 @@
 //! - A [`SourceFile`] holds one `.fol` or `.fsty` file as a parsed
 //!   [`Source`]. The host edits it in place ([`Source::edit`]), which reparses
 //!   only the smallest enclosing block, and sets the result.
-//! - A [`DataFile`] holds the bytes of an image or data file.
+//! - A [`DataFile`] holds the contents of an image or data file: bytes the
+//!   host set, or a file on disk that is read the first time a build names
+//!   it ([`FileContent`], SPEC §12.1).
 //!
 //! The variant and the target are not settable inputs but keys: a [`Build`]
 //! interns a project with a target and an optional variant, and the
@@ -45,7 +47,8 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Registry, Target};
@@ -144,9 +147,109 @@ pub struct DataFile {
     /// Where the file is in the project. Never changes.
     #[returns(ref)]
     pub path: ProjectPath,
-    /// The file's contents. [`Durability::LOW`].
+    /// The file's contents, read on demand when they are on disk.
+    /// [`Durability::LOW`].
     #[returns(ref)]
-    pub bytes: Bytes,
+    pub content: FileContent,
+}
+
+impl DataFile {
+    /// The file's contents, read from disk if no query has read them yet;
+    /// empty when they cannot be read, which [`data_file`] reports.
+    pub fn bytes(self, db: &dyn Db) -> &Bytes {
+        static EMPTY: LazyLock<Bytes> = LazyLock::new(|| Bytes::from(Vec::new()));
+        self.content(db).load().unwrap_or(&EMPTY)
+    }
+}
+
+/// The contents of an image or data file: bytes the host set, or a file on
+/// disk, read the first time a query asks for it and then kept, so that the
+/// queries of a revision agree on it (SPEC §12.1). A file that changes on
+/// disk is seen when the host sets a new content, as a watcher does on a
+/// file-system event. Cheap to clone: clones share what was read.
+#[derive(Clone)]
+pub struct FileContent(Arc<Content>);
+
+enum Content {
+    Bytes(Bytes),
+    Disk {
+        path: PathBuf,
+        read: OnceLock<Result<Bytes, EcoString>>,
+    },
+}
+
+impl FileContent {
+    /// Contents the host has in memory.
+    pub fn new(bytes: impl Into<Bytes>) -> Self {
+        Self(Arc::new(Content::Bytes(bytes.into())))
+    }
+
+    /// The contents of a file on disk, not read until a query asks for
+    /// them.
+    pub fn on_disk(path: impl Into<PathBuf>) -> Self {
+        Self(Arc::new(Content::Disk {
+            path: path.into(),
+            read: OnceLock::new(),
+        }))
+    }
+
+    /// The contents of a file on disk, read now.
+    pub fn read(path: impl Into<PathBuf>) -> Self {
+        let content = Self::on_disk(path);
+        let _ = content.load();
+        content
+    }
+
+    /// The bytes, read from disk on the first call; `None` when the file
+    /// cannot be read.
+    pub fn load(&self) -> Option<&Bytes> {
+        self.try_load().ok()
+    }
+
+    /// The bytes, read from disk on the first call, or why the file cannot
+    /// be read.
+    pub fn try_load(&self) -> Result<&Bytes, &EcoString> {
+        match &*self.0 {
+            Content::Bytes(bytes) => Ok(bytes),
+            Content::Disk { path, read } => read
+                .get_or_init(|| {
+                    std::fs::read(path)
+                        .map(Bytes::from)
+                        .map_err(|e| eco_format!("{e}"))
+                })
+                .as_ref(),
+        }
+    }
+
+    /// What reading gave, without reading: `None` when the contents are on
+    /// disk and nothing has asked for them yet.
+    pub fn loaded(&self) -> Option<Result<&Bytes, &EcoString>> {
+        match &*self.0 {
+            Content::Bytes(bytes) => Some(Ok(bytes)),
+            Content::Disk { read, .. } => read.get().map(Result::as_ref),
+        }
+    }
+
+    /// The file on disk the contents come from, if they do.
+    pub fn disk_path(&self) -> Option<&PathBuf> {
+        match &*self.0 {
+            Content::Bytes(_) => None,
+            Content::Disk { path, .. } => Some(path),
+        }
+    }
+}
+
+impl Debug for FileContent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &*self.0 {
+            Content::Bytes(bytes) => bytes.fmt(f),
+            Content::Disk { path, read } => match read.get() {
+                Some(Ok(bytes)) => write!(f, "{bytes:?} from {}", path.display()),
+                Some(Err(e)) => write!(f, "unreadable {}: {e}", path.display()),
+                None => write!(f, "unread {}", path.display()),
+            },
+        }
+    }
 }
 
 /// One output of a project: its target, and its variant, or none when the
@@ -326,10 +429,23 @@ pub fn source_file(db: &dyn Db, project: Project, path: ProjectPath) -> Option<S
     project.sources(db).get(&path).copied()
 }
 
-/// The data file at a path, if the project has one.
+/// The data file at a path, if the project has one and it can be read.
+/// Reads it if no query has yet (SPEC §12.1), and reports a file that
+/// cannot be read, which is then not found.
 #[salsa::tracked(returns(copy))]
 pub fn data_file(db: &dyn Db, project: Project, path: ProjectPath) -> Option<DataFile> {
-    project.files(db).get(&path).copied()
+    let file = project.files(db).get(&path).copied()?;
+    if let Err(why) = file.content(db).try_load() {
+        diag::report(
+            db,
+            Diagnostic::error(
+                DiagSpan::detached(),
+                eco_format!("cannot read `{}`: {why}", path.as_str()),
+            ),
+        );
+        return None;
+    }
+    Some(file)
 }
 
 /// The files a source names literally: string paths of `#import` and
