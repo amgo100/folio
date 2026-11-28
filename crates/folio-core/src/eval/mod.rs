@@ -121,6 +121,7 @@ pub use self::value::{
     Angle, Applied, Arg, Args, Array, Closure, Dict, Duration, Fraction, Func, Length, Module,
     NativeFunc, Scope, Value,
 };
+pub(crate) use self::vm::float_spelling;
 
 use self::error::Stop;
 use self::vm::Vm;

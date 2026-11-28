@@ -139,6 +139,113 @@ fn quantities_in_text() {
     );
 }
 
+/// A float written as the argument of `qty` or `num` in text keeps its
+/// digits and its power of ten, as it would in an equation (D-324-1); a
+/// float computed or bound to a name is written in the shorter of its plain
+/// and power-of-ten forms (D-324-2).
+#[test]
+fn floats_in_text_as_written() {
+    assert_eq!(
+        formulas(
+            "#qty(3e8, \"m s^-1\") #qty(3.00e8, \"m s^-1\") #qty(300000000.0, \"m s^-1\") \
+             #qty(2.0, \"m\") #qty(-1.6e-19, \"C\") #qty(1e8, \"m\", pm: 1e6) \
+             #num(+1.5e3)"
+        ),
+        [
+            "[qty(3e8, unit: \"m s^-1\")]",
+            "[qty(3.00e8, unit: \"m s^-1\")]",
+            "[qty(300000000.0, unit: \"m s^-1\")]",
+            "[qty(2.0, unit: \"m\")]",
+            "[qty(-1.6e-19, unit: \"C\")]",
+            "[qty(1e8, pm: 1e6, unit: \"m\")]",
+            "[qty(1.5e3)]",
+        ]
+    );
+    // A script's function hands the spelling on, in text and in an
+    // equation alike, and code after `#` in an equation keeps it too.
+    assert_eq!(
+        formulas(
+            "#let speed(..a) = qty(..a, \"m s^-1\")\n\
+             #speed(3.00e8) $c = speed(#3.00e8)$ $qty(#3.00e8, \"m\")$ \
+             #qty(2.31, \"m\", pm: 0.020)"
+        ),
+        [
+            "[qty(3.00e8, unit: \"m s^-1\")]",
+            "[c, rel(=), qty(3.00e8, unit: \"m s^-1\")]",
+            "[qty(3.00e8, unit: \"m\")]",
+            "[qty(2.31, pm: 0.020, unit: \"m\")]",
+        ]
+    );
+    // Text matches the same call in an equation.
+    assert_eq!(
+        formulas("$qty(3.00e8, \"m s^-1\")$ $qty(2.0, \"m\")$"),
+        ["[qty(3.00e8, unit: \"m s^-1\")]", "[qty(2.0, unit: \"m\")]",]
+    );
+    assert_eq!(
+        formulas(
+            "#let c = 3.00e8\n\
+             #qty(c, \"m s^-1\") #qty(2.0 * 1.5e8, \"m\") #qty(0.5 * 3000.0, \"J\") \
+             #qty(1.2e5 * 1.0, \"Pa\") #num(-(2.0)) $qty(#(0.25 * 0.004), \"m\")$"
+        ),
+        [
+            "[qty(3e8, unit: \"m s^-1\")]",
+            "[qty(3e8, unit: \"m\")]",
+            "[qty(1500, unit: \"J\")]",
+            "[qty(1.2e5, unit: \"Pa\")]",
+            "[qty(-2)]",
+            "[qty(1e-3, unit: \"m\")]",
+        ]
+    );
+}
+
+/// An SI prefix before `ohm` names the prefixed unit; a symbol that ends in
+/// a name but cannot be read is an error at that factor.
+#[test]
+fn prefixed_unit_names() {
+    assert_eq!(
+        formulas(
+            "#qty(4.7, \"kohm\") #qty(2.2, \"Mohm\") $qty(15, \"mohm\")$ #unit(\"microohm m\")"
+        ),
+        [
+            "[qty(4.7, unit: \"kΩ\")]",
+            "[qty(2.2, unit: \"MΩ\")]",
+            "[qty(15, unit: \"mΩ\")]",
+            "[qty(unit: \"µΩ m\")]",
+        ]
+    );
+    assert_eq!(
+        errors("#qty(4.7, \"kiloohm\") $qty(20, \"m kdegC\")$"),
+        [
+            // In text the error points at the whole string, as for any unit.
+            error("`kilo` is not an SI prefix of `ohm`", "\"kiloohm\""),
+            error("`degC` takes no prefix, so `kdegC` is not a unit", "kdegC"),
+        ]
+    );
+    // A literal that cannot be read says why, in text as in an equation.
+    assert_eq!(
+        errors(
+            "#let len(..a) = qty(..a, \"m\")\n\
+             #qty(1e10000, \"m\") $qty(1e10000, \"m\")$ $len(#1e10000)$ \
+             #qty(2.0, \"m\", pm: -0.10, pm@markscheme: 0.2)"
+        ),
+        [
+            error(
+                "a power of ten can be at most 9999 in either direction",
+                "1e10000"
+            ),
+            error(
+                "a power of ten can be at most 9999 in either direction",
+                "1e10000"
+            ),
+            error(
+                "a power of ten can be at most 9999 in either direction",
+                "1e10000"
+            ),
+            error("an uncertainty cannot be negative", "pm: -0.10"),
+        ]
+    );
+}
+
 #[test]
 fn quantity_errors() {
     assert_eq!(

@@ -1554,13 +1554,16 @@ impl Args {
 
     /// The arguments with the spans of the call and of each argument
     /// detached, which makes the same call at two sites equal. The values
-    /// keep their own spans.
+    /// keep their own spans. The spellings of float literals go too: a
+    /// closure without a sink binds its arguments' values, which have none,
+    /// so `f(2.0)` and `f(2.00)` are the same call.
     pub(crate) fn without_spans(&self) -> Self {
         let items = self
             .items
             .iter()
             .map(|arg| Arg {
                 span: Span::detached(),
+                spelling: None,
                 ..arg.clone()
             })
             .collect();
@@ -1615,6 +1618,13 @@ pub struct Arg {
     pub scope: Option<EcoString>,
     /// The value.
     pub value: Value,
+    /// The text of a float literal written as the argument, with its
+    /// sign: `3.00e8`, `-1.6e-19`. `qty` and `num` write the number as
+    /// it was written (D-324-1); a float from anywhere else has none. It is
+    /// part of the argument's identity, so that a memoised call that hands
+    /// its arguments on (`let f(..a) = qty(..a)`) is not reused for another
+    /// spelling of the same float.
+    pub spelling: Option<EcoString>,
 }
 
 #[cfg(test)]
@@ -1660,6 +1670,7 @@ mod tests {
                 name: None,
                 scope: None,
                 value: nested(2),
+                spelling: None,
             }]),
         );
         assert_eq!(args.depth(), 3);
@@ -1795,6 +1806,7 @@ mod tests {
             name: None,
             scope: None,
             value,
+            spelling: None,
         };
         let mut args = Args::new(
             Span::detached(),
@@ -1835,6 +1847,7 @@ mod tests {
                 name: None,
                 scope: None,
                 value: value.clone(),
+                spelling: None,
             };
             Args::new(Span::detached(), EcoVec::from([arg.clone(), arg]))
         };

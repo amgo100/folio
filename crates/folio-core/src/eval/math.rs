@@ -483,11 +483,16 @@ impl Vm<'_> {
                 },
                 false => self.math_arg_value(expr)?,
             };
+            let spelling = match value {
+                Value::Float(_) => math_spelling(expr),
+                _ => None,
+            };
             items.push(Arg {
                 span,
                 name,
                 scope: None,
                 value,
+                spelling,
             });
         }
         Ok(Args::new(args.span(), items.into_iter().collect()))
@@ -747,17 +752,16 @@ impl Vm<'_> {
                 Ok(number) => return Ok(number),
                 // A literal that is out of range says so: one with too
                 // many digits or too large a power of ten.
-                Err(message)
-                    if text.starts_with(|c: char| c.is_ascii_digit() || "-−+.".contains(c))
-                        && text
-                            .chars()
-                            .all(|c| c.is_ascii_digit() || "-−+.eE".contains(c))
-                        && text.contains(|c: char| c.is_ascii_digit()) =>
-                {
+                Err(message) if looks_like_literal(&text) => {
                     return Err(EvalError::new(span, message).into());
                 }
                 Err(_) => {}
             }
+        }
+        // A float literal in code keeps its spelling too: `#3.00e8`.
+        if let Some(spelling) = super::float_spelling(expr) {
+            return Number::parse(&spelling)
+                .map_err(|message| EvalError::new(span, message).into());
         }
         match self.value_in_math(expr)? {
             Some(value) => number_of(&value, span),
@@ -1045,6 +1049,29 @@ fn literal_text(expr: ast::Expr<'_>) -> Option<String> {
             .filter(|c| !c.is_whitespace())
             .collect(),
     )
+}
+
+/// The spelling of a float literal as an argument in an equation, which a
+/// script's function hands on to `qty` or `num` (D-324-1): a decimal
+/// literal of math as written (`3.00e8`), or a float literal of code after
+/// `#`.
+/// A literal that is out of range keeps its spelling, so that `qty` says
+/// why it cannot read it.
+fn math_spelling(expr: ast::Expr<'_>) -> Option<EcoString> {
+    match literal_text(expr) {
+        Some(text) => looks_like_literal(&text).then(|| text.into()),
+        None => super::float_spelling(expr),
+    }
+}
+
+/// Whether the text of a math expression is shaped like a decimal literal,
+/// read or not: `9.81`, `-6.02e23`, `1e99999`.
+fn looks_like_literal(text: &str) -> bool {
+    text.starts_with(|c: char| c.is_ascii_digit() || "-−+.".contains(c))
+        && text
+            .chars()
+            .all(|c| c.is_ascii_digit() || "-−+.eE".contains(c))
+        && text.contains(|c: char| c.is_ascii_digit())
 }
 
 /// A number as a script's value: an integer when it is one that fits, a

@@ -1372,6 +1372,7 @@ impl<'a> Vm<'a> {
                     name: None,
                     scope: None,
                     value: self.expr(expr)?,
+                    spelling: float_spelling(expr),
                 }),
                 ast::Arg::Named(named) => {
                     let name = named.name().get().clone();
@@ -1392,6 +1393,7 @@ impl<'a> Vm<'a> {
                         name: Some(name),
                         scope: named.scope().map(|s| s.get().clone()),
                         value,
+                        spelling: float_spelling(named.expr()),
                     });
                 }
                 ast::Arg::Spread(spread) => match self.expr(spread.expr())? {
@@ -1403,6 +1405,7 @@ impl<'a> Vm<'a> {
                             name: None,
                             scope: None,
                             value,
+                            spelling: None,
                         }));
                     }
                     Value::Dict(dict) => {
@@ -1412,6 +1415,7 @@ impl<'a> Vm<'a> {
                             name: Some(key.clone()),
                             scope: None,
                             value: value.clone(),
+                            spelling: None,
                         }));
                     }
                     Value::Args(args) => {
@@ -2031,6 +2035,7 @@ impl Vm<'_> {
                 name: Some(field.into()),
                 scope: None,
                 value,
+                spelling: None,
             })
             .collect();
         self.instantiate(&name, Args::new(span, items), span)
@@ -2122,6 +2127,27 @@ fn label_without_element(span: Span) -> EvalError {
     EvalError::new(span, "a label must follow an element").with_hint(
         "labels attach to the element before them, such as a heading, a figure or a call",
     )
+}
+
+/// The text of a float literal written as an argument, with a sign before
+/// it if there is one: `3.00e8`, `-1.6e-19`. `qty` and `num` write the
+/// number as it was written (D-324-1). `None` for any other expression.
+pub(crate) fn float_spelling(expr: ast::Expr<'_>) -> Option<EcoString> {
+    match expr {
+        ast::Expr::Float(float) => Some(float.to_untyped().leaf_text().clone()),
+        ast::Expr::Unary(unary) => {
+            let sign = match unary.op() {
+                ast::UnOp::Neg => "-",
+                ast::UnOp::Pos => "",
+                ast::UnOp::Not => return None,
+            };
+            let ast::Expr::Float(float) = unary.expr() else {
+                return None;
+            };
+            Some(eco_format!("{sign}{}", float.to_untyped().leaf_text()))
+        }
+        _ => None,
+    }
 }
 
 fn steps_exceeded(span: Span, limits: Limits) -> EvalError {

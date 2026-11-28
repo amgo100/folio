@@ -135,24 +135,24 @@ fn num_func(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 }
 
 fn quantity_func(vm: &mut Vm<'_>, args: &mut Args, value: bool, unit: bool) -> EvalResult<Value> {
-    use super::math::{Spanned, number_of, quantity};
+    use super::math::{Spanned, quantity};
     let span = args.span;
     let mut positional = |what: &str| match args.eat() {
-        Some(arg) => Ok((arg.value, arg.span)),
+        Some(arg) => Ok(arg),
         None => Err(EvalError::new(
             span,
             eco_format!("missing argument: {what}"),
         )),
     };
     let value = if value {
-        let (v, at) = positional("value")?;
-        Some((number_of(&v, at)?, at))
+        let arg = positional("value")?;
+        Some((spelled_number(&arg)?, arg.span))
     } else {
         None
     };
     let unit = if unit {
-        let (v, at) = positional("unit")?;
-        Some(Spanned::new(v, at))
+        let arg = positional("unit")?;
+        Some(Spanned::new(arg.value, arg.span))
     } else {
         None
     };
@@ -162,12 +162,28 @@ fn quantity_func(vm: &mut Vm<'_>, args: &mut Args, value: bool, unit: bool) -> E
             args.items()
                 .iter()
                 .rev()
-                .find(|arg| arg.name.as_deref() == Some(name))
+                .find(|arg| arg.name.as_deref() == Some(name) && arg.scope.is_none())
                 .map_or(span, |arg| arg.span)
         };
         let pm_at = at(args, "pm");
+        // The last `pm:` wins, as `named` takes it; its spelling with it.
+        let pm_spelling = args
+            .items()
+            .iter()
+            .rev()
+            .find(|arg| arg.name.as_deref() == Some("pm") && arg.scope.is_none())
+            .and_then(|arg| arg.spelling.clone());
         let pm = match args.named::<Value>("pm")? {
-            Some(v) => Some((number_of(&v, pm_at)?, pm_at)),
+            Some(v) => Some((
+                spelled_number(&Arg {
+                    span: pm_at,
+                    name: None,
+                    scope: None,
+                    value: v,
+                    spelling: pm_spelling,
+                })?,
+                pm_at,
+            )),
             None => None,
         };
         let digits_at = at(args, "digits");
@@ -182,6 +198,19 @@ fn quantity_func(vm: &mut Vm<'_>, args: &mut Args, value: bool, unit: bool) -> E
         span,
     );
     Ok(Value::Content(vm.math_content(formula, false, span)?))
+}
+
+/// The number of an argument of `qty` or `num` in text: a float literal as
+/// it was written, which keeps its digits and its power of ten as in an
+/// equation (`3.00e8`, `2.0`; D-324-1), or the number its value gives.
+/// A literal that cannot be read (too many digits, too large a power of
+/// ten) is an error that says why, as in an equation.
+fn spelled_number(arg: &Arg) -> EvalResult<folio_math::Number> {
+    if let (Value::Float(_), Some(spelling)) = (&arg.value, &arg.spelling) {
+        return folio_math::Number::parse(spelling)
+            .map_err(|message| EvalError::new(arg.span, message).into());
+    }
+    super::math::number_of(&arg.value, arg.span)
 }
 
 /// The `calc` module. Its transcendental functions come from `libm`, not
@@ -1125,6 +1154,7 @@ fn call_with(vm: &mut Vm<'_>, func: &Func, values: &[Value], span: Span) -> Eval
                 name: None,
                 scope: None,
                 value: value.clone(),
+                spelling: None,
             })
             .collect(),
     );
