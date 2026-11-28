@@ -2,11 +2,12 @@
 //!
 //! SVG figures reach PDF through `usvg`, `svgtypes`, `kurbo`,
 //! `tiny-skia-path`, `resvg` and `tiny-skia`, and PDF figures converted to
-//! SVG through `hayro-interpret` and `hayro-syntax`, whose floating-point
-//! code called std's transcendental functions (`sin`, `atan2`, `powf`, …). Those
-//! come from the platform's maths library, so the same drawing could give
-//! other PDF bytes on another machine. Folio builds patched copies that call
-//! the `libm` crate instead (`scripts/patch-third-party.sh`,
+//! SVG through `hayro-interpret` and `hayro-syntax` (with `moxcms` for
+//! colour and `hayro-jpeg2000` for JPEG 2000 images), whose floating-point
+//! code called std's transcendental functions (`sin`, `atan2`, `powf`, …).
+//! Those come from the platform's maths library, so the same drawing could
+//! give other PDF bytes on another machine. Folio builds patched copies that
+//! call the `libm` crate instead (`scripts/patch-third-party.sh`,
 //! `third_party/README.md`). This test fails when:
 //!
 //! - a patched copy calls one of the functions `clippy.toml` disallows in
@@ -20,6 +21,11 @@
 //!   aarch64 before the patches (#300);
 //! - a calculator function's colour in the corpus's PDF figure is not the
 //!   one `libm` computes (#304).
+//!
+//! moxcms and hayro-jpeg2000 also fused multiply-adds on some targets only
+//! and picked SIMD paths by CPU at run time (#312). Their copies always
+//! round a product and a sum apart and refuse to build those paths, and
+//! `colour.rs` checks what they compute.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,8 +55,9 @@ const ALLOWED: &[(&str, &str, &str, usize, &str)] = &[(
 )];
 
 /// The patched crates whose patch needs no `libm`: `hayro-syntax` only
-/// multiplies out a `powi`.
-const WITHOUT_LIBM: &[&str] = &["hayro-syntax"];
+/// multiplies out a `powi`, and `hayro-jpeg2000` only unfuses a
+/// multiply-add and turns its SIMD paths off.
+const WITHOUT_LIBM: &[&str] = &["hayro-jpeg2000", "hayro-syntax"];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")

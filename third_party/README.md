@@ -4,8 +4,9 @@ This directory holds what Folio takes from other projects.
 
 - `typst/`: the licence and notice of Typst, from which `folio-syntax` and
   `folio-math` derive (see `NOTICE` at the repository root).
-- `hayro-interpret/`, `hayro-syntax/`, `kurbo/`, `resvg/`, `svgtypes/`,
-  `tiny-skia/`, `tiny-skia-path/`, `usvg/`: patched copies of crates.io
+- `hayro-interpret/`, `hayro-jpeg2000/`, `hayro-syntax/`, `kurbo/`,
+  `moxcms/`, `resvg/`, `svgtypes/`, `tiny-skia/`, `tiny-skia-path/`,
+  `usvg/`: patched copies of crates.io
   releases, which the workspace uses in place of the releases through
   `[patch.crates-io]` in the root `Cargo.toml` (and in `fuzz/Cargo.toml`).
 
@@ -30,6 +31,26 @@ calculator functions called the same functions, and are patched the same
 way (#304). `tests/corpus/figures/assets/spectrum.pdf`, written by
 `spectrum.py` beside it, exercises them.
 
+`hayro-interpret` converts ICC-based and Lab colour, and DeviceCMYK through
+its CMYK profile, with `moxcms`, and `hayro-syntax` decodes JPEG 2000
+images with `hayro-jpeg2000`. Both fused multiply-adds on some targets only
+(aarch64 always, x86-64 when built with FMA) and picked SIMD paths by CPU
+at run time, and moxcms took powers and cube roots from `pxfm`, which also
+picks a path by CPU: the same figure converted to three different SVGs on
+aarch64, on x86-64 with SSE 4.1 or later, and on baseline x86-64 (#312).
+Their copies always round a product and a sum apart, as baseline x86-64
+did, refuse to build their SIMD features (moxcms's `avx`, `sse`, `avx512`
+and `neon`, hayro-jpeg2000's `simd`; the patched `hayro-interpret` and
+`hayro-syntax` manifests no longer ask for them), and moxcms computes
+pxfm's functions with `libm`. `crates/folio-pdf/tests/data/colour.pdf`,
+written by `colour.py` beside it, runs every 8-bit level through these
+paths, and `cargo test -p folio-pdf --test colour` compares a digest of
+its conversion with the one recorded on x86-64. It passes unchanged under
+QEMU on aarch64 and on x86-64 CPUs without AVX2 or SSE 4.1 (`qemu64`,
+`Nehalem`); before the patch, each of the three gave its own digest.
+`pxfm` itself is not patched: moxcms keeps only its `const fn`s, which the
+compiler evaluates the same on every host.
+
 PDF figures come from files Folio does not trust (SPEC §14.3), and the two
 hayro crates are patched for that too (#333): `hayro-syntax` reads arrays
 and dictionaries at most 256 deep and decodes no JPEG 2000, JBIG2 or CCITT image larger than
@@ -49,8 +70,10 @@ changes, and every changed file carries a comment that starts with
 | Crate | Version | Licence | Patch |
 |---|---|---|---|
 | hayro-interpret | 0.7.0 | Apache-2.0 OR MIT | `patches/hayro-interpret.patch` |
+| hayro-jpeg2000 | 0.3.5 | Apache-2.0 OR MIT | `patches/hayro-jpeg2000.patch` |
 | hayro-syntax | 0.7.2 | Apache-2.0 OR MIT | `patches/hayro-syntax.patch` |
 | kurbo | 0.13.1 | Apache-2.0 OR MIT | `patches/kurbo.patch` |
+| moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 | `patches/moxcms.patch` |
 | resvg | 0.47.0 | Apache-2.0 OR MIT | `patches/resvg.patch` |
 | svgtypes | 0.16.2 | Apache-2.0 OR MIT | `patches/svgtypes.patch` |
 | tiny-skia | 0.12.0 | BSD-3-Clause | `patches/tiny-skia.patch` |
@@ -63,16 +86,17 @@ the checksum `Cargo.lock` recorded for it before the patch.
 the float functions `clippy.toml` disallows outside comments and tests,
 when either workspace stops using a copy, and when an arrowhead's rotation
 or a calculator function's colour in `spectrum.pdf` is not the one `libm`
-gives.
+gives; `cargo test -p folio-pdf --test colour` fails when moxcms or
+hayro-jpeg2000 converts `colour.pdf` otherwise than recorded.
 
 `polycool`, which kurbo uses to find polynomial roots, is not patched: its
 only such calls outside its tests are `2.0f64.powi(-515)`, a power of two,
 which every way of computing `powi` gives exactly.
 
 Still unpatched, and outside what the corpus uses: krilla's sweep
-gradients (one `atan2`; Folio draws none), and `moxcms`, which converts
-Lab and ICC-based colour in PDF figures, fuses multiply-adds on aarch64
-only and picks SIMD paths by CPU at run time (#312 tracks it).
+gradients (one `atan2`; Folio draws none). `zune-jpeg`, which decodes
+JPEG images in PDF figures, and `hayro-jbig2` keep their SIMD paths, which
+compute in integers only.
 
 The copies are not workspace members (`exclude` in the root `Cargo.toml`):
 they keep their own lints, and `cargo test --workspace` does not run their
@@ -99,7 +123,29 @@ scripts/patch-third-party.sh           # rebuild every copy from crates.io
    again, update the crate's `FOLIO.md` and the table above, and run
    `cargo test -p folio-pdf --test third_party` and `scripts/check.sh`.
 4. Rebuild the corpus on aarch64 as `tests/README.md` describes, to check
-   that the digests still match x86-64.
+   that the digests still match x86-64, and run
+   `cargo test -p folio-pdf --test colour` there and on x86-64 without
+   AVX2 (below).
+
+### Checking on other CPUs
+
+`cargo test -p folio-pdf --test colour` must pass unchanged on aarch64 and
+on x86-64 CPUs without AVX2. On x86-64 Linux, QEMU's user-mode emulation
+runs it on both (the packages and target of `tests/README.md`'s aarch64
+check):
+
+```bash
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+cargo test -p folio-pdf --test colour --no-run --target aarch64-unknown-linux-gnu
+QEMU_LD_PREFIX=/usr/aarch64-linux-gnu qemu-aarch64 \
+    target/aarch64-unknown-linux-gnu/debug/deps/colour-<hash>
+cargo test -p folio-pdf --test colour --no-run
+for cpu in qemu64 Nehalem Haswell; do
+    qemu-x86_64 -cpu $cpu target/debug/deps/colour-<hash>
+done
+```
+
+`cargo test --no-run` prints the path of each test binary.
 
 When upstream gives these crates a way to use `libm` with std, the copies
 can go.
