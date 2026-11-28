@@ -16,6 +16,10 @@
 //! ([`folio::layout::DETAIL_CODES`]: underfull lines, relaxed widows,
 //! orphans, keeps and unbreakable blocks) unless `--layout` asks for them
 //! (SPEC §7.9).
+//!
+//! With `--leaks`, and for every project in strict mode, it also checks
+//! that what each variant does not show reaches none of its outputs (SPEC
+//! §6.4, [`folio::check_leaks`]); a leak is an error.
 
 use std::process::ExitCode;
 
@@ -24,12 +28,13 @@ use folio::LayoutDiagnostics;
 use super::ProjectArgs;
 use super::build::{Mode, run_command};
 
-/// Runs `folio check`, with every layout diagnostic when `layout` is set.
-pub(crate) fn check(args: &ProjectArgs, layout: bool) -> ExitCode {
+/// Runs `folio check`, with every layout diagnostic when `layout` is set
+/// and the leak check when `leaks` is.
+pub(crate) fn check(args: &ProjectArgs, layout: bool, leaks: bool) -> ExitCode {
     let layout = if layout {
         LayoutDiagnostics::All
     } else {
         LayoutDiagnostics::Serious
     };
-    run_command(args, Mode::Check, layout)
+    run_command(args, Mode::Check, layout, leaks)
 }

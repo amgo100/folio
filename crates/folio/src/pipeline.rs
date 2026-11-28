@@ -27,17 +27,16 @@ use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{FontId, Location, QualifiedName, SourceRef, Target};
 use folio_core::db::{Build, Bytes, Db, build_output, source_file};
 use folio_core::diag::{self, Diagnostic};
-use folio_core::eval::Value;
+use folio_core::eval::{Content, Element, Node, Value};
 use folio_core::fonts::{Fonts, fonts};
 use folio_core::layout::{GridLayout, Pages, lines, pages};
-use folio_core::model::document;
-use folio_core::pipeline::resolution;
 use folio_core::pipeline::step_styled;
+use folio_core::pipeline::{resolution, selected_root};
 use folio_core::project::ProjectPath;
 use folio_core::resolve::Resolution;
 use folio_core::span_map::{source_ref, span};
 use folio_core::text::{TableRole, Text, TextBlock, TextFlow, TextMath, text};
-use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Role, Span2, Tag};
+use folio_pdf::{Destination, Link, ListKind, Navigation, Preflight, Provenance, Role, Span2, Tag};
 use folio_syntax::{DiagSpan, Span, SubRange};
 
 /// What compiling a build produces, without its diagnostics, which
@@ -127,15 +126,15 @@ pub(crate) fn check_target(db: &dyn Db, build: Build<'_>) -> bool {
 /// reported.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct PdfInput {
-    structure: Tag,
-    info: folio_pdf::Info,
+    pub(crate) structure: Tag,
+    pub(crate) info: folio_pdf::Info,
     navigation: Navigation,
-    whole: DiagSpan,
+    pub(crate) whole: DiagSpan,
 }
 
 impl PdfInput {
     /// The document the writer writes, of these pages and fonts.
-    fn document<'a>(
+    pub(crate) fn document<'a>(
         &'a self,
         pages: &'a Pages,
         fonts: &'a FontTable<'a>,
@@ -174,19 +173,15 @@ impl PdfInput {
 pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let text = text(db, build).as_ref()?;
     let project = build.project(db);
-    let doc = document(
-        db,
-        project,
-        build.variant(db).clone(),
-        build.version(db).clone(),
-    )
-    .as_ref()?;
+    // The document tree as the variant shows it: a field Select left out
+    // or replaced never reaches the metadata (SPEC §6.4).
+    let root = selected_root(db, build)?;
     let grids: Vec<GridLayout> = lines(db, build)
         .as_ref()
         .map(|l| l.grids.iter().cloned().collect())
         .unwrap_or_default();
     let structure = structure(&text.root, text, &grids);
-    let plain = |field: &str| match doc.root.field(field) {
+    let plain = |field: &str| match root.field(field) {
         Some(Value::Content(content)) => Some(content.plain_text()),
         Some(Value::Str(text)) => Some(text.clone()),
         _ => None,
@@ -194,26 +189,112 @@ pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let lang = project.manifest(db).project.lang.v.as_str();
     // The title as it is shown, with the language's quotation marks, if
     // it is shown.
-    let shown = text.root.children.iter().find_map(|child| match child {
+    let title_block = text.root.children.iter().find_map(|child| match child {
         TextFlow::Block(block) if block.part.as_ref().is_some_and(|p| p.as_str() == "title") => {
-            block_text(block, text)
+            Some(block)
         }
         _ => None,
     });
+    let shown = title_block.and_then(|block| block_text(block, text));
+    // Where the metadata was read from, for the leak check (SPEC §6.4).
+    let mut provenance = Vec::new();
+    let title = match shown {
+        Some(title) => {
+            if let Some(block) = title_block {
+                block_provenance(block, text, &mut provenance);
+            }
+            Some(title)
+        }
+        None => {
+            field_provenance(root, "title", &mut provenance);
+            plain("title").and_then(clean)
+        }
+    };
+    let subject = plain("subject").and_then(clean);
+    if subject.is_some() {
+        field_provenance(root, "subject", &mut provenance);
+    }
     let info = folio_pdf::Info {
-        title: shown.or_else(|| plain("title").and_then(clean)),
-        subject: plain("subject").and_then(clean),
+        title,
+        subject,
         lang: Some(lang.into()),
+        provenance,
     };
     let navigation = resolution(db, build).map(navigation).unwrap_or_default();
     // Problems without a source of their own concern the document.
-    let whole = document_span(db, build, doc.root.span);
+    let whole = document_span(db, build, root.span);
     Some(PdfInput {
         structure,
         info,
         navigation,
         whole,
     })
+}
+
+/// Notes where the text of a block's paragraphs came from: each source
+/// node with the innermost element instance it is in.
+fn block_provenance(block: &TextBlock, text: &Text, out: &mut Vec<Provenance>) {
+    for child in &block.children {
+        match child {
+            TextFlow::Block(inner) => block_provenance(inner, text, out),
+            TextFlow::Paragraph(index) => {
+                let paragraph = &text.paragraphs[*index];
+                for source in &paragraph.sources {
+                    let location = if source.location == Location::DETACHED {
+                        paragraph.location
+                    } else {
+                        source.location
+                    };
+                    out.push(Provenance {
+                        source: source_ref(source.span),
+                        location,
+                    });
+                }
+                for object in &paragraph.objects {
+                    out.push(Provenance {
+                        source: source_ref(object.span),
+                        location: object.location,
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Notes where the text of a field of the document's root element came
+/// from: the root for a string, and the nodes of content.
+fn field_provenance(root: &Element, field: &str, out: &mut Vec<Provenance>) {
+    fn walk(content: &Content, location: Location, out: &mut Vec<Provenance>) {
+        for node in content.nodes() {
+            match node {
+                Node::Text { span, .. } => out.push(Provenance {
+                    source: source_ref(*span),
+                    location,
+                }),
+                Node::Element(element) => {
+                    out.push(Provenance {
+                        source: source_ref(element.span),
+                        location: element.location,
+                    });
+                    for (_, value) in element.fields.iter() {
+                        if let Value::Content(body) = value {
+                            walk(body, element.location, out);
+                        }
+                    }
+                }
+                Node::Slot(slot) => walk(&slot.body, location, out),
+                _ => {}
+            }
+        }
+    }
+    match root.field(field) {
+        Some(Value::Content(body)) => walk(body, root.location, out),
+        Some(_) => out.push(Provenance {
+            source: source_ref(root.span),
+            location: root.location,
+        }),
+        None => {}
+    }
 }
 
 /// The PDF writer's check of a build ([`folio_pdf::preflight`]), which
@@ -638,7 +719,7 @@ fn unsupported(db: &dyn Db, build: Build<'_>, message: impl Into<EcoString>) {
 
 /// The fonts of a build for a writer: its faces, by the index that glyph
 /// runs name them by.
-struct FontTable<'a>(&'a Fonts);
+pub(crate) struct FontTable<'a>(pub(crate) &'a Fonts);
 
 impl folio_pdf::FontTable for FontTable<'_> {
     fn font(&self, id: FontId) -> Option<folio_fonts::Font> {

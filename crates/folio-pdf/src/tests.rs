@@ -129,6 +129,7 @@ fn info(title: Option<&str>) -> Info {
         title: title.map(Into::into),
         subject: Some("Mechanics".into()),
         lang: Some("en".into()),
+        provenance: Vec::new(),
     }
 }
 

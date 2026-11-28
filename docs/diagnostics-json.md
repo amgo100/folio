@@ -76,6 +76,8 @@ Most diagnostics have no code yet. These have one:
 | `broken-keep-together` | warning | A page break falls inside a block despite `keep-together`. At the block. |
 | `broken-unbreakable` | warning | A page break falls inside a block despite `breakable: false`. At the block. |
 | `page-overflow` | warning | Something is taller than the space a page has for it. At what does not fit. |
+| `leak` | error | Something written to a variant's output comes from content the variant does not show, by its provenance (SPEC §6.4): a box, glyph, image, structure element, bookmark, alternate description, destination, link or metadata entry. At the hidden content. Reported by `folio check --leaks`, and by `folio build`, `folio check` and the outputs of `folio watch` in strict mode. |
+| `leak-text` | error | The text of an output, as a reader extracts it, holds six whole words in a row, or 30 letters and digits, of content the variant does not show (SPEC §6.4). At the hidden content. Reported as `leak` is. |
 
 `folio build` and `folio check` leave out `underfull-line`, `widow`, `orphan`, `broken-keep-with-next`, `broken-keep-together` and `broken-unbreakable`; `folio check --layout` includes them (SPEC §7.9).
 

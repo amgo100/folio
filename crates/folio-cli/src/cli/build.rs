@@ -2,6 +2,11 @@
 //! a project and writes their outputs where `[output] path` says (SPEC §6.4). `folio
 //! check` runs the same command without emitting or writing anything
 //! ([`Mode::Check`]).
+//!
+//! `folio check --leaks` checks each build for leaks (SPEC §6.4,
+//! [`folio::check_leaks`]); in a project in strict mode, compiling and
+//! checking do so without asking ([`folio::checks_leaks_by_default`]). A
+//! leak is an error, so a build that leaks writes no output.
 
 use std::collections::HashSet;
 use std::fs;
@@ -14,7 +19,8 @@ use ecow::EcoVec;
 use folio::diag::{self, Files, Resolved, TextFiles};
 use folio::{
     BuildKey, Cancelled, Compiled, Diagnostic, FileKind, FileRead, FontCache, LayoutDiagnostics,
-    Manifest, Name, ProjectPath, World, check_versioned_builds, compile_versioned_builds,
+    Manifest, Name, ProjectPath, World, check_leaks_builds, check_versioned_builds,
+    checks_leaks_by_default, compile_versioned_builds,
 };
 use folio_syntax::DiagSpan;
 use serde::Serialize;
@@ -33,14 +39,20 @@ pub(super) enum Mode {
 
 /// Runs `folio build`.
 pub(crate) fn build(args: &ProjectArgs) -> ExitCode {
-    run_command(args, Mode::Build, LayoutDiagnostics::Serious)
+    run_command(args, Mode::Build, LayoutDiagnostics::Serious, false)
 }
 
 /// Runs `folio build` or `folio check`, showing the layout diagnostics
-/// that `layout` shows.
-pub(super) fn run_command(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics) -> ExitCode {
+/// that `layout` shows, and checking for leaks when `leaks` is set or the
+/// project is in strict mode.
+pub(super) fn run_command(
+    args: &ProjectArgs,
+    mode: Mode,
+    layout: LayoutDiagnostics,
+    leaks: bool,
+) -> ExitCode {
     let mut report = Report::new(args);
-    let status = run(args, mode, layout, &mut report);
+    let status = run(args, mode, layout, leaks, &mut report);
     report.finish();
     status
 }
@@ -63,7 +75,13 @@ enum Done {
 }
 
 /// Builds or checks, reporting what it finds to `report`.
-fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut Report) -> ExitCode {
+fn run(
+    args: &ProjectArgs,
+    mode: Mode,
+    layout: LayoutDiagnostics,
+    leaks: bool,
+    report: &mut Report,
+) -> ExitCode {
     let mut fail = |message: String| {
         report.diagnostics(&TextFiles::new(), &[error(message)]);
         ExitCode::from(FAILURE)
@@ -156,6 +174,12 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
         }
     };
 
+    let mut outputs = outputs;
+    // In strict mode compiling and checking already did.
+    if leaks && !checks_leaks_by_default(&world) {
+        check_for_leaks(&world, &mut outputs);
+    }
+
     // A diagnostic of a file that several builds read is shown once.
     let mut seen: HashSet<Diagnostic> = diagnostics.iter().cloned().collect();
     // Each build, in the manifest's order, with what it compiled to, or
@@ -239,6 +263,39 @@ fn run(args: &ProjectArgs, mode: Mode, layout: LayoutDiagnostics, report: &mut R
         ExitCode::from(FAILURE)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// Checks the builds that compiled or checked for leaks (SPEC §6.4), and
+/// adds the leaks found to their diagnostics: a leak is an error, so a
+/// build that leaks writes no output.
+fn check_for_leaks(world: &World, outputs: &mut [(BuildKey, Outcome)]) {
+    let builds = outputs
+        .iter()
+        .filter(|(_, outcome)| outcome.is_ok())
+        .map(|(key, _)| key.clone());
+    for found in check_leaks_builds(world, builds) {
+        let Some((_, outcome)) = outputs.iter_mut().find(|(key, _)| *key == found.build) else {
+            continue;
+        };
+        let leaks = match found.result {
+            Ok(leaks) => leaks,
+            Err(cancelled) => {
+                *outcome = Err(cancelled);
+                continue;
+            }
+        };
+        if leaks.is_empty() {
+            continue;
+        }
+        let Ok((diagnostics, done)) = outcome else {
+            continue;
+        };
+        match done {
+            Done::Compiled(compiled) => compiled.diagnostics.extend(leaks.iter().cloned()),
+            Done::Checked { errors, .. } => *errors |= leaks.iter().any(Diagnostic::is_error),
+        }
+        diagnostics.extend(leaks);
     }
 }
 

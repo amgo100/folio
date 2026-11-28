@@ -188,8 +188,8 @@ pub(crate) struct CheckArgs {
     #[arg(long)]
     pub(crate) layout: bool,
 
-    /// Also check that content hidden from a variant does not reach its
-    /// outputs (not yet supported)
+    /// Also check that content a variant does not show reaches none of its
+    /// outputs (always on in strict mode)
     #[arg(long)]
     pub(crate) leaks: bool,
 
@@ -201,9 +201,7 @@ pub(crate) struct CheckArgs {
 impl CheckArgs {
     /// The first flag given that is not supported yet.
     fn later(&self) -> Option<&'static str> {
-        if self.leaks {
-            Some("--leaks")
-        } else if self.report.is_some() {
+        if self.report.is_some() {
             Some("--report")
         } else {
             None
@@ -312,7 +310,7 @@ pub(crate) fn run() -> ExitCode {
     }
     match cli.command {
         Command::Build(args) => build::build(&args.project),
-        Command::Check(args) => check::check(&args.project, args.layout),
+        Command::Check(args) => check::check(&args.project, args.layout, args.leaks),
         Command::Watch(args) => watch::watch(&args),
         Command::Fmt(args) => fmt::fmt(&args),
         Command::Lsp(args) => lsp::lsp(&args),
@@ -401,7 +399,8 @@ mod tests {
         assert_eq!(args.project.diagnostics, DiagnosticsFormat::Json);
         assert_eq!(args.later(), None);
         assert_eq!(parse(&["--layout"]).unwrap().later(), None);
-        assert_eq!(parse(&["--leaks"]).unwrap().later(), Some("--leaks"));
+        assert_eq!(parse(&["--leaks"]).unwrap().later(), None);
+        assert!(parse(&["--leaks"]).unwrap().leaks);
         assert_eq!(
             parse(&["--report", "overrides"]).unwrap().later(),
             Some("--report")

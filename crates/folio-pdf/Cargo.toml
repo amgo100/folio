@@ -15,6 +15,7 @@ krilla.workspace = true
 krilla-svg.workspace = true
 usvg.workspace = true
 hayro-svg.workspace = true
+kurbo = "0.13.1"
 
 [dev-dependencies]
 libm.workspace = true
