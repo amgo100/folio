@@ -129,6 +129,132 @@ fn stylesheet_tracks_and_track_functions() {
     assert!(close(columns[2], Abs::mm(58.0)), "{columns:?}");
 }
 
+/// The columns of the first grid of a world.
+fn columns_of(world: &World) -> Vec<Abs> {
+    let lines = folio::lines(world, Target::Pdf, None).unwrap().unwrap();
+    lines.grids[0].columns.to_vec()
+}
+
+/// The messages of a world's diagnostics.
+fn messages(world: &World) -> Vec<String> {
+    diagnostics(world)
+        .iter()
+        .map(|d| d.message.to_string())
+        .collect()
+}
+
+#[test]
+fn track_functions_in_content_as_in_a_stylesheet() {
+    let body = "[\n  #cell[a] #cell[b] #cell[c] #cell[d]\n]\n";
+    for (hint, declared) in [
+        (
+            "(repeat(2, 30mm), minmax(10mm, 1fr))",
+            "repeat(2, 30mm) minmax(10mm, 1fr)",
+        ),
+        ("(auto, minmax(2cm, 1fr), 25%)", "auto minmax(2cm, 1fr) 25%"),
+        (
+            "repeat(2, 1fr, minmax(auto, 2cm))",
+            "repeat(2, 1fr, minmax(auto, 2cm))",
+        ),
+        ("(minmax(1em, auto), 1fr)", "minmax(1em, auto) 1fr"),
+    ] {
+        let content = world("", &format!("#grid(column-tracks: {hint}){body}"));
+        let style = world(
+            &format!("grid.t {{ column-tracks: {declared}; }}\n"),
+            &format!("#grid(class: \"t\"){body}"),
+        );
+        assert_eq!(messages(&content), Vec::<String>::new(), "{hint}");
+        assert_eq!(messages(&style), Vec::<String>::new(), "{declared}");
+        assert_eq!(columns_of(&content), columns_of(&style), "{hint}");
+        assert_eq!(pages(&content).hashes, pages(&style).hashes, "{hint}");
+    }
+    let content = world(
+        "",
+        "#grid(column-tracks: (repeat(2, 30mm), minmax(10mm, 1fr)))[\n  #cell[a] #cell[b] #cell[c]\n]\n",
+    );
+    let columns = columns_of(&content);
+    assert_eq!(columns.len(), 3);
+    assert!(close(columns[0], Abs::mm(30.0)) && close(columns[1], Abs::mm(30.0)));
+    assert!(close(columns[2], Abs::mm(58.0)), "{columns:?}");
+}
+
+#[test]
+fn track_function_errors() {
+    let errors = |text: &str| -> Vec<String> {
+        diagnostics(&world("", text))
+            .iter()
+            .filter(|d| d.severity == folio::Severity::Error)
+            .map(|d| d.message.to_string())
+            .collect()
+    };
+    let cases = [
+        (
+            "#grid(column-tracks: minmax(1fr, 2cm))[x]\n",
+            "expected a length, a ratio or `auto`, found a fraction",
+        ),
+        (
+            "#grid(column-tracks: minmax(\"a\", 2cm))[x]\n",
+            "expected a length, a ratio or `auto`, found a str",
+        ),
+        (
+            "#grid(column-tracks: minmax(1cm))[x]\n",
+            "missing argument: the greatest size",
+        ),
+        (
+            "#grid(column-tracks: repeat(-1, 1cm))[x]\n",
+            "`repeat` takes a count of zero or more, not -1",
+        ),
+        (
+            "#grid(column-tracks: repeat(2))[x]\n",
+            "missing argument: the tracks to repeat",
+        ),
+        (
+            "#grid(column-tracks: repeat(2, repeat(2, 1cm)))[x]\n",
+            "`repeat` cannot hold another `repeat`",
+        ),
+    ];
+    for (text, message) in cases {
+        let found = errors(text);
+        assert!(
+            found.iter().any(|m| m.contains(message)),
+            "{text}: {found:?}"
+        );
+    }
+    // A track function is a value of its own.
+    let world = world("", "#repr(minmax(2cm, 1fr)) #type(repeat(2, auto))\n");
+    assert!(messages(&world).is_empty(), "{:?}", messages(&world));
+    let all: String = page_runs(&pages(&world).pages[0])
+        .into_iter()
+        .map(|(_, t)| t)
+        .collect();
+    assert!(
+        all.contains("minmax(") && all.contains("track list"),
+        "{all}"
+    );
+}
+
+#[test]
+fn a_zero_and_stylesheet_keyword_calls() {
+    // A zero without a unit is a length in content.
+    let content = world(
+        "",
+        "#grid(column-tracks: (minmax(0, 1fr), 1fr))[\n  #cell[a] #cell[b]\n]\n",
+    );
+    let length = world(
+        "",
+        "#grid(column-tracks: (minmax(0pt, 1fr), 1fr))[\n  #cell[a] #cell[b]\n]\n",
+    );
+    assert!(messages(&content).is_empty(), "{:?}", messages(&content));
+    assert_eq!(columns_of(&content), columns_of(&length));
+    // A stylesheet still writes them as keyword calls, whose arguments it
+    // does not check.
+    let style = world(
+        "grid.t { column-tracks: minmax(min-content, 1fr) 2cm; }\n",
+        "#grid(class: \"t\")[\n  #cell[a] #cell[b]\n]\n",
+    );
+    assert!(messages(&style).is_empty(), "{:?}", messages(&style));
+}
+
 #[test]
 fn spans_and_explicit_places() {
     let world = world(

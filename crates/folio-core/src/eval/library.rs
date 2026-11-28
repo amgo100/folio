@@ -123,6 +123,97 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("yaml", yaml),
 ];
 
+/// The track functions of content, `minmax` and `repeat` (SPEC §7.4), for
+/// a name no binding, global or element takes. They are not globals, so
+/// that a stylesheet, which looks its calls up among the globals, keeps
+/// writing them as keyword calls, and an element a component names so
+/// keeps its name.
+pub(super) fn track_function(name: &str) -> Option<Value> {
+    match name {
+        "minmax" => Some(native("minmax", minmax)),
+        "repeat" => Some(native("repeat", repeat)),
+        _ => None,
+    }
+}
+
+/// `minmax(2cm, 1fr)` in a `column-tracks` hint: a track at least `min`
+/// and at most `max` wide, as a stylesheet writes it. `min` is a length, a
+/// ratio or `auto`; `max` may also be a fraction.
+fn minmax(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    let mut sizes = Vec::with_capacity(2);
+    for (what, fraction) in [("the least size", false), ("the greatest size", true)] {
+        let Some(arg) = args.eat() else {
+            bail!(args.span, "missing argument: {what}");
+        };
+        sizes.push(track_size(arg.value, fraction).at(arg.span)?);
+    }
+    Ok(Value::Call(
+        track_name("minmax"),
+        sizes.into_iter().collect(),
+    ))
+}
+
+/// `repeat(3, auto)` or `repeat(2, 1fr, 2cm)` in a `column-tracks` hint:
+/// the tracks given, `n` times over, as a stylesheet writes it.
+fn repeat(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    let span = args.span;
+    let Some(count) = args.eat() else {
+        bail!(span, "missing argument: how many times");
+    };
+    let n = match count.value {
+        Value::Int(n) if n >= 0 => n,
+        Value::Int(n) => bail!(
+            count.span,
+            "`repeat` takes a count of zero or more, not {n}"
+        ),
+        other => bail!(
+            count.span,
+            "expected an integer, found {}",
+            a_type(other.type_name())
+        ),
+    };
+    let mut items = vec![Value::Int(n)];
+    while let Some(arg) = args.eat() {
+        let track = match arg.value {
+            Value::Call(name, call) if name.as_str() == "minmax" => Value::Call(name, call),
+            Value::Call(name, _) if name.as_str() == "repeat" => {
+                bail!(arg.span, "`repeat` cannot hold another `repeat`");
+            }
+            value => track_size(value, true).at(arg.span)?,
+        };
+        items.push(track);
+    }
+    if items.len() == 1 {
+        bail!(span, "missing argument: the tracks to repeat");
+    }
+    Ok(Value::Call(
+        track_name("repeat"),
+        items.into_iter().collect(),
+    ))
+}
+
+/// A size of a track: a length (a zero without a unit too), a ratio,
+/// `auto`, or with `fraction` a fraction too. A stylesheet token is not
+/// one: it is resolved for a whole hint or an item of its list only.
+fn track_size(value: Value, fraction: bool) -> StrResult<Value> {
+    match value {
+        Value::Length(_) | Value::Ratio(_) | Value::Auto => Ok(value),
+        Value::Fraction(_) if fraction => Ok(value),
+        Value::Int(0) => Ok(Value::Length(Default::default())),
+        Value::Float(f) if f.get() == 0.0 => Ok(Value::Length(Default::default())),
+        other => Err(eco_format!(
+            "expected a length, a ratio{} or `auto`, found {}",
+            if fraction { ", a fraction" } else { "" },
+            a_type(other.type_name())
+        )),
+    }
+}
+
+/// The name of a track function.
+fn track_name(name: &str) -> folio_component::Name {
+    folio_component::Name::new(name).expect("track functions have names")
+}
+
 /// `qty(9.81, "m s^-2", pm: 0.02, digits: 3)` in text: an inline formula
 /// of the quantity, as `$qty(..)$` makes it (SPEC §8.1). A value is an
 /// integer, a float, or a string that keeps its digits (`"9.80"`).

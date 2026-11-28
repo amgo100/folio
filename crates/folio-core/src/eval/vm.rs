@@ -999,6 +999,11 @@ impl<'a> Vm<'a> {
         {
             bail!(ident.span(), "{error}");
         }
+        // The track functions of content, after every other meaning of
+        // their names (SPEC §7.4).
+        if let Some(func) = library::track_function(name) {
+            return Ok(func);
+        }
         bail!(ident.span(), "unknown variable: {name}")
     }
 

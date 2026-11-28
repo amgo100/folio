@@ -70,6 +70,10 @@ pub enum Value {
     /// is evaluated once for every build, so the name is kept and the
     /// style stage resolves it against the tokens of each build.
     Token(EcoString),
+    /// A keyword call for a property value, which a layout hint passes to
+    /// the style stage as a stylesheet writes it: `minmax(2cm, 1fr)` and
+    /// `repeat(3, auto)` in `column-tracks` (SPEC §7.4).
+    Call(Name, Array),
 }
 
 impl Value {
@@ -97,6 +101,8 @@ impl Value {
             Self::Args(_) => "arguments",
             Self::Module(_) => "module",
             Self::Token(_) => "token",
+            Self::Call(name, _) if name.as_str() == "repeat" => "track list",
+            Self::Call(..) => "track",
             Self::Math(_) => "formula",
         }
     }
@@ -197,6 +203,16 @@ impl Value {
             }
             Self::Module(m) => write!(out, "<module {}>", m.name()).unwrap(),
             Self::Token(name) => write!(out, "tok.{name}").unwrap(),
+            Self::Call(name, args) => {
+                write!(out, "{name}(").unwrap();
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    arg.write_repr(out, limit)?;
+                }
+                out.push(')');
+            }
             Self::Math(formula) => {
                 // A formula is written whole, so its length is bounded
                 // first: its nodes can share one long text.
@@ -225,7 +241,7 @@ impl Value {
     pub fn depth(&self) -> u32 {
         match self {
             Self::Content(c) => c.depth(),
-            Self::Array(a) => a.depth(),
+            Self::Array(a) | Self::Call(_, a) => a.depth(),
             Self::Dict(d) => d.depth(),
             Self::Func(f) => f.depth(),
             Self::Args(a) => a.depth(),
