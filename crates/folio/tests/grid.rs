@@ -516,7 +516,10 @@ fn same_pages(a: &str, b: &str, files: &[(&str, &str)]) {
             .iter()
             .map(|d| d.message.to_string())
             .collect();
-        assert!(messages.is_empty(), "diagnostics for {text:?}: {messages:?}");
+        assert!(
+            messages.is_empty(),
+            "diagnostics for {text:?}: {messages:?}"
+        );
         pages(&world).hashes.to_vec()
     };
     assert_eq!(build(a), build(b), "{a}\n---\n{b}");
@@ -578,7 +581,10 @@ fn the_design_examples_lay_out_alike_in_both_forms() {
         &[],
     );
     // (e) A table from a data file, header included.
-    let csv = [("results.csv", "l,T,T2\n0.200,0.897,0.805\n0.250,1.003,1.006\n")];
+    let csv = [(
+        "results.csv",
+        "l,T,T2\n0.200,0.897,0.805\n0.250,1.003,1.006\n",
+    )];
     same_pages(
         "#let data = csv(\"results.csv\")\n\
          #grid(column-tracks: data.first().len(), header-rows: 1)[\n\
@@ -620,7 +626,11 @@ fn a_separator_line_marks_header_rows() {
     };
     same_pages(&long(true, ""), &long(false, ", header-rows: 1"), &[]);
     // It agrees with `header-rows`, or is an error.
-    same_pages(&long(true, ", header-rows: 1"), &long(false, ", header-rows: 1"), &[]);
+    same_pages(
+        &long(true, ", header-rows: 1"),
+        &long(false, ", header-rows: 1"),
+        &[],
+    );
     let world = world("", &long(true, ", header-rows: 2"));
     let messages: Vec<String> = diagnostics(&world)
         .iter()

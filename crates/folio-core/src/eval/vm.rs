@@ -13,8 +13,8 @@ use super::captures::{captures, free_variables};
 use super::content::{Content, Node, anchor};
 use super::decl;
 use super::element;
-use super::grid;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
+use super::grid;
 use super::library;
 use super::ops::{self, a_type};
 use super::value::{
@@ -1458,7 +1458,8 @@ impl<'a> Vm<'a> {
         for arg in args.items() {
             match arg {
                 ast::Arg::Pos(ast::Expr::ContentBlock(block)) if grid => {
-                    let (body, rows) = self.grid_body(block)?;
+                    self.step(block.span())?;
+                    let (body, rows) = self.nest(|vm| vm.grid_body(block))?;
                     header = header.or(rows);
                     items.push(Arg {
                         span: block.span(),

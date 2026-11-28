@@ -1032,7 +1032,11 @@ impl Walk {
     /// The width of each cell of a row that is a line of its own, as the
     /// row is formatted, and the line's indentation; `None` for another
     /// row, or one with a comment.
-    fn row_line(&self, row: &Row, decided: &[Option<EcoString>]) -> Option<(Vec<usize>, EcoString)> {
+    fn row_line(
+        &self,
+        row: &Row,
+        decided: &[Option<EcoString>],
+    ) -> Option<(Vec<usize>, EcoString)> {
         let (first, end) = (row.tokens.start, row.tokens.end);
         if first == end {
             return None;
@@ -1549,10 +1553,7 @@ mod tests {
         );
         // Wide characters take two columns, and markup and code in cells
         // count as formatted.
-        markup(
-            "| 表 | x |\n| ab | y |\n",
-            "| 表 | x |\n| ab | y |\n",
-        );
+        markup("| 表 | x |\n| ab | y |\n", "| 表 | x |\n| ab | y |\n");
         markup(
             "| #f(a,b) | x |\n| $y$   z | w |\n",
             "| #f(a, b) | x |\n| $y$ z    | w |\n",

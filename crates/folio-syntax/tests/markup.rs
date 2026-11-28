@@ -782,10 +782,17 @@ fn a_pipe_in_maths_code_raw_brackets_or_an_escape_splits_no_cell() {
     ok(text);
     assert_eq!(
         rows(text),
-        [vec!["$|x|$", "`a|b`", "#f(\"|\")", "#g[x | y]", "[p | q]", "a \\| b"]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>()]
+        [vec![
+            "$|x|$",
+            "`a|b`",
+            "#f(\"|\")",
+            "#g[x | y]",
+            "[p | q]",
+            "a \\| b"
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>()]
     );
 }
 
@@ -798,7 +805,8 @@ fn a_pipe_not_at_a_line_start_is_text() {
 
 #[test]
 fn a_cell_block_may_run_over_lines() {
-    let text = "#grid[\n  | 3(a) | #cell[\n      One.\n\n      Two.\n    ] | 2 |\n  | 3(b) | x | 1 |\n]\n";
+    let text =
+        "#grid[\n  | 3(a) | #cell[\n      One.\n\n      Two.\n    ] | 2 |\n  | 3(b) | x | 1 |\n]\n";
     ok(text);
     let cells = rows(text);
     assert_eq!(cells.len(), 2);

@@ -5,8 +5,8 @@
 
 use ecow::{EcoString, eco_format};
 use folio_component::QualifiedName;
-use folio_syntax::ast::{self, AstNode};
 use folio_syntax::Span;
+use folio_syntax::ast::{self, AstNode};
 
 use super::content::{Content, Node};
 use super::element::canonical_fields;
@@ -90,7 +90,8 @@ impl Vm<'_> {
     /// does not pull the next one up; the places a row leaves free get empty
     /// cells.
     pub(super) fn grid_rows(&mut self, args: Args, span: Span) -> EvalResult<Args> {
-        let named = |arg: &Arg, name: &str| arg.name.as_deref() == Some(name) && arg.scope.is_none();
+        let named =
+            |arg: &Arg, name: &str| arg.name.as_deref() == Some(name) && arg.scope.is_none();
         if !args
             .items
             .iter()
@@ -117,7 +118,10 @@ impl Vm<'_> {
                 Value::None | Value::Auto => {}
                 value => {
                     let values = row_values(value).map_err(|message| {
-                        EvalError::new(arg.span, eco_format!("`header` takes a row or `auto`: {message}"))
+                        EvalError::new(
+                            arg.span,
+                            eco_format!("`header` takes a row or `auto`: {message}"),
+                        )
                     })?;
                     data.push((values, arg.span));
                 }
@@ -129,8 +133,11 @@ impl Vm<'_> {
                 Value::Array(rows) => {
                     for (i, row) in rows.iter().enumerate() {
                         let values = row_values(row).map_err(|message| {
-                            EvalError::new(arg.span, eco_format!("row {} of `rows`: {message}", i + 1))
-                                .with_hint("each row is an array of cells: `(([a], [b]), ([c], [d]))`")
+                            EvalError::new(
+                                arg.span,
+                                eco_format!("row {} of `rows`: {message}", i + 1),
+                            )
+                            .with_hint("each row is an array of cells: `(([a], [b]), ([c], [d]))`")
                         })?;
                         data.push((values, arg.span));
                     }
@@ -191,13 +198,13 @@ impl Vm<'_> {
         // Which places of each row are taken, and the cells of each row
         // with their columns.
         let mut taken: Vec<Vec<bool>> = Vec::new();
-        let mut placed: Vec<Vec<(usize, Content)>> = Vec::new();
+        let mut placed: Vec<(Vec<(usize, Content)>, Span)> = Vec::new();
         let mut columns = 0;
         for (r, (values, span)) in data.into_iter().enumerate() {
             if taken.len() <= r {
                 taken.resize(r + 1, Vec::new());
             }
-            placed.push(Vec::with_capacity(values.len()));
+            placed.push((Vec::with_capacity(values.len()), span));
             let mut c = 0;
             for value in values {
                 self.step(span)?;
@@ -209,7 +216,7 @@ impl Vm<'_> {
                 if cell.field("column").is_some_and(|v| *v != Value::None)
                     || cell.field("row").is_some_and(|v| *v != Value::None)
                 {
-                    placed[r].push((usize::MAX, content));
+                    placed[r].0.push((usize::MAX, content));
                     continue;
                 }
                 let span_of = |field: &str| match cell.field(field) {
@@ -224,6 +231,8 @@ impl Vm<'_> {
                     bail!(span, "row {} has more than {MAX_TRACKS} columns", r + 1);
                 }
                 let end = (c + colspan).min(MAX_TRACKS);
+                // The places a cell takes count against the memory limit.
+                self.alloc(((end - c) * rowspan) as u64, span)?;
                 if taken.len() < r + rowspan {
                     taken.resize(r + rowspan, Vec::new());
                 }
@@ -237,29 +246,25 @@ impl Vm<'_> {
                 }
                 columns = columns.max(end);
                 self.place_cell(&mut content, c, r)?;
-                placed[r].push((c, content));
+                placed[r].0.push((c, content));
                 c = end;
             }
         }
         // Empty cells where a row leaves places free.
         let mut out = Content::new();
-        for (r, mut cells) in placed.into_iter().enumerate() {
+        for (r, (mut cells, span)) in placed.into_iter().enumerate() {
             let row = taken.get(r).map(Vec::as_slice).unwrap_or_default();
             for c in 0..columns {
                 if !row.get(c).copied().unwrap_or(false) {
-                    let span = cells.first().map_or(Span::detached(), |(_, cell)| {
-                        match cell.nodes().first() {
-                            Some(Node::Element(e)) => e.span,
-                            _ => Span::detached(),
-                        }
-                    });
-                    let mut empty = self.builtin("cell", [("body", Content::new().into())], span)?;
+                    self.step(span)?;
+                    let mut empty =
+                        self.builtin("cell", [("body", Content::new().into())], span)?;
                     self.place_cell(&mut empty, c, r)?;
                     cells.push((c, empty));
                 }
             }
             cells.sort_by_key(|(c, _)| *c);
-            self.alloc(64 * cells.len() as u64, Span::detached())?;
+            self.alloc(64 * cells.len() as u64, span)?;
             for (_, cell) in cells {
                 out.extend(cell);
             }
@@ -314,11 +319,20 @@ fn prepend_to_body(items: &mut Vec<Arg>, cells: Content, span: Span) {
         .find(|arg| arg.name.is_none() || arg.name.as_deref() == Some("body"));
     match body {
         Some(arg) => {
-            if let Value::Content(content) = &arg.value {
-                let mut all = cells;
-                all.extend(content.clone());
-                arg.value = Value::Content(all);
-            }
+            let body = match &arg.value {
+                Value::Content(content) => content.clone(),
+                Value::Str(text) => Content::node(Node::Text {
+                    text: text.clone(),
+                    span: arg.span,
+                }),
+                Value::None => Content::new(),
+                // Any other value is not a body, which instantiation
+                // reports.
+                _ => return,
+            };
+            let mut all = cells;
+            all.extend(body);
+            arg.value = Value::Content(all);
         }
         None => items.push(Arg {
             span,

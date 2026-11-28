@@ -905,7 +905,10 @@ impl<'a> TableRow<'a> {
         for cell in self.cells() {
             any = true;
             let text = cell.to_untyped().full_text();
-            if !text.chars().all(|c| matches!(c, '-' | ':') || c.is_whitespace()) {
+            if !text
+                .chars()
+                .all(|c| matches!(c, '-' | ':') || c.is_whitespace())
+            {
                 return false;
             }
             dash |= text.contains('-');
