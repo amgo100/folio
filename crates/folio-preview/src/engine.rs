@@ -443,6 +443,7 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         deferred: BTreeSet::new(),
         deferred_since: None,
         released: BTreeSet::new(),
+        texts: HashMap::new(),
         rx,
         queue: VecDeque::new(),
     };
@@ -545,6 +546,9 @@ struct Engine {
     /// The held files whose time ran out, read as they are when next
     /// applied.
     released: BTreeSet<PathBuf>,
+    /// The world's sources by project path as the engine last set them,
+    /// which [`Self::recheck`] puts back when a read was torn.
+    texts: HashMap<String, Source>,
     /// What the engine is told.
     rx: Receiver<Input>,
     /// Inputs taken from `rx` to see whether events wait, handled before
@@ -681,10 +685,16 @@ impl Engine {
             Change::Moved => {
                 // With everything under a directory moved; a link that was
                 // made or removed is not followed to what it leads to.
-                for path in paths.iter().map(|path| location(path)) {
-                    self.open.retain(|open| !open.starts_with(&path));
-                    self.released
-                        .retain(|released| !released.starts_with(&path));
+                for path in paths {
+                    let at = location(path);
+                    self.open.retain(|open| !open.starts_with(&at));
+                    self.released.retain(|released| !released.starts_with(&at));
+                    // A link to a file, replaced: the file it led to.
+                    if path.is_file() {
+                        let file = resolved(path);
+                        self.open.remove(&file);
+                        self.released.remove(&file);
+                    }
                 }
             }
             Change::Other => {}
@@ -806,16 +816,6 @@ impl Engine {
             }
             !hold
         });
-        // The sources as they are, which the loader's reads may replace,
-        // under every path that reaches a file: through links too, and
-        // under directories read again.
-        let sources = world
-            .source_paths()
-            .filter_map(|path| {
-                let path = path.as_str();
-                Some((path.to_owned(), world.source(path)?))
-            })
-            .collect();
         // Read whole, or gone: no longer held.
         for file in read {
             if !held.contains(&file) {
@@ -826,7 +826,13 @@ impl Engine {
         for file in held {
             self.held.entry(file).or_insert(until);
         }
-        Some(Before { sources, released })
+        // Every file whose hold ran out is read as it is, however the batch
+        // reaches it.
+        let released = released
+            .into_iter()
+            .chain(self.released.iter().cloned())
+            .collect();
+        Some(Before { released })
     }
 
     /// Puts back the world's text of the sources that read [`torn`] after
@@ -874,8 +880,10 @@ impl Engine {
                 continue;
             }
             let writing = written.contains(&file);
-            let old = before.sources.get(&rel);
-            let old_len = old.map_or(0, |old| old.text().len() as u64);
+            // Released files are read as they are once.
+            self.released.remove(&file);
+            let old = self.texts.get(&rel).cloned();
+            let old_len = old.as_ref().map_or(0, |old| old.text().len() as u64);
             // Removed by the loader: gone, or not UTF-8, as when the read
             // ends inside a character that a write in chunks splits.
             let new = self.world.as_ref().and_then(|world| world.source(&rel));
@@ -891,7 +899,7 @@ impl Engine {
             }
             // Read again on its close either way. A new file is taken out
             // again.
-            let put_back = self.world.as_mut().is_some_and(|world| match old {
+            let put_back = self.world.as_mut().is_some_and(|world| match &old {
                 Some(old) => world.set_source(&rel, old.text()).is_ok(),
                 None => world.remove_source(&rel),
             });
@@ -916,6 +924,20 @@ impl Engine {
             self.held.entry(file).or_insert(until);
         }
         restored
+    }
+
+    /// Records the world's texts of the sources at the paths that changed
+    /// ([`Self::texts`]).
+    fn record(&mut self, changed: &BTreeSet<String>) {
+        let Some(world) = &self.world else {
+            return;
+        };
+        for rel in changed {
+            match world.source(rel) {
+                Some(source) => self.texts.insert(rel.clone(), source),
+                None => self.texts.remove(rel),
+            };
+        }
     }
 
     /// Builds the project's world from the disk.
@@ -949,6 +971,13 @@ impl Engine {
             world.set_system_fonts(folio::system_fonts());
         }
         world.set_today(self.settings.today);
+        self.texts = world
+            .source_paths()
+            .filter_map(|path| {
+                let path = path.as_str();
+                Some((path.to_owned(), world.source(path)?))
+            })
+            .collect();
         self.world = Some(world);
         self.redraw = true;
         self.edited();
@@ -998,6 +1027,7 @@ impl Engine {
             }
         };
         let restored = self.recheck(before, &mut update.changed, warned);
+        self.record(&update.changed);
         if project_file {
             // Cleared only here, where the change is a new revision
             // (`edited` below), whose check schedules the writes that the
@@ -1723,11 +1753,10 @@ impl Files for Layered {
     }
 }
 
-/// The world's sources before the loader reads a batch, by project path,
-/// and the files whose hold ran out, which are read as they are
+/// What [`Engine::recheck`] needs from before the loader reads a batch:
+/// the files whose hold ran out, which are read as they are
 /// ([`Engine::hold`]).
 struct Before {
-    sources: HashMap<String, Source>,
     released: BTreeSet<PathBuf>,
 }
 
