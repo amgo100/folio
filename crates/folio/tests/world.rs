@@ -153,7 +153,13 @@ fn early_cutoff_on_a_whitespace_edit() {
     assert_eq!(after, before);
     assert_eq!(
         logged.take(),
-        set(&["dependencies", "check_source", "file_elements", EVAL])
+        set(&[
+            "dependencies",
+            "check_source",
+            "variant_conditions",
+            "file_elements",
+            EVAL
+        ])
     );
 
     // An edit that changes the imports re-runs the file set. The file it
@@ -172,6 +178,7 @@ fn early_cutoff_on_a_whitespace_edit() {
             "build_files",
             "dependencies",
             "check_source",
+            "variant_conditions",
             "file_elements",
             "project_elements",
             "source_file",
@@ -231,6 +238,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         set(&[
             "dependencies",
             "check_source",
+            "variant_conditions",
             "file_elements",
             "match_node",
             "compile_build",
@@ -252,6 +260,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         set(&[
             "dependencies",
             "check_source",
+            "variant_conditions",
             "file_elements",
             "compile_build",
             EVAL
@@ -853,4 +862,21 @@ fn adds_many_files() {
         assert!(world.remove_file(&format!("data/{i}.csv")));
     }
     assert_eq!(world.file_paths().count(), 0);
+}
+
+/// A text data file gets a file id that errors can point into; an image
+/// does not, and removing the file frees its id.
+#[test]
+fn text_data_files_have_ids() {
+    let mut world = World::new(MANIFEST).unwrap();
+    world
+        .set_file("data/bank.yaml", b"a: 1\n".to_vec())
+        .unwrap();
+    world.set_file("figure.png", b"png".to_vec()).unwrap();
+    let id = world.id("data/bank.yaml").unwrap();
+    assert_eq!(world.path(id), Some("data/bank.yaml"));
+    assert!(world.id("figure.png").is_none());
+    assert!(world.remove_file("data/bank.yaml"));
+    assert!(world.id("data/bank.yaml").is_none());
+    assert_eq!(world.path(id), None);
 }

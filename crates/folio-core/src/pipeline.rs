@@ -7,7 +7,7 @@
 //!    the smallest block an edit touches ([`SourceFile`](crate::db::SourceFile));
 //!    [`check_source`](crate::db::check_source) reports its syntax errors.
 //! 2. **Evaluate**: [`evaluate`](crate::eval::evaluate) and the document
-//!    model ([`document`](crate::model::document)). Neither reads the
+//!    model ([`document`]). Neither reads the
 //!    target, and code that does not read `variant` is evaluated once for
 //!    every variant.
 //! 3. **Style**: [`styles()`].
@@ -23,10 +23,11 @@
 //!    fixed-layout target's pages to its writer. The Office targets fork
 //!    after step styling and will take the step-styled tree (M4, M5).
 //!
-//! Every stage from Style on runs per variant and target. Until the
-//! milestones that fill them in, Select, Sequence and Step styling pass the
-//! styled tree on unchanged: Select until variants (M2), Sequence until
-//! slides (M4), and Step styling until steps (M4). Resolve passes it on with
+//! Every stage from Style on runs per variant and target. Select leaves
+//! out what the variant does not show ([`crate::variants::select`]). Until
+//! the milestones that fill them in, Sequence and Step styling pass the
+//! styled tree on unchanged: Sequence until slides (M4), and Step styling
+//! until steps (M4). Resolve passes it on with
 //! the counters, markers, labels and references it resolved
 //! ([`crate::resolve`]). They are queries already, so the stages after
 //! them read the tree from the stage before, and an edit that leaves the
@@ -36,18 +37,24 @@ use ecow::eco_format;
 
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
+use crate::eval::Element;
 use crate::layout::pages;
+use crate::model::document;
 use crate::resolve::page_refs::{self, EXTRA_PASSES};
 use crate::resolve::{PageNumbers, Resolution, resolve_tree};
 use crate::style::{Styled, styles};
 
-/// The styled tree after Select (SPEC §2.1, §6.3): the nodes whose computed
-/// `display` is `none` removed, and answer space or placeholders
-/// substituted. Until variants (M2) it is the styled tree.
+/// The styled tree after Select (SPEC §2.1, §6.2, §6.3): the nodes the
+/// variant does not show removed, and placeholders substituted
+/// ([`crate::variants::select`]).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Selected {
     /// The tree.
     pub styled: Styled,
+    /// The `doc` element of the document tree with the same content left
+    /// out or replaced, or `None` when the variant shows all of the
+    /// document tree ([`selected_root`]).
+    pub root: Option<Element>,
 }
 
 /// The selected tree after Sequence (SPEC §2.1, §10.1): split into slides,
@@ -83,13 +90,44 @@ pub struct StepStyled {
 }
 
 /// Selects the content of a build (stage 4), or `None` when the document
-/// could not be styled. Until variants (M2) it keeps every node.
+/// could not be styled: what the variant does not show is left out of the
+/// styled tree and the document tree, and placeholders replace content
+/// (SPEC §6.2, §6.3; [`crate::variants::select`]).
 #[salsa::tracked(returns(ref))]
 pub fn select(db: &dyn Db, build: Build<'_>) -> Option<Selected> {
     let styled = styles(db, build).as_ref()?;
+    let project = build.project(db);
+    let variant = build.variant(db).clone();
+    let doc = document(db, project, variant.clone()).as_ref()?;
+    let selection = crate::variants::select::select(
+        db,
+        project.manifest(db),
+        variant.as_ref(),
+        &styled.properties,
+        &doc.root,
+        &styled.root,
+    );
     Some(Selected {
-        styled: styled.clone(),
+        styled: Styled {
+            root: selection.styled,
+            ..styled.clone()
+        },
+        root: selection.root,
     })
+}
+
+/// The `doc` element of the document tree that a build shows: the
+/// document tree after Select, which the stages after it read beside the
+/// styled tree; or `None` when the document could not be styled.
+pub fn selected_root<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<&'db Element> {
+    let build = build.base(db);
+    let selected = select(db, build).as_ref()?;
+    match &selected.root {
+        Some(root) => Some(root),
+        None => document(db, build.project(db), build.variant(db).clone())
+            .as_ref()
+            .map(|doc| &doc.root),
+    }
 }
 
 /// Sequences the selected content of a build into slides and steps (stage

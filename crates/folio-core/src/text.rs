@@ -55,7 +55,6 @@ use crate::eval::{self, Content, Element, Node};
 use crate::fonts::{Fonts, Request, fonts};
 use crate::image::{LoadedImage, load_image};
 use crate::locate::StyledChildren;
-use crate::model::document;
 use crate::pipeline::{resolution, step_styled};
 use crate::resolve::{Resolution, UNRESOLVED};
 use crate::style::{
@@ -427,7 +426,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
     let project = build.project(db);
     let styled = step_styled(db, build)?;
     let resolution = resolution(db, build)?;
-    let doc = document(db, project, build.variant(db).clone()).as_ref()?;
+    let root = crate::pipeline::selected_root(db, build)?;
     let fonts = fonts(db, project);
     let default_lang =
         Lang::new(project.manifest(db).project.lang.v.as_str()).unwrap_or_else(Lang::english);
@@ -454,7 +453,7 @@ pub fn collect_text(db: &dyn Db, build: Build<'_>) -> Option<Collected> {
         in_note: false,
         continued: Vec::new(),
     };
-    collector.element(&doc.root, &styled.root);
+    collector.element(root, &styled.root);
 
     let root = collector.root.take().expect("the root is a block");
     Some(Collected {

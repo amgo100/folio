@@ -424,7 +424,7 @@ impl Resolution {
 /// Reports references that do not resolve.
 pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolution {
     let project = build.project(db);
-    let Some(doc) = document(db, project, build.variant(db).clone()).as_ref() else {
+    let Some(root) = crate::pipeline::selected_root(db, build) else {
         return Resolution::default();
     };
     let props = &styled.properties;
@@ -450,7 +450,7 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
         patterns: HashMap::new(),
     };
     walk.out.footnotes_per_page = page_resets(db, build, styled);
-    walk.element(&doc.root, &styled.root);
+    walk.element(root, &styled.root);
     // Numbers and labels are looked up as references resolve.
     walk.out.reindex();
     walk.references();
@@ -1182,6 +1182,33 @@ impl Walk<'_> {
 
     /// Reports a reference to a label that no element of the build has.
     fn missing(&mut self, r: &PendingRef) {
+        if let Some(hidden) = self.hidden(&r.label) {
+            let project = self.build.project(self.db);
+            let strict = project.manifest(self.db).formatting.mode.v
+                == crate::project::FormattingMode::Strict;
+            let message = eco_format!(
+                "`<{}>` names {} that {} does not show, so the reference has nothing to refer to",
+                r.label,
+                a_element(&hidden),
+                match self.build.variant(self.db) {
+                    Some(variant) => eco_format!("variant `{variant}`"),
+                    None => "the document".into(),
+                },
+            );
+            let diagnostic = if strict {
+                Diagnostic::error(r.span, message)
+            } else {
+                Diagnostic::warning(r.span, message)
+            };
+            diag::report(
+                self.db,
+                diagnostic.with_code("reference-hidden").with_hint(
+                    "show the element in this variant, or hide the reference with it, as in \
+                     `#in-variant(\"markscheme\")[see @label]`",
+                ),
+            );
+            return;
+        }
         let labels: Vec<&str> = self.out.labels.iter().map(|l| l.label.as_str()).collect();
         let diagnostic = Diagnostic::warning(
             r.span,
@@ -1196,6 +1223,27 @@ impl Walk<'_> {
                 .with_hint("label the element the reference means, such as `= Forces <forces>`"),
         };
         diag::report(self.db, diagnostic);
+    }
+
+    /// The name of the element with a label that the variant does not
+    /// show (SPEC §4.5): one that its document tree has but Select left
+    /// out. `None` if no element of the document tree has the label.
+    fn hidden(&self, label: &str) -> Option<QualifiedName> {
+        fn find(element: &Element, label: &str) -> Option<QualifiedName> {
+            if element.label.as_deref() == Some(label) {
+                return Some(element.name.clone());
+            }
+            element.fields.iter().find_map(|(_, value)| match value {
+                Value::Content(content) => content.nodes().iter().find_map(|node| match node {
+                    crate::eval::Node::Element(child) => find(child, label),
+                    _ => None,
+                }),
+                _ => None,
+            })
+        }
+        let project = self.build.project(self.db);
+        let doc = document(self.db, project, self.build.variant(self.db).clone()).as_ref()?;
+        find(&doc.root, label)
     }
 
     /// The reference word of an element in a language, and whether its

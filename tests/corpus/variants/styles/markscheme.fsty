@@ -1,0 +1,4 @@
+// The mark scheme overlay: each question condensed to its marks and
+// answer, the stem left out (SPEC §6.2).
+doc { font-size: 10pt; }
+enum-item { show-only: strong figure; }

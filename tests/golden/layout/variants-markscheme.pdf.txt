@@ -1,0 +1,103 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 419.53 × 595.28, 1 page(s)
+page 1 419.53 × 595.28, 14 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 19.83..423.11
+    box (0.00, 0.00) 334.49 × 426.46 main.fol:1:2 baselines 19.83..423.11
+      box (0.00, 0.00) 334.49 × 28.44 main.fol:1:2 baselines 19.83..19.83 keep penalty 10000
+        text (0.00, 19.83) SourceSerif4-Bold 16.00 w 175.90 23 glyph(s) "Forces and motion: quiz"
+      box (0.00, 44.44) 334.49 × 382.02 main.fol:3:1 baselines 16.72..378.67
+        box (0.00, 0.00) 334.49 × 24.32 main.fol:3:1 baselines 16.72..16.72 keep penalty 10000
+          text (0.00, 16.72) SourceSerif4-Bold 13.00 w 59.70 9 glyph(s) "Questions"
+        box (0.00, 30.32) 334.49 × 20.21 main.fol:5:2 baselines 13.61..13.61
+          text (0.00, 13.61) SourceSerif4-Regular 10.00 w 275.30 58 glyph(s) "Mark scheme. M marks are for method, A marks for accuracy."
+        box (0.00, 58.53) 334.49 × 271.32 main.fol:7:1 baselines 13.61..255.22
+          box (15.00, 0.00) 319.49 × 83.63 main.fol:7:1 baselines 13.61..67.53
+            box (0.00, 0.00) 319.49 × 20.21 main.fol:7:3 baselines 13.61..13.61
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 10.33 3 glyph(s) "1.\u{a0}"
+              text (10.33, 13.61) SourceSerif4-Bold 10.00 w 12.38 3 glyph(s) "[2]"
+            box (0.00, 24.21) 319.49 × 59.42 main.fol:11:4 baselines 23.11..43.32
+              shape (0.00, 0.00) M(0.00, 0.25) L(319.49, 0.25) stroke #808080ff 0.50 Butt Miter main.fol:11:4
+              shape (0.00, 0.00) M(0.00, 59.17) L(319.49, 59.17) stroke #808080ff 0.50 Butt Miter main.fol:11:4
+              shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 59.42) stroke #808080ff 0.50 Butt Miter main.fol:11:4
+              shape (0.00, 0.00) M(319.24, 0.00) L(319.24, 59.42) stroke #808080ff 0.50 Butt Miter main.fol:11:4
+              box (4.50, 9.50) 310.49 × 40.42 main.fol:11:28 baselines 13.61..33.82
+                box (0.00, 9.19) 18.30 × 4.53 main.fol:11:28
+                  text (0.00, 4.42) NewCMMath-Regular 10.00 w 4.96 1 glyph(s) "𝑣"
+                  text (7.74, 4.42) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                box (18.30, 7.78) 17.94 × 6.66 main.fol:11:28
+                  text (0.00, 5.83) NewCMMath-Regular 10.00 w 5.72 1 glyph(s) "𝑢"
+                  text (7.94, 5.83) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "+"
+                box (36.24, 7.35) 22.24 × 6.37 main.fol:11:28
+                  text (0.00, 6.26) NewCMMath-Regular 10.00 w 5.29 1 glyph(s) "𝑎"
+                  text (5.29, 6.26) NewCMMath-Regular 10.00 w 3.61 1 glyph(s) "𝑡"
+                  text (11.68, 6.26) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                box (58.48, 6.95) 17.22 × 7.49 main.fol:11:28
+                  text (0.00, 6.66) NewCMMath-Regular 10.00 w 5.00 1 glyph(s) "0"
+                  text (7.22, 6.66) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "+"
+                box (75.70, 6.95) 25.00 × 6.88 main.fol:11:28
+                  text (0.00, 6.66) NewCMMath-Regular 10.00 w 12.78 3 glyph(s) "9.8"
+                  text (15.00, 6.66) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "×"
+                box (100.70, 6.95) 26.12 × 6.88 main.fol:11:28
+                  text (0.00, 6.66) NewCMMath-Regular 10.00 w 12.78 3 glyph(s) "2.0"
+                  text (15.56, 6.66) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                box (126.82, 6.95) 17.78 × 6.88 main.fol:11:28
+                  text (0.00, 6.66) NewCMMath-Regular 10.00 w 17.78 4 glyph(s) "19.6"
+                text (144.60, 13.61) SourceSerif4-Regular 10.00 w 165.89 37 glyph(s) " m/s. M1 for the equation, A1 for the"
+                text (142.00, 33.82) SourceSerif4-Regular 10.00 w 26.49 6 glyph(s) "value."
+          box (15.00, 93.63) 319.49 × 84.06 main.fol:13:1 baselines 13.61..67.78
+            box (0.00, 0.00) 319.49 × 20.21 main.fol:13:3 baselines 13.61..13.61
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 10.33 3 glyph(s) "2.\u{a0}"
+              text (10.33, 13.61) SourceSerif4-Bold 10.00 w 12.38 3 glyph(s) "[3]"
+            box (0.00, 24.21) 319.49 × 59.85 main.fol:17:4 baselines 23.11..43.57
+              shape (0.00, 0.00) M(0.00, 0.25) L(319.49, 0.25) stroke #808080ff 0.50 Butt Miter main.fol:17:4
+              shape (0.00, 0.00) M(0.00, 59.60) L(319.49, 59.60) stroke #808080ff 0.50 Butt Miter main.fol:17:4
+              shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 59.85) stroke #808080ff 0.50 Butt Miter main.fol:17:4
+              shape (0.00, 0.00) M(319.24, 0.00) L(319.24, 59.85) stroke #808080ff 0.50 Butt Miter main.fol:17:4
+              box (4.50, 9.50) 310.49 × 40.85 main.fol:17:28 baselines 13.61..34.07
+                box (0.00, 9.19) 18.63 × 4.53 main.fol:17:28
+                  text (0.00, 4.42) NewCMMath-Regular 10.00 w 5.29 1 glyph(s) "𝑎"
+                  text (8.07, 4.42) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                box (18.63, 5.01) 24.28 × 12.21 main.fol:17:28
+                  text (1.00, 4.66) NewCMMath-Regular 7.00 w 8.95 3 glyph(s) "3.0"
+                  text (1.00, 12.05) NewCMMath-Regular 7.00 w 8.95 3 glyph(s) "4.0"
+                  shape (1.00, 5.90) M(0.00, 0.00) L(8.95, 0.00) L(8.95, 0.40) L(0.00, 0.40) Z fill #000000ff NonZero main.fol:17:33
+                  text (13.72, 8.60) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                box (42.91, 6.85) 17.78 × 6.98 main.fol:17:28
+                  text (0.00, 6.76) NewCMMath-Regular 10.00 w 17.78 4 glyph(s) "0.75"
+                text (60.69, 13.61) SourceSerif4-Regular 10.00 w 59.25 14 glyph(s) " m/s², M1 A1; "
+                box (119.93, 6.81) 21.11 × 6.80 main.fol:17:64
+                  text (0.00, 6.80) NewCMMath-Regular 10.00 w 7.77 1 glyph(s) "𝐹"
+                  text (10.55, 6.80) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                box (141.04, 9.19) 27.41 × 4.53 main.fol:17:64
+                  text (0.00, 4.42) NewCMMath-Regular 10.00 w 8.78 1 glyph(s) "𝑚"
+                  text (8.78, 4.42) NewCMMath-Regular 10.00 w 5.29 1 glyph(s) "𝑎"
+                  text (16.85, 4.42) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                box (168.44, 6.95) 12.78 × 6.88 main.fol:17:64
+                  text (0.00, 6.66) NewCMMath-Regular 10.00 w 12.78 3 glyph(s) "1.5"
+                text (181.22, 13.61) SourceSerif4-Regular 10.00 w 110.94 26 glyph(s) " N, A1. Accept 1.5 N from "
+                box (292.16, 6.81) 21.11 × 6.80 main.fol:17:105
+                  text (0.00, 6.80) NewCMMath-Regular 10.00 w 7.77 1 glyph(s) "𝐹"
+                  text (10.55, 6.80) NewCMMath-Regular 10.00 w 7.78 1 glyph(s) "="
+                box (146.77, 26.52) 13.96 × 11.08 main.fol:17:105
+                  text (0.00, 7.55) NewCMMath-Regular 10.00 w 8.33 1 glyph(s) "Δ"
+                  text (9.33, 3.09) NewCMMath-Regular 7.00 w 3.63 1 glyph(s) "𝑝"
+                  text (9.88, 11.00) NewCMMath-Regular 7.00 w 2.53 1 glyph(s) "𝑡"
+                  shape (9.33, 4.85) M(0.00, 0.00) L(3.63, 0.00) L(3.63, 0.40) L(0.00, 0.40) Z fill #000000ff NonZero main.fol:17:116
+                text (160.72, 34.07) SourceSerif4-Regular 10.00 w 3.00 1 glyph(s) "."
+          box (15.00, 187.69) 319.49 × 83.63 main.fol:19:1 baselines 13.61..67.53
+            box (0.00, 0.00) 319.49 × 20.21 main.fol:19:3 baselines 13.61..13.61
+              text (0.00, 13.61) SourceSerif4-Regular 10.00 w 10.33 3 glyph(s) "3.\u{a0}"
+              text (10.33, 13.61) SourceSerif4-Bold 10.00 w 12.38 3 glyph(s) "[2]"
+            box (0.00, 24.21) 319.49 × 59.42 main.fol:23:4 baselines 23.11..43.32
+              shape (0.00, 0.00) M(0.00, 0.25) L(319.49, 0.25) stroke #808080ff 0.50 Butt Miter main.fol:23:4
+              shape (0.00, 0.00) M(0.00, 59.17) L(319.49, 59.17) stroke #808080ff 0.50 Butt Miter main.fol:23:4
+              shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 59.42) stroke #808080ff 0.50 Butt Miter main.fol:23:4
+              shape (0.00, 0.00) M(319.24, 0.00) L(319.24, 59.42) stroke #808080ff 0.50 Butt Miter main.fol:23:4
+              box (4.50, 9.50) 310.49 × 40.42 main.fol:23:28 baselines 13.61..33.82
+                text (0.00, 13.61) SourceSerif4-Regular 10.00 w 310.49 72 glyph(s) "The forces two bodies exert on each other are equal in size and opposite"
+                text (47.86, 33.82) SourceSerif4-Regular 10.00 w 214.77 50 glyph(s) "in direction, B1; they act on different bodies, B1."
+        box (0.00, 339.85) 334.49 × 20.21 main.fol:25:2 baselines 13.61..13.61
+          text (0.00, 13.61) SourceSerif4-It 10.00 w 188.73 47 glyph(s) "Hint: in question 2, find the acceleration first."
+        box (0.00, 365.06) 334.49 × 16.96 main.fol:27:1 baselines 13.61..13.61
+          text (0.00, 13.61) SourceSerif4-Regular 10.00 w 96.66 21 glyph(s) "The paper ends here. "
+          text (96.66, 13.61) SourceSerif4-Regular 10.00 w 65.39 15 glyph(s) "Total: 7 marks."

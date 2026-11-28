@@ -1,0 +1,48 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 419.53 × 595.28, 1 page(s)
+page 1 419.53 × 595.28, 9 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 20.82..474.06
+    box (0.00, 0.00) 334.49 × 477.58 main.fol:1:2 baselines 20.82..474.06
+      box (0.00, 0.00) 334.49 × 29.86 main.fol:1:2 baselines 20.82..20.82 keep penalty 10000
+        text (0.00, 20.82) SourceSerif4-Bold 16.80 w 184.70 23 glyph(s) "Forces and motion: quiz"
+      box (0.00, 46.66) 334.49 × 430.92 main.fol:3:1 baselines 16.88..427.41
+        box (0.00, 0.00) 334.49 × 24.65 main.fol:3:1 baselines 16.88..16.88 keep penalty 10000
+          text (0.00, 16.88) SourceSerif4-Bold 13.00 w 59.70 9 glyph(s) "Questions"
+        box (0.00, 30.65) 334.49 × 21.22 main.fol:5:2 baselines 14.29..14.29
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 234.20 50 glyph(s) "Answer all questions in the spaces provided. Take "
+          box (234.20, 9.65) 19.27 × 6.79 main.fol:5:81
+            text (0.00, 4.64) NewCMMath-Regular 10.50 w 5.27 1 glyph(s) "𝑔"
+            text (8.19, 4.64) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
+          box (253.48, 7.30) 13.42 × 7.22 main.fol:5:81
+            text (0.00, 6.99) NewCMMath-Regular 10.50 w 13.42 3 glyph(s) "9.8"
+          text (266.89, 14.29) SourceSerif4-Regular 10.50 w 26.43 6 glyph(s) " m/s²."
+        box (0.00, 59.87) 334.49 × 316.28 main.fol:7:1 baselines 14.29..316.28
+          box (15.75, 0.00) 318.74 × 91.35 main.fol:7:1 baselines 14.29..91.35
+            box (0.00, 0.00) 318.74 × 21.22 main.fol:7:3 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "1.\u{a0}"
+              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 245.51 55 glyph(s) "A ball is dropped from rest. Find its speed after 2.0 s."
+            box (0.00, 23.32) 318.74 × 68.03 main.fol:9:4 baselines 22.68..68.03
+              shape (0.00, 22.43) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:9:4
+              shape (0.00, 45.10) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:9:4
+              shape (0.00, 67.78) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:9:4
+          box (15.75, 101.85) 318.74 × 112.57 main.fol:13:1 baselines 14.29..112.57
+            box (0.00, 0.00) 318.74 × 42.44 main.fol:13:3 baselines 14.29..35.51
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 11.03 3 glyph(s) "2.\u{a0}"
+              text (11.03, 14.29) SourceSerif4-Regular 10.50 w 307.70 67 glyph(s) "A trolley of mass 2.0 kg accelerates uniformly from rest to 3.0 m/s"
+              text (0.00, 35.51) SourceSerif4-Regular 10.50 w 174.58 41 glyph(s) "in 4.0 s. Find the resultant force on it."
+            box (0.00, 44.54) 318.74 × 68.03 main.fol:15:4 baselines 22.68..68.03
+              shape (0.00, 22.43) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:4
+              shape (0.00, 45.10) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:4
+              shape (0.00, 67.78) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:15:4
+          box (15.75, 224.92) 318.74 × 91.35 main.fol:19:1 baselines 14.29..91.35
+            box (0.00, 0.00) 318.74 × 21.22 main.fol:19:3 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "3.\u{a0}"
+              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 162.80 35 glyph(s) "State Newton’s third law of motion."
+            box (0.00, 23.32) 318.74 × 68.03 main.fol:21:4 baselines 22.68..68.03
+              shape (0.00, 22.43) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:4
+              shape (0.00, 45.10) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:4
+              shape (0.00, 67.78) M(0.00, 0.00) L(318.74, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:21:4
+        box (0.00, 386.64) 334.49 × 21.22 main.fol:25:2 baselines 14.29..14.29
+          text (0.00, 14.29) SourceSerif4-It 10.50 w 168.54 39 glyph(s) "(The hint is given in the mark scheme.)"
+        box (0.00, 413.12) 334.49 × 17.81 main.fol:27:1 baselines 14.29..14.29
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 99.05 20 glyph(s) "The paper ends here."

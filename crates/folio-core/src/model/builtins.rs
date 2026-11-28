@@ -164,6 +164,20 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
             .fields([FieldDecl::required(name("message"), FieldType::Str)])
             .body(content(Inline))
             .build(),
+        // Content for one variant, or for all but one (SPEC §6.2):
+        // `#in-variant("markscheme")[Accept 7.2 to 7.4 m.]`. The Select
+        // stage leaves it out of the variants it is not for; elsewhere it
+        // is styled like any inline element (`in-variant { .. }`).
+        element("in-variant", ElementKind::Inline, true)
+            .fields([FieldDecl::required(name("variant"), FieldType::Str)])
+            .positional(["variant", "body"])
+            .body(content(Inline))
+            .build(),
+        element("except-variant", ElementKind::Inline, true)
+            .fields([FieldDecl::required(name("variant"), FieldType::Str)])
+            .positional(["variant", "body"])
+            .body(content(Inline))
+            .build(),
         // Tables and layout grids (SPEC §7.4): a `grid` holds cells. Each
         // block of its body is a cell, a `cell` element or another block
         // standing for a cell of its own, placed by auto-flow, row by

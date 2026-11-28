@@ -240,8 +240,7 @@ impl Properties {
 /// Its initial value, and `placement: here`, which is where layout puts
 /// every float, ask for nothing, nor does `marker-position: inside`, which
 /// is where the text stage sets every marker. Each entry goes with the work
-/// that reads the property: hanging markers with layout, `display`
-/// with variants and visibility (SPEC §6.3), `template` with render
+/// that reads the property: hanging markers with layout, `template` with render
 /// templates (§5.3), and the others with pages and running elements
 /// (§7.1, §7.8), the baseline grid (§7.3), floats (§7.5),
 /// margin notes (§7.6) and text wrap (§7.7). Properties of other targets
@@ -263,7 +262,6 @@ pub(super) fn not_implemented(property: &Property, value: Option<&Value>) -> Opt
         return None;
     }
     Some(match property.name.name.as_str() {
-        "display" | "show-only" => "showing and hiding content",
         // Markers are set inside the first line until layout hangs them.
         "marker-position" => "hanging markers",
         "trailer" => "block trailers",
@@ -519,7 +517,9 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
         "display",
         any_of([
             Auto,
-            kw(&["block", "inline", "none", "hidden", "answer-space"]),
+            // `none` is the literal of the expression language.
+            PropertyType::None,
+            kw(&["block", "inline", "hidden", "answer-space"]),
             // SPEC §6.3: `placeholder("Solution in the mark scheme")`.
             PropertyType::Call(EcoVec::from([n("placeholder")])),
         ]),
