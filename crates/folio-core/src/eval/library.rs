@@ -157,10 +157,21 @@ fn minmax(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 /// the tracks given, `n` times over, as a stylesheet writes it.
 fn repeat(_: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let span = args.span;
-    let n = args.expect::<i64>("how many times")?;
-    if n < 0 {
-        bail!(span, "`repeat` takes a count of zero or more, not {n}");
-    }
+    let Some(count) = args.eat() else {
+        bail!(span, "missing argument: how many times");
+    };
+    let n = match count.value {
+        Value::Int(n) if n >= 0 => n,
+        Value::Int(n) => bail!(
+            count.span,
+            "`repeat` takes a count of zero or more, not {n}"
+        ),
+        other => bail!(
+            count.span,
+            "expected an integer, found {}",
+            a_type(other.type_name())
+        ),
+    };
     let mut items = vec![Value::Int(n)];
     while let Some(arg) = args.eat() {
         let track = match arg.value {

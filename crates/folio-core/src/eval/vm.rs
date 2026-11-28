@@ -990,11 +990,6 @@ impl<'a> Vm<'a> {
                     .into(),
             );
         }
-        // The track functions of content, after every other meaning of
-        // their names (SPEC §7.4).
-        if let Some(func) = library::track_function(name) {
-            return Ok(func);
-        }
         // An element name that components provide but that does not resolve,
         // because it is ambiguous or its binding is stale, says why.
         if let Some(host) = component_host(self.db, self.project)
@@ -1003,6 +998,11 @@ impl<'a> Vm<'a> {
             && error.reason != Reason::Unknown
         {
             bail!(ident.span(), "{error}");
+        }
+        // The track functions of content, after every other meaning of
+        // their names (SPEC §7.4).
+        if let Some(func) = library::track_function(name) {
+            return Ok(func);
         }
         bail!(ident.span(), "unknown variable: {name}")
     }
