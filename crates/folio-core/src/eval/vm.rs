@@ -105,6 +105,9 @@ pub(crate) struct Vm<'a> {
     /// make cells (SPEC §7.4). [`Vm::markup_labelled`] takes it, so the
     /// markup nested in it is not.
     pub(super) rows: bool,
+    /// The `|---|` line of the grid body being evaluated, which marks its
+    /// header rows; a later row like it is a row of em dashes.
+    pub(super) header_line: Option<Span>,
     /// Whether the call whose arguments are evaluated next is one of the
     /// built-in `grid`, whose content block is its body.
     grid_call: bool,
@@ -189,6 +192,7 @@ impl<'a> Vm<'a> {
             math_depth: 0,
             origin: Origin::ROOT,
             rows: false,
+            header_line: None,
             grid_call: false,
         }
     }
@@ -485,7 +489,7 @@ impl<'a> Vm<'a> {
 
     /// Records an error in markup that need not stop it: a file's own
     /// markup reports it and goes on, and markup inside code fails.
-    fn tolerate(&mut self, error: EvalError) -> EvalResult<()> {
+    pub(super) fn tolerate(&mut self, error: EvalError) -> EvalResult<()> {
         if !self.recover {
             return Err(error.into());
         }
@@ -2143,7 +2147,7 @@ fn descend<R>(
 }
 
 /// The pipe rows on consecutive lines from the first of `items`, a table
-/// row, and how many items they and the spaces between them take.
+/// row, and how many items they and the line breaks between them take.
 fn row_run<'s>(items: &[ast::MarkupItem<'s>]) -> (Vec<ast::TableRow<'s>>, usize) {
     let mut rows = Vec::new();
     let mut taken = 0;
@@ -2153,7 +2157,8 @@ fn row_run<'s>(items: &[ast::MarkupItem<'s>]) -> (Vec<ast::TableRow<'s>>, usize)
                 rows.push(*row);
                 taken = i + 1;
             }
-            ast::MarkupItem::Expr(ast::Expr::Space(_) | ast::Expr::Parbreak(_)) => {}
+            ast::MarkupItem::Expr(ast::Expr::Space(_)) => {}
+            // A blank line ends the run, as it ends a paragraph.
             _ => break,
         }
     }

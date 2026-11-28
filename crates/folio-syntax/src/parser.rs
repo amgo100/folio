@@ -295,10 +295,13 @@ fn table_row(p: &mut Parser<'_>) {
 fn table_cell(p: &mut Parser<'_>) {
     let m = p.marker();
     let mut nesting: usize = 0;
-    let in_cell = mem::replace(&mut p.in_cell, true);
+    let in_cell = p.in_cell;
     while !p.at_set(syntax_set!(TablePipe, RightBracket, End))
         || (nesting > 0 && p.at_set(syntax_set!(TablePipe, RightBracket)))
     {
+        // Inside brackets of the cell's text, a pipe is text, so strong and
+        // emphasized text there do not end at one.
+        p.in_cell = nesting == 0;
         markup_expr(p, false, &mut nesting);
     }
     p.in_cell = in_cell;

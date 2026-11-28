@@ -68,7 +68,9 @@ impl Vm<'_> {
         let header = separator(block.body())?;
         self.enter();
         self.rows = true;
+        let line = std::mem::replace(&mut self.header_line, header.map(|(_, span)| span));
         let result = self.markup(block.body());
+        self.header_line = line;
         self.rows = false;
         self.exit();
         Ok((result?, header))
@@ -81,7 +83,7 @@ impl Vm<'_> {
     pub(super) fn row_run(&mut self, rows: &[ast::TableRow<'_>]) -> EvalResult<Content> {
         let mut data = Vec::with_capacity(rows.len());
         for &row in rows {
-            if row.is_separator() {
+            if self.header_line == Some(row.span()) {
                 self.step(row.span())?;
                 continue;
             }
@@ -108,16 +110,32 @@ impl Vm<'_> {
     pub(super) fn table_row(&mut self, row: ast::TableRow<'_>) -> EvalResult<Content> {
         self.step(row.span())?;
         let mut out = Content::new();
-        if row.is_separator() {
-            return Ok(out);
-        }
         let count = row.cells().count();
         for (i, cell) in row.cells().enumerate() {
             self.step(cell.span())?;
-            let (content, label) = self.markup_labelled(cell)?;
+            let (mut content, mut label) = self.markup_labelled(cell)?;
+            // A label at the end of a cell is the cell's, not that of the
+            // element before it in the cell, unless that is a `#cell`.
+            let trailing = cell
+                .exprs()
+                .rev()
+                .find(|expr| !matches!(expr, ast::Expr::Space(_)))
+                .and_then(|expr| match expr {
+                    ast::Expr::Label(label) => Some(label),
+                    _ => None,
+                });
+            if let Some(written) = trailing
+                && label.is_none()
+                && lone_cell(&content).is_none()
+                && let Some(element) = content.last_element_mut()
+                && element.label.as_deref() == Some(written.get())
+            {
+                element.label = None;
+                label = Some(written);
+            }
             // A label alone after the last pipe is the last cell's:
             // `| a | b | <t>`.
-            if let Some(label) = label
+            if let Some(written) = label
                 && i + 1 == count
                 && i > 0
                 && content
@@ -130,7 +148,15 @@ impl Vm<'_> {
                     .last()
                     .is_some_and(|n| n.kind() == folio_syntax::SyntaxKind::TablePipe)
             {
-                out = super::vm::labelled(out, Some(label));
+                match out.last_element_mut() {
+                    Some(last) if last.label.is_some() => {
+                        self.tolerate(EvalError::new(
+                            written.span(),
+                            "this element already has a label",
+                        ))?;
+                    }
+                    _ => out = super::vm::labelled(out, Some(written)),
+                }
                 break;
             }
             if content.nodes().iter().any(is_cell_node) && lone_cell(&content).is_none() {
@@ -480,15 +506,9 @@ fn separator(body: ast::Markup<'_>) -> EvalResult<Option<(i64, Span)>> {
         };
         match expr {
             ast::Expr::Space(_) | ast::Expr::Parbreak(_) => {}
-            ast::Expr::TableRow(row) if row.is_separator() => {
-                if found.is_some() {
-                    return Err(EvalError::new(
-                        row.span(),
-                        "a grid's body has one `|---|` line at most",
-                    )
-                    .with_hint("the rows above the first one are the header rows")
-                    .into());
-                }
+            // Only the first such line marks header rows; a later one is a
+            // row of em dashes, `---` in markup.
+            ast::Expr::TableRow(row) if row.is_separator() && found.is_none() => {
                 if other {
                     return Err(EvalError::new(
                         row.span(),

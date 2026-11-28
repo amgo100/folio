@@ -670,9 +670,11 @@ fn pipe_row_errors() {
         errors("#grid[\n  |---|\n  | a |\n]\n"),
         ["a `|---|` line marks the rows above it as header rows, but there are none"]
     );
-    assert_eq!(
-        errors("#grid[\n  | a |\n  |---|\n  | b |\n  |---|\n]\n"),
-        ["a grid's body has one `|---|` line at most"]
+    // A later line like it is a row of em dashes.
+    same_pages(
+        "#grid(header-rows: 1)[\n  | a |\n  | b |\n  | — |\n]\n",
+        "#grid[\n  | a |\n  |---|\n  | b |\n  | --- |\n]\n",
+        &[],
     );
     assert_eq!(
         errors("#grid[\n  #cell[a]\n  |---|\n]\n"),
@@ -799,6 +801,29 @@ fn more_pipe_row_errors() {
         ["a label after a pipe row has no cell"]
     );
     assert!(errors("#grid[\n  | a | b | <t>\n]\nSee @t.\n").is_empty());
+    assert_eq!(
+        errors("#grid[\n  | a | #cell[b] <x> | <t>\n]\n"),
+        ["this element already has a label"]
+    );
+    // A label at the end of a cell is the cell's, not the strong text's.
+    let all = |text: &str| -> Vec<String> {
+        diagnostics(&world("", text))
+            .iter()
+            .map(|d| d.message.to_string())
+            .collect()
+    };
+    assert!(
+        !all("#grid[\n  | *Total* <t> | 3 |\n]\nSee @t.\n")
+            .iter()
+            .any(|m| m.contains("strong")),
+    );
+    // A pipe in brackets around strong text, in a cell.
+    assert!(errors("#grid(column-tracks: 2)[\n  | [*a | b*] | c |\n]\n").is_empty());
+    // A blank line ends a run of rows, and a span with it.
+    assert_eq!(
+        errors("#grid[\n  | #cell(rowspan: 2)[A] | b |\n\n  | c |\n]\n"),
+        ["this cell spans 2 rows, past the last of the rows it is in"]
+    );
     // A binding above a header line, and a row of dashes below it.
     assert!(
         errors(
