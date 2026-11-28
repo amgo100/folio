@@ -11,6 +11,7 @@ use indexmap::IndexSet;
 
 use super::captures::{captures, free_variables};
 use super::content::{Content, Node, anchor};
+use super::decl;
 use super::element;
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::library;
@@ -862,13 +863,48 @@ impl<'a> Vm<'a> {
             ast::Expr::ScopedRule(rule) => Ok(Value::Content(Content::node(Node::Rule(
                 rule.to_untyped().clone(),
             )))),
-            ast::Expr::ElementDecl(_) => Err(EvalError::new(
-                span,
-                "element declarations are not supported yet",
-            )
-            .with_hint("elements come from components for now")
-            .into()),
+            ast::Expr::ElementDecl(decl) => self.element_decl(decl),
         }
+    }
+
+    /// Binds the element an element declaration declares (SPEC §4.3): its
+    /// schema was collected before evaluation, with the project's other
+    /// declarations ([`decl::project_elements`]). A declaration with errors,
+    /// which were reported there, poisons its name.
+    fn element_decl(&mut self, decl: ast::ElementDecl<'_>) -> EvalResult<Value> {
+        let span = decl.span();
+        if decl.to_untyped().diagnosis().errors {
+            // `check_source` reports the syntax error.
+            return Err(Stop::Reported);
+        }
+        let top_level = source_file(self.db, self.project, self.file.clone()).is_some_and(|file| {
+            decl::file_elements(self.db, file)
+                .iter()
+                .any(|d| d.span == span)
+        });
+        if !top_level {
+            return Err(
+                EvalError::new(span, "an element is declared at the top level of a file")
+                    .with_hint(
+                        "elements are known before any script runs, so a declaration cannot be \
+                     inside code, a block or a function",
+                    )
+                    .into(),
+            );
+        }
+        let name = decl.name().get().clone();
+        let accepted = decl::project_elements(self.db, self.project).accepts(&self.file, span);
+        match Name::new(&name) {
+            Some(element) if accepted => {
+                let namespace = Name::new(decl::PROJECT).expect("an identifier");
+                let func = Func::Element(QualifiedName::qualified(namespace, element));
+                self.define(name, Value::Func(func));
+            }
+            _ => {
+                self.poisoned.insert(name);
+            }
+        }
+        Ok(Value::None)
     }
 
     /// Evaluates the expressions of a code block and joins their values.
@@ -928,6 +964,30 @@ impl<'a> Vm<'a> {
         }
         if let Some(value) = self.globals.get(name) {
             return Ok(value.clone());
+        }
+        // An element the project declares is imported from the file that
+        // declares it.
+        if let Some(file) = decl::project_elements(self.db, self.project).file_of(name) {
+            if *file == self.file {
+                return Err(
+                    EvalError::new(ident.span(), eco_format!("unknown variable: {name}"))
+                        .with_hint(eco_format!(
+                            "`{name}` is an element declared later in this file; move its \
+                         declaration above its first use"
+                        ))
+                        .into(),
+                );
+            }
+            return Err(
+                EvalError::new(ident.span(), eco_format!("unknown variable: {name}"))
+                    .with_hint(eco_format!(
+                        "`{name}` is an element declared in `{}`; import it with \
+                     `#import \"/{}\": {name}`",
+                        file.as_str(),
+                        file.as_str()
+                    ))
+                    .into(),
+            );
         }
         // An element name that components provide but that does not resolve,
         // because it is ambiguous or its binding is stale, says why.

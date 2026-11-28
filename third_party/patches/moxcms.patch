@@ -1,0 +1,450 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2006-07-24 01:21:28.000000000 +0000
++++ b/Cargo.toml	2026-11-28 09:09:55.532649039 +0000
+@@ -62,18 +62,10 @@
+ avx_shaper_fixed_point_paths = ["avx"]
+ avx_shaper_optimized_paths = ["avx"]
+ avx_shaper_paths = ["avx"]
+-default = [
+-    "avx_shaper_paths",
+-    "sse_shaper_paths",
+-    "neon_shaper_paths",
+-    "avx_shaper_fixed_point_paths",
+-    "avx_luts",
+-    "sse_shaper_fixed_point_paths",
+-    "sse_luts",
+-    "neon_shaper_fixed_point_paths",
+-    "neon_luts",
+-    "lut",
+-]
++# Folio: only the scalar code by default. The SIMD paths, which moxcms picks
++# by CPU at run time, round otherwise (Folio's SPEC §2.4, #312); src/lib.rs
++# refuses to build them.
++default = ["lut"]
+ extended_range = []
+ in_place = []
+ lut = []
+@@ -105,6 +97,11 @@
+ [dependencies.pxfm]
+ version = "^0.1.1"
+ 
++# Folio: libm for the float functions moxcms took from pxfm at run time and
++# from std (Folio's SPEC §2.4; see FOLIO.md).
++[dependencies.libm]
++version = "0.2.16"
++
+ [dev-dependencies.rand]
+ version = "0.10.0"
+ 
+diff -ruN a/FOLIO.md b/FOLIO.md
+--- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
++++ b/FOLIO.md	2026-11-28 09:09:55.535370110 +0000
+@@ -0,0 +1,45 @@
++# moxcms 0.8.1, patched for Folio
++
++This is the crates.io release of `moxcms` 0.8.1
++(https://crates.io/crates/moxcms/0.8.1), unpacked as published, with Folio's
++patch applied. Folio uses it through `[patch.crates-io]` in its root
++`Cargo.toml`. Its licence is unchanged: BSD-3-Clause OR Apache-2.0
++(LICENSE.md, LICENSE-APACHE.md).
++
++Folio converts a PDF figure to SVG through `hayro-svg` where PDF/A or
++PDF/UA forbids embedding the figure or its PDF version is newer than the
++output's (Folio's SPEC §11.1), and `hayro-interpret` converts its
++ICC-based and Lab colour, and DeviceCMYK, with this crate. The release
++computes in ways that depend on the machine, which SPEC §2.4 forbids for
++output: an aarch64 build, an x86-64 build on a CPU with SSE 4.1 or AVX2,
++and one on a CPU without converted the same figure to different colours
++(#312). Folio's changes make it compute the same way everywhere. Each
++changed file carries a comment that starts with `Folio:`.
++
++- `src/mlaf.rs`: `mlaf` is always `acc + a * b`, a rounded product and a
++  rounded sum. The release fused the two on aarch64 and on x86-64 built
++  with FMA, which rounds once.
++- `src/lib.rs`, `Cargo.toml`: the default features are only `lut`, and the
++  crate refuses to build with `avx`, `sse`, `avx512` or `neon`, which build
++  the SIMD paths it picks by CPU at run time and which round otherwise
++  than the scalar code. Folio builds only the scalar code.
++- `src/folio_libm.rs` (new): the float functions the crate took from
++  `pxfm` at run time, under pxfm's names, computed with the `libm` crate.
++  Several of pxfm's functions pick an AVX+FMA or a generic path by CPU at
++  run time and by target at compile time, and its `dirty_powf` is an
++  approximation whose result depends on fused multiply-adds. `dirty_powf`
++  becomes `libm::powf` of the magnitude with the release's sign rule, and
++  `f_hypot3f` a square root in `f64`. `src/defaults.rs` still uses
++  pxfm's `const fn`s, which the compiler evaluates the same on every host.
++- `src/rgb.rs`, `src/lab.rs`, `src/srlab2.rs`, `src/gamma.rs`,
++  `src/trc.rs`, `src/jzazbz.rs`, `src/jzczhz.rs`, `src/dt_ucs.rs`,
++  `src/oklab.rs`, `src/oklch.rs`, `src/luv.rs`, `src/yrg.rs`: take those
++  functions from `folio_libm` instead of `pxfm`.
++- `src/rgb.rs`: `Rgb::cbrt` and `Rgb`'s `Pow` with `libm`, through a new
++  public trait `LibmFloat` (for `f32` and `f64`), instead of std's through
++  `num_traits::Float`.
++- `Cargo.toml`: depends on `libm`.
++
++The whole change is `third_party/patches/moxcms.patch` in Folio's repository;
++`scripts/patch-third-party.sh` rebuilds this directory from the release and
++the patch, and `third_party/README.md` says how to move to a new release.
+diff -ruN a/src/dt_ucs.rs b/src/dt_ucs.rs
+--- a/src/dt_ucs.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/dt_ucs.rs	2026-11-28 09:09:55.534538099 +0000
+@@ -28,7 +28,8 @@
+  */
+ use crate::Xyz;
+ use crate::mlaf::mlaf;
+-use pxfm::{f_atan2f, f_powf, f_sincosf};
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{f_atan2f, f_powf, f_sincosf};
+ 
+ /// Darktable UCS JCH ( Darktable Uniform Color Space )
+ #[derive(Copy, Clone, PartialOrd, PartialEq, Debug)]
+diff -ruN a/src/folio_libm.rs b/src/folio_libm.rs
+--- a/src/folio_libm.rs	1970-01-01 00:00:00.000000000 +0000
++++ b/src/folio_libm.rs	2026-11-28 09:09:55.532804440 +0000
+@@ -0,0 +1,71 @@
++// Folio: this module is Folio's, not moxcms's (Folio's SPEC §2.4, #312).
++//
++// The float functions moxcms took from `pxfm` at run time, under pxfm's
++// names, computed with the `libm` crate instead. Several of pxfm's functions
++// pick an AVX+FMA or a generic path by CPU at run time and by target at
++// compile time, and its `dirty_*` functions are approximations whose
++// results differ with fused multiply-adds, so the same colour could convert
++// to other bits on another machine. `libm` is plain Rust with IEEE
++// operations only, so it gives the same bits everywhere. `defaults.rs`
++// still uses pxfm's `const fn`s, which the compiler evaluates, the same on
++// every host.
++
++pub(crate) use libm::{
++    atan2f as f_atan2f, cbrtf as f_cbrtf, exp as f_exp, exp2 as f_exp2, exp2f as f_exp2f,
++    exp10 as f_exp10, exp10f as f_exp10f, expf as f_expf, hypotf as f_hypotf, log as f_log,
++    log2 as f_log2, log2f as f_log2f, log10 as f_log10, log10f as f_log10f, logf as f_logf,
++    pow as f_pow, powf as f_powf, sincosf as f_sincosf, sinf as f_sinf,
++};
++
++/// `sqrt(x² + y² + z²)`: the squares are exact in `f64`, the sum and the
++/// square root rounded as IEEE 754 specifies.
++#[inline]
++pub(crate) fn f_hypot3f(x: f32, y: f32, z: f32) -> f32 {
++    let (x, y, z) = (x as f64, y as f64, z as f64);
++    libm::sqrt(x * x + y * y + z * z) as f32
++}
++
++/// pxfm's `dirty_powf`: `|d|^n`, negated for a negative `d` and an odd
++/// integer part of `n`.
++#[inline]
++pub(crate) fn dirty_powf(d: f32, n: f32) -> f32 {
++    let c = libm::powf(d.abs(), n);
++    if d < 0.0 && (n as i32) % 2 != 0 {
++        -c
++    } else {
++        c
++    }
++}
++
++/// The powers and cube roots of `Rgb<T>`'s methods, which called std's
++/// through `num_traits::Float`.
++pub trait LibmFloat: Copy {
++    /// The cube root, with `libm`.
++    fn libm_cbrt(self) -> Self;
++    /// `self` to the power `n`, with `libm`.
++    fn libm_powf(self, n: Self) -> Self;
++}
++
++impl LibmFloat for f32 {
++    #[inline]
++    fn libm_cbrt(self) -> Self {
++        libm::cbrtf(self)
++    }
++
++    #[inline]
++    fn libm_powf(self, n: Self) -> Self {
++        libm::powf(self, n)
++    }
++}
++
++impl LibmFloat for f64 {
++    #[inline]
++    fn libm_cbrt(self) -> Self {
++        libm::cbrt(self)
++    }
++
++    #[inline]
++    fn libm_powf(self, n: Self) -> Self {
++        libm::pow(self, n)
++    }
++}
+diff -ruN a/src/gamma.rs b/src/gamma.rs
+--- a/src/gamma.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/gamma.rs	2026-11-28 09:09:55.534567406 +0000
+@@ -30,7 +30,8 @@
+ use crate::transform::PointeeSizeExpressible;
+ use crate::*;
+ use num_traits::AsPrimitive;
+-use pxfm::*;
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::*;
+ 
+ #[inline]
+ /// Linear transfer function for sRGB
+diff -ruN a/src/jzazbz.rs b/src/jzazbz.rs
+--- a/src/jzazbz.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/jzazbz.rs	2026-11-28 09:09:55.534680753 +0000
+@@ -30,7 +30,8 @@
+ use crate::jzczhz::Jzczhz;
+ use crate::mlaf::mlaf;
+ use num_traits::Pow;
+-use pxfm::{dirty_powf, f_cbrtf, f_powf};
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{dirty_powf, f_cbrtf, f_powf};
+ use std::ops::{
+     Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign,
+ };
+diff -ruN a/src/jzczhz.rs b/src/jzczhz.rs
+--- a/src/jzczhz.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/jzczhz.rs	2026-11-28 09:09:55.534695731 +0000
+@@ -29,7 +29,8 @@
+ use crate::Xyz;
+ use crate::jzazbz::Jzazbz;
+ use num_traits::Pow;
+-use pxfm::{f_atan2f, f_cbrtf, f_hypot3f, f_hypotf, f_powf, f_sincosf, f_sinf};
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{f_atan2f, f_cbrtf, f_hypot3f, f_hypotf, f_powf, f_sincosf, f_sinf};
+ use std::ops::{
+     Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign,
+ };
+diff -ruN a/src/lab.rs b/src/lab.rs
+--- a/src/lab.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/lab.rs	2026-11-28 09:09:55.534713194 +0000
+@@ -28,7 +28,8 @@
+  */
+ use crate::mlaf::{fmla, mlaf};
+ use crate::{Chromaticity, LCh, Xyz};
+-use pxfm::f_cbrtf;
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::f_cbrtf;
+ 
+ /// Holds CIE LAB values
+ #[repr(C)]
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/lib.rs	2026-11-28 09:09:55.534726641 +0000
+@@ -40,12 +40,23 @@
+     not(any(feature = "avx", feature = "sse", feature = "avx512", feature = "neon",)),
+     forbid(unsafe_code)
+ )]
++// Folio: moxcms's SIMD paths, which it picks by CPU at run time, round
++// otherwise than its scalar code, so the same colour could convert to other
++// bits on another machine (Folio's SPEC §2.4, #312). Folio builds only the
++// scalar code; a dependency that turns a SIMD feature on fails the build.
++#[cfg(any(feature = "avx", feature = "sse", feature = "avx512", feature = "neon"))]
++compile_error!(
++    "Folio's patched moxcms builds no SIMD paths (Folio's SPEC §2.4, #312): \
++     turn moxcms's avx, sse, avx512 and neon features off"
++);
+ mod chad;
+ mod cicp;
+ mod conversions;
+ mod dat;
+ mod defaults;
+ mod err;
++// Folio: the float functions moxcms took from pxfm, with libm.
++mod folio_libm;
+ mod gamma;
+ mod gamut;
+ mod ictcp;
+@@ -93,6 +104,8 @@
+ };
+ pub use dt_ucs::{DtUchHcb, DtUchHsb, DtUchJch};
+ pub use err::{CmsError, MalformedSize};
++// Folio: the bound of `Rgb::cbrt` and `Rgb`'s `Pow`.
++pub use folio_libm::LibmFloat;
+ pub use gamut::filmlike_clip;
+ pub use ictcp::ICtCp;
+ pub use jzazbz::Jzazbz;
+diff -ruN a/src/luv.rs b/src/luv.rs
+--- a/src/luv.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/luv.rs	2026-11-28 09:09:55.534757338 +0000
+@@ -56,7 +56,8 @@
+ use crate::mlaf::mlaf;
+ use crate::{Chromaticity, Lab, Xyz};
+ use num_traits::Pow;
+-use pxfm::{f_atan2f, f_cbrtf, f_hypotf, f_powf, f_sincosf};
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{f_atan2f, f_cbrtf, f_hypotf, f_powf, f_sincosf};
+ use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+ 
+ pub(crate) const LUV_WHITE_U_PRIME: f32 = 4.0f32 * Chromaticity::D50.to_xyz().y
+diff -ruN a/src/mlaf.rs b/src/mlaf.rs
+--- a/src/mlaf.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/mlaf.rs	2026-11-28 09:09:55.534986385 +0000
+@@ -29,33 +29,14 @@
+ use num_traits::MulAdd;
+ use std::ops::{Add, Mul, Neg};
+ 
+-#[cfg(any(
+-    all(
+-        any(target_arch = "x86", target_arch = "x86_64"),
+-        target_feature = "fma"
+-    ),
+-    all(target_arch = "aarch64", target_feature = "neon")
+-))]
++// Folio: always `acc + a * b`, a rounded product and a rounded sum, the form
++// baseline x86-64 used. moxcms fused the two on aarch64 and on x86-64 built
++// with FMA, which rounds once, so the same colour converted to other bits
++// on another machine (Folio's SPEC §2.4, #312).
+ #[inline(always)]
+ pub(crate) fn mlaf<T: Copy + Mul<T, Output = T> + Add<T, Output = T> + MulAdd<T, Output = T>>(
+     acc: T,
+     a: T,
+-    b: T,
+-) -> T {
+-    MulAdd::mul_add(a, b, acc)
+-}
+-
+-#[inline(always)]
+-#[cfg(not(any(
+-    all(
+-        any(target_arch = "x86", target_arch = "x86_64"),
+-        target_feature = "fma"
+-    ),
+-    all(target_arch = "aarch64", target_feature = "neon")
+-)))]
+-pub(crate) fn mlaf<T: Copy + Mul<T, Output = T> + Add<T, Output = T> + MulAdd<T, Output = T>>(
+-    acc: T,
+-    a: T,
+     b: T,
+ ) -> T {
+     acc + a * b
+diff -ruN a/src/oklab.rs b/src/oklab.rs
+--- a/src/oklab.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/oklab.rs	2026-11-28 09:09:55.535030187 +0000
+@@ -7,7 +7,8 @@
+ use crate::Rgb;
+ use crate::mlaf::mlaf;
+ use num_traits::Pow;
+-use pxfm::{f_cbrtf, f_powf};
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{f_cbrtf, f_powf};
+ use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+ 
+ #[repr(C)]
+diff -ruN a/src/oklch.rs b/src/oklch.rs
+--- a/src/oklch.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/oklch.rs	2026-11-28 09:09:55.535045542 +0000
+@@ -6,7 +6,8 @@
+  */
+ use crate::{Oklab, Rgb};
+ use num_traits::Pow;
+-use pxfm::{f_atan2f, f_cbrtf, f_hypotf, f_powf, f_sincosf};
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{f_atan2f, f_cbrtf, f_hypotf, f_powf, f_sincosf};
+ use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+ 
+ /// Represents *Oklch* colorspace
+diff -ruN a/src/rgb.rs b/src/rgb.rs
+--- a/src/rgb.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/rgb.rs	2026-11-28 09:09:55.535124930 +0000
+@@ -6,9 +6,10 @@
+  */
+ use crate::math::{FusedMultiplyAdd, m_clamp, m_max, m_min};
+ use crate::mlaf::mlaf;
+-use crate::{Matrix3f, Vector3, Xyz};
++use crate::{LibmFloat, Matrix3f, Vector3, Xyz};
+ use num_traits::{AsPrimitive, Bounded, Float, Num, Pow, Signed};
+-use pxfm::{
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{
+     f_exp, f_exp2, f_exp2f, f_exp10, f_exp10f, f_expf, f_log, f_log2, f_log2f, f_log10, f_log10f,
+     f_logf, f_pow, f_powf,
+ };
+@@ -673,33 +674,46 @@
+         )
+     }
+ 
++}
++
++// Folio: the cube root with `libm`, not std's through `num_traits::Float`.
++impl<T: LibmFloat> Rgb<T> {
+     #[inline]
+     pub fn cbrt(&self) -> Rgb<T> {
+-        Rgb::new(self.r.cbrt(), self.g.cbrt(), self.b.cbrt())
++        Rgb::new(self.r.libm_cbrt(), self.g.libm_cbrt(), self.b.libm_cbrt())
+     }
+ }
+ 
++// Folio: powers with `libm`, not std's through `num_traits::Float`.
+ impl<T> Pow<T> for Rgb<T>
+ where
+-    T: Float,
++    T: Float + LibmFloat,
+ {
+     type Output = Rgb<T>;
+ 
+     #[inline]
+     fn pow(self, rhs: T) -> Self::Output {
+-        Rgb::<T>::new(self.r.powf(rhs), self.g.powf(rhs), self.b.powf(rhs))
++        Rgb::<T>::new(
++            self.r.libm_powf(rhs),
++            self.g.libm_powf(rhs),
++            self.b.libm_powf(rhs),
++        )
+     }
+ }
+ 
+ impl<T> Pow<Rgb<T>> for Rgb<T>
+ where
+-    T: Float,
++    T: Float + LibmFloat,
+ {
+     type Output = Rgb<T>;
+ 
+     #[inline]
+     fn pow(self, rhs: Rgb<T>) -> Self::Output {
+-        Rgb::<T>::new(self.r.powf(rhs.r), self.g.powf(rhs.g), self.b.powf(rhs.b))
++        Rgb::<T>::new(
++            self.r.libm_powf(rhs.r),
++            self.g.libm_powf(rhs.g),
++            self.b.libm_powf(rhs.b),
++        )
+     }
+ }
+ 
+diff -ruN a/src/srlab2.rs b/src/srlab2.rs
+--- a/src/srlab2.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/srlab2.rs	2026-11-28 09:09:55.535167642 +0000
+@@ -28,7 +28,8 @@
+  */
+ use crate::Xyz;
+ use crate::mlaf::mlaf;
+-use pxfm::f_cbrtf;
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::f_cbrtf;
+ 
+ #[inline]
+ fn srlab2_gamma(x: f32) -> f32 {
+diff -ruN a/src/trc.rs b/src/trc.rs
+--- a/src/trc.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/trc.rs	2026-11-28 09:09:55.535242418 +0000
+@@ -33,7 +33,8 @@
+ use crate::writer::FloatToFixedU8Fixed8;
+ use crate::{CmsError, ColorProfile, DataColorSpace, Rgb, TransferCharacteristics};
+ use num_traits::AsPrimitive;
+-use pxfm::{dirty_powf, f_pow, f_powf};
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{dirty_powf, f_pow, f_powf};
+ 
+ #[derive(Clone, Debug, PartialEq)]
+ pub enum ToneReprCurve {
+diff -ruN a/src/yrg.rs b/src/yrg.rs
+--- a/src/yrg.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/yrg.rs	2026-11-28 09:09:55.535315424 +0000
+@@ -28,7 +28,8 @@
+  */
+ use crate::mlaf::mlaf;
+ use crate::{Matrix3f, Vector3f, Xyz};
+-use pxfm::{f_atan2f, f_hypotf, f_sincosf};
++// Folio: pxfm's run-time functions computed with `libm` (folio_libm.rs).
++use crate::folio_libm::{f_atan2f, f_hypotf, f_sincosf};
+ 
+ /// Structure for Yrg colorspace
+ ///

@@ -167,9 +167,12 @@ fn an_edit_to_one_paragraph_reruns_only_what_depends_on_it() {
     assert_eq!(
         logged.take(),
         counts(&[
-            // The edited file is reparsed, checked, and linted for
-            // `#if variant == ..` (SPEC §6.2).
-            ("dependencies check_source variant_conditions", 1),
+            // The edited file is reparsed, checked, linted for
+            // `#if variant == ..` (SPEC §6.2), and its elements declared.
+            (
+                "dependencies check_source variant_conditions file_elements",
+                1
+            ),
             // `questions/q2.fol` and `main.fol`.
             ("eval_file", 2),
             ("evaluate document check_fonts compile_build", 1),
