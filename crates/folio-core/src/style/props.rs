@@ -466,6 +466,11 @@ static BUILTINS: LazyLock<Vec<Property>> = LazyLock::new(|| {
     prop("rule-spacing", Length, mm(8.0), Layout);
     prop("rule-stroke", Any, Value::Auto, Layout);
     prop("rule-breakable", Bool, Value::Bool(false), Layout);
+    // SPEC §6.3: the height of `display: answer-space` without
+    // `rule-lines`: a length, or `auto` for the answer's own height, as a
+    // discarded layout measures it, times `answer-scale`.
+    prop("answer-height", any_of([Auto, Length]), Value::Auto, Layout);
+    prop("answer-scale", Number, Value::Number(1.0.into()), Layout);
 
     group = GroupId::NUMBERING;
     let mut prop =

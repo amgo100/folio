@@ -1607,7 +1607,13 @@ impl Walk<'_> {
             })
         }
         let project = self.build.project(self.db);
-        let doc = document(self.db, project, self.build.variant(self.db).clone()).as_ref()?;
+        let doc = document(
+            self.db,
+            project,
+            self.build.variant(self.db).clone(),
+            self.build.version(self.db).clone(),
+        )
+        .as_ref()?;
         find(&doc.root, label)
     }
 

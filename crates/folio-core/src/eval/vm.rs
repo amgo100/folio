@@ -952,6 +952,7 @@ impl<'a> Vm<'a> {
         }
         match name.as_str() {
             "variant" => return self.variant(),
+            "version" => return self.version(),
             "today" => {
                 return match today(self.db, self.project) {
                     Some(date) => Ok(Value::Date(date)),
@@ -1007,8 +1008,19 @@ impl<'a> Vm<'a> {
     fn variant(&self) -> EvalResult<Value> {
         match &self.mode {
             Mode::Shared => Err(Stop::NeedsVariant),
-            Mode::Variant(Some(name)) => Ok(Value::Str(name.as_str().into())),
-            Mode::Variant(None) => Ok(Value::None),
+            Mode::Variant(Some(name), _) => Ok(Value::Str(name.as_str().into())),
+            Mode::Variant(None, _) => Ok(Value::None),
+        }
+    }
+
+    /// The value of `version`: the version of a shuffled paper being built,
+    /// or `none` for a project without versions (SPEC §6.4). Like
+    /// `variant`, it stops evaluation for all variants and versions at once.
+    fn version(&self) -> EvalResult<Value> {
+        match &self.mode {
+            Mode::Shared => Err(Stop::NeedsVariant),
+            Mode::Variant(_, Some(name)) => Ok(Value::Str(name.as_str().into())),
+            Mode::Variant(_, None) => Ok(Value::None),
         }
     }
 
@@ -1547,7 +1559,7 @@ impl<'a> Vm<'a> {
                 Mode::Shared,
             );
             match (&shared.outcome, &mode) {
-                (Err(Stop::NeedsVariant), Mode::Variant(_)) => super::call_closure(
+                (Err(Stop::NeedsVariant), Mode::Variant(..)) => super::call_closure(
                     db,
                     project,
                     closure.clone(),

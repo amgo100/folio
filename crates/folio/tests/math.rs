@@ -238,6 +238,31 @@ fn text_numbers_and_embedded_values() {
         "[num(6.02), bin(×), attach([num(10)], sup: [num(23)]), vary(−), num(1), bin(×), \
          attach([num(10)], sup: [vary(−), num(7)]), sym(∞)]"
     );
+    // A float literal embedded with `#` keeps its spelling (#421).
+    assert_eq!(
+        tree("$#3.00e8 #(-1.60e-19) #(-2.50) #300000000.0$"),
+        "[num(3.00), bin(×), attach([num(10)], sup: [num(8)]), vary(−), num(1.60), bin(×), \
+         attach([num(10)], sup: [vary(−), num(19)]), vary(−), num(2.50), num(300000000.0)]"
+    );
+    // Under a sign in parentheses too; a literal out of range says so.
+    assert_eq!(tree("$#(-(2.50))$"), "[vary(−), num(2.50)]");
+    assert_eq!(
+        errors("$#1e99999$"),
+        [(
+            "a power of ten can be at most 9999 in either direction".to_string(),
+            "1e99999".to_string()
+        )]
+    );
+    // A computed or bound float is written in the shorter of its plain and
+    // scientific forms (D-324-2), without the `.0` of a whole float.
+    assert_eq!(
+        tree(
+            "#let c = 3.00e8\n$c = #c, #(2.0 * 1.5e8), #(0.5 * 3000.0), #(1.0 / 20.0), #(1.0 / 1000.0)$"
+        ),
+        "[c, rel(=), num(3), bin(×), attach([num(10)], sup: [num(8)]), punct(,), num(3), bin(×), \
+         attach([num(10)], sup: [num(8)]), punct(,), num(1500), punct(,), num(0.05), punct(,), num(1), \
+         bin(×), attach([num(10)], sup: [vary(−), num(3)])]"
+    );
     // Content that is only text is one text, with its spaces.
     assert_eq!(
         tree("#let t = [speed of light]\n$#t = c$"),

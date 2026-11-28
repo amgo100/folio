@@ -174,7 +174,13 @@ impl PdfInput {
 pub(crate) fn pdf_input(db: &dyn Db, build: Build<'_>) -> Option<PdfInput> {
     let text = text(db, build).as_ref()?;
     let project = build.project(db);
-    let doc = document(db, project, build.variant(db).clone()).as_ref()?;
+    let doc = document(
+        db,
+        project,
+        build.variant(db).clone(),
+        build.version(db).clone(),
+    )
+    .as_ref()?;
     let grids: Vec<GridLayout> = lines(db, build)
         .as_ref()
         .map(|l| l.grids.iter().cloned().collect())

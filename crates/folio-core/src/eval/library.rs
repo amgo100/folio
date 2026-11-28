@@ -6,11 +6,11 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use ecow::{EcoString, eco_format};
-use folio_component::{Color, QualifiedName, Scalar};
+use folio_component::{Color, ElementKind, QualifiedName, Scalar};
 use folio_syntax::{DiagSpan, FileId, Span, ast};
 
 use super::MAX_NESTING;
-use super::content::Content;
+use super::content::{Content, Node};
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::ops::{self, a_type};
 use super::value::{
@@ -115,6 +115,7 @@ const GLOBALS: &[(&str, NativeFn)] = &[
     ("read", read),
     ("repr", repr),
     ("rgb", rgb),
+    ("shuffle", shuffle),
     ("str", str),
     ("toml", toml),
     ("type", type_),
@@ -383,6 +384,105 @@ fn range(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
         }
     }
     Ok(Value::Array(out))
+}
+
+/// `shuffle(items, seed: "B")`: the array's items in an order fixed by the
+/// seed, a string or an integer (an integer seeds as its decimal digits, so
+/// `seed: 2` and `seed: "2"` agree). `#shuffle(seed: "B")[..]` reorders the
+/// blocks, floats and slides at the top level of its body in the same way,
+/// and leaves the text, inline elements, notes, spaces and breaks between
+/// them where they are. `seed: none` keeps
+/// the order, so that a build without versions is not shuffled (SPEC §6.4).
+fn shuffle(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
+    let span = args.span;
+    let items: Value = args.expect("items")?;
+    let seed = match args.named::<Value>("seed")? {
+        None => {
+            return Err(EvalError::new(span, "missing argument: seed")
+                .with_hint("name the seed, as in `shuffle(items, seed: version)`")
+                .into());
+        }
+        Some(Value::None) => None,
+        Some(Value::Str(s)) => Some(s),
+        Some(Value::Int(i)) => Some(eco_format!("{i}")),
+        Some(v) => bail!(
+            span,
+            "expected a string, an integer or none as the seed, found {}",
+            a_type(v.type_name())
+        ),
+    };
+    match items {
+        Value::Array(items) => {
+            let Some(seed) = seed else {
+                return Ok(Value::Array(items));
+            };
+            vm.alloc(2 * ITEM * items.len() as u64, span)?;
+            let order = permutation(seed.as_bytes(), items.len());
+            let slice = items.as_slice();
+            Ok(Value::Array(
+                order.into_iter().map(|i| slice[i].clone()).collect(),
+            ))
+        }
+        Value::Content(body) => {
+            let Some(seed) = seed else {
+                return Ok(Value::Content(body));
+            };
+            let nodes = body.nodes();
+            let at: Vec<usize> = (0..nodes.len())
+                .filter(|&i| {
+                    matches!(&nodes[i], Node::Element(e)
+                        if !matches!(e.kind, ElementKind::Inline | ElementKind::Note))
+                })
+                .collect();
+            vm.alloc(2 * ITEM * nodes.len() as u64, span)?;
+            let order = permutation(seed.as_bytes(), at.len());
+            let mut out: Vec<Node> = nodes.to_vec();
+            for (slot, from) in at.iter().zip(order) {
+                out[*slot] = nodes[at[from]].clone();
+            }
+            Ok(Value::Content(out.into_iter().collect()))
+        }
+        v => bail!(
+            span,
+            "expected an array or content to shuffle, found {}",
+            a_type(v.type_name())
+        ),
+    }
+}
+
+/// The order of `len` items that a seed fixes: index `k` of the result is
+/// the index of the item put `k`th. The algorithm is part of the language
+/// (SPEC §6.4), so that a version printed once can be printed again by a
+/// later compiler: the seed's bytes hashed with 64-bit FNV-1a start a
+/// SplitMix64 generator, which drives a Fisher–Yates shuffle from the last
+/// item down, each draw bounded without bias by Lemire's method.
+pub(crate) fn permutation(seed: &[u8], len: usize) -> Vec<usize> {
+    let mut state = seed.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    let mut next = move || {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    // A number below `n`, every one equally likely.
+    let mut below = |n: u64| -> u64 {
+        let threshold = n.wrapping_neg() % n;
+        loop {
+            let m = u128::from(next()) * u128::from(n);
+            if (m as u64) >= threshold {
+                return (m >> 64) as u64;
+            }
+        }
+    };
+    let mut order: Vec<usize> = (0..len).collect();
+    for i in (1..len).rev() {
+        let j = below(i as u64 + 1) as usize;
+        order.swap(i, j);
+    }
+    order
 }
 
 /// `rgb("1f5fa8")`, `rgb(31, 95, 168)`, with an optional alpha.
@@ -1830,6 +1930,27 @@ mod tests {
     use folio_component::Name;
 
     use super::*;
+
+    #[test]
+    fn permutations_are_fixed_by_their_seed() {
+        // The orders are part of the language: a version printed once must
+        // come out the same from every later compiler (SPEC §6.4).
+        assert_eq!(permutation(b"A", 6), [2, 5, 1, 3, 4, 0]);
+        assert_eq!(permutation(b"B", 6), [1, 0, 5, 2, 4, 3]);
+        assert_eq!(permutation(b"B", 10), [8, 2, 3, 0, 9, 1, 5, 4, 7, 6]);
+        assert_eq!(permutation(b"", 0), Vec::<usize>::new());
+        assert_eq!(permutation(b"A", 1), [0]);
+        for seed in [&b"A"[..], b"B", b"version 3", b"2"] {
+            for len in [2, 5, 13, 100] {
+                let order = permutation(seed, len);
+                assert_eq!(order, permutation(seed, len), "the same twice");
+                let mut sorted = order.clone();
+                sorted.sort_unstable();
+                assert_eq!(sorted, (0..len).collect::<Vec<_>>(), "a permutation");
+            }
+        }
+        assert_ne!(permutation(b"A", 10), permutation(b"B", 10));
+    }
 
     #[test]
     fn csv_quotes_and_line_breaks() {

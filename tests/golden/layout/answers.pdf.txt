@@ -1,5 +1,5 @@
 # Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
-master 419.53 × 595.28, 3 page(s)
+master 419.53 × 595.28, 4 page(s)
 page 1 419.53 × 595.28, 9 line(s)
   box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 21.81..449.83
     box (0.00, 0.00) 334.49 × 453.51 main.fol:1:2 baselines 21.81..449.83
@@ -96,12 +96,70 @@ page 2 419.53 × 595.28, 5 line(s)
         box (0.00, 386.00) 334.49 × 40.89 main.fol:25:1 baselines 14.97..37.20
           text (0.00, 14.97) SourceSerif4-Regular 11.00 w 334.49 69 glyph(s) "Explain why an object falling freely near the surface of the Earth is"
           text (0.00, 37.20) SourceSerif4-Regular 11.00 w 195.48 39 glyph(s) "said to move with uniform acceleration."
-page 3 419.53 × 595.28, 0 line(s)
-  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 22.68..90.71
-    box (0.00, 0.00) 334.49 × 90.71 main.fol:1:2 baselines 22.68..90.71
+page 3 419.53 × 595.28, 6 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 22.68..419.15
+    box (0.00, 0.00) 334.49 × 422.83 main.fol:1:2 baselines 22.68..419.15
       box (0.00, 0.00) 334.49 × 90.71 main.fol:3:1 baselines 22.68..90.71
         box (0.00, 0.00) 334.49 × 90.71 main.fol:27:2 baselines 22.68..90.71
           shape (0.00, 22.43) M(0.00, 0.00) L(334.49, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:27:2
           shape (0.00, 45.10) M(0.00, 0.00) L(334.49, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:27:2
           shape (0.00, 67.78) M(0.00, 0.00) L(334.49, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:27:2
           shape (0.00, 90.46) M(0.00, 0.00) L(334.49, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:27:2
+      box (0.00, 107.51) 334.49 × 315.32 main.fol:29:1 baselines 18.08..311.64
+        box (0.00, 0.00) 334.49 × 26.34 main.fol:29:1 baselines 18.08..18.08 keep penalty 10000
+          text (0.00, 18.08) SourceSerif4-Bold 14.00 w 88.31 12 glyph(s) "Answer space"
+        box (0.00, 32.34) 334.49 × 44.46 main.fol:31:1 baselines 14.97..37.20
+          text (0.00, 14.97) SourceSerif4-Regular 11.00 w 331.06 63 glyph(s) "The answers below are in the source, and the worksheet shows an"
+          text (331.06, 14.97) SourceSerif4-Regular 11.00 w 3.43 1 glyph(s) "-"
+          text (0.00, 37.20) SourceSerif4-Regular 11.00 w 181.35 38 glyph(s) "swer space in their place (SPEC §6.3)."
+        box (0.00, 82.31) 334.49 × 22.23 main.fol:33:1 baselines 14.97..14.97
+          text (0.00, 14.97) SourceSerif4-Regular 11.00 w 78.30 18 glyph(s) "A cyclist travels "
+          box (78.30, 7.65) 27.58 × 7.57 main.fol:33:20
+            text (0.00, 7.33) NewCMMath-Regular 11.00 w 16.50 3 glyph(s) "150"
+            text (18.33, 7.33) NewCMMath-Regular 11.00 w 9.25 1 glyph(s) "m"
+          text (105.88, 14.97) SourceSerif4-Regular 11.00 w 15.07 4 glyph(s) " in "
+          box (120.95, 7.65) 17.17 × 7.57 main.fol:33:38
+            text (0.00, 7.33) NewCMMath-Regular 11.00 w 11.00 2 glyph(s) "30"
+            text (12.83, 7.33) NewCMMath-Regular 11.00 w 4.33 1 glyph(s) "s"
+          text (138.12, 14.97) SourceSerif4-Regular 11.00 w 184.33 40 glyph(s) ". Calculate the cyclist’s average speed."
+        box (0.00, 107.54) 334.49 × 68.03 main.fol:35:2 baselines 22.68..68.03
+          shape (0.00, 22.43) M(0.00, 0.00) L(334.49, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:35:2
+          shape (0.00, 45.10) M(0.00, 0.00) L(334.49, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:35:2
+          shape (0.00, 67.78) M(0.00, 0.00) L(334.49, 0.00) stroke #000000ff 0.50 Butt Miter main.fol:35:2
+        box (0.00, 183.57) 334.49 × 22.23 main.fol:37:1 baselines 14.97..14.97
+          text (0.00, 14.97) SourceSerif4-Regular 11.00 w 199.83 43 glyph(s) "Sketch the cyclist’s distance against time."
+        box (0.00, 208.80) 334.49 × 79.87 main.fol:39:2
+          shape (0.00, 0.00) M(0.00, 0.25) L(334.49, 0.25) stroke #808080ff 0.50 Butt Miter main.fol:39:2
+          shape (0.00, 0.00) M(0.00, 79.62) L(334.49, 79.62) stroke #808080ff 0.50 Butt Miter main.fol:39:2
+          shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 79.87) stroke #808080ff 0.50 Butt Miter main.fol:39:2
+          shape (0.00, 0.00) M(334.24, 0.00) L(334.24, 79.87) stroke #808080ff 0.50 Butt Miter main.fol:39:2
+        box (0.00, 296.67) 334.49 × 18.66 main.fol:41:1 baselines 14.97..14.97
+          text (0.00, 14.97) SourceSerif4-Regular 11.00 w 183.19 36 glyph(s) "Show that a stone thrown upwards at "
+          box (183.19, 5.85) 38.71 × 9.24 main.fol:41:38
+            text (0.00, 9.12) NewCMMath-Regular 11.00 w 11.00 2 glyph(s) "12"
+            text (12.83, 9.12) NewCMMath-Regular 11.00 w 9.25 1 glyph(s) "m"
+            text (23.92, 9.12) NewCMMath-Regular 11.00 w 4.33 1 glyph(s) "s"
+            text (28.25, 5.13) NewCMMath-Regular 7.70 w 5.99 1 glyph(s) "−"
+            text (34.24, 5.13) NewCMMath-Regular 7.70 w 3.85 1 glyph(s) "1"
+          text (221.90, 14.97) SourceSerif4-Regular 11.00 w 58.64 13 glyph(s) " rises about "
+          box (280.54, 7.54) 25.14 × 7.68 main.fol:41:69
+            text (0.00, 7.44) NewCMMath-Regular 11.00 w 14.06 3 glyph(s) "7.3"
+            text (15.89, 7.44) NewCMMath-Regular 11.00 w 9.25 1 glyph(s) "m"
+          text (305.69, 14.97) SourceSerif4-Regular 11.00 w 3.30 1 glyph(s) "."
+page 4 419.53 × 595.28, 1 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 199.95..199.95
+    box (0.00, 0.00) 334.49 × 298.65 main.fol:1:2 baselines 199.95..199.95
+      box (0.00, 0.00) 334.49 × 298.65 main.fol:29:1 baselines 199.95..199.95
+        box (0.00, 0.00) 334.49 × 140.75 main.fol:43:2
+          shape (0.00, 0.00) M(0.00, 0.25) L(334.49, 0.25) stroke #808080ff 0.50 Butt Miter main.fol:43:2
+          shape (0.00, 0.00) M(0.00, 140.50) L(334.49, 140.50) stroke #808080ff 0.50 Butt Miter main.fol:43:2
+          shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 140.75) stroke #808080ff 0.50 Butt Miter main.fol:43:2
+          shape (0.00, 0.00) M(334.24, 0.00) L(334.24, 140.75) stroke #808080ff 0.50 Butt Miter main.fol:43:2
+        box (0.00, 151.75) 334.49 × 22.23 main.fol:47:2
+        box (0.00, 184.98) 334.49 × 22.23 main.fol:49:1 baselines 14.97..14.97
+          text (0.00, 14.97) SourceSerif4-Regular 11.00 w 252.42 55 glyph(s) "Explain why the stone takes as long to fall as to rise."
+        box (0.00, 210.21) 334.49 × 88.44 main.fol:51:2
+          shape (0.00, 0.00) M(0.00, 0.25) L(334.49, 0.25) stroke #808080ff 0.50 Butt Miter main.fol:51:2
+          shape (0.00, 0.00) M(0.00, 88.19) L(334.49, 88.19) stroke #808080ff 0.50 Butt Miter main.fol:51:2
+          shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 88.44) stroke #808080ff 0.50 Butt Miter main.fol:51:2
+          shape (0.00, 0.00) M(334.24, 0.00) L(334.24, 88.44) stroke #808080ff 0.50 Butt Miter main.fol:51:2
