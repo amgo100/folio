@@ -17,7 +17,11 @@
 //!   it changed. `watch-paint` times the same edit to the completed canvas:
 //!   until the preview's viewer, in Chromium, shows the edited page with
 //!   every glyph (SPEC §12.2). It runs when Node.js can load Playwright and
-//!   its Chromium, and is left out with a note otherwise. Glyphs drawn
+//!   its Chromium, and is left out with a note otherwise. `watch-image`
+//!   times an edit on a page with a 4 MB photograph, which the client
+//!   shows, to the first update it receives and decodes: the photograph is
+//!   sent once per connection, and the lists after name it by its content
+//!   hash. Glyphs drawn
 //!   from another quarter-pixel offset while the right one is fetched
 //!   count as drawn;
 //! - the stages of the reference document's builds: how long each query
@@ -45,6 +49,7 @@ use std::time::{Duration, Instant};
 
 use folio::{BuildMode, Name, Target, World};
 use folio_preview::{Event, Preview};
+use folio_render::wire;
 use folio_testkit::corpus;
 use folio_testkit::corpus::Project;
 use folio_testkit::refdoc::{self, Edit, Spec};
@@ -216,6 +221,8 @@ struct Watching {
     /// The file to edit, and its text after the edit.
     file: PathBuf,
     edited: String,
+    /// The images the connection carried, for a client that decodes.
+    images: wire::Images,
 }
 
 /// The corpus project that `watch-edit` previews: the acceptance exam of
@@ -273,6 +280,7 @@ fn watching() -> Prepared {
         revision,
         file,
         edited,
+        images: wire::Images::new(),
     }))
 }
 
@@ -334,6 +342,194 @@ fn paint_after_edit(prepared: Prepared) -> usize {
     assert_eq!(holes, 0, "the viewer showed text with holes");
     defer_drop(painting);
     1
+}
+
+/// The side of the photograph `watch-image` shows, in pixels: an RGB
+/// image of about 4 MB.
+const PHOTO_SIDE: u32 = 1160;
+
+/// A PNG of `side` × `side` pixels of noise, its image data stored without
+/// compression: about three bytes a pixel.
+fn photo_png(side: u32) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in bytes {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let crc = crc32(&out[start..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+    }
+    // Rows of RGB noise, each after its filter byte (none).
+    let mut raw = Vec::with_capacity((side * (side * 3 + 1)) as usize);
+    let mut state = 0x2545_f491_u32;
+    for _ in 0..side {
+        raw.extend(std::iter::once(0).chain((0..side * 3).map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as u8
+        })));
+    }
+    // A zlib stream of stored blocks.
+    let mut z = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65_535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        z.push(u8::from(i + 1 == blocks.len()));
+        let len = block.len() as u16;
+        z.extend_from_slice(&len.to_le_bytes());
+        z.extend_from_slice(&(!len).to_le_bytes());
+        z.extend_from_slice(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in &raw {
+        a = (a + u32::from(byte)) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = Vec::new();
+    header.extend_from_slice(&side.to_be_bytes());
+    header.extend_from_slice(&side.to_be_bytes());
+    header.extend_from_slice(&[8, 2, 0, 0, 0]);
+    chunk(&mut png, b"IHDR", &header);
+    chunk(&mut png, b"IDAT", &z);
+    chunk(&mut png, b"IEND", &[]);
+    png
+}
+
+/// The sentence `watch-image` edits, on the photograph's page.
+const IMAGE_EDIT: (&str, &str) = ("The photograph was taken", "The photograph was then taken");
+
+/// Serves a project whose first page holds a 4 MB photograph with `folio
+/// watch`'s preview, watching the disk, and connects a client that
+/// receives and decodes every page.
+fn watching_image() -> Prepared {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    std::fs::write(
+        dir.path().join("folio.toml"),
+        "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\nlang = \"en-GB\"\n",
+    )
+    .expect("the manifest");
+    std::fs::write(dir.path().join("photo.png"), photo_png(PHOTO_SIDE)).expect("the photograph");
+    // The photograph on the first page, and pages of text after it.
+    let mut text = String::from(
+        "= A photograph\n\n#image(\"photo.png\", alt: \"Noise\", width: 8cm)\n\n\
+         The photograph was taken with a long exposure, so the noise in it is even.\n\n",
+    );
+    for p in 0..40 {
+        for s in 0..8 {
+            text.push_str(&format!(
+                "Sentence {s} of paragraph {p} after the photograph. "
+            ));
+        }
+        text.push_str("\n\n");
+    }
+    std::fs::write(dir.path().join("main.fol"), text).expect("the entry file");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let options = folio_preview::Options::new(dir.path())
+        .system_fonts(false)
+        .on_event(move |event| {
+            if let Event::Updated(update) = event {
+                let _ = tx.send(update.revision);
+            }
+        });
+    let preview = Preview::start(options).expect("the preview starts");
+    let revision = rx.recv().expect("the first revision");
+    let url = format!("ws://{}/ws?token={}", preview.addr(), preview.token());
+    let stream = TcpStream::connect(preview.addr()).expect("the server");
+    let (mut client, _) = tungstenite::client(url, stream).expect("the websocket opens");
+    let mut images = wire::Images::new();
+    while decoded_lists(&mut client, &mut images).0 < revision {}
+    assert_eq!(images.len(), 1, "the photograph was sent");
+    // The client shows the first page, which is laid out and sent first,
+    // and keeps the images it was sent, which the lists after name alone.
+    client
+        .send(Message::text(
+            r#"{"type":"visible","pages":[0],"images":true}"#,
+        ))
+        .expect("the client says what it shows");
+    // A click is answered once the server has read that.
+    let click = format!(r#"{{"type":"click","revision":{revision},"page":0,"x":1,"y":1}}"#);
+    client
+        .send(Message::text(click))
+        .expect("the client clicks");
+    while !matches!(
+        client.read().expect("the preview's messages"),
+        Message::Text(text) if text.contains(r#""type":"source""#)
+    ) {}
+    let file = dir.path().join("main.fol");
+    let text = std::fs::read_to_string(&file).expect("the entry file");
+    let edited = text.replacen(IMAGE_EDIT.0, IMAGE_EDIT.1, 1);
+    Prepared::Watching(Box::new(Watching {
+        _preview: preview,
+        _dir: dir,
+        client,
+        revision,
+        file,
+        edited,
+        images,
+    }))
+}
+
+/// Writes the edit on the photograph's page to disk and waits until the
+/// client, which shows that page, has decoded the lists of the first
+/// update of the edit's revision: the visible page, sent before the
+/// revision is checked (SPEC §12.2).
+fn watch_image_after_edit(prepared: Prepared) -> usize {
+    let Prepared::Watching(mut watching) = prepared else {
+        unreachable!("set up as a watched project")
+    };
+    std::fs::write(&watching.file, &watching.edited).expect("the edit is written");
+    loop {
+        let (revision, lists) = decoded_lists(&mut watching.client, &mut watching.images);
+        if revision > watching.revision {
+            assert!(lists > 0, "the edit changed a page");
+            defer_drop(watching);
+            return lists;
+        }
+    }
+}
+
+/// [`received_lists`], decoding each list as a client does, with the
+/// images the connection carried before.
+fn decoded_lists(client: &mut WebSocket<TcpStream>, images: &mut wire::Images) -> (u64, usize) {
+    let mut lists = 0;
+    loop {
+        match client.read().expect("the preview's messages") {
+            Message::Binary(frame) => {
+                let message = wire::decode_with(&frame[4..], images).expect("a valid list");
+                std::hint::black_box(message);
+                lists += 1;
+            }
+            Message::Text(text) if text.starts_with(r#"{"type":"done""#) => {
+                return (done_revision(&text), lists);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The revision of a `done` message.
+fn done_revision(text: &str) -> u64 {
+    text.trim_end_matches('}')
+        .rsplit(':')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .expect("a revision")
 }
 
 /// Reads one revision from the preview's websocket, to its `done`
@@ -587,6 +783,13 @@ fn scenarios() -> Vec<Scenario> {
             }),
             setup: painting,
             run: paint_after_edit,
+        },
+        Scenario {
+            name: "watch-image",
+            what: "a page with a 4 MB photograph in `folio watch`, an edit on disk to its decoded list",
+            bounds: Some(PREVIEW),
+            setup: watching_image,
+            run: watch_image_after_edit,
         },
         Scenario {
             name: "check-edit",

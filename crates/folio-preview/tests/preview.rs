@@ -118,6 +118,8 @@ fn receive(ws: &mut WebSocket<TcpStream>) -> Received {
             Message::Binary(bytes) => {
                 let (index, body) = bytes.split_at(4);
                 let index = u32::from_le_bytes(index.try_into().unwrap());
+                // This client does not say it keeps images: every list
+                // holds their bytes.
                 frames.push((index, wire::decode(body).expect("a valid wire message")));
             }
             Message::Text(text) => {
@@ -376,7 +378,7 @@ fn the_viewer_draws_pages_inside_an_iframe() {
     let dir = project("exam");
     let (preview, events) = start(dir.path(), |o| o.watch(false));
     updated(&events, |u| u.pages > 0);
-    node("iframe.cjs", &preview.url());
+    node("iframe.cjs", &[&preview.url()]);
 }
 
 #[test]
@@ -389,21 +391,34 @@ fn the_viewer_draws_images() {
         eprintln!("skipped: Node.js with Playwright is not installed");
         return;
     }
-    for name in ["acceptance", "figures"] {
-        let dir = project(name);
-        let (preview, events) = start(dir.path(), |o| o.watch(false));
-        updated(&events, |u| u.pages > 0);
-        node("images.cjs", &preview.url());
-    }
+    let dir = project("acceptance");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    updated(&events, |u| u.pages > 0);
+    node("images.cjs", &[&preview.url()]);
+    // Then an edit moves every page of the figures, whose lists name the
+    // images the connection had by content hash alone, and the viewer
+    // draws them again.
+    let dir = project("figures");
+    let (preview, events) = start(dir.path(), |o| o);
+    updated(&events, |u| u.pages > 0);
+    let file = dir.path().join("main.fol");
+    node(
+        "images.cjs",
+        &[
+            &preview.url(),
+            file.to_str().unwrap(),
+            "#figure[#image(\"assets/wave.png\"",
+        ],
+    );
 }
 
 /// Runs a script of this crate's `tests` directory with Node.js and fails
 /// with its output unless it succeeds.
-fn node(script: &str, url: &str) {
+fn node(script: &str, args: &[&str]) {
     let mut child = std::process::Command::new("node")
         .current_dir(tests_dir())
         .arg(script)
-        .arg(url)
+        .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -1416,4 +1431,128 @@ fn edits_never_paint_text_with_holes() {
     eprintln!("edit to the completed canvas: {times:?}");
     painter.finish();
     preview.stop();
+}
+
+/// Reads one revision's binary frames as they came, to its `done`.
+fn raw_frames(ws: &mut WebSocket<TcpStream>) -> (u64, Vec<Vec<u8>>) {
+    let mut frames = Vec::new();
+    loop {
+        match ws.read().unwrap() {
+            Message::Binary(bytes) => frames.push(bytes[4..].to_vec()),
+            Message::Text(text) => {
+                let message: Value = serde_json::from_str(&text).unwrap();
+                if message["type"] == "done" {
+                    return (message["revision"].as_u64().unwrap(), frames);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn images_are_sent_once_to_clients_that_keep_them() {
+    let dir = project("figures");
+    let (preview, events) = start(dir.path(), |o| o.watch(false));
+    let first = updated(&events, |u| u.pages > 0);
+    let mut keeps = connect(&preview, preview.token(), None).unwrap();
+    let mut plain = connect(&preview, preview.token(), None).unwrap();
+    let mut images = wire::Images::new();
+    loop {
+        let (revision, frames) = raw_frames(&mut keeps);
+        for frame in &frames {
+            wire::decode_with(frame, &mut images).unwrap();
+        }
+        if revision >= first.revision {
+            break;
+        }
+    }
+    while raw_frames(&mut plain).0 < first.revision {}
+    assert!(!images.is_empty(), "the figures were sent");
+    keeps
+        .send(Message::text(
+            r#"{"type":"visible","pages":[0],"images":true}"#,
+        ))
+        .unwrap();
+    // A visible message is answered by nothing: a click after it is, once
+    // the server has read both.
+    let click = serde_json::json!({
+        "type": "click", "revision": first.revision, "page": 0, "x": 1.0, "y": 1.0,
+    });
+    keeps.send(Message::text(click.to_string())).unwrap();
+    message_of(&mut keeps, "source");
+
+    // A paragraph before the first figure moves every page.
+    let file = edit(
+        dir.path(),
+        "main.fol",
+        "#figure[#image(\"assets/wave.png\"",
+        "A paragraph that moves every page.\n\n#figure[#image(\"assets/wave.png\"",
+    );
+    preview.changed([file]);
+    let next = updated(&events, |u| u.revision > first.revision);
+    let named_alone = |frames: &[Vec<u8>]| {
+        frames
+            .iter()
+            .filter(|frame| wire::decode(frame) == Err(wire::DecodeError::UnknownImage))
+            .count()
+    };
+    let (mut kept, mut whole) = (Vec::new(), Vec::new());
+    while kept.is_empty() || raw_frames_revision(&kept) < next.revision {
+        kept.push(raw_frames(&mut keeps));
+    }
+    while whole.is_empty() || raw_frames_revision(&whole) < next.revision {
+        whole.push(raw_frames(&mut plain));
+    }
+    let kept: Vec<Vec<u8>> = kept.into_iter().flat_map(|(_, f)| f).collect();
+    let whole: Vec<Vec<u8>> = whole.into_iter().flat_map(|(_, f)| f).collect();
+    assert!(
+        named_alone(&kept) > 0,
+        "the client that keeps images got them again"
+    );
+    for frame in &kept {
+        wire::decode_with(frame, &mut images).expect("named images it has");
+    }
+    assert_eq!(
+        named_alone(&whole),
+        0,
+        "a plain client was sent lists without bytes"
+    );
+
+    // A client that lacks an image it was named is sent the pages that show
+    // it again, whole.
+    let hash = kept
+        .iter()
+        .find_map(|frame| {
+            let Ok(wire::Message::List(list)) = wire::decode_with(frame, &mut images) else {
+                return None;
+            };
+            list.items.iter().find_map(|item| match &item.command {
+                folio_render::Command::Image(image) => Some(image.image.content_hash()),
+                _ => None,
+            })
+        })
+        .expect("an image on the pages");
+    let missing = serde_json::json!({"type": "missing", "images": [format!("{hash:016x}")]});
+    keeps.send(Message::text(missing.to_string())).unwrap();
+    // Updates already on their way (the overlays) may come first.
+    let whole_again = (0..5).any(|_| {
+        raw_frames(&mut keeps)
+            .1
+            .iter()
+            .any(|frame| match wire::decode(frame) {
+                Ok(wire::Message::List(list)) => list.items.iter().any(|item| {
+                    matches!(&item.command, folio_render::Command::Image(image)
+                        if image.image.content_hash() == hash)
+                }),
+                _ => false,
+            })
+    });
+    assert!(whole_again, "the missing image was not sent again");
+    preview.stop();
+}
+
+/// The revision of the last of the updates read.
+fn raw_frames_revision(read: &[(u64, Vec<Vec<u8>>)]) -> u64 {
+    read.last().map_or(0, |(revision, _)| *revision)
 }

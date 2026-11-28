@@ -188,8 +188,23 @@ function command(tag, r) {
       const n = r.count(1);
       const bytes = r.bytes.subarray(r.pos, r.pos + n);
       r.pos += n;
-      // The key is hashed when the image is first drawn.
-      return { kind: "image", rect, format, bytes, key: null };
+      // Its content hash and whether its bytes were left out, because
+      // this connection carried them before (`knownImages`); without
+      // them, from an older server, the key is hashed when the image is
+      // first drawn.
+      let key = null;
+      let known = false;
+      if (r.left() >= 9) {
+        const lo = r.view.getUint32(r.pos, true);
+        const hi = r.view.getUint32(r.pos + 4, true);
+        r.pos += 8;
+        key = hi.toString(16).padStart(8, "0") + lo.toString(16).padStart(8, "0");
+        const flag = r.u8();
+        if (flag > 1) throw new DecodeError("an image's flag is not 0 or 1");
+        known = flag === 1;
+        if (known && n !== 0) throw new DecodeError("an image left out has bytes");
+      }
+      return { kind: "image", rect, format, bytes, key, known };
     }
     default: return { kind: "unknown" }; // A command of a later version.
   }
@@ -248,6 +263,12 @@ const RASTER_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 // it is decoded or fetched, or waits to be fetched again, `pending` an
 // object that names the request.
 let imageCache = new Map();
+// Content hash and format (`hash/format`) → the bytes of the images of the
+// pages the viewer has,
+// which later lists name alone: the server sends an image whole once and
+// then names it while the client's pages show it (the viewer says it
+// keeps them in `visible`).
+let knownImages = new Map();
 // Content hash → how many times fetching a figure has failed.
 const imageFailures = new Map();
 // How many times a figure is fetched again after a failure that may pass.
@@ -793,7 +814,7 @@ let socket = null;
 let lastVisible = "";
 function sendVisible() {
   const pagesShown = [...visible].sort((a, b) => a - b);
-  const text = JSON.stringify({ type: "visible", pages: pagesShown });
+  const text = JSON.stringify({ type: "visible", pages: pagesShown, images: true });
   if (socket && socket.readyState === WebSocket.OPEN && text !== lastVisible) {
     socket.send(text);
     lastVisible = text;
@@ -819,6 +840,8 @@ function pageElement(i) {
     // shows, whether that has holes, and since when a frame with holes
     // has waited to replace it (`draw`).
     shown: null, shownList: null, holes: false, waitingSince: 0,
+    // The content hashes of the images of the last list sent for the page.
+    imageKeys: [],
   };
   pages[i] = page;
   return page;
@@ -1026,6 +1049,8 @@ function connect() {
   ws.onclose = () => {
     socket = null;
     incoming = null;
+    // A new connection is sent every image again.
+    knownImages = new Map();
     // The server may come back as another process, with other fonts.
     fontGeneration = null;
     dropGlyphs();
@@ -1034,6 +1059,10 @@ function connect() {
     setTimeout(connect, 1000);
   };
 }
+
+// The hashes of images lists named alone that the viewer lacks, which it
+// asks the server for after the update.
+const missing = new Set();
 
 function apply({ update, frames }) {
   incoming = null;
@@ -1059,17 +1088,46 @@ function apply({ update, frames }) {
     if (i >= update.pages) continue;
     const page = pages[i];
     if (decoded.kind === "list") {
+      // The images of the list the server sent, which it names alone from
+      // now on, whether or not the page can be drawn from it.
+      // By content hash and format, as the server names them.
+      const stored = (item) => `${item.key}/${item.format}`;
+      page.imageKeys = [];
+      for (const item of decoded.list.items) {
+        if (item.kind !== "image" || item.key === null) continue;
+        page.imageKeys.push(stored(item));
+        if (!item.known) knownImages.set(stored(item), item.bytes);
+      }
+      // An image named alone that the viewer does not have: the page is
+      // shown as the server renders it, and the server is asked for the
+      // image, which comes with the page again.
+      const lacking = decoded.list.items.filter((item) => item.kind === "image" && item.known
+        && !knownImages.has(stored(item)));
+      if (lacking.length) {
+        for (const item of lacking) missing.add(item.key);
+        showImage(page, i, update.revision);
+        continue;
+      }
       page.list = decoded.list;
+      for (const item of page.list.items) {
+        if (item.kind === "image" && item.known) item.bytes = knownImages.get(stored(item));
+      }
       if (page.img) {
         page.img.remove();
         page.img = null;
       }
       page.drawn = 0;
     } else if (decoded.kind === "error") {
+      page.imageKeys = [];
       showImage(page, i, update.revision);
     }
     // A span map changes nothing that is drawn.
   }
+  // The images of the lists the server sent for the pages the viewer has
+  // are kept, as the server expects; the rest are dropped.
+  const onPages = new Set();
+  for (const page of pages) if (page) for (const key of page.imageKeys) onPages.add(key);
+  for (const key of knownImages.keys()) if (!onPages.has(key)) knownImages.delete(key);
   retryFailedImages();
   if (fitting || !zoom) zoom = fitZoom();
   for (const page of pages) if (page) layoutPage(page);
@@ -1084,6 +1142,10 @@ function apply({ update, frames }) {
   // After drawing, so that the visible pages have hashed their images.
   pruneImages();
   sendVisible();
+  if (missing.size && socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "missing", images: [...missing] }));
+  }
+  missing.clear();
 }
 
 // ---------------------------------------------------------------------

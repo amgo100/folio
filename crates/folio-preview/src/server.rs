@@ -481,9 +481,17 @@ async fn websocket(mut stream: TcpStream, request: &Request, shared: Arc<Shared>
     client(ws, shared).await;
 }
 
-/// What a client has of each page: its content and entry numbers
-/// ([`PageEntry`](crate::engine::PageEntry)).
-type Known = Vec<(u64, u64)>;
+/// What a client has: of each page, its content and entry numbers
+/// ([`PageEntry`](crate::engine::PageEntry)); the content hashes and
+/// formats of the images it keeps, those of the pages it has, which the
+/// lists sent after name alone (`folio_render::wire::encode_with`); and
+/// whether it said it keeps them (`"images": true` in `visible`).
+#[derive(Default)]
+struct Known {
+    pages: Vec<(u64, u64)>,
+    images: std::collections::HashSet<(u64, folio_component::ImageFormat)>,
+    keeps_images: bool,
+}
 
 /// Serves a websocket client: every revision it has not seen, until it
 /// goes or the server stops.
@@ -491,7 +499,7 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
     let mut published = shared.published.clone();
     let mut stop = shared.stop.clone();
     let mut broadcast = shared.broadcast.subscribe();
-    let mut known = Known::new();
+    let mut known = Known::default();
     let mut visible: Vec<usize> = Vec::new();
     // Forgets what the client shows however its task ends.
     let seen = Seen {
@@ -516,9 +524,31 @@ async fn client(mut ws: WebSocketStream<TcpStream>, shared: Arc<Shared>) {
             }
             message = ws.next() => match message {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
-                    Ok(ClientMessage::Visible { pages }) => {
+                    Ok(ClientMessage::Visible { pages, images }) => {
                         shared.visible.show(id, &pages);
                         visible = pages;
+                        // It has kept the images of every list since it
+                        // connected.
+                        known.keeps_images |= images;
+                    }
+                    Ok(ClientMessage::Missing { images }) => {
+                        // Sent whole again, with the pages that show them.
+                        let current = published.borrow().clone();
+                        let missing: Vec<u64> = images
+                            .iter()
+                            .filter_map(|hex| u64::from_str_radix(hex, 16).ok())
+                            .collect();
+                        known.images.retain(|(hash, _)| !missing.contains(hash));
+                        for (i, entry) in current.pages.iter().enumerate() {
+                            if entry.images.iter().any(|(hash, _)| missing.contains(hash))
+                                && let Some(page) = known.pages.get_mut(i)
+                            {
+                                *page = (0, 0);
+                            }
+                        }
+                        if send(&mut ws, &current, &mut known, &visible).await.is_err() {
+                            break;
+                        }
                     }
                     Ok(ClientMessage::Click { revision, page, x, y }) => {
                         let current = published.borrow().clone();
@@ -632,8 +662,17 @@ struct SourceMessage<'a> {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum ClientMessage {
-    /// The pages the client shows now.
-    Visible { pages: Vec<usize> },
+    /// The pages the client shows now, and whether it keeps the images of
+    /// the pages it has, so that lists may name them alone.
+    Visible {
+        pages: Vec<usize>,
+        #[serde(default)]
+        images: bool,
+    },
+    /// Images, by their content hashes in hexadecimal, that a list named
+    /// alone although the client does not keep them: they are sent whole
+    /// again, with the pages that show them.
+    Missing { images: Vec<String> },
     /// A click at a point of a page, in points from its top-left corner,
     /// as the client shows the revision.
     Click {
@@ -684,7 +723,7 @@ async fn send(
     let mut spans = Vec::new();
     for i in order {
         let entry = &published.pages[i];
-        match known.get(i) {
+        match known.pages.get(i) {
             Some(&(content, id)) if content == entry.content => {
                 if id != entry.id {
                     spans.push(i);
@@ -718,8 +757,18 @@ async fn send(
         let entry = &published.pages[i];
         let body = if spans_only {
             &entry.spans
-        } else {
+        } else if known.keeps_images
+            && entry
+                .images
+                .iter()
+                .all(|image| known.images.contains(image))
+        {
             &entry.bytes
+        } else {
+            // Every image of the page whole, and then named alone while
+            // the client's pages show it.
+            known.images.extend(entry.images.iter().copied());
+            entry.whole()
         };
         let index = u32::try_from(i).expect("fewer pages than u32::MAX");
         let mut frame = Vec::with_capacity(4 + body.len());
@@ -730,10 +779,17 @@ async fn send(
     let done = format!(r#"{{"type":"done","revision":{}}}"#, published.revision);
     ws.feed(Message::text(done)).await?;
     ws.flush().await?;
-    *known = published
+    known.pages = published
         .pages
         .iter()
         .map(|entry| (entry.content, entry.id))
+        .collect();
+    // The client keeps the images of the pages it has now, as the server
+    // sends them, and drops the rest.
+    known.images = published
+        .pages
+        .iter()
+        .flat_map(|entry| entry.images.iter().copied())
         .collect();
     Ok(())
 }

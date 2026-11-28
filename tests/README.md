@@ -243,7 +243,10 @@ the limits of SPEC §14.1 and §15:
   right one arrives), with the few milliseconds Playwright takes to tell
   Node.js; it fails if a frame with holes was shown, and runs
   only when Node.js can load Playwright and its Chromium, so a machine
-  without them does not check this gate; the reference document's
+  without them does not check this gate; an edit on a page with a 4 MB
+  photograph that the client shows, timed to the first update it receives
+  and decodes (`watch-image`, reported against 80 ms), which the
+  photograph's bytes no longer join after the first; the reference document's
   full compile, one-word edit to PDF, one-word edit to the pages (the
   preview of the M1 exit check: 80 ms), one-word edit checked without
   emit (reported only), stylesheet edit, and the ratio of

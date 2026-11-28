@@ -105,7 +105,8 @@
 //!
 //! A new connection receives every page. Pages that the client says are
 //! visible come first: it sends `{"type": "visible", "pages": [..]}`
-//! whenever that changes. They are also laid out first (SPEC §12.2): once
+//! whenever that changes (with `"images": true` from a client that keeps
+//! images; see below). They are also laid out first (SPEC §12.2): once
 //! any client has said what it shows, a revision whose document has pages
 //! after the last visible one, as the revision before had, may come in two
 //! updates: the first, with `partial` true, sends the pages through it
@@ -147,8 +148,20 @@
 //! height of zero. An answer holds at most 32 MiB of coverage: the glyphs
 //! past it are left out, and the count says how many it holds.
 //!
-//! Images arrive in the display lists with their files' bytes. A client
-//! decodes JPEG, PNG, WebP and GIF itself (a JPEG as stored, without
+//! Images arrive in the display lists with their files' bytes and content
+//! hashes. A client that keeps them says so with `"images": true` in its
+//! `visible` message: it keeps, from the start of the connection, the
+//! images of the lists it was sent for the pages it has after each update,
+//! and may drop the rest ([`folio_render::wire::Images`]). From then on,
+//! lists name the images of those pages by hash and format alone, with
+//! their bytes left out (the image item's last fields,
+//! [`folio_render::wire::encode_with`]): an image's bytes come in the
+//! first list that holds it, and again only after the client's pages
+//! stopped showing it. A client that finds an image named
+//! alone that it does not have sends `{"type": "missing", "images":
+//! [hash, ..]}`, the hashes as 16 lowercase hexadecimal digits, and is sent
+//! the pages that show them again, whole. A client decodes JPEG, PNG, WebP and
+//! GIF itself (a JPEG as stored, without
 //! turning it by its Exif orientation, which PDF output ignores), and asks for SVG and PDF
 //! figures as SVG through `/figure/<hash>.svg`: `<hash>` is the content
 //! hash of the file's bytes (`Image::content_hash` of `folio-component`)
@@ -158,9 +171,9 @@
 //! it stretches to any box as the figure does, with the figure embedded as
 //! a `data:` URI (a PDF figure as the SVG it converts to), under a policy
 //! that allows nothing else. A hash no SVG or PDF figure of the current
-//! revision has is `404`. The viewer hashes an image when it first draws
-//! it and keeps decoded images by their hash while the pages it has drawn
-//! show them, so a page sent again does not decode them again.
+//! revision has is `404`. The viewer keeps decoded images by their hash
+//! while the pages it has drawn show them, so a page sent again does not
+//! decode them again.
 
 #![forbid(unsafe_code)]
 
