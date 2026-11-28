@@ -172,8 +172,11 @@ fn is_inline_markup(expr: Expr<'_>) -> bool {
     matches!(expr, Expr::ContentBlock(_)) && inline(expr.to_untyped())
 }
 
+/// Whether a component has elements whose lints can run: the project's
+/// own elements have none (SPEC §4.3), so a project that declares
+/// elements does not walk its document tree for them.
 fn has_elements(component: &Registered) -> bool {
-    !component.declarations.elements.is_empty()
+    !crate::eval::is_project(component) && !component.declarations.elements.is_empty()
 }
 
 #[salsa::tracked]
