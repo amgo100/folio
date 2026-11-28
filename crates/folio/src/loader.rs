@@ -28,7 +28,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use folio_core::db::FileContent;
+use folio_core::db::{FileContent, Unreadable};
 use folio_fonts::{FontCache, PROJECT_FONT_DIR};
 use folio_syntax::DiagSpan;
 
@@ -162,8 +162,11 @@ pub struct ProjectFile {
     pub disk: PathBuf,
     /// The contents of a source (`.fol` or `.fsty`), read with the
     /// project; `None` for any other file, which is read when a build
-    /// names it.
+    /// names it, and for a source that was not taken.
     pub bytes: Option<Vec<u8>>,
+    /// Why a source was not taken: it could not be read, or it is a link
+    /// that leads out of the project. A build that names it says why.
+    refused: Option<Unreadable>,
 }
 
 /// What [`Loader::update`] changed.
@@ -306,9 +309,10 @@ impl Loader {
     /// names them, and removes the sources and
     /// data files the project no longer has, including those a host set
     /// itself, such as unsaved editor buffers, which it sets again after.
-    /// Warns of sources that cannot be read or are not
-    /// UTF-8; leaves out files whose paths a document cannot name. Returns
-    /// the paths it changed.
+    /// Records sources that cannot be read, are not UTF-8 or are links out
+    /// of the project, so that a build that names one says why; leaves out
+    /// files whose paths a document cannot name. Returns the paths it
+    /// changed.
     pub fn load(
         &mut self,
         world: &mut World,
@@ -322,7 +326,7 @@ impl Loader {
                 changed.insert(path);
             }
         }
-        set_all(world, files, &mut changed, warnings, &self.canonical)?;
+        set_all(world, files, &mut changed, &self.canonical)?;
         Ok(changed)
     }
 
@@ -457,12 +461,33 @@ impl Loader {
             return Ok(());
         }
         let full = self.root.join(rel);
+        self.links.retain(|link, _| !is_under(link, rel));
+        // A source that a link outside the project stands for, in a
+        // directory a read of the project follows, is recorded as a read
+        // would record it.
+        let dir = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
+        if is_source(rel)
+            && !self.outputs.contains(rel)
+            && self.is_link(&full)
+            && let Ok(target) = full.canonicalize()
+            && !target.starts_with(&self.canonical)
+            && target.is_file()
+            && self.chain(dir).is_some()
+        {
+            for path in world.paths_under(rel) {
+                if remove(world, &path) {
+                    update.changed.insert(path);
+                }
+            }
+            let file = ProjectFile::refused(rel.to_owned(), target, Unreadable::LinkOutOfProject);
+            set(world, file, &mut update.changed)?;
+            return Ok(());
+        }
         // Reads are limited to the project, and leave out outputs.
         let canonical = full
             .canonicalize()
             .ok()
             .filter(|c| c.starts_with(&self.canonical) && !self.canonical_outputs().contains(c));
-        self.links.retain(|link, _| !is_under(link, rel));
         let metadata = canonical
             .as_ref()
             .filter(|_| !self.outputs.contains(rel))
@@ -479,7 +504,6 @@ impl Loader {
         let canonical = canonical.expect("there is metadata");
         // The directories it is in must be ones a read of the project
         // follows, and so must it if it is a directory.
-        let dir = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
         let chain = if metadata.is_dir() {
             self.chain(rel)
         } else {
@@ -521,7 +545,7 @@ impl Loader {
                 }
             }
             files.sort_by(|a, b| a.path.cmp(&b.path));
-            set_all(world, files, &mut update.changed, warnings, &self.canonical)?;
+            set_all(world, files, &mut update.changed, &self.canonical)?;
         } else if metadata.is_file() {
             // A directory that is now a file.
             for path in world.paths_under(rel) {
@@ -534,26 +558,25 @@ impl Loader {
                     path: rel.to_owned(),
                     disk: canonical,
                     bytes: None,
+                    refused: None,
                 };
                 set_data(world, vec![file], &mut update.changed, &self.canonical);
                 return Ok(());
             }
-            match fs::read(&canonical) {
-                Ok(bytes) => {
-                    let file = ProjectFile {
-                        path: rel.to_owned(),
-                        disk: canonical,
-                        bytes: Some(bytes),
-                    };
-                    set(world, file, &mut update.changed, warnings)?;
-                }
-                Err(e) => {
-                    warnings.push(unreadable(rel, &e.to_string()));
-                    if remove(world, rel) {
-                        update.changed.insert(rel.to_owned());
-                    }
-                }
-            }
+            let file = match fs::read(&canonical) {
+                Ok(bytes) => ProjectFile {
+                    path: rel.to_owned(),
+                    disk: canonical,
+                    bytes: Some(bytes),
+                    refused: None,
+                },
+                Err(e) => ProjectFile::refused(
+                    rel.to_owned(),
+                    canonical,
+                    Unreadable::Io(e.to_string().into()),
+                ),
+            };
+            set(world, file, &mut update.changed)?;
         } else {
             // Neither a file nor a directory, which a read leaves out.
             for path in world.paths_under(rel) {
@@ -717,9 +740,19 @@ impl Loader {
                 }
                 let path = join(&dir, &name);
                 let target = if file_type.is_symlink() {
-                    // Reads are limited to the project.
+                    // Reads are limited to the project. A source that a
+                    // link outside stands for is recorded, so that a build
+                    // that names it says why it is not read.
                     match entry.path().canonicalize() {
                         Ok(target) if target.starts_with(&self.canonical) => Some(target),
+                        Ok(target) if is_source(&path) && target.is_file() => {
+                            files.push(ProjectFile::refused(
+                                path,
+                                target,
+                                Unreadable::LinkOutOfProject,
+                            ));
+                            continue;
+                        }
                         _ => continue,
                     }
                 } else {
@@ -773,17 +806,21 @@ impl Loader {
                         path,
                         disk: canonical,
                         bytes: None,
+                        refused: None,
                     });
                     continue;
                 }
-                match fs::read(entry.path()) {
-                    Ok(bytes) => files.push(ProjectFile {
+                files.push(match fs::read(entry.path()) {
+                    Ok(bytes) => ProjectFile {
                         path,
                         disk: canonical,
                         bytes: Some(bytes),
-                    }),
-                    Err(e) => warnings.push(unreadable(&path, &e.to_string())),
-                }
+                        refused: None,
+                    },
+                    Err(e) => {
+                        ProjectFile::refused(path, canonical, Unreadable::Io(e.to_string().into()))
+                    }
+                });
             }
         }
         Ok(())
@@ -804,13 +841,12 @@ fn set_all(
     world: &mut World,
     files: Vec<ProjectFile>,
     changed: &mut BTreeSet<String>,
-    warnings: &mut Vec<Diagnostic>,
     root: &Path,
 ) -> Result<(), WorldError> {
     let mut data = Vec::new();
     for file in files {
         if is_source(&file.path) {
-            set(world, file, changed, warnings)?;
+            set(world, file, changed)?;
         } else {
             data.push(file);
         }
@@ -820,40 +856,37 @@ fn set_all(
 }
 
 /// Sets a source in a world. Records its path in `changed` if the world
-/// had it differently. Warns of sources that are not UTF-8, or were not
-/// read, and leaves out files whose paths a document cannot name.
+/// had it differently. A source that was not taken, or is not UTF-8, is
+/// recorded as unreadable with why, which a build that names it reports;
+/// leaves out files whose paths a document cannot name.
 fn set(
     world: &mut World,
     file: ProjectFile,
     changed: &mut BTreeSet<String>,
-    warnings: &mut Vec<Diagnostic>,
 ) -> Result<(), WorldError> {
-    let text = file.bytes.map(String::from_utf8);
-    let result = match text {
-        // Some editors start UTF-8 files with a byte-order mark, which is
-        // not part of the text.
-        Some(Ok(text)) => {
-            let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
-            if world.source(&file.path).is_some_and(|s| s.text() == text) {
-                return Ok(());
-            }
-            world.set_source(&file.path, text).map(drop)
-        }
-        Some(Err(_)) | None => {
-            let why = if text.is_some() {
-                "it is not UTF-8 text"
-            } else {
-                "it was not read"
-            };
-            warnings.push(unreadable(&file.path, why));
-            if world.remove_source(&file.path) {
+    let text = match (file.bytes, file.refused) {
+        (Some(bytes), None) => String::from_utf8(bytes).map_err(|_| Unreadable::NotUtf8),
+        (_, Some(why)) => Err(why),
+        (None, None) => Err(Unreadable::Io("it was not read".into())),
+    };
+    let text = match text {
+        Ok(text) => text,
+        Err(why) => {
+            let removed = world.remove_source(&file.path);
+            if world.set_unreadable(&file.path, Some(why)) || removed {
                 changed.insert(file.path);
             }
             return Ok(());
         }
     };
-    match result {
-        Ok(()) => {
+    // Some editors start UTF-8 files with a byte-order mark, which is not
+    // part of the text.
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(&text);
+    if world.source(&file.path).is_some_and(|s| s.text() == text) {
+        return Ok(());
+    }
+    match world.set_source(&file.path, text) {
+        Ok(_) => {
             changed.insert(file.path);
             Ok(())
         }
@@ -901,10 +934,13 @@ fn set_data(
     world.set_contents(contents);
 }
 
-/// Removes a source or data file from a world. Returns whether there was
-/// one.
+/// Removes a source, data file or unreadable source from a world. Returns
+/// whether there was one.
 fn remove(world: &mut World, path: &str) -> bool {
-    world.remove_source(path) || world.remove_file(path)
+    let source = world.remove_source(path);
+    let file = world.remove_file(path);
+    let unreadable = world.set_unreadable(path, None);
+    source || file || unreadable
 }
 
 /// Whether a project path names a hidden file or directory, or one in a
@@ -963,10 +999,22 @@ fn warning(message: String) -> Diagnostic {
     Diagnostic::warning(DiagSpan::detached(), message)
 }
 
-/// The warning that a file cannot be read.
+/// The warning that a directory cannot be read.
 fn unreadable(path: &str, why: &str) -> Diagnostic {
     warning(format!("cannot read `{path}`: {why}"))
-        .with_hint("a document that uses it reports it as not found")
+        .with_hint("a document that uses a file in it reports it as not found")
+}
+
+impl ProjectFile {
+    /// A source that was not taken, and why.
+    fn refused(path: String, disk: PathBuf, why: Unreadable) -> Self {
+        Self {
+            path,
+            disk,
+            bytes: None,
+            refused: Some(why),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1092,6 +1140,62 @@ mod tests {
         }
     }
 
+    /// A source that is not UTF-8, or a link out of the project, is
+    /// recorded as unreadable on an update too, and forgotten once it is
+    /// readable or gone (#343).
+    #[cfg(unix)]
+    #[test]
+    fn records_unreadable_sources_on_updates() {
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("q.fol"), b"= Q\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join(MANIFEST),
+            "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(root.join("main.fol"), b"= A\n").unwrap();
+        let mut loader = Loader::new(root).unwrap();
+        let mut world = loader.world(World::builder()).unwrap();
+        let mut warnings = Vec::new();
+        loader.load(&mut world, &mut warnings).unwrap();
+        let unreadable = |world: &World| {
+            world.source("main.fol").is_none() && world.paths_under("main.fol") == ["main.fol"]
+        };
+        assert!(!unreadable(&world));
+
+        fs::write(root.join("main.fol"), b"= \xb3\n").unwrap();
+        let update = loader
+            .update(&mut world, [root.join("main.fol")], &mut warnings)
+            .unwrap();
+        assert!(update.changed.contains("main.fol"));
+        assert!(unreadable(&world));
+
+        fs::write(root.join("main.fol"), b"= B\n").unwrap();
+        loader
+            .update(&mut world, [root.join("main.fol")], &mut warnings)
+            .unwrap();
+        assert_eq!(world.source("main.fol").unwrap().text(), "= B\n");
+        assert!(!unreadable(&world));
+
+        fs::remove_file(root.join("main.fol")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("q.fol"), root.join("main.fol")).unwrap();
+        let update = loader
+            .update(&mut world, [root.join("main.fol")], &mut warnings)
+            .unwrap();
+        assert!(update.changed.contains("main.fol"));
+        assert!(unreadable(&world));
+
+        fs::remove_file(root.join("main.fol")).unwrap();
+        let update = loader
+            .update(&mut world, [root.join("main.fol")], &mut warnings)
+            .unwrap();
+        assert!(update.changed.contains("main.fol"));
+        assert!(world.paths_under("main.fol").is_empty());
+        assert!(warnings.is_empty());
+    }
+
     #[test]
     fn sets_sources_and_data() {
         let mut world = World::new(
@@ -1107,9 +1211,9 @@ mod tests {
                 path: path.into(),
                 disk,
                 bytes: is_source(path).then(|| bytes.to_vec()),
+                refused: None,
             }
         };
-        let mut warnings = Vec::new();
         let mut changed = BTreeSet::new();
         let files = vec![
             file("bad.fol", &[0xff, 0xfe]),
@@ -1118,15 +1222,14 @@ mod tests {
             file("bom.fol", "\u{FEFF}= Forces\n".as_bytes()),
             file("weird\\name.csv", b""),
         ];
-        set_all(&mut world, files, &mut changed, &mut warnings, &root).unwrap();
+        set_all(&mut world, files, &mut changed, &root).unwrap();
         assert_eq!(world.source("main.fol").unwrap().text(), "= Forces\n");
         assert_eq!(world.source("bom.fol").unwrap().text(), "= Forces\n");
         assert!(world.source("bad.fol").is_none());
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("`bad.fol`"));
+        assert_eq!(world.paths_under("bad.fol"), ["bad.fol"]);
         assert_eq!(
             changed.iter().map(String::as_str).collect::<Vec<_>>(),
-            ["bom.fol", "data/points.csv", "main.fol"]
+            ["bad.fol", "bom.fol", "data/points.csv", "main.fol"]
         );
 
         // The data file is not read until something asks for it.
@@ -1140,7 +1243,7 @@ mod tests {
             file("main.fol", b"= Forces\n"),
             file("data/points.csv", b"x,y\n"),
         ];
-        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
+        set_all(&mut world, files, &mut again, &root).unwrap();
         assert!(again.is_empty());
         assert!(
             world
@@ -1153,10 +1256,10 @@ mod tests {
         // Once read, a data file is compared with the disk.
         assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n");
         let files = vec![file("data/points.csv", b"x,y\n")];
-        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
+        set_all(&mut world, files, &mut again, &root).unwrap();
         assert!(again.is_empty());
         let files = vec![file("data/points.csv", b"x,y\n1,2\n")];
-        set_all(&mut world, files, &mut again, &mut warnings, &root).unwrap();
+        set_all(&mut world, files, &mut again, &root).unwrap();
         assert_eq!(again.iter().collect::<Vec<_>>(), ["data/points.csv"]);
         assert_eq!(&*world.file("data/points.csv").unwrap(), b"x,y\n1,2\n");
     }

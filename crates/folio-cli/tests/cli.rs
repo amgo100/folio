@@ -150,6 +150,56 @@ fn a_closed_pipe_ends_the_report_quietly() {
     }
 }
 
+/// A source that is not UTF-8 is an error where it is used, which says
+/// why it was not read, not that it is missing (#343).
+#[test]
+fn reports_why_a_source_was_not_read() {
+    let dir = project(&[("folio.toml", MANIFEST)]);
+    // Latin-1, as an old editor might save it.
+    fs::write(dir.path().join("main.fol"), b"= Si\xb3y\n").unwrap();
+    let output = folio(dir.path(), &["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains("error: cannot read `main.fol`: it is not UTF-8 text"),
+        "{text}"
+    );
+    assert!(text.contains("folio.toml:2:9"), "{text}");
+    assert!(!text.contains("not found"), "{text}");
+
+    let output = folio(dir.path(), &["check", "--diagnostics", "json"]);
+    let document = json(&output);
+    let diagnostics = document["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{document}");
+    assert_eq!(
+        diagnostics[0]["message"],
+        "cannot read `main.fol`: it is not UTF-8 text"
+    );
+    assert_eq!(diagnostics[0]["location"]["path"], "folio.toml");
+}
+
+/// A `.fol` link that leads out of the project is an error where it is
+/// imported, which says so (#343).
+#[cfg(unix)]
+#[test]
+fn reports_a_source_link_out_of_the_project() {
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("q1.fol"), "= Question\n").unwrap();
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "#include \"q1.fol\"\n"),
+    ]);
+    std::os::unix::fs::symlink(outside.path().join("q1.fol"), dir.path().join("q1.fol")).unwrap();
+    let output = folio(dir.path(), &["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains("error: cannot read `q1.fol`: it is a link that leads out of the project"),
+        "{text}"
+    );
+    assert!(text.contains("main.fol:1:10"), "{text}");
+}
+
 #[test]
 fn reports_manifest_errors() {
     let dir = project(&[("folio.toml", "[project]\nentry = \"main.fol\"\n")]);
