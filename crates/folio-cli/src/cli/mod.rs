@@ -99,6 +99,10 @@ pub(crate) struct ProjectArgs {
     #[arg(long = "variant", value_name = "VARIANT")]
     pub(crate) variants: Vec<String>,
 
+    /// Only this version of a shuffled paper; repeat for several
+    #[arg(long = "versions", value_name = "VERSION")]
+    pub(crate) versions: Vec<String>,
+
     /// Only this target; repeat for several
     #[arg(long = "target", value_name = "TARGET", value_parser = parse_target)]
     pub(crate) targets: Vec<Target>,

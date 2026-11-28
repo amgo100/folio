@@ -47,14 +47,20 @@ impl Document {
     }
 }
 
-/// The document tree of a variant (`None` for a project without variants),
-/// or `None` when the document could not be evaluated. Reports misplaced
+/// The document tree of a variant (`None` for a project without variants)
+/// and a version (`None` without versions, SPEC §6.4), or `None` when the
+/// document could not be evaluated. Reports misplaced
 /// `#doc` calls and labels used twice. References to labels that no
 /// element has are reported by the Resolve stage, which knows what each
 /// build shows ([`crate::resolve`]).
 #[salsa::tracked(returns(ref))]
-pub fn document(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<Document> {
-    let content = evaluate(db, project, variant).as_ref()?;
+pub fn document(
+    db: &dyn Db,
+    project: Project,
+    variant: Option<Name>,
+    version: Option<Name>,
+) -> Option<Document> {
+    let content = evaluate(db, project, variant, version).as_ref()?;
     let entry = project.manifest(db).project.entry.v.clone();
     let span = source_file(db, project, entry)
         .map_or(Span::detached(), |file| file.source(db).root().span());

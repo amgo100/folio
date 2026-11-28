@@ -262,30 +262,37 @@ fn show_only_condenses_an_element() {
     assert!(markscheme.iter().any(|p| p.contains("Answer two.")));
 }
 
-/// `hidden` and `answer-space` are not laid out yet: the content is left
-/// out, never shown, with one warning each per build.
+/// `hidden` and `answer-space` keep the block of an element and leave its
+/// content out of the document the variant shows; layout sizes the block
+/// (`answer_space.rs`). Neither warns of a block.
 #[test]
-fn modes_not_laid_out_leave_the_content_out() {
+fn spaces_leave_the_content_out() {
     let world = world(
         "figure.a { display: answer-space; }\nfigure.h { display: hidden; }\n",
         "",
         "#figure(class: \"a\")[ANSWER one.]\n\n#figure(class: \"a\")[ANSWER two.]\n\n\
          #figure(class: \"h\")[HIDDEN.]\n\nText.\n",
     );
-    assert_eq!(paragraphs(&world, "exam"), ["Text."]);
+    let text = folio::text(&world, Target::Pdf, Some(&name("exam")))
+        .unwrap()
+        .unwrap();
+    // The paragraphs the document's blocks hold: the spaces hold none.
+    fn shown(block: &folio::TextBlock, text: &folio::Text, out: &mut Vec<String>) {
+        for child in &block.children {
+            match child {
+                folio::TextFlow::Paragraph(i) => {
+                    out.push(text.paragraphs[*i].shaped.text().to_string())
+                }
+                folio::TextFlow::Block(b) => shown(b, text, out),
+            }
+        }
+    }
+    let mut paragraphs = Vec::new();
+    shown(&text.root, &text, &mut paragraphs);
+    assert_eq!(paragraphs, ["Text."]);
+    assert_eq!(text.spaces.len(), 3);
     let found = diagnostics(&world, "exam");
-    let count = |what: &str| found.iter().filter(|(_, _, m)| m.contains(what)).count();
-    assert_eq!(
-        count("`display: answer-space` does not draw answer space yet"),
-        1
-    );
-    assert_eq!(count("`display: hidden` does not keep the space"), 1);
-    assert!(
-        found
-            .iter()
-            .all(|(_, _, m)| !m.contains("is not implemented yet")),
-        "{found:?}"
-    );
+    assert!(found.is_empty(), "{found:?}");
 }
 
 /// A placeholder takes one string.

@@ -60,7 +60,8 @@ pub use folio_core::locate;
 pub use folio_core::model;
 pub use folio_core::project::{Date, Lockfile, Manifest, OutputPattern, ProjectError, ProjectPath};
 pub use folio_core::resolve::{
-    Labelled, Marker, Number, Reference, Resolution, Target as ResolveTarget,
+    Entry, Labelled, Marker, Number, Query, QueryResult, Reference, Resolution,
+    Target as ResolveTarget,
 };
 pub use folio_core::style;
 pub use folio_core::text::{SegmentStyle, Text, TextBlock, TextFlow, TextParagraph, TextSource};
@@ -282,8 +283,9 @@ fn check_now(world: &World, target: Target, variant: Option<&Name>) -> Checked {
 }
 
 /// The diagnostics of a build without those that only the other variants
-/// of its numbering group report. Their shared counters are counted on the
-/// group's common tree (SPEC §6.1), so the build selects each of them, and
+/// of its numbering group report. Its shared counters and totals are
+/// counted on the group's common tree (SPEC §6.1, §4.5), so the build
+/// selects each of the group's variants when it has either, and
 /// collects what evaluating, styling and selecting them reports; that
 /// belongs to their own builds. A diagnostic the build's own variant also
 /// reports up to Select stays.
@@ -293,14 +295,15 @@ fn own(
     diagnostics: EcoVec<Diagnostic>,
 ) -> EcoVec<Diagnostic> {
     let db = world.db();
-    if folio_core::variants::common::group_build(db, build).is_none() {
+    if !reads_common_tree(world, build) {
         return diagnostics;
     }
     let project = world.project();
     let target = build.target(db);
     let variant = build.variant(db).clone();
     let selected = |name: Option<Name>| {
-        let each = folio_core::db::Build::new(db, project, target, name);
+        let each =
+            folio_core::db::Build::versioned(db, project, target, name, build.version(db).clone());
         folio_core::pipeline::select::accumulated::<Reported>(db, each)
     };
     let mine: HashSet<&Diagnostic> = selected(variant.clone())
@@ -331,6 +334,24 @@ fn own(
         .into_iter()
         .filter(|d| !foreign.contains(d))
         .collect()
+}
+
+/// Whether a build read its numbering group's common tree: it shares
+/// counters, or shows a total (SPEC §6.1, §4.5).
+fn reads_common_tree(world: &World, build: folio_core::db::Build<'_>) -> bool {
+    let db = world.db();
+    let Some(variant) = build.variant(db) else {
+        return false;
+    };
+    let Some(group) = world.manifest().numbering_group(variant.as_str()) else {
+        return false;
+    };
+    !group.shared_counters.is_empty()
+        || folio_core::pipeline::resolution(db, build).is_some_and(|r| {
+            r.queries
+                .iter()
+                .any(|q| matches!(q.result, QueryResult::Total(_)))
+        })
 }
 
 /// The problems of pairing a variant's instances with those of the other
@@ -439,7 +460,7 @@ impl Compiled {
 /// variant shares it. Fails only when an edit to the world cancels it.
 pub fn evaluate(world: &World, variant: Option<&Name>) -> Result<Option<eval::Content>, Cancelled> {
     catch(world, || {
-        eval::evaluate(world.db(), world.project(), variant.cloned()).clone()
+        eval::evaluate(world.db(), world.project(), variant.cloned(), None).clone()
     })
 }
 
@@ -455,7 +476,7 @@ pub fn document(
     variant: Option<&Name>,
 ) -> Result<Option<model::Document>, Cancelled> {
     catch(world, || {
-        model::document(world.db(), world.project(), variant.cloned()).clone()
+        model::document(world.db(), world.project(), variant.cloned(), None).clone()
     })
 }
 
@@ -498,6 +519,33 @@ pub fn select(
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         folio_core::pipeline::selected_root(db, build)
             .map(|root| model::Document { root: root.clone() })
+    })
+}
+
+/// The value of a component's aggregate (SPEC §3.2) in a variant of the
+/// world's document for a target, named qualified (`exam.total-marks`):
+/// computed over the numbering group's common tree when the variant is in
+/// a group, and over the variant's own tree otherwise; or `None` when the
+/// component or aggregate is unknown, the document could not be styled,
+/// or the component gives no value. Fails only when an edit to the world
+/// cancels it.
+pub fn aggregate(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    name: &str,
+) -> Result<Option<folio_component::Value>, Cancelled> {
+    catch(world, || {
+        let db = world.db();
+        let (Some(namespace), Some(name)) = name
+            .split_once('.')
+            .map(|(n, a)| (Name::new(n), Name::new(a)))
+            .unwrap_or((None, None))
+        else {
+            return None;
+        };
+        let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
+        folio_core::aggregate::aggregate(db, build, namespace, name).clone()
     })
 }
 
@@ -708,6 +756,229 @@ impl Display for Cancelled {
 }
 
 impl std::error::Error for Cancelled {}
+
+// ---- Versions of a shuffled paper (SPEC §6.4) ----
+
+/// One build of a project: a variant (`None` only for a project without
+/// variants), a version of a shuffled paper (`None` for a project without
+/// versions, or a build that keeps the source order) and a target.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct BuildKey {
+    /// The variant.
+    pub variant: Option<Name>,
+    /// The version.
+    pub version: Option<Name>,
+    /// The target.
+    pub target: Target,
+}
+
+/// The result of one build of [`compile_versioned_builds`] or
+/// [`check_versioned_builds`].
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct VersionedOutput<T = Compiled> {
+    /// The build.
+    pub build: BuildKey,
+    /// What compiling or checking it produced.
+    pub result: Result<T, Cancelled>,
+}
+
+/// Compiles a version of a variant of the world's document for a target,
+/// as [`compile`] compiles a variant: the build sees `version` as the
+/// version, and shares numbering only with the same version's variants.
+/// Without a version it is [`compile`]. In a long-lived world, a panic in
+/// a query is an `internal-error` without a kept output.
+pub fn compile_versioned(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    version: Option<&Name>,
+) -> Result<Compiled, Cancelled> {
+    let Some(version) = version else {
+        return compile(world, target, variant);
+    };
+    let now = || {
+        let db = world.db();
+        let build = folio_core::db::Build::versioned(
+            db,
+            world.project(),
+            target,
+            variant.cloned(),
+            Some(version.clone()),
+        );
+        let built = pipeline::compile_build(db, build);
+        let mut diagnostics = own(
+            world,
+            build,
+            collect(pipeline::compile_build::accumulated::<Reported>(db, build)),
+        );
+        diagnostics.extend(version_pairing(world, variant, version));
+        let mut read = pipeline::compile_build::accumulated::<Read>(db, build);
+        read.extend(version_pairing_reads(world, variant, version));
+        Compiled {
+            sources: built.sources.clone(),
+            files: files(read),
+            output: built.output.clone(),
+            diagnostics,
+        }
+    };
+    if world.kept().is_none() {
+        return catch(world, now);
+    }
+    Ok(isolate(world, now)?.unwrap_or_else(|panic| {
+        let (sources, files) = watched(world, EcoVec::new(), EcoVec::new());
+        Compiled {
+            sources,
+            files,
+            output: None,
+            diagnostics: EcoVec::from([internal_error(&panic, None)]),
+        }
+    }))
+}
+
+/// Checks a version of a variant of the world's document for a target
+/// without emitting it, as [`check`] checks a variant. Without a version it
+/// is [`check`].
+pub fn check_versioned(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    version: Option<&Name>,
+) -> Result<Checked, Cancelled> {
+    let Some(version) = version else {
+        return check(world, target, variant);
+    };
+    let now = || {
+        let db = world.db();
+        let build = folio_core::db::Build::versioned(
+            db,
+            world.project(),
+            target,
+            variant.cloned(),
+            Some(version.clone()),
+        );
+        let checked = pipeline::check_build(db, build);
+        let mut diagnostics = own(
+            world,
+            build,
+            collect(pipeline::check_build::accumulated::<Reported>(db, build)),
+        );
+        diagnostics.extend(version_pairing(world, variant, version));
+        let mut read = pipeline::check_build::accumulated::<Read>(db, build);
+        read.extend(version_pairing_reads(world, variant, version));
+        Checked {
+            sources: checked.sources.clone(),
+            files: files(read),
+            writes: checked.writes,
+            diagnostics,
+        }
+    };
+    if world.kept().is_none() {
+        return catch(world, now);
+    }
+    Ok(isolate(world, now)?.unwrap_or_else(|panic| {
+        let (sources, files) = watched(world, EcoVec::new(), EcoVec::new());
+        Checked {
+            sources,
+            files,
+            writes: false,
+            diagnostics: EcoVec::from([internal_error(&panic, None)]),
+        }
+    }))
+}
+
+/// Compiles builds with their versions, as [`compile_builds`] does: in
+/// parallel, each on its own handle of the world, the outputs in the order
+/// of the builds. [`World::versioned_builds`] lists every build declared.
+pub fn compile_versioned_builds(
+    world: &World,
+    builds: impl IntoIterator<Item = BuildKey>,
+) -> Vec<VersionedOutput> {
+    run_versioned_builds(world, builds, compile_versioned)
+}
+
+/// Checks builds with their versions without emitting them, as
+/// [`check_builds`] does.
+pub fn check_versioned_builds(
+    world: &World,
+    builds: impl IntoIterator<Item = BuildKey>,
+) -> Vec<VersionedOutput<Checked>> {
+    run_versioned_builds(world, builds, check_versioned)
+}
+
+/// Compiles or checks one versioned build: [`compile_versioned`] or
+/// [`check_versioned`].
+type VersionedRun<T> = fn(&World, Target, Option<&Name>, Option<&Name>) -> Result<T, Cancelled>;
+
+/// Runs `run` on builds in parallel, each on its own handle of the world.
+fn run_versioned_builds<T: Send>(
+    world: &World,
+    builds: impl IntoIterator<Item = BuildKey>,
+    run: VersionedRun<T>,
+) -> Vec<VersionedOutput<T>> {
+    let builds: Vec<_> = builds
+        .into_iter()
+        .map(|build| (world.clone(), build))
+        .collect();
+    builds
+        .into_par_iter()
+        .map(|(world, build)| {
+            let result = run(
+                &world,
+                build.target,
+                build.variant.as_ref(),
+                build.version.as_ref(),
+            );
+            VersionedOutput { build, result }
+        })
+        .collect()
+}
+
+/// The pages of a version of a variant of the world's document for a
+/// target, as [`pages`] lays out a variant. Without a version it is
+/// [`pages`].
+pub fn pages_versioned(
+    world: &World,
+    target: Target,
+    variant: Option<&Name>,
+    version: Option<&Name>,
+) -> Result<Option<Pages>, Cancelled> {
+    catch(world, || {
+        let db = world.db();
+        let build = folio_core::db::Build::versioned(
+            db,
+            world.project(),
+            target,
+            variant.cloned(),
+            version.cloned(),
+        );
+        layout::pages(db, build).clone()
+    })
+}
+
+/// [`pairing`] for a version: the version's variants pair with each other.
+fn version_pairing(world: &World, variant: Option<&Name>, version: &Name) -> EcoVec<Diagnostic> {
+    folio_core::variants::check_version_pairing(
+        world.db(),
+        world.project(),
+        variant.cloned(),
+        Some(version.clone()),
+    )
+    .clone()
+}
+
+/// [`pairing_reads`] for a version.
+fn version_pairing_reads<'a>(
+    world: &'a World,
+    variant: Option<&Name>,
+    version: &Name,
+) -> Vec<&'a Read> {
+    folio_core::variants::check_version_pairing::accumulated::<Read>(
+        world.db(),
+        world.project(),
+        variant.cloned(),
+        Some(version.clone()),
+    )
+}
 
 /// Runs queries, turning salsa's cancellation unwind into [`Cancelled`].
 /// A panic in a query unwinds on.
