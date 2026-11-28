@@ -32,6 +32,7 @@
 
 #![forbid(unsafe_code)]
 
+mod aggregate;
 mod component;
 mod draw;
 mod element;
@@ -47,6 +48,7 @@ mod template;
 mod text;
 mod value;
 
+pub use self::aggregate::{AggregateDecl, LintReads};
 pub use self::component::{
     Component, ComponentManifest, Declarations, INTERFACE_VERSION, SUPPORTED_INTERFACES,
 };

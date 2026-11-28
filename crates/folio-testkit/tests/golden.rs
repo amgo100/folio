@@ -27,16 +27,17 @@ fn layout() {
     let mut failures = Vec::new();
     for project in corpus::projects() {
         let world = project.world(BuildMode::Ci);
-        for (variant, target) in world.builds() {
+        for build in world.versioned_builds() {
+            let (variant, version, target) = (build.variant, build.version, build.target);
             if !corpus::laid_out(target) {
                 continue;
             }
             let name = format!(
                 "{}.{}.txt",
-                project.build_name(variant.as_ref()),
+                project.versioned_build_name(variant.as_ref(), version.as_ref()),
                 target.as_str()
             );
-            let pages = folio::pages(&world, target, variant.as_ref())
+            let pages = folio::pages_versioned(&world, target, variant.as_ref(), version.as_ref())
                 .expect("nothing cancels the build")
                 .unwrap_or_else(|| panic!("{name}: the document could not be laid out"));
             check_build(&dir, &name, &world, &pages, &mut expected, &mut failures);

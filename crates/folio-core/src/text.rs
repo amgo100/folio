@@ -1179,12 +1179,25 @@ impl Collector<'_> {
             out.raw(text, style, element.span);
             return;
         }
-        // A total shows the sum Resolve gave it (SPEC §4.5).
-        if is_builtin(&element.name, "total") {
-            let text = match self.resolution.query(element.location).map(|q| &q.result) {
-                Some(crate::resolve::QueryResult::Total(text)) => text.as_str(),
-                _ => UNRESOLVED,
-            };
+        // A total shows the sum Resolve gave it (SPEC §4.5), and a
+        // component's aggregate its value (D-72-1).
+        let value = match self.resolution.query(element.location).map(|q| &q.result) {
+            Some(crate::resolve::QueryResult::Total(text)) => Some(text.as_str()),
+            _ => None,
+        };
+        let aggregate = || {
+            element.name.namespace.as_ref().is_some_and(|namespace| {
+                crate::db::component_host(self.db, self.project)
+                    .as_ref()
+                    .and_then(|host| {
+                        host.components()
+                            .find(|c| &c.manifest.namespace() == namespace)
+                    })
+                    .is_some_and(|c| c.aggregate_decl(element.name.name.as_str()).is_some())
+            })
+        };
+        if value.is_some() || is_builtin(&element.name, "total") || aggregate() {
+            let text = value.unwrap_or(UNRESOLVED);
             out.push_part(text, style, element.span, TextSource::WHOLE, false);
             return;
         }

@@ -103,7 +103,7 @@ pub fn select(db: &dyn Db, build: Build<'_>) -> Option<Selected> {
     let styled = styles(db, build).as_ref()?;
     let project = build.project(db);
     let variant = build.variant(db).clone();
-    let doc = document(db, project, variant.clone()).as_ref()?;
+    let doc = document(db, project, variant.clone(), build.version(db).clone()).as_ref()?;
     let selection = crate::variants::select::select(
         db,
         project.manifest(db),
@@ -130,9 +130,14 @@ pub fn selected_root<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<&'db Ele
     let selected = select(db, build).as_ref()?;
     match &selected.root {
         Some(root) => Some(root),
-        None => document(db, build.project(db), build.variant(db).clone())
-            .as_ref()
-            .map(|doc| &doc.root),
+        None => document(
+            db,
+            build.project(db),
+            build.variant(db).clone(),
+            build.version(db).clone(),
+        )
+        .as_ref()
+        .map(|doc| &doc.root),
     }
 }
 
@@ -221,6 +226,7 @@ pub fn settle(db: &dyn Db, build: Build<'_>) -> PageNumbers {
             project,
             build.target(db),
             variant.clone(),
+            build.version(db).clone(),
             Some(used.clone()),
         );
         let Some(pages) = pages(db, pass).as_ref() else {

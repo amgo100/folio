@@ -735,6 +735,25 @@ struct Walk<'a> {
     measuring: bool,
     /// The labels of that content, which only its own references see.
     measured_labels: Vec<Labelled>,
+    /// The elements of components' aggregates (D-72-1), by qualified name.
+    aggregates: HashSet<QualifiedName>,
+}
+
+/// The elements of the components' aggregates (D-72-1), by qualified
+/// name.
+fn aggregate_elements(db: &dyn Db, build: Build<'_>) -> HashSet<QualifiedName> {
+    let Some(host) = component_host(db, build.project(db)).as_ref() else {
+        return HashSet::new();
+    };
+    host.components()
+        .flat_map(|c| {
+            let namespace = c.manifest.namespace();
+            c.declarations
+                .aggregates
+                .iter()
+                .map(move |a| QualifiedName::qualified(namespace.clone(), a.name.clone()))
+        })
+        .collect()
 }
 
 /// The counters that components' elements declare `within` another
@@ -841,6 +860,7 @@ impl<'a> Walk<'a> {
                 .unwrap_or_default(),
             measuring: false,
             measured_labels: Vec::new(),
+            aggregates: aggregate_elements(db, build),
         }
     }
 
@@ -1118,6 +1138,7 @@ impl Walk<'_> {
         let list = is_builtin(&element.name, "outline") || is_builtin(&element.name, "list-of");
         let total = is_builtin(&element.name, "total");
         if !list && !total {
+            self.aggregate_query(element, style);
             return;
         }
         let Some(Value::Str(target)) = element.field("target") else {
@@ -1144,6 +1165,32 @@ impl Walk<'_> {
             span: element.span,
             target: target.clone(),
             kind,
+        });
+    }
+
+    /// Takes the element of a component's aggregate (D-72-1), to resolve
+    /// once the whole tree is walked.
+    fn aggregate_query(&mut self, element: &Element, style: &ComputedStyle) {
+        let Some(namespace) = &element.name.namespace else {
+            return;
+        };
+        if !self.aggregates.contains(&element.name) {
+            return;
+        }
+        let marker = locale::number_format(
+            &self.lang(style),
+            style.value(self.props, self.ids.decimal_marker),
+        )
+        .decimal_marker;
+        self.pending_queries.push(query::Pending {
+            location: element.location,
+            span: element.span,
+            target: element.name.to_string().into(),
+            kind: query::Kind::Aggregate {
+                namespace: namespace.clone(),
+                name: element.name.name.clone(),
+                marker,
+            },
         });
     }
 
@@ -1212,19 +1259,30 @@ impl Walk<'_> {
                         .collect();
                     QueryResult::List(entries)
                 }
-                query::Kind::Total { field, marker } => {
-                    if common.is_none()
-                        && let Some(variant) = self.build.variant(self.db)
-                        && group.is_some()
-                        && let Some(decl) = self
-                            .build
-                            .project(self.db)
-                            .manifest(self.db)
-                            .numbering_group(variant.as_str())
-                    {
-                        let name = decl.name.v.to_string();
-                        self.report(query::group_unavailable(q.span, &name));
+                query::Kind::Aggregate {
+                    namespace,
+                    name,
+                    marker,
+                } => {
+                    self.warn_group_unavailable(group.is_some() && common.is_none(), q.span);
+                    let value = crate::aggregate::aggregate(
+                        self.db,
+                        self.build,
+                        namespace.clone(),
+                        name.clone(),
+                    );
+                    match value.as_ref().and_then(|v| query::show(v, *marker)) {
+                        Some(text) => QueryResult::Total(text),
+                        None => {
+                            let qualified =
+                                QualifiedName::qualified(namespace.clone(), name.clone());
+                            self.report(query::no_value(q.span, &qualified));
+                            QueryResult::Total(UNRESOLVED.into())
+                        }
                     }
+                }
+                query::Kind::Total { field, marker } => {
+                    self.warn_group_unavailable(group.is_some() && common.is_none(), q.span);
                     let tree = common.map_or(root, |c| &c.root);
                     let (sum, wrong) = query::sum(query::instances(tree, &q.target), field);
                     if let Some(element) = wrong {
@@ -1239,6 +1297,22 @@ impl Walk<'_> {
             });
         }
         self.out.queries = out.into_iter().collect();
+    }
+
+    /// Warns at a total or aggregate that counts only what its variant
+    /// shows, as its numbering group's common tree could not be made.
+    fn warn_group_unavailable(&mut self, unavailable: bool, span: Span) {
+        if !unavailable {
+            return;
+        }
+        let Some(variant) = self.build.variant(self.db) else {
+            return;
+        };
+        let manifest = self.build.project(self.db).manifest(self.db);
+        if let Some(decl) = manifest.numbering_group(variant.as_str()) {
+            let name = decl.name.v.to_string();
+            self.report(query::group_unavailable(span, &name));
+        }
     }
 
     fn label(&mut self, label: EcoString, target: Target, element: &Element) {
@@ -1643,7 +1717,13 @@ impl Walk<'_> {
             })
         }
         let project = self.build.project(self.db);
-        let doc = document(self.db, project, self.build.variant(self.db).clone()).as_ref()?;
+        let doc = document(
+            self.db,
+            project,
+            self.build.variant(self.db).clone(),
+            self.build.version(self.db).clone(),
+        )
+        .as_ref()?;
         find(&doc.root, label)
     }
 
