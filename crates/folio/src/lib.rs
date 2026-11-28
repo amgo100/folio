@@ -349,7 +349,7 @@ fn reads_common_tree(world: &World, build: folio_core::db::Build<'_>) -> bool {
         || folio_core::pipeline::resolution(db, build).is_some_and(|r| {
             r.queries
                 .iter()
-                .any(|q| matches!(q.result, folio_core::resolve::QueryResult::Total(_)))
+                .any(|q| matches!(q.result, QueryResult::Total(_)))
         })
 }
 
