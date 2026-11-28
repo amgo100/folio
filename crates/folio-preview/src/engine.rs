@@ -686,13 +686,15 @@ impl Engine {
                 // Held under another path that reaches the same file, as
                 // through a link: the loader reads it under every such path
                 // with the batch.
-                if !self.held.is_empty() {
+                if !self.held.is_empty() || !self.open.is_empty() {
                     let closed: BTreeSet<PathBuf> =
                         paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
-                    self.held.retain(|held, _| {
-                        paths.contains(held)
-                            || held.canonicalize().map_or(true, |r| !closed.contains(&r))
-                    });
+                    let other = |path: &PathBuf| {
+                        !paths.contains(path)
+                            && path.canonicalize().is_ok_and(|r| closed.contains(&r))
+                    };
+                    self.held.retain(|held, _| !other(held));
+                    self.open.retain(|open| !other(open));
                 }
             }
             // Removed, renamed or created: whatever writes it now has
@@ -850,9 +852,18 @@ impl Engine {
                 .chain(released.iter().cloned())
                 .collect(),
         };
-        // Read whole, or gone: no longer held.
-        for path in read {
-            self.held.remove(&path);
+        // Read whole, or gone: no longer held, under any path that reaches
+        // the same file.
+        if !self.held.is_empty() && !read.is_empty() {
+            let resolved: BTreeSet<PathBuf> = read
+                .iter()
+                .filter_map(|p| p.canonicalize().ok())
+                .chain(read.iter().cloned())
+                .collect();
+            self.held.retain(|held, _| {
+                !resolved.contains(held)
+                    && held.canonicalize().map_or(true, |r| !resolved.contains(&r))
+            });
         }
         let until = Instant::now() + MAX_HOLD;
         for path in held {
