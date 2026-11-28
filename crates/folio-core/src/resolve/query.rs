@@ -3,9 +3,11 @@
 //!
 //! - `#outline(heading)` and `#list-of(figure)` list the instances of an
 //!   element that the variant shows, in document order, each with its
-//!   marker (*2.1*, *Figure 3:*) and its title: its caption, or else its
-//!   text. They read the variant's own tree after Select, so they never
-//!   list what the variant hides.
+//!   marker (*2.1*, *Figure 3:*), its title (its caption, or else its
+//!   text) and, after a comma, the page it starts on, which the
+//!   page-number fixpoint sets (D-65-1: `2.1 Forces, 4`). They read the
+//!   variant's own tree after Select, so they never list what the variant
+//!   hides.
 //! - `#total(question, "marks")` sums a numeric field over the instances
 //!   of an element. In a numbering group it reads the group's common tree
 //!   ([`crate::variants::common`]), so a cover page and its mark scheme
@@ -53,6 +55,24 @@ pub struct Entry {
     pub marker: Option<EcoString>,
     /// Its title: its caption, or else the text of its body.
     pub title: EcoString,
+    /// The page it starts on, as the entry shows it (D-65-1), set by the
+    /// page-number fixpoint like a page-number reference's
+    /// ([`super::Resolution::set_pages`]); [`super::UNRESOLVED`] until a
+    /// layout pass has measured it.
+    pub page: EcoString,
+}
+
+impl Entry {
+    /// The entry's text: its marker, its title, and its page after a
+    /// separator (`2.1 Forces, 4`, D-65-1).
+    pub fn text(&self) -> EcoString {
+        eco_format!(
+            "{}{}, {}",
+            self.marker.as_deref().unwrap_or(""),
+            self.title,
+            self.page
+        )
+    }
 }
 
 /// What a query asks for, as the walk found it.

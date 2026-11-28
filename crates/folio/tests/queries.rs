@@ -63,6 +63,18 @@ fn results(world: &World, variant: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The text of every paragraph a variant sets, with no-break spaces
+/// written `~`.
+fn paragraphs(world: &World, variant: &str) -> Vec<String> {
+    folio::text(world, Target::Pdf, Some(&name(variant)))
+        .unwrap()
+        .unwrap()
+        .paragraphs
+        .iter()
+        .map(|p| p.shaped.text().replace('\u{a0}', "~"))
+        .collect()
+}
+
 fn diagnostics(world: &World, variant: &str) -> Vec<(Severity, String)> {
     folio::compile(world, Target::Pdf, Some(&name(variant)))
         .unwrap()
@@ -91,12 +103,12 @@ fn a_total_is_the_same_in_every_variant_of_a_group() {
     let world = world(true, QUESTIONS);
     assert_eq!(results(&world, "exam"), [["8"]]);
     assert_eq!(results(&world, "markscheme"), [["8"]]);
-    // Until the text stage sets queries, it warns that it leaves them out.
-    let found: Vec<_> = diagnostics(&world, "exam")
-        .into_iter()
-        .filter(|(_, m)| !m.contains("is not laid out yet"))
-        .collect();
-    assert!(found.is_empty(), "{found:?}");
+    assert!(
+        diagnostics(&world, "exam").is_empty(),
+        "{:?}",
+        diagnostics(&world, "exam")
+    );
+    assert_eq!(paragraphs(&world, "exam")[0], "Total: 8 marks.");
 }
 
 /// Outside a group, a variant totals what it shows.
@@ -192,4 +204,67 @@ fn a_query_names_its_element_bare() {
         ),
         "{found:?}"
     );
+}
+
+/// D-65-1: each entry is set as its own paragraph, its marker, title and
+/// page: `1. Forces, 1`.
+#[test]
+fn entries_show_their_page() {
+    let world = world(
+        false,
+        "#outline(heading)\n\n= Forces\n\n#figure(caption: [Ball.])[A.]\n\n\
+         #heading(level: 2)[Friction]\n\n= Energy\n",
+    );
+    let text = paragraphs(&world, "exam");
+    assert_eq!(
+        &text[..3],
+        ["1.~Forces, 1", "1.1.~Friction, 1", "2.~Energy, 1"],
+        "{text:?}"
+    );
+    assert!(
+        diagnostics(&world, "exam").is_empty(),
+        "{:?}",
+        diagnostics(&world, "exam")
+    );
+}
+
+/// Entries find the page their target starts on across a page break.
+#[test]
+fn entries_follow_their_targets_onto_later_pages() {
+    let mut text = String::from("#outline(heading)\n\n= First\n\n");
+    for _ in 0..60 {
+        text.push_str("A paragraph long enough to fill a good part of a line of the page.\n\n");
+    }
+    text.push_str("= Second\n");
+    let world = world(false, &text);
+    let set = paragraphs(&world, "exam");
+    assert_eq!(set[0], "1.~First, 1");
+    let second = &set[1];
+    assert!(
+        second.starts_with("2.~Second, ") && !second.ends_with(", 1") && !second.ends_with("??"),
+        "{second}"
+    );
+}
+
+/// Each entry links to what it lists: by its label, or by a name made for
+/// it; the PDF still claims PDF/UA-1.
+#[test]
+fn entries_are_links() {
+    let world = world(
+        false,
+        "#doc(title: [Forces])\n\n#outline(heading)\n\n= Forces <sec:forces>\n\nText.\n\n= Energy\n\nMore.\n",
+    );
+    let compiled = folio::compile(&world, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert!(
+        compiled.diagnostics.is_empty(),
+        "{:?}",
+        compiled.diagnostics
+    );
+    let pdf = compiled.output.clone().expect("a PDF");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("<pdfuaid:part>1</pdfuaid:part>"), "PDF/UA-1");
+    assert_eq!(text.matches("/Subtype/Link").count(), 2);
+    assert_eq!(text.matches("/S/Link").count(), 2);
+    assert_eq!(text.matches("/Dest(sec:forces)").count(), 1);
+    assert_eq!(text.matches("/Dest(entry 1)").count(), 1);
 }

@@ -308,7 +308,8 @@ impl Resolution {
 
     /// What layout must find the pages of: the targets of the page-number
     /// references, each once, in the order they are first referred to,
-    /// then, when footnotes are numbered per page, the footnotes.
+    /// then, when footnotes are numbered per page, the footnotes, then the
+    /// instances that outlines and figure lists list.
     pub fn page_targets(&self) -> Vec<Location> {
         let mut seen = HashSet::new();
         let footnotes = self
@@ -316,12 +317,17 @@ impl Resolution {
             .iter()
             .filter(|_| self.footnotes_per_page)
             .map(|f| f.location);
+        let entries = self.queries.iter().flat_map(|q| match &q.result {
+            QueryResult::List(entries) => entries.iter().map(|e| e.target).collect(),
+            QueryResult::Total(_) => Vec::new(),
+        });
         self.references
             .iter()
             .filter(|r| r.page.is_some())
             .filter_map(|r| r.target)
             .map(|t| t.location)
             .chain(footnotes)
+            .chain(entries)
             .filter(|l| seen.insert(*l))
             .collect()
     }
@@ -350,6 +356,17 @@ impl Resolution {
             } else {
                 eco_format!("{word}{NBSP}{page}")
             };
+        }
+        for q in self.queries.make_mut() {
+            let QueryResult::List(entries) = &mut q.result else {
+                continue;
+            };
+            for entry in entries.make_mut() {
+                entry.page = match numbers.page(entry.target) {
+                    Some(page) => eco_format!("{page}"),
+                    None => UNRESOLVED.into(),
+                };
+            }
         }
         self.pages = numbers;
     }
@@ -1042,6 +1059,7 @@ impl Walk<'_> {
                                 .then(|| m.text.clone())
                             }),
                             title: query::title(element),
+                            page: UNRESOLVED.into(),
                         })
                         .collect(),
                 ),
