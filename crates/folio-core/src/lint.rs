@@ -200,12 +200,13 @@ fn lint_variant(db: &dyn Db, project: Project, variant: Option<Name>, version: O
     for component in host.components().filter(|c| has_elements(c)) {
         let namespace = component.manifest.namespace();
         let mut spans = HashMap::new();
-        let mut cx = Cx {
+        let lint_reads = &component.declarations.lint_reads;
+        let view = view(
             component,
-            namespace: &namespace,
-            spans: &mut spans,
-        };
-        let view = InstanceTree::new(cx.in_element(&document.root));
+            &document.root,
+            &|field| lint_reads.reads(field),
+            &mut spans,
+        );
         for found in run_lint(db, project, namespace.clone(), view).iter() {
             diag::report(db, diagnostic(&namespace, found, &spans));
         }
@@ -263,6 +264,26 @@ struct Cx<'a> {
     namespace: &'a Name,
     /// The span of each instance, to report diagnostics at.
     spans: &'a mut HashMap<Location, Span>,
+    /// Which fields the view holds (SPEC §3.5): those the call reads.
+    reads: &'a dyn Fn(&str) -> bool,
+}
+
+/// The view of a component's instances in a tree (SPEC §3.2), holding only
+/// the fields `reads` accepts, and the span of each instance in `spans`.
+pub(crate) fn view(
+    component: &Registered,
+    root: &Element,
+    reads: &dyn Fn(&str) -> bool,
+    spans: &mut HashMap<Location, Span>,
+) -> InstanceTree {
+    let namespace = component.manifest.namespace();
+    let mut cx = Cx {
+        component,
+        namespace: &namespace,
+        spans,
+        reads,
+    };
+    InstanceTree::new(cx.in_element(root))
 }
 
 impl Cx<'_> {
@@ -270,6 +291,15 @@ impl Cx<'_> {
     /// is one, else those in its fields, in their order.
     fn in_element(&mut self, element: &Element) -> Vec<Instance> {
         if element.name.namespace.as_ref() == Some(self.namespace) {
+            // An aggregate's element shows its value; it is not one of the
+            // instances the aggregate reads (D-72-1).
+            if self
+                .component
+                .aggregate_decl(element.name.name.as_str())
+                .is_some()
+            {
+                return Vec::new();
+            }
             return vec![self.instance(element)];
         }
         let mut out = Vec::new();
@@ -330,6 +360,7 @@ impl Cx<'_> {
                     let children = self.in_content(content);
                     parts.push(Part::new(name, children).with_empty(content.is_empty()));
                 }
+                _ if !(self.reads)(key) => {}
                 _ => {
                     if let Some(plain) = plain(value) {
                         fields.push((name, plain));

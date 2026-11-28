@@ -18,7 +18,7 @@ use super::value::{
 };
 use super::vm::{FromValue, NativeFn, Vm};
 use crate::component::ComponentHost;
-use crate::db::{Bytes, FileKind, data_file, report_read, source_file};
+use crate::db::{Bytes, FileKind, data_file, missing_source, report_read, source_file};
 use crate::locate::{Frame, item_key};
 
 /// The global scope: the library, the built-in elements content can call,
@@ -64,9 +64,7 @@ pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
         }
         let namespace = component.manifest.namespace();
         let elements: BTreeMap<EcoString, Value> = component
-            .declarations
-            .elements
-            .iter()
+            .elements()
             .map(|schema| {
                 names.push(schema.name.clone());
                 let name = QualifiedName::qualified(namespace.clone(), schema.name.clone());
@@ -561,6 +559,14 @@ fn load(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(Bytes, Span, Option<Fil
     } else if let Some(file) = source_file(vm.db, vm.project, path.clone()) {
         let source = file.source(vm.db);
         (Bytes::from(source.text().as_bytes()), Some(source.id()))
+    } else if vm.project.unreadable(vm.db).contains_key(&path) {
+        // A source the host found but could not take: say why.
+        let (message, hint) = missing_source(vm.db, vm.project, &path);
+        let mut error = EvalError::new(span, message);
+        if let Some(hint) = hint {
+            error = error.with_hint(hint);
+        }
+        return Err(error.into());
     } else {
         bail!(span, "file `{}` not found", path.as_str());
     };

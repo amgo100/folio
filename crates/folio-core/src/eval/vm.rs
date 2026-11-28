@@ -22,7 +22,7 @@ use super::value::{
 };
 use super::{Cost, Limits, MAX_NESTING, Memo, Mode, eval_file_for, globals, reachable, today};
 use crate::component::Reason;
-use crate::db::{Db, Project, component_host, source_file};
+use crate::db::{Db, Project, component_host, missing_source, source_file};
 use crate::locate::{Frame, Origin, item_key};
 use crate::project::ProjectPath;
 
@@ -1974,11 +1974,12 @@ impl<'a> Vm<'a> {
             );
         }
         let Some(file) = source_file(self.db, self.project, path.clone()) else {
-            return Err(
-                EvalError::new(span, eco_format!("file `{}` not found", path.as_str()))
-                    .with_hint("Folio reads `.fol` and `.fsty` files inside the project")
-                    .into(),
-            );
+            let (message, hint) = missing_source(self.db, self.project, &path);
+            let mut error = EvalError::new(span, message);
+            if let Some(hint) = hint {
+                error = error.with_hint(hint);
+            }
+            return Err(error.into());
         };
         if path == self.file || reachable(self.db, self.project, file).contains(&self.file) {
             return Err(EvalError::new(span, "cyclic import")

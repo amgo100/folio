@@ -99,12 +99,12 @@ fn install(args: &InstallArgs) -> ExitCode {
     match toolchain::install(&version, &Channel::official(), &Curl, &toolchains) {
         Ok(installed) => {
             if installed.already {
-                eprintln!(
+                errln!(
                     "Folio {version} is already installed at {}",
                     installed.path.display()
                 );
             } else {
-                eprintln!("installed Folio {version} at {}", installed.path.display());
+                errln!("installed Folio {version} at {}", installed.path.display());
             }
             let floor = toolchain::security_fixes_from(Some(&toolchains));
             if version < floor {

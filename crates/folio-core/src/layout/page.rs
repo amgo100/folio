@@ -133,8 +133,9 @@ pub struct SpaceHeight {
     /// How tall its content box is: for `hidden`, the border box of the
     /// content it held, measured in a discarded layout; for answer space,
     /// its ruled lines, its `answer-height`, or its content's height times
-    /// `answer-scale`. At most the body's height, but for hidden content
-    /// and ruled lines, which may be broken across pages.
+    /// `answer-scale`. At most the body's height, but for hidden content,
+    /// ruled lines and answer space with `answer-breakable: true`, which
+    /// may be broken across pages.
     pub height: Abs,
 }
 

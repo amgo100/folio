@@ -567,3 +567,165 @@ fn a_hidden_caption_is_measured_with_its_marker() {
         );
     }
 }
+
+#[test]
+fn answer_space_breaks_across_pages_only_when_asked() {
+    // A 120mm box after about 85mm of text on a 180mm body: whole, it moves to
+    // the next page; with `answer-breakable: true` it starts on this one.
+    let text = format!(
+        "{}\n\n#figure(class: \"answer\")[Answer.]\n\nAfter.\n",
+        (0..4).map(|_| prose(25)).collect::<Vec<_>>().join("\n\n")
+    );
+    let style = "figure.answer { display: answer-space; answer-height: 120mm; \
+                 border: 0.5pt; space-before: 0pt; }\n";
+    let whole = pages(&world(style, SHOWN, &text), "exam");
+    let broken = pages(
+        &world(
+            &format!("{style}figure.answer {{ answer-breakable: true; }}\n"),
+            SHOWN,
+            &text,
+        ),
+        "exam",
+    );
+    assert!(close(whole.spaces[0].height, Abs::mm(120.0)));
+    assert!(close(broken.spaces[0].height, Abs::mm(120.0)));
+    // Its border is drawn on both pages it is broken across.
+    let borders = |pages: &Pages, page: usize| {
+        let mut out = 0;
+        fn walk(fragment: &Fragment, out: &mut usize) {
+            for (_, item) in &fragment.items {
+                match item {
+                    FragmentItem::Group(group) => walk(group, out),
+                    FragmentItem::Shape { .. } => *out += 1,
+                    _ => {}
+                }
+            }
+        }
+        walk(&pages.pages[page].fragment, &mut out);
+        out
+    };
+    assert_eq!(borders(&whole, 0), 0);
+    assert!(borders(&whole, 1) > 0);
+    assert!(borders(&broken, 0) > 0 && borders(&broken, 1) > 0);
+    // What follows comes sooner when the space is broken.
+    assert_eq!(find(&whole, "After").0, find(&broken, "After").0);
+    assert!(find(&broken, "After").1 < find(&whole, "After").1);
+}
+
+/// The text of the paragraphs that the spaces of a variant measure.
+fn measured_text(world: &World, variant: &str) -> Vec<String> {
+    fn walk(block: &folio::TextBlock, text: &folio::Text, out: &mut Vec<String>) {
+        for child in &block.children {
+            match child {
+                folio::TextFlow::Paragraph(i) => {
+                    out.push(text.paragraphs[*i].shaped.text().replace('\u{a0}', " "))
+                }
+                folio::TextFlow::Block(b) => walk(b, text, out),
+            }
+        }
+    }
+    let text = folio::text(world, Target::Pdf, Some(&name(variant)))
+        .unwrap()
+        .unwrap();
+    let mut out = Vec::new();
+    for space in &text.spaces {
+        if let Some(block) = &space.measure {
+            walk(block, &text, &mut out);
+        }
+    }
+    out
+}
+
+#[test]
+fn hidden_content_is_measured_with_its_numbers_and_references() {
+    let world = world(
+        "figure.h { display: hidden; }\nheading { numbering: \"1.\"; }\n",
+        "figure.h { display: block; }\n",
+        "= Forces <forces>\n\n#figure(caption: [A ball.])[Ball.] <ball>\n\n\
+         #figure(class: \"h\")[See @ball and @forces, and @step.\n\n\
+         + First step. <step>\n+ Second step.\n\n#figure(caption: [Inner.])[In.] <inner>\n\n\
+         As @inner shows.]\n\n#figure(caption: [After.])[Last.] <last>\n\nClosing @last.\n",
+    );
+    let measured = measured_text(&world, "exam");
+    let joined = measured.join(" | ");
+    assert!(!joined.contains("??"), "{joined}");
+    assert!(
+        joined.contains("See Figure 1 and Section 1, and 1."),
+        "{joined}"
+    );
+    // The hidden figure is still counted (2), and the one inside it is
+    // numbered after it, as where it is shown.
+    assert!(joined.contains("2. Second step"), "{joined}");
+    assert!(joined.contains("As Figure 3 shows"), "{joined}");
+    // What the paper shows after it is numbered without what it only
+    // measures.
+    let exam = pages(&world, "exam");
+    let text = shown(&exam).replace('\u{a0}', " ");
+    assert!(text.contains("Figure 3"), "{text}");
+    assert!(!text.contains("Figure 4"), "{text}");
+    // And nothing reports on what only measures.
+    let found = diagnostics(&world, "exam");
+    assert!(found.is_empty(), "{found:?}");
+    // The paper and the mark scheme still break alike.
+    assert_same(
+        find(&exam, "Last"),
+        find(&pages(&world, "markscheme"), "Last"),
+        "Last",
+    );
+}
+
+#[test]
+fn breakable_answer_space_has_no_slice_taller_than_the_body() {
+    // 300mm slices on a 180mm body are cut to the body's height.
+    let world = world(
+        "figure.answer { display: answer-space; answer-breakable: true; \
+         rule-spacing: 300mm; answer-height: 400mm; space-before: 0pt; }\n",
+        SHOWN,
+        "#figure(class: \"answer\")[Answer.]\n\nAfter.\n",
+    );
+    let exam = pages(&world, "exam");
+    assert!(close(exam.spaces[0].height, Abs::mm(400.0)));
+    let found = diagnostics(&world, "exam");
+    assert!(
+        found.iter().all(|m| !m.contains("does not fit")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn shared_numbers_do_not_count_measured_content_twice() {
+    // In a numbering group the common tree counts what one variant hides
+    // and the other shows, once.
+    let manifest = "[project]\nentry = \"main.fol\"\nedition = \"2027\"\ncompiler = \"0.0.0\"\n\
+                    lang = \"en\"\nstyles = [\"styles/main.fsty\"]\n\n\
+                    [variants.exam]\ntargets = [\"pdf\"]\n\n\
+                    [variants.markscheme]\ntargets = [\"pdf\"]\n\
+                    styles = [\"styles/markscheme.fsty\"]\n\n\
+                    [numbering-groups.paper]\nvariants = [\"exam\", \"markscheme\"]\n\
+                    shared-counters = [\"figure\"]\n";
+    let mut world = World::new(manifest).unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            &format!("{PAGE}figure.h {{ display: hidden; }}\n"),
+        )
+        .unwrap();
+    world
+        .set_source("styles/markscheme.fsty", "figure.h { display: block; }\n")
+        .unwrap();
+    world
+        .set_source(
+            "main.fol",
+            "#figure[A.] <a>\n\n#figure(class: \"h\")[#figure[Inner.] <inner>\n\nSee @inner.]\n\n\
+             #figure[Last.] <last>\n\nSee @inner and @last.\n",
+        )
+        .unwrap();
+    let markscheme = shown(&pages(&world, "markscheme")).replace('\u{a0}', " ");
+    assert!(
+        markscheme.contains("Figure 3") && markscheme.contains("Figure 4"),
+        "{markscheme}"
+    );
+    assert!(!markscheme.contains("Figure 5"), "{markscheme}");
+    let exam = measured_text(&world, "exam").join(" | ");
+    assert!(exam.contains("See Figure 3."), "{exam}");
+}

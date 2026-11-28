@@ -8,6 +8,8 @@ Some messages are still plain text, with no document or before it:
 - Handing the build to the compiler version that `folio.toml` pins (SPEC §2.4) happens before the arguments are read. A failure to run that version ends with a plain message and exit status 1. A warning that the pinned version has an unfixed security problem is plain text before the pinned version's own output.
 - A crash of the compiler (exit status 101) writes no document.
 
+A reader that closes standard error before the document ends, as `head` does, gets what it read; the command writes nothing more and exits with the status it would have had.
+
 ## Version 1
 
 ```json
