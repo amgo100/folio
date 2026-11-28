@@ -238,6 +238,61 @@ pub fn layout_paragraph(
     prepared.set(input, &broken.ends, &widths, &params, broken.optimal)
 }
 
+/// A paragraph's widths without a width to break at (SPEC §7.4): what a
+/// table's track sizing reads of the paragraphs in its cells.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Hash)]
+pub struct Measures {
+    /// Its min-content width: the widest piece that no line break divides,
+    /// the first with the indent. A break at a hyphenation point divides
+    /// nothing here, unless it is a soft hyphen.
+    pub min: Abs,
+    /// Its max-content width: its widest line, broken only where it must
+    /// be.
+    pub max: Abs,
+}
+
+/// A paragraph's min-content and max-content widths (SPEC §7.4). They do
+/// not depend on a width, so the line-break cache memoises them with the
+/// paragraph's content and style values.
+pub fn measure_paragraph(input: &ParagraphInput<'_>) -> Measures {
+    let prepared = Prepared::new(input);
+    let breakable = &prepared.breakable;
+    let params = Params {
+        justify: false,
+        indent: input.style.indent.to_pt(),
+        ragged_stretch: 0.0,
+        protrusion: false,
+    };
+    let text = input.shaped.text();
+    let widths = [0.0];
+    let (mut min, mut max) = (0.0f64, 0.0f64);
+    let (mut piece, mut pieces) = (&breakable.start, 0);
+    let (mut line, mut lines) = (&breakable.start, 0);
+    for candidate in &breakable.candidates {
+        let divides = match candidate.kind {
+            BreakKind::Hyphenate => text[..candidate.offset].ends_with('\u{ad}'),
+            _ => true,
+        };
+        if divides {
+            let m = breakable.measure(piece, candidate, pieces, &widths, &params);
+            min = min.max(m.natural);
+            piece = candidate;
+            pieces += 1;
+        }
+        if candidate.kind == BreakKind::Mandatory {
+            let m = breakable.measure(line, candidate, lines, &widths, &params);
+            max = max.max(m.natural);
+            line = candidate;
+            lines += 1;
+        }
+    }
+    let width = |w: f64| Abs::pt(if w.is_finite() { w.max(0.0) } else { 0.0 });
+    Measures {
+        min: width(min),
+        max: width(max.max(min)),
+    }
+}
+
 /// A paragraph prepared for breaking: its breakable form, and what setting
 /// its lines needs.
 struct Prepared {

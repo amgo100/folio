@@ -1,0 +1,98 @@
+#doc(title: [Pendulum practical: results], subject: "Year 12 physics")
+
+= The simple pendulum
+
+The period $T$ of a simple pendulum of length $l$ is $T = 2 pi sqrt(l / g)$ for small swings. Each student timed ten oscillations for each length, and the table gives the period found.#footnote[Timing ten oscillations divides the reaction-time error by ten.] A graph of $T^2$ against $l$ is a straight line through the origin, whose gradient is $4 pi^2 / g$.
+
+#grid(class: "results", column-tracks: (auto, 1fr, 1fr, 1fr, 1fr), header-rows: 1)[
+  #cell[Run] #cell[Length $l$] #cell[Ten periods] #cell[Period $T$] #cell[$T^2$]
+  #cell[1] #cell[#qty("0.200", "m")] #cell[#qty("8.97", "s")] #cell[#qty("0.897", "s")] #cell[#qty("0.805", "s^2")]
+  #cell[2] #cell[#qty("0.250", "m")] #cell[#qty("10.03", "s")] #cell[#qty("1.003", "s")] #cell[#qty("1.006", "s^2")]
+  #cell[3] #cell[#qty("0.300", "m")] #cell[#qty("10.99", "s")] #cell[#qty("1.099", "s")] #cell[#qty("1.207", "s^2")]
+  #cell[4] #cell[#qty("0.350", "m")] #cell[#qty("11.87", "s")] #cell[#qty("1.187", "s")] #cell[#qty("1.409", "s^2")]
+  #cell[5] #cell[#qty("0.400", "m")] #cell[#qty("12.69", "s")] #cell[#qty("1.269", "s")] #cell[#qty("1.610", "s^2")]
+  #cell[6] #cell[#qty("0.450", "m")] #cell[#qty("13.46", "s")] #cell[#qty("1.346", "s")] #cell[#qty("1.811", "s^2")]
+  #cell[7] #cell[#qty("0.500", "m")] #cell[#qty("14.19", "s")] #cell[#qty("1.419", "s")] #cell[#qty("2.012", "s^2")]
+  #cell[8] #cell[#qty("0.550", "m")] #cell[#qty("14.88", "s")] #cell[#qty("1.488", "s")] #cell[#qty("2.213", "s^2")]
+  #cell[9] #cell[#qty("0.600", "m")] #cell[#qty("15.54", "s")] #cell[#qty("1.554", "s")] #cell[#qty("2.415", "s^2")]
+  #cell[10] #cell[#qty("0.650", "m")] #cell[#qty("16.17", "s")] #cell[#qty("1.617", "s")] #cell[#qty("2.616", "s^2")]
+  #cell[11] #cell[#qty("0.700", "m")] #cell[#qty("16.78", "s")] #cell[#qty("1.678", "s")] #cell[#qty("2.817", "s^2")]
+  #cell[12] #cell[#qty("0.750", "m")] #cell[#qty("17.37", "s")] #cell[#qty("1.737", "s")] #cell[#qty("3.018", "s^2")]
+  #cell[13] #cell[#qty("0.800", "m")] #cell[#qty("17.94", "s")] #cell[#qty("1.794", "s")] #cell[#qty("3.219", "s^2")]
+  #cell[14] #cell[#qty("0.850", "m")] #cell[#qty("18.50", "s")] #cell[#qty("1.850", "s")] #cell[#qty("3.421", "s^2")]
+  #cell[15] #cell[#qty("0.900", "m")] #cell[#qty("19.03", "s")] #cell[#qty("1.903", "s")] #cell[#qty("3.622", "s^2")]
+  #cell[16] #cell[#qty("0.950", "m")] #cell[#qty("19.55", "s")] #cell[#qty("1.955", "s")] #cell[#qty("3.823", "s^2")]
+  #cell[17] #cell[#qty("1.000", "m")] #cell[#qty("20.06", "s")] #cell[#qty("2.006", "s")] #cell[#qty("4.024", "s^2")]
+  #cell[18] #cell[#qty("1.050", "m")] #cell[#qty("20.56", "s")] #cell[#qty("2.056", "s")] #cell[#qty("4.226", "s^2")]
+  #cell[19] #cell[#qty("1.100", "m")] #cell[#qty("21.04", "s")] #cell[#qty("2.104", "s")] #cell[#qty("4.427", "s^2")]
+  #cell[20] #cell[#qty("1.150", "m")] #cell[#qty("21.51", "s")] #cell[#qty("2.151", "s")] #cell[#qty("4.628", "s^2")]
+  #cell[21] #cell[#qty("1.200", "m")] #cell[#qty("21.98", "s")] #cell[#qty("2.198", "s")] #cell[#qty("4.829", "s^2")]
+  #cell[22] #cell[#qty("1.250", "m")] #cell[#qty("22.43", "s")] #cell[#qty("2.243", "s")] #cell[#qty("5.030", "s^2")]
+  #cell[23] #cell[#qty("1.300", "m")] #cell[#qty("22.87", "s")] #cell[#qty("2.287", "s")] #cell[#qty("5.232", "s^2")]
+  #cell[24] #cell[#qty("1.350", "m")] #cell[#qty("23.31", "s")] #cell[#qty("2.331", "s")] #cell[#qty("5.433", "s^2")]
+  #cell[25] #cell[#qty("1.400", "m")] #cell[#qty("23.74", "s")] #cell[#qty("2.374", "s")] #cell[#qty("5.634", "s^2")]
+  #cell[26] #cell[#qty("1.450", "m")] #cell[#qty("24.16", "s")] #cell[#qty("2.416", "s")] #cell[#qty("5.835", "s^2")]
+  #cell[27] #cell[#qty("1.500", "m")] #cell[#qty("24.57", "s")] #cell[#qty("2.457", "s")] #cell[#qty("6.036", "s^2")]
+  #cell[28] #cell[#qty("1.550", "m")] #cell[#qty("24.98", "s")] #cell[#qty("2.498", "s")] #cell[#qty("6.238", "s^2")]
+  #cell[29] #cell[#qty("1.600", "m")] #cell[#qty("25.37", "s")] #cell[#qty("2.537", "s")] #cell[#qty("6.439", "s^2")]
+  #cell[30] #cell[#qty("1.650", "m")] #cell[#qty("25.77", "s")] #cell[#qty("2.577", "s")] #cell[#qty("6.640", "s^2")]
+  #cell(colspan: 4)[Mean gradient of $T^2$ against $l$] #cell[#qty("4.03", "s^2 m^-1")]
+]
+
+= Sources of error
+
+#grid(class: "errors", column-tracks: (auto, 2fr, 3fr), header-rows: 1)[
+  #cell[Kind] #cell[Source] #cell[How it was reduced]
+  #cell(rowspan: 2)[Random] #cell[Reaction time when starting and stopping the stopwatch.] #cell[Ten oscillations were timed together, and each timing was repeated three times.#footnote[The mean of the three timings is in the table.]]
+  #cell[The amplitude of the swing changing between runs.] #cell[The bob was released from the same mark each time.]
+  #cell[Systematic] #cell[The length measured to the top of the bob rather than its centre.] #cell[The radius of the bob was added to every length.]
+]
+
+= Notes from the practical
+
+#grid(class: "notes", column-tracks: (1fr, 1fr))[
+  #cell[
+    The pendulum was hung from a clamp held firmly in a stand, which was weighed down so that it did not move as the bob swung. A fiducial marker was placed at the lowest point of the swing, where the bob moves fastest, so that the moment it passed was easy to judge.
+
+    Each length was measured with a metre rule from the point of suspension to the centre of the bob. The bob was pulled aside through a small angle, less than ten degrees, so that the motion was close to simple harmonic, and released without a push.
+
+    Timing began on the third pass of the marker, once the swing had settled. Ten full oscillations were counted, and the stopwatch was stopped as the bob passed the marker in the same direction as at the start.
+
+    The timing was repeated three times for each length and the mean taken. Any timing that differed from the others by more than a tenth of a second was repeated.
+  ]
+  #cell[
+    The results show that the period increases with the length, and that the square of the period is proportional to the length, within the uncertainty of the measurements.
+
+    The gradient of the graph of $T^2$ against $l$ gives a value of the acceleration of free fall close to the accepted value. The small difference comes mostly from the uncertainty in starting and stopping the stopwatch.
+
+    A light gate and a data logger would remove the reaction time from the measurement altogether, and would allow a single period to be measured accurately.
+
+    The experiment could be extended by measuring the period at larger amplitudes, where the approximation of simple harmonic motion no longer holds and the period grows slightly with the amplitude.
+  ]
+]
+
+= Apparatus
+
+#grid(class: "kit", column-tracks: (1fr, 2fr), header-rows: 1)[
+  Item
+
+  Use
+
+  Stopwatch
+
+  Timing ten oscillations, to a hundredth of a second.
+
+  Metre rule
+
+  - measuring the length of the string;
+  - checking that the bob hangs vertically.
+
+  #cell[Clamp and stand]
+  #cell[
+    Holding the pendulum. The stand was weighed down:
+
+    #grid(class: "inner", column-tracks: 2)[
+      #cell[Mass] #cell[#qty(2, "kg")#footnote[Two masses of one kilogram each.]]
+    ]
+  ]
+]
