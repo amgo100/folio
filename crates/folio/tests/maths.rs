@@ -410,6 +410,11 @@ fn numbers_in_formulas_are_written_in_the_number_format_of_their_text() {
     // or without.
     let pl = text(polish, "$1,23456$ i $1,23456^2$\n");
     assert_eq!(pl.matches("234\u{202F}56").count(), 2, "{pl}");
+    // So does a float embedded with `#`, as written or computed (#421).
+    let pl = text(polish, "$#3.00e8$ i $#(2.0 * 1.25)$ i $#(1.0 / 3.0)$\n");
+    assert!(pl.contains("3,00") && pl.contains("2,5"), "{pl}");
+    assert!(pl.contains("0,333"), "{pl}");
+    assert!(!pl.contains("300000000"), "{pl}");
     let en = text("", "$g = 9.81$ and $12345.5$\n");
     assert!(
         en.contains("9.81") && en.contains("12\u{202F}345.5"),
