@@ -582,8 +582,8 @@ See @eq:speed.
     let style = "math { numbering: \"(1)\"; }\n\
                  render example as compact { body: slot(statement); }\n\
                  example.short { template: compact; }\n";
-    let world = world(style, content);
-    let resolution = folio::resolve(&world, Target::Pdf, exam().as_ref())
+    let compact = world(style, content);
+    let resolution = folio::resolve(&compact, Target::Pdf, exam().as_ref())
         .unwrap()
         .unwrap();
     let numbers: Vec<String> = resolution
