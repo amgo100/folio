@@ -10,6 +10,7 @@
 //! | --- | --- | --- |
 //! | `markup` | content markup | the parse is lossless |
 //! | `stylesheet` | a stylesheet | the parse is lossless |
+//! | `fmt` | a byte choosing content or a stylesheet, then the file | formatting a file without syntax errors does not fail as `Unsound` and gives a file without syntax errors that is equivalent and formats to itself |
 //! | `reparse` | a sequence of edits to markup or a stylesheet | after each, incremental reparsing equals a full parse; node identities follow the edit |
 //! | `style` | content and a stylesheet | evaluation, the cascade and selector matching finish without a panic |
 //! | `nesting` | wrappers and how often to apply each | a script that nests values that deeply compiles to PDF on a small stack, or reports the nesting limit, without a panic or an overflow |
@@ -31,6 +32,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use folio::{BuildMode, Fragment, FragmentItem, Limits, Name, Target, World, span_map};
+use folio_syntax::fmt::{self, FormatError};
 use folio_syntax::{NodeIds, Source, SyntaxNode, parse, parse_stylesheet};
 
 use crate::corpus;
@@ -44,6 +46,7 @@ pub type Body = fn(&[u8]);
 pub const TARGETS: &[(&str, Body)] = &[
     ("markup", markup),
     ("stylesheet", stylesheet),
+    ("fmt", fmt),
     ("reparse", reparse),
     ("style", style),
     ("nesting", nesting),
@@ -69,6 +72,58 @@ pub fn markup(data: &[u8]) {
     };
     check_lossless(&parse(text), text);
     let _ = Source::detached(text).root().errors_and_warnings();
+}
+
+/// Formats a file, content when the first byte is even and a stylesheet
+/// when it is odd, and checks that formatting is sound and idempotent: a
+/// file without syntax errors formats (it does not fail as
+/// [`FormatError::Unsound`]) to a file without syntax errors that is
+/// [`fmt::equivalent`] to it and is formatted already.
+pub fn fmt(data: &[u8]) {
+    let Some((&kind, rest)) = data.split_first() else {
+        return;
+    };
+    let Ok(text) = std::str::from_utf8(rest) else {
+        return;
+    };
+    let stylesheet = kind % 2 == 1;
+    let parse_file = |text: &str| {
+        if stylesheet {
+            parse_stylesheet(text)
+        } else {
+            parse(text)
+        }
+    };
+    let root = parse_file(text);
+    let edits = match fmt::format(&root) {
+        Ok(edits) => edits,
+        Err(FormatError::Syntax) => {
+            assert!(
+                root.diagnosis().errors,
+                "`Syntax` for a file without errors"
+            );
+            return;
+        }
+        Err(FormatError::Unsound) => panic!("formatting would change the meaning of {text:?}"),
+    };
+    let once = edits.apply(text);
+    let formatted = parse_file(&once);
+    assert!(
+        !formatted.diagnosis().errors,
+        "formatting {text:?} gave syntax errors: {once:?}"
+    );
+    assert!(
+        fmt::equivalent(&root, &formatted),
+        "formatting {text:?} changed the tree: {once:?}"
+    );
+    match fmt::format(&formatted) {
+        Ok(again) => assert!(
+            again.is_empty(),
+            "formatting {text:?} is not idempotent: {once:?} formats to {:?}",
+            again.apply(&once)
+        ),
+        Err(e) => panic!("formatting {text:?} gave {once:?}, which fails to format: {e}"),
+    }
 }
 
 /// Parses a stylesheet and checks that the tree holds the text exactly.
@@ -1375,6 +1430,14 @@ pub fn seeds() -> Vec<(&'static str, String, Vec<u8>)> {
     }
     for (name, text) in &sheets {
         out.push(("stylesheet", name.clone(), text.as_bytes().to_vec()));
+    }
+    // Each file for `fmt`, behind the byte that says what it is.
+    for (kind, files) in [(0u8, &contents), (1, &sheets)] {
+        for (name, text) in files {
+            let mut bytes = vec![kind];
+            bytes.extend(text.as_bytes());
+            out.push(("fmt", name.clone(), bytes));
+        }
     }
     // Edits in the middle of each file: an insertion and a deletion.
     for (stylesheet, files) in [(false, &contents), (true, &sheets)] {

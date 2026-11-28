@@ -155,6 +155,7 @@ with `cargo fuzz`, and runs each in turn. The targets' bodies are in
 | --- | --- |
 | `markup` | Parsing content markup is lossless. |
 | `stylesheet` | Parsing a stylesheet is lossless. |
+| `fmt` | Formatting content or a stylesheet (the first byte chooses) does not fail as `Unsound` on a file without syntax errors, and gives a file without syntax errors that parses to an equivalent tree and is formatted already. |
 | `reparse` | After each edit of a sequence to a file, an incremental reparse equals a full parse, and node identities follow the edit. Its seeds include, for each corpus file, delimiters typed and deleted again, and the file made dense with syntax errors with a binding typed into it a character at a time. |
 | `style` | Evaluating content and matching a stylesheet's selectors against it finishes without a panic, within small evaluation limits. |
 | `nesting` | A script that nests content, arrays, dictionaries, closures and arguments by applying wrappers in loops compiles to PDF on a 2 MiB stack, or stops at the nesting limit, without a panic or a stack overflow. |
