@@ -237,9 +237,14 @@ fn defaults() {
     assert_eq!(m.formatting.mode.v, FormattingMode::Local);
     assert!(m.formatting.allow_overrides_sheet.v);
     assert!(!m.formatting.allow_local_packages.v);
-    assert_eq!(m.output.path.v.as_str(), "out/{stem}-{variant}.{ext}");
+    assert!(m.project.versions.is_empty());
+    assert_eq!(m.version_keys(), [None]);
     assert_eq!(
-        m.output.path.v.resolve("main", Some("exam"), "pdf"),
+        m.output.path.v.as_str(),
+        "out/{stem}-{variant}-{version}.{ext}"
+    );
+    assert_eq!(
+        m.output.path.v.resolve("main", Some("exam"), None, "pdf"),
         "out/main-exam.pdf"
     );
 }
@@ -248,7 +253,7 @@ fn defaults() {
 fn output_paths_without_variants() {
     let resolve = |pattern: &str| {
         let m = parse(&format!("{PROJECT}\n[output]\npath = \"{pattern}\"\n"));
-        m.output.path.v.resolve("main", None, "pdf")
+        m.output.path.v.resolve("main", None, None, "pdf")
     };
     assert_eq!(resolve("out/{stem}-{variant}.{ext}"), "out/main.pdf");
     assert_eq!(resolve("out/{stem}_{variant}.{ext}"), "out/main.pdf");
@@ -275,6 +280,78 @@ fn output_paths_without_variants() {
     );
 }
 
+/// SPEC §4.1, §6.4: `project.versions` builds every variant once per
+/// version, and `{version}` names their files.
+#[test]
+fn versions() {
+    let m = parse(&format!(
+        "{PROJECT}versions = [\"A\", \"B\"]\n\n[variants.exam]\ntargets = [\"pdf\"]\n"
+    ));
+    let names: Vec<&str> = m.project.versions.iter().map(|v| v.v.as_str()).collect();
+    assert_eq!(names, ["A", "B"]);
+    let (exam, b) = (Name::new("exam").unwrap(), Name::new("B").unwrap());
+    assert_eq!(
+        m.version_keys(),
+        [Some(Name::new("A").unwrap()), Some(b.clone())]
+    );
+    assert_eq!(
+        m.versioned_output_path(Some(&exam), Some(&b), Target::Pdf)
+            .as_deref(),
+        Some("out/main-exam-B.pdf")
+    );
+    assert_eq!(
+        m.output_path(Some(&exam), Target::Pdf).as_deref(),
+        Some("out/main-exam.pdf")
+    );
+    // Without variants, the version follows the stem.
+    let m = parse(&format!("{PROJECT}versions = [\"A\", \"B\"]\n"));
+    assert_eq!(
+        m.versioned_output_path(None, Some(&b), Target::Pdf)
+            .as_deref(),
+        Some("out/main-B.pdf")
+    );
+
+    let resolve = |pattern: &str, variant, version| {
+        let m = parse(&format!("{PROJECT}\n[output]\npath = \"{pattern}\"\n"));
+        m.output.path.v.resolve("main", variant, version, "pdf")
+    };
+    let pattern = "out/{version}/{stem}-{variant}.{ext}";
+    assert_eq!(
+        resolve(pattern, Some("exam"), Some("B")),
+        "out/B/main-exam.pdf"
+    );
+    assert_eq!(resolve(pattern, Some("exam"), None), "out/main-exam.pdf");
+    assert_eq!(resolve(pattern, None, None), "out/main.pdf");
+    assert_eq!(resolve("out/{version}.{ext}", None, None), "out/main.pdf");
+    assert_eq!(
+        resolve("out/{variant}-{version}.{ext}", None, Some("B")),
+        "out/B.pdf"
+    );
+
+    assert_eq!(
+        errors("versions = []\n"),
+        "`versions` lists no version @ []\n  \
+         hint: list each version, such as `versions = [\"A\", \"B\"]`, or leave the key out\n"
+    );
+    assert_eq!(
+        errors("versions = [\"A\", \"A\", \"a\", \"1\"]\n"),
+        "duplicate item in `versions` @ \"A\"\n\
+         versions `A` and `a` differ only in case @ \"a\"\n  \
+         hint: their output files would have the same name on some file systems\n\
+         `1` is not a valid name @ \"1\"\n  \
+         hint: a name starts with a letter or `_` and continues with letters, digits, `-` or `_`\n"
+    );
+    assert_eq!(
+        errors("versions = [\"A\", \"B\"]\n\n[output]\npath = \"out/{stem}.{ext}\"\n"),
+        "every version writes to the same file @ \"out/{stem}.{ext}\"\n  \
+         hint: add `{version}` to the path\n"
+    );
+    // One version needs no `{version}`.
+    parse(&format!(
+        "{PROJECT}versions = [\"A\"]\n\n[output]\npath = \"out/{{stem}}.{{ext}}\"\n"
+    ));
+}
+
 #[test]
 fn spans_point_into_the_file() {
     let text = format!("{PROJECT}lang = \"pl\"\n");
@@ -294,7 +371,7 @@ fn today_and_output() {
     assert_eq!(m.project.today.unwrap().v.to_string(), "2026-11-24");
     assert_eq!(m.output.path.v.as_str(), "build/{stem}.{ext}");
     assert_eq!(
-        m.output.path.v.resolve("main", Some("exam"), "pdf"),
+        m.output.path.v.resolve("main", Some("exam"), None, "pdf"),
         "build/main.pdf"
     );
 }
@@ -305,7 +382,7 @@ fn review_edge_cases() {
     let m = parse(&PROJECT.replace("main.fol", "{variant}.fol"));
     let stem = m.project.entry.v.stem();
     assert_eq!(
-        m.output.path.v.resolve(stem, Some("exam"), "pdf"),
+        m.output.path.v.resolve(stem, Some("exam"), None, "pdf"),
         "out/{variant}-exam.pdf"
     );
     // A colon is not a drive letter unless a separator or the end follows.
@@ -341,7 +418,7 @@ fn unknown_keys() {
     assert_eq!(
         errors("colour = \"red\"\n"),
         "unknown key `colour` in `[project]` @ colour\n  hint: expected `entry`, `edition`, \
-         `compiler`, `lang`, `styles` or `today`\n"
+         `compiler`, `lang`, `styles`, `today` or `versions`\n"
     );
     assert_eq!(
         errors("\n[variants.exam]\ntargets = [\"pdf\"]\nstyle = [\"a.fsty\"]\n"),
@@ -566,7 +643,7 @@ fn invalid_output() {
     assert_eq!(
         errors("\n[output]\npath = \"out/{stem\"\n"),
         "unmatched brace in `out/{stem` @ \"out/{stem\"\n  \
-         hint: placeholders are `{stem}`, `{variant}` or `{ext}`\n"
+         hint: placeholders are `{stem}`, `{variant}`, `{version}` or `{ext}`\n"
     );
     assert_eq!(
         errors("\n[output]\npath = \"out/\"\n"),

@@ -47,6 +47,9 @@ pub struct Project {
     /// The date that scripts see as `today`, since there is no clock
     /// (SPEC §4.4). The command line can also supply one.
     pub today: Option<Spanned<Date>>,
+    /// The versions of a shuffled paper, in declaration order (SPEC §6.4):
+    /// every variant is built once for each. Empty when not given.
+    pub versions: Vec<Spanned<Name>>,
 }
 
 /// `[components]`: components declared by path or version, and first-party
@@ -170,12 +173,12 @@ impl Default for Output {
 
 /// The path of an output file, relative to the project, with the
 /// placeholders `{stem}` (the entry file's name without extension),
-/// `{variant}` and `{ext}` (the target's file extension).
+/// `{variant}`, `{version}` and `{ext}` (the target's file extension).
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub struct OutputPattern(EcoString);
 
 impl OutputPattern {
-    const PLACEHOLDERS: &[&str] = &["stem", "variant", "ext"];
+    const PLACEHOLDERS: &[&str] = &["stem", "variant", "version", "ext"];
 
     /// The pattern as written, normalised.
     pub fn as_str(&self) -> &str {
@@ -192,12 +195,23 @@ impl OutputPattern {
     /// separator (`-`, `_`, `.` or `/`): the one after it when it starts a
     /// path segment, the one before it otherwise; but where that would leave
     /// a file name without a stem, `{variant}` becomes `{stem}`. So
-    /// `out/{stem}-{variant}.{ext}` gives `out/main.pdf`.
-    pub fn resolve(&self, stem: &str, variant: Option<&str>, ext: &str) -> EcoString {
-        let pattern = match variant {
-            Some(_) => self.0.clone(),
-            None => without_variant(&self.0),
-        };
+    /// `out/{stem}-{variant}.{ext}` gives `out/main.pdf`. `version` is
+    /// `None` for a project without versions, which leaves `{version}` out
+    /// in the same way, before `{variant}`.
+    pub fn resolve(
+        &self,
+        stem: &str,
+        variant: Option<&str>,
+        version: Option<&str>,
+        ext: &str,
+    ) -> EcoString {
+        let mut pattern = self.0.clone();
+        if version.is_none() {
+            pattern = without(&pattern, "{version}");
+        }
+        if variant.is_none() {
+            pattern = without(&pattern, "{variant}");
+        }
         // One pass, so braces in a substituted value are left alone.
         let mut out = EcoString::new();
         let mut rest = pattern.as_str();
@@ -207,6 +221,7 @@ impl OutputPattern {
             out.push_str(match &rest[open + 1..close] {
                 "stem" => stem,
                 "variant" => variant.unwrap_or_default(),
+                "version" => version.unwrap_or_default(),
                 "ext" => ext,
                 other => other,
             });
@@ -255,17 +270,17 @@ impl OutputPattern {
     }
 }
 
-/// An output pattern with every `{variant}` left out, with the separator
-/// after it when it starts a path segment, or the one before it otherwise.
-/// A `{variant}` that would leave a file name without a stem, as in
-/// `out/{variant}.{ext}`, becomes `{stem}` instead.
-fn without_variant(pattern: &str) -> EcoString {
+/// An output pattern with every `placeholder` (`{variant}` or `{version}`)
+/// left out, with the separator after it when it starts a path segment, or
+/// the one before it otherwise. One that would leave a file name without a
+/// stem, as in `out/{variant}.{ext}`, becomes `{stem}` instead.
+fn without(pattern: &str, placeholder: &str) -> EcoString {
     const SEPARATORS: &[char] = &['-', '_', '.', '/'];
     let mut out = EcoString::new();
     let mut rest = pattern;
-    while let Some(at) = rest.find("{variant}") {
+    while let Some(at) = rest.find(placeholder) {
         let before = &rest[..at];
-        let after = &rest[at + "{variant}".len()..];
+        let after = &rest[at + placeholder.len()..];
         let starts_segment = before.is_empty() || before.ends_with('/');
         let names_file = after.starts_with('.') && !after.contains('/');
         if starts_segment && names_file {
@@ -286,7 +301,7 @@ fn without_variant(pattern: &str) -> EcoString {
 
 impl Default for OutputPattern {
     fn default() -> Self {
-        Self("out/{stem}-{variant}.{ext}".into())
+        Self("out/{stem}-{variant}-{version}.{ext}".into())
     }
 }
 
@@ -382,7 +397,8 @@ impl Manifest {
             .and_then(|v| v.table(&mut cx, "`[output]`".into()))
             .map(|table| {
                 let entry = project.as_ref().map(|p| &p.entry.v);
-                read_output(&mut cx, &table, &variants, entry, &components)
+                let versions = project.as_ref().map_or(&[][..], |p| &p.versions[..]);
+                read_output(&mut cx, &table, &variants, versions, entry, &components)
             })
             .unwrap_or_default();
 
@@ -451,19 +467,49 @@ impl Manifest {
     /// target writes its output to (SPEC §6.4): `[output] path` with the
     /// entry file's stem, the variant and the target's extension. `None`
     /// when the target writes no file. `variant` is `None` for a project
-    /// without variants.
+    /// without variants. The build has no version; see
+    /// [`Manifest::versioned_output_path`].
     pub fn output_path(&self, variant: Option<&Name>, target: Target) -> Option<EcoString> {
+        self.versioned_output_path(variant, None, target)
+    }
+
+    /// [`Manifest::output_path`] of a build of one version of a shuffled
+    /// paper (SPEC §6.4); `version` is `None` for a project without
+    /// versions.
+    pub fn versioned_output_path(
+        &self,
+        variant: Option<&Name>,
+        version: Option<&Name>,
+        target: Target,
+    ) -> Option<EcoString> {
         let ext = target.extension()?;
         let stem = self.project.entry.v.stem();
         let variant = variant.map(Name::as_str);
-        Some(self.output.path.v.resolve(stem, variant, ext))
+        let version = version.map(Name::as_str);
+        Some(self.output.path.v.resolve(stem, variant, version, ext))
+    }
+
+    /// The versions every variant is built in: each declared version, or
+    /// `None` alone for a project without versions (SPEC §6.4).
+    pub fn version_keys(&self) -> Vec<Option<Name>> {
+        if self.project.versions.is_empty() {
+            vec![None]
+        } else {
+            self.project
+                .versions
+                .iter()
+                .map(|v| Some(v.v.clone()))
+                .collect()
+        }
     }
 }
 
 fn read_project(cx: &mut Cx, table: &Table<'_>) -> Option<Project> {
     table.check_keys(
         cx,
-        &["entry", "edition", "compiler", "lang", "styles", "today"],
+        &[
+            "entry", "edition", "compiler", "lang", "styles", "today", "versions",
+        ],
     );
     let entry = table
         .require(cx, "entry")
@@ -486,7 +532,12 @@ fn read_project(cx: &mut Cx, table: &Table<'_>) -> Option<Project> {
         let (year, month, day) = v.date(cx)?;
         Some(cx.spanned(Date { year, month, day }, v.span.clone()))
     });
+    let versions = table
+        .get("versions")
+        .map(|v| read_versions(cx, v))
+        .unwrap_or_default();
     Some(Project {
+        versions,
         entry: entry?,
         edition: edition?,
         compiler: compiler?,
@@ -494,6 +545,41 @@ fn read_project(cx: &mut Cx, table: &Table<'_>) -> Option<Project> {
         styles,
         today,
     })
+}
+
+/// `project.versions`: names, at least one, none given twice, and no two
+/// that differ only in case, which would name the same output file on a
+/// file system that ignores case.
+fn read_versions(cx: &mut Cx, value: &Value<'_>) -> Vec<Spanned<Name>> {
+    let mut versions: Vec<Spanned<Name>> = Vec::new();
+    let items = value.array(cx).unwrap_or_default();
+    if value.is_empty_array() {
+        cx.error(value.span.clone(), "`versions` lists no version")
+            .hint("list each version, such as `versions = [\"A\", \"B\"]`, or leave the key out");
+    }
+    for item in items {
+        let Some(version) = item.parse(cx, parse_name) else {
+            continue;
+        };
+        let text = version.v.as_str();
+        if let Some(other) = versions
+            .iter()
+            .find(|v| v.v.as_str().eq_ignore_ascii_case(text))
+        {
+            if other.v == version.v {
+                cx.error(item.span.clone(), "duplicate item in `versions`");
+            } else {
+                cx.error(
+                    item.span.clone(),
+                    eco_format!("versions `{}` and `{text}` differ only in case", other.v),
+                )
+                .hint("their output files would have the same name on some file systems");
+            }
+        } else {
+            versions.push(version);
+        }
+    }
+    versions
 }
 
 fn parse_compiler(text: &str) -> Result<semver::Version, Invalid> {
@@ -770,6 +856,7 @@ fn read_output(
     cx: &mut Cx,
     table: &Table<'_>,
     variants: &[Variant],
+    versions: &[Spanned<Name>],
     entry: Option<&ProjectPath>,
     components: &Components,
 ) -> Output {
@@ -789,6 +876,15 @@ fn read_output(
     if !path.v.uses("variant") && variants.iter().filter(|v| writes_file(v)).count() > 1 {
         cx.error(range.clone(), "every variant writes to the same file")
             .hint("add `{variant}` to the path");
+    }
+    let writes_any = if variants.is_empty() {
+        Target::Pdf.extension().is_some()
+    } else {
+        variants.iter().any(writes_file)
+    };
+    if !path.v.uses("version") && versions.len() > 1 && writes_any {
+        cx.error(range.clone(), "every version writes to the same file")
+            .hint("add `{version}` to the path");
     }
     let file_targets = |v: &Variant| {
         v.targets
@@ -812,23 +908,28 @@ fn read_output(
     // No output replaces a file the project is made of. The first file
     // that a build would write there is reported.
     if let Some(entry) = entry {
-        let files: Vec<EcoString> = if variants.is_empty() {
-            Target::Pdf
-                .extension()
-                .map(|ext| path.v.resolve(entry.stem(), None, ext))
-                .into_iter()
-                .collect()
+        let builds: Vec<(Option<&str>, Target)> = if variants.is_empty() {
+            vec![(None, Target::Pdf)]
         } else {
             variants
                 .iter()
-                .flat_map(|v| {
-                    v.targets.iter().filter_map(|t| {
-                        let ext = t.v.extension()?;
-                        Some(path.v.resolve(entry.stem(), Some(v.name.v.as_str()), ext))
-                    })
-                })
+                .flat_map(|v| v.targets.iter().map(|t| (Some(v.name.v.as_str()), t.v)))
                 .collect()
         };
+        let versions: Vec<Option<&str>> = if versions.is_empty() {
+            vec![None]
+        } else {
+            versions.iter().map(|v| Some(v.v.as_str())).collect()
+        };
+        let files: Vec<EcoString> = versions
+            .iter()
+            .flat_map(|version| {
+                builds.iter().filter_map(|(variant, target)| {
+                    let ext = target.extension()?;
+                    Some(path.v.resolve(entry.stem(), *variant, *version, ext))
+                })
+            })
+            .collect();
         if let Some(invalid) = files
             .iter()
             .find_map(|file| reserved_output(file, entry, components))

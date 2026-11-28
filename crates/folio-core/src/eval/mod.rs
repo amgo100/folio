@@ -180,14 +180,16 @@ pub(crate) struct Cost {
     pub bytes: u64,
 }
 
-/// Which variant a file or call is evaluated for.
+/// Which variant and version a file or call is evaluated for.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) enum Mode {
-    /// For every variant at once: reading `variant` stops evaluation.
+    /// For every variant and version at once: reading `variant` or
+    /// `version` stops evaluation.
     Shared,
     /// For one variant, or for the only build of a project without variants
-    /// (`None`).
-    Variant(Option<Name>),
+    /// (`None`), and one version of a shuffled paper, or none for a project
+    /// without versions (SPEC §6.4).
+    Variant(Option<Name>, Option<Name>),
 }
 
 /// The result of a memoised evaluation, what it cost, and how deeply it
@@ -220,7 +222,7 @@ pub fn evaluate(db: &dyn Db, project: Project, variant: Option<Name>) -> Option<
     let entry = project.manifest(db).project.entry.v.clone();
     // A missing entry file is reported by `build_files`.
     let file = source_file(db, project, entry)?;
-    let memo = eval_file_for(db, project, file, &Mode::Variant(variant), 0);
+    let memo = eval_file_for(db, project, file, &Mode::Variant(variant, None), 0);
     for error in &memo.recovered {
         diag::report(db, error.clone().into());
     }
@@ -245,7 +247,7 @@ pub(crate) fn eval_file_for<'db>(
 ) -> &'db Memo<Module> {
     let shared = eval_file(db, project, file, Mode::Shared, depth);
     match (&shared.outcome, mode) {
-        (Err(Stop::NeedsVariant), Mode::Variant(_)) => {
+        (Err(Stop::NeedsVariant), Mode::Variant(..)) => {
             eval_file(db, project, file, mode.clone(), depth)
         }
         _ => shared,

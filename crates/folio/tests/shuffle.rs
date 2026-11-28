@@ -78,14 +78,31 @@ fn a_seed_fixes_the_order() {
 
 #[test]
 fn bad_seeds_are_errors() {
-    let w = world(PLAIN, "#shuffle((1, 2))\n\n#shuffle((1, 2), seed: 1.5)\n");
+    let w = world(
+        PLAIN,
+        "#shuffle((1, 2))\n\n#shuffle((1, 2), seed: 1.5)\n\n#shuffle(3, seed: \"A\")\n",
+    );
     assert_eq!(
         errors(&w),
         [
             "missing argument: seed",
             "expected a string, an integer or none as the seed, found a float",
+            "expected an array or content to shuffle, found an int",
         ]
     );
+}
+
+/// `#shuffle(seed: ..)[..]` reorders the elements of its body and leaves
+/// the text between them in place; `version` is `none` without versions,
+/// so `seed: version` keeps the order.
+#[test]
+fn a_body_reorders_its_elements() {
+    let main = "#shuffle(seed: \"A\")[\n= One\n\n= Two\n\nBetween.\n\n= Three\n\n= Four\n]\n\n\
+                #repr(version)\n\n\
+                #shuffle(seed: version)[\n= Five\n\n= Six\n]\n";
+    let w = world(PLAIN, main);
+    assert_eq!(text(&w, None), "Four Two Between. Three One none Five Six");
+    assert!(errors(&w).is_empty(), "{:?}", errors(&w));
 }
 
 /// SPEC §6.4: questions shuffled with one seed are numbered in printed

@@ -10,7 +10,7 @@ use folio_component::{Color, QualifiedName, Scalar};
 use folio_syntax::{DiagSpan, FileId, Span, ast};
 
 use super::MAX_NESTING;
-use super::content::Content;
+use super::content::{Content, Node};
 use super::error::{At, EvalError, EvalResult, Stop, StrResult, bail};
 use super::ops::{self, a_type};
 use super::value::{
@@ -390,32 +390,62 @@ fn range(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 
 /// `shuffle(items, seed: "B")`: the array's items in an order fixed by the
 /// seed, a string or an integer (an integer seeds as its decimal digits, so
-/// `seed: 2` and `seed: "2"` agree). `seed: none` keeps the order, so that a
-/// build without versions is not shuffled (SPEC §6.4).
+/// `seed: 2` and `seed: "2"` agree). `#shuffle(seed: "B")[..]` reorders the
+/// elements at the top level of its body in the same way, and leaves the
+/// text, spaces and breaks between them where they are. `seed: none` keeps
+/// the order, so that a build without versions is not shuffled (SPEC §6.4).
 fn shuffle(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let span = args.span;
-    let items: Array = args.expect("items")?;
+    let items: Value = args.expect("items")?;
     let seed = match args.named::<Value>("seed")? {
         None => {
             return Err(EvalError::new(span, "missing argument: seed")
-                .with_hint("name the seed, as in `shuffle(items, seed: \"B\")`")
+                .with_hint("name the seed, as in `shuffle(items, seed: version)`")
                 .into());
         }
-        Some(Value::None) => return Ok(Value::Array(items)),
-        Some(Value::Str(s)) => EcoString::from(s.as_str()),
-        Some(Value::Int(i)) => eco_format!("{i}"),
+        Some(Value::None) => None,
+        Some(Value::Str(s)) => Some(s),
+        Some(Value::Int(i)) => Some(eco_format!("{i}")),
         Some(v) => bail!(
             span,
             "expected a string, an integer or none as the seed, found {}",
             a_type(v.type_name())
         ),
     };
-    vm.alloc(2 * ITEM * items.len() as u64, span)?;
-    let order = permutation(seed.as_bytes(), items.len());
-    let slice = items.as_slice();
-    Ok(Value::Array(
-        order.into_iter().map(|i| slice[i].clone()).collect(),
-    ))
+    match items {
+        Value::Array(items) => {
+            let Some(seed) = seed else {
+                return Ok(Value::Array(items));
+            };
+            vm.alloc(2 * ITEM * items.len() as u64, span)?;
+            let order = permutation(seed.as_bytes(), items.len());
+            let slice = items.as_slice();
+            Ok(Value::Array(
+                order.into_iter().map(|i| slice[i].clone()).collect(),
+            ))
+        }
+        Value::Content(body) => {
+            let Some(seed) = seed else {
+                return Ok(Value::Content(body));
+            };
+            let nodes = body.nodes();
+            let at: Vec<usize> = (0..nodes.len())
+                .filter(|&i| matches!(nodes[i], Node::Element(_)))
+                .collect();
+            vm.alloc(2 * ITEM * nodes.len() as u64, span)?;
+            let order = permutation(seed.as_bytes(), at.len());
+            let mut out: Vec<Node> = nodes.to_vec();
+            for (slot, from) in at.iter().zip(order) {
+                out[*slot] = nodes[at[from]].clone();
+            }
+            Ok(Value::Content(out.into_iter().collect()))
+        }
+        v => bail!(
+            span,
+            "expected an array or content to shuffle, found {}",
+            a_type(v.type_name())
+        ),
+    }
 }
 
 /// The order of `len` items that a seed fixes: index `k` of the result is
