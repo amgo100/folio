@@ -64,9 +64,7 @@ pub(crate) fn globals(host: Option<&ComponentHost>) -> Scope {
         }
         let namespace = component.manifest.namespace();
         let elements: BTreeMap<EcoString, Value> = component
-            .declarations
-            .elements
-            .iter()
+            .elements()
             .map(|schema| {
                 names.push(schema.name.clone());
                 let name = QualifiedName::qualified(namespace.clone(), schema.name.clone());

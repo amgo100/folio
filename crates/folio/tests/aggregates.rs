@@ -191,3 +191,49 @@ fn a_lint_reports_with_its_code() {
     assert_eq!(found.len(), 1, "{:?}", compiled.diagnostics);
     assert_eq!(found[0].message, "the question has no marks");
 }
+
+/// The text of every paragraph a variant sets.
+fn paragraphs(world: &World, variant: &str) -> Vec<String> {
+    folio::text(world, Target::Pdf, Some(&name(variant)))
+        .unwrap()
+        .unwrap()
+        .paragraphs
+        .iter()
+        .map(|p| p.shaped.text().to_string())
+        .collect()
+}
+
+/// D-72-1: each aggregate is a bodiless inline element of its component,
+/// which shows its value; it is not an instance the aggregate counts.
+#[test]
+fn content_shows_an_aggregate_as_an_element() {
+    let text = format!("Total: #exam.total-marks() marks.\n\n{PAPER}");
+    let (grouped, _) = world(true, &text);
+    for variant in ["exam", "markscheme"] {
+        assert_eq!(
+            paragraphs(&grouped, variant)[0],
+            "Total: 9 marks.",
+            "{variant}"
+        );
+    }
+    let compiled = folio::compile(&grouped, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert!(
+        compiled.diagnostics.is_empty(),
+        "{:?}",
+        compiled.diagnostics
+    );
+    // Outside a group, each variant shows what it counts.
+    let (alone, _) = world(false, &text);
+    assert_eq!(paragraphs(&alone, "exam")[0], "Total: 5 marks.");
+    // It takes no body.
+    let (bad, _) = world(false, "#exam.total-marks()[x]\n");
+    let compiled = folio::compile(&bad, Target::Pdf, Some(&name("exam"))).unwrap();
+    assert!(
+        compiled
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("unexpected argument")),
+        "{:?}",
+        compiled.diagnostics
+    );
+}

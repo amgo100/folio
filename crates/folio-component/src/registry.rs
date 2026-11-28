@@ -11,7 +11,7 @@ use crate::aggregate::{AggregateDecl, LintReads};
 use crate::component::{
     Component, ComponentManifest, Declarations, INTERFACE_VERSION, SUPPORTED_INTERFACES,
 };
-use crate::element::{BODY, Body, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
+use crate::element::{BODY, Body, ElementKind, ElementSchema, LocaleString, UNIVERSAL_FIELDS};
 use crate::instance::InstanceTree;
 use crate::lint::LintDiagnostic;
 use crate::names::{ComponentName, Name};
@@ -51,9 +51,17 @@ impl Registry {
         if !errors.is_empty() {
             return Err(errors);
         }
+        // Each aggregate is a bodiless inline element of the component
+        // (D-72-1), which content calls to show its value.
+        let aggregates = declarations
+            .aggregates
+            .iter()
+            .map(|a| ElementSchema::new(a.name.clone(), ElementKind::Inline))
+            .collect();
         self.components.push(Arc::new(Registered {
             manifest,
             declarations,
+            aggregates,
             component: Arc::new(component),
         }));
         Ok(())
@@ -115,6 +123,8 @@ pub struct Registered {
     pub manifest: ComponentManifest,
     /// What it adds through the extension points.
     pub declarations: Declarations,
+    /// The element of each aggregate, made from its declaration.
+    aggregates: Vec<ElementSchema>,
     component: Arc<dyn Component>,
 }
 
@@ -169,12 +179,17 @@ impl Registered {
         &self.manifest.name
     }
 
-    /// The element with a name, within the component's namespace.
+    /// The elements content can call: those the component declares, then
+    /// the element of each of its aggregates (D-72-1).
+    pub fn elements(&self) -> impl Iterator<Item = &ElementSchema> {
+        self.declarations.elements.iter().chain(&self.aggregates)
+    }
+
+    /// The element with a name, within the component's namespace: one it
+    /// declares, or the element of one of its aggregates (D-72-1), a
+    /// bodiless inline element that shows the aggregate's value.
     pub fn element(&self, name: &str) -> Option<&ElementSchema> {
-        self.declarations
-            .elements
-            .iter()
-            .find(|e| e.name.as_str() == name)
+        self.elements().find(|e| e.name.as_str() == name)
     }
 
     /// The property with a name, within the component's namespace.

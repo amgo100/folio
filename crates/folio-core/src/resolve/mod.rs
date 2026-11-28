@@ -1004,6 +1004,7 @@ impl Walk<'_> {
         let list = is_builtin(&element.name, "outline") || is_builtin(&element.name, "list-of");
         let total = is_builtin(&element.name, "total");
         if !list && !total {
+            self.aggregate_query(element, style);
             return;
         }
         let Some(Value::Str(target)) = element.field("target") else {
@@ -1030,6 +1031,39 @@ impl Walk<'_> {
             span: element.span,
             target: target.clone(),
             kind,
+        });
+    }
+
+    /// Takes the element of a component's aggregate (D-72-1), to resolve
+    /// once the whole tree is walked.
+    fn aggregate_query(&mut self, element: &Element, style: &ComputedStyle) {
+        let Some(namespace) = &element.name.namespace else {
+            return;
+        };
+        let aggregate = component_host(self.db, self.build.project(self.db))
+            .as_ref()
+            .and_then(|host| {
+                host.components()
+                    .find(|c| &c.manifest.namespace() == namespace)
+            })
+            .is_some_and(|c| c.aggregate_decl(element.name.name.as_str()).is_some());
+        if !aggregate {
+            return;
+        }
+        let marker = locale::number_format(
+            &self.lang(style),
+            style.value(self.props, self.ids.decimal_marker),
+        )
+        .decimal_marker;
+        self.pending_queries.push(query::Pending {
+            location: element.location,
+            span: element.span,
+            target: element.name.to_string().into(),
+            kind: query::Kind::Aggregate {
+                namespace: namespace.clone(),
+                name: element.name.name.clone(),
+                marker,
+            },
         });
     }
 
@@ -1097,6 +1131,27 @@ impl Walk<'_> {
                         })
                         .collect();
                     QueryResult::List(entries)
+                }
+                query::Kind::Aggregate {
+                    namespace,
+                    name,
+                    marker,
+                } => {
+                    let value = crate::aggregate::aggregate(
+                        self.db,
+                        self.build,
+                        namespace.clone(),
+                        name.clone(),
+                    );
+                    match value.as_ref().and_then(|v| query::show(v, *marker)) {
+                        Some(text) => QueryResult::Total(text),
+                        None => {
+                            let qualified =
+                                QualifiedName::qualified(namespace.clone(), name.clone());
+                            self.report(query::no_value(q.span, &qualified));
+                            QueryResult::Total(UNRESOLVED.into())
+                        }
+                    }
                 }
                 query::Kind::Total { field, marker } => {
                     if common.is_none()

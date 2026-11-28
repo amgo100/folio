@@ -286,6 +286,15 @@ impl Cx<'_> {
     /// is one, else those in its fields, in their order.
     fn in_element(&mut self, element: &Element) -> Vec<Instance> {
         if element.name.namespace.as_ref() == Some(self.namespace) {
+            // An aggregate's element shows its value; it is not one of the
+            // instances the aggregate reads (D-72-1).
+            if self
+                .component
+                .aggregate_decl(element.name.name.as_str())
+                .is_some()
+            {
+                return Vec::new();
+            }
             return vec![self.instance(element)];
         }
         let mut out = Vec::new();
