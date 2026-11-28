@@ -1578,12 +1578,13 @@ fn a_file_read_through_a_link_while_written_is_not_shown() {
 
     let file = root.join("shared/a.fol");
     let mut handle = std::fs::File::create(&file).unwrap();
-    // The truncate's event is handled: the file is held.
-    let mut counts = page_counts(&events, Instant::now() + Duration::from_millis(200));
+    // The truncate's event is handled: the file is held. Both waits are
+    // well inside its hold of half a second.
+    let mut counts = page_counts(&events, Instant::now() + Duration::from_millis(100));
     preview.changed([root]);
     counts.extend(page_counts(
         &events,
-        Instant::now() + Duration::from_millis(300),
+        Instant::now() + Duration::from_millis(150),
     ));
     handle.write_all(text.as_bytes()).unwrap();
     drop(handle);

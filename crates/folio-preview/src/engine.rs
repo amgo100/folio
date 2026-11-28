@@ -664,6 +664,16 @@ impl Engine {
                     self.released.remove(path);
                     self.open.insert(path.clone());
                 }
+                // Under every path that reaches the same file.
+                if !self.released.is_empty() {
+                    let written: BTreeSet<PathBuf> =
+                        paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
+                    self.released.retain(|released| {
+                        released
+                            .canonicalize()
+                            .map_or(true, |r| !written.contains(&r))
+                    });
+                }
             }
             Change::Written => {}
             Change::Closed => {
@@ -680,7 +690,8 @@ impl Engine {
                     let closed: BTreeSet<PathBuf> =
                         paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
                     self.held.retain(|held, _| {
-                        held.canonicalize().map_or(true, |r| !closed.contains(&r))
+                        paths.contains(held)
+                            || held.canonicalize().map_or(true, |r| !closed.contains(&r))
                     });
                 }
             }
@@ -752,6 +763,13 @@ impl Engine {
             // Read as it is from now on, even if it is not closed.
             self.open.remove(path);
             self.released.insert(path.clone());
+        }
+        // Under every path that reaches the same file.
+        if !due.is_empty() && !self.open.is_empty() {
+            let resolved: BTreeSet<PathBuf> =
+                due.iter().filter_map(|p| p.canonicalize().ok()).collect();
+            self.open
+                .retain(|open| open.canonicalize().map_or(true, |r| !resolved.contains(&r)));
         }
         if self.lagging_behind() {
             self.defer(due);
