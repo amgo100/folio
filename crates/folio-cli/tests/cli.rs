@@ -209,6 +209,31 @@ fn reports_a_source_link_out_of_the_project() {
     assert!(text.contains("main.fol:1:10"), "{text}");
 }
 
+/// In a file that starts with a byte order mark, which the loader leaves
+/// out of the text, byte ranges in the JSON document count from the file's
+/// first byte, and lines and columns from the text (#276).
+#[test]
+fn json_byte_ranges_count_a_byte_order_mark() {
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "\u{FEFF}= Forces\n\n#box(\n"),
+    ]);
+    let output = folio(dir.path(), &["check", "--diagnostics", "json"]);
+    let document = json(&output);
+    let location = &document["diagnostics"][0]["location"];
+    assert_eq!(location["path"], "main.fol", "{document:#}");
+    // `(` is at byte 14 of the text and 17 of the file.
+    assert_eq!(location["bytes"]["start"], 17, "{document:#}");
+    assert_eq!(location["start"]["line"], 3);
+    assert_eq!(location["start"]["column"], 5);
+    let file = fs::read(dir.path().join("main.fol")).unwrap();
+    assert_eq!(file[17], b'(');
+
+    // The excerpt still shows the right place.
+    let text = stderr(&folio(dir.path(), &["check", "--color", "never"]));
+    assert!(text.contains("┌─ main.fol:3:5"), "{text}");
+}
+
 #[test]
 fn reports_manifest_errors() {
     let dir = project(&[("folio.toml", "[project]\nentry = \"main.fol\"\n")]);
@@ -743,8 +768,9 @@ fn formatting_keeps_byte_order_marks_and_permissions() {
     let read = |name: &str| fs::read_to_string(path(name)).unwrap();
     assert_eq!(read("main.fol"), "\u{FEFF}= Forces\n");
 
-    // A file with a byte order mark gets no fix, whose byte ranges would
-    // not count the mark.
+    // A file with a byte order mark gets a fix whose byte ranges count in
+    // the file, the mark included, so applying it to the file formats it
+    // (#276).
     fs::write(path("main.fol"), "\u{FEFF}= Forces  \n").unwrap();
     let output = folio(dir.path(), &["fmt", "--check", "--diagnostics", "json"]);
     let document = json(&output);
@@ -755,7 +781,23 @@ fn formatting_keeps_byte_order_marks_and_permissions() {
         .filter(|d| d["code"] == "unformatted" && d["location"]["path"] == "main.fol")
         .collect();
     assert_eq!(unformatted.len(), 1, "{document:#}");
-    assert!(unformatted[0]["fixes"].as_array().unwrap().is_empty());
+    let fixes = unformatted[0]["fixes"].as_array().unwrap();
+    assert_eq!(fixes.len(), 1, "{document:#}");
+    let mut bytes = fs::read(path("main.fol")).unwrap();
+    let mut edits: Vec<_> = fixes[0]["edits"].as_array().unwrap().iter().collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e["location"]["bytes"]["start"].as_u64()));
+    for edit in edits {
+        let range = &edit["location"]["bytes"];
+        let start = range["start"].as_u64().unwrap() as usize;
+        let end = range["end"].as_u64().unwrap() as usize;
+        let replacement = edit["replacement"].as_str().unwrap().as_bytes();
+        bytes.splice(start..end, replacement.iter().copied());
+    }
+    assert_eq!(String::from_utf8(bytes).unwrap(), "\u{FEFF}= Forces\n");
+    // The location of the diagnostic counts in the file too; its line and
+    // column count in the text, as an editor shows it.
+    assert_eq!(unformatted[0]["location"]["bytes"]["start"], 11);
+    assert_eq!(unformatted[0]["location"]["start"]["column"], 9);
     assert_eq!(read("style.fsty"), "a {\n  b: c\n}\n");
     assert_eq!(read("locked.fsty"), "a{b:c}");
     #[cfg(unix)]

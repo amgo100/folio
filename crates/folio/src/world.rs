@@ -59,6 +59,10 @@ pub struct World {
     /// point into.
     manifest_text: Lines<String>,
     lockfile_text: Option<Lines<String>>,
+    /// The bytes before the text of each source read from disk that start
+    /// with some: a byte order mark, which the loader leaves out of the
+    /// text ([`Files::text_start`]).
+    text_starts: Arc<BTreeMap<FileId, usize>>,
     /// In a long-lived world, what the last compilation of each build that
     /// did not panic gave, shared by every handle.
     kept: Option<Arc<Kept>>,
@@ -283,6 +287,7 @@ impl WorldBuilder {
             nodes: Arc::default(),
             manifest_text: Lines::new(manifest_text.to_owned()),
             lockfile_text: lockfile_text.map(|text| Lines::new(text.to_owned())),
+            text_starts: Arc::default(),
             kept: self.long_lived.then(Arc::default),
         })
     }
@@ -570,7 +575,23 @@ impl World {
         let id = file.source(&self.db).id();
         Arc::make_mut(&mut self.nodes).remove(id);
         Arc::make_mut(&mut self.ids).release(&path);
+        self.set_text_start(id, 0);
         true
+    }
+
+    /// Records how many bytes come before the text of a source in its file
+    /// on disk: a byte order mark's three, which the loader leaves out of
+    /// the text, or none.
+    pub(crate) fn set_text_start(&mut self, id: FileId, bytes: usize) {
+        if self.text_starts.get(&id).copied().unwrap_or(0) == bytes {
+            return;
+        }
+        let starts = Arc::make_mut(&mut self.text_starts);
+        if bytes == 0 {
+            starts.remove(&id);
+        } else {
+            starts.insert(id, bytes);
+        }
     }
 
     /// The paths of the world's sources, in path order.
@@ -658,6 +679,7 @@ impl World {
             data: Arc::new(data),
             manifest_text: self.manifest_text.clone(),
             lockfile_text: self.lockfile_text.clone(),
+            text_starts: self.text_starts.clone(),
         }
     }
 
@@ -911,6 +933,10 @@ impl Files for World {
                 .or_else(|| self.data_lines(id)),
         }
     }
+
+    fn text_start(&self, id: FileId) -> usize {
+        self.text_starts.get(&id).copied().unwrap_or(0)
+    }
 }
 
 impl Debug for World {
@@ -1006,6 +1032,7 @@ pub struct Snapshot {
     data: Arc<BTreeMap<FileId, FileContent>>,
     manifest_text: Lines<String>,
     lockfile_text: Option<Lines<String>>,
+    text_starts: Arc<BTreeMap<FileId, usize>>,
 }
 
 impl Snapshot {
@@ -1042,6 +1069,10 @@ impl Files for Snapshot {
                 .map(|source| source.lines().clone())
                 .or_else(|| content_lines(self.data.get(&id)?)),
         }
+    }
+
+    fn text_start(&self, id: FileId) -> usize {
+        self.text_starts.get(&id).copied().unwrap_or(0)
     }
 }
 
