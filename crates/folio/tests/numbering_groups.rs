@@ -215,3 +215,80 @@ fn a_target_overlay_that_changes_counting_warns() {
             .all(|(_, m)| !m.contains("numbering group"))
     );
 }
+
+/// What only another variant of the group reports belongs to that
+/// variant's build, though the common tree selects it.
+#[test]
+fn a_build_reports_only_its_own_problems() {
+    let world = world(
+        "\"figure\"",
+        "#figure[A.]\n\n#if variant == \"markscheme\" { undefined_function() }\n",
+    );
+    let exam = diagnostics(&world, "exam");
+    assert!(
+        exam.iter().all(|(_, m)| !m.contains("undefined_function")),
+        "{exam:?}"
+    );
+    let markscheme = diagnostics(&world, "markscheme");
+    assert!(
+        markscheme
+            .iter()
+            .any(|(s, m)| *s == Severity::Error && m.contains("undefined_function")),
+        "{markscheme:?}"
+    );
+}
+
+/// An equation one variant replaces by a placeholder is counted as the
+/// variant that shows it numbers it: by its labelled lines.
+#[test]
+fn a_placeholder_does_not_change_what_is_counted() {
+    let mut world = World::new(&manifest("\"equation\"", "")).unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            "math { numbering: \"(1)\"; }\n\
+             @variant exam { figure math { display: placeholder(\"(working)\"); } }\n",
+        )
+        .unwrap();
+    world
+        .set_source(
+            "main.fol",
+            "#figure[$ a = b <eq:x> \\ c = d <eq:y> $]\n\n$ e = f $\n",
+        )
+        .unwrap();
+    assert_eq!(
+        numbers(&world, "markscheme"),
+        ["figure: 1", "equation: 1", "equation: 2", "equation: 3"]
+    );
+    // The placeholder is not numbered as a formula; the next one is 3.
+    let exam = numbers(&world, "exam");
+    assert_eq!(
+        exam.last().map(String::as_str),
+        Some("equation: 3"),
+        "{exam:?}"
+    );
+}
+
+/// Variants that restart a shared counter differently at one instance
+/// are warned about.
+#[test]
+fn variants_restarting_a_shared_counter_differently_warn() {
+    let mut world = World::new(&manifest("\"figure\"", "")).unwrap();
+    world
+        .set_source(
+            "styles/main.fsty",
+            "figure { numbering: \"1\"; }\n\
+             @variant markscheme { heading { counter-reset: figure; } }\n",
+        )
+        .unwrap();
+    world
+        .set_source("main.fol", "= One\n\n#figure[A.]\n\n= Two\n\n#figure[B.]\n")
+        .unwrap();
+    let found = diagnostics(&world, "exam");
+    assert!(
+        found
+            .iter()
+            .any(|(_, m)| m.contains("restart counters differently here")),
+        "{found:?}"
+    );
+}

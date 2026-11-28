@@ -492,7 +492,9 @@ fn shared(db: &dyn Db, build: Build<'_>, walk: &mut Walk<'_>) -> Option<Shared> 
         return None;
     }
     crate::variants::common::check_target_overlays(db, build, &group.name.v);
-    let common = crate::variants::common::common_numbers(db, group_build);
+    // A variant of the group that cannot be styled reports so in its own
+    // build; meanwhile each variant counts its own content.
+    let common = crate::variants::common::common_numbers(db, group_build).as_ref()?;
     Some(Shared {
         counters,
         values: common

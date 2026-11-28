@@ -401,8 +401,10 @@ impl Manifest {
     /// reads but does not act on yet, at each one that is given: strict
     /// mode, which checks no overrides yet (SPEC §5.5), the other keys of
     /// strict mode (`strict-paths` at its first path, as an empty list means
-    /// the same as none). A declared component that cannot be hosted is reported
-    /// with the components ([`crate::component::unhosted`]).
+    /// the same as none). None depends on the variant any more, which the
+    /// signature keeps for its callers. A declared component that cannot be
+    /// hosted is reported with the components
+    /// ([`crate::component::unhosted`]).
     pub fn not_implemented(&self, _variant: Option<&Name>) -> Vec<Diagnostic> {
         let given = |span: DiagSpan| !matches!(span.get(), DiagSpanKind::Detached);
         let mut out = Vec::new();

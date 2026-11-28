@@ -19,10 +19,10 @@
 //! them, a target overlay that changes what a group counts is a warning
 //! ([`check_target_overlays`]).
 
-use std::collections::{HashMap, HashSet};
-
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{BODY, Location, Name};
+use folio_syntax::Span;
+use std::collections::{HashMap, HashSet};
 
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
@@ -30,7 +30,7 @@ use crate::eval::{Content, Element, Node, Value};
 use crate::locate::StyledChildren;
 use crate::pipeline::{select, selected_root};
 use crate::resolve::{Target, count_common};
-use crate::style::{NodeName, StyledNode};
+use crate::style::{NodeName, PropId, Properties, StyledNode};
 use crate::style::{Origin, cascade};
 
 /// What the common tree of a numbering group counts: each counted target
@@ -60,34 +60,55 @@ pub fn group_build<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<Build<'db>
 
 /// Counts the common tree of the numbering group that `build` stands for
 /// ([`group_build`]): the values of every counter, of which its variants
-/// keep those they share. Empty when a variant of the group cannot be
-/// styled.
+/// keep those they share; `None` when a variant of the group cannot be
+/// styled, so that each variant counts its own content. Warns at an
+/// instance whose `counter-reset` the variants that show it style
+/// differently: the common tree counts it with one of their styles.
 #[salsa::tracked(returns(ref))]
-pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> CommonNumbers {
+pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> Option<CommonNumbers> {
     let project = build.project(db);
-    let Some(variant) = build.variant(db).as_ref() else {
-        return CommonNumbers::default();
-    };
-    let Some(group) = project.manifest(db).numbering_group(variant.as_str()) else {
-        return CommonNumbers::default();
-    };
+    let variant = build.variant(db).as_ref()?;
+    let group = project.manifest(db).numbering_group(variant.as_str())?;
     let mut trees = Vec::new();
+    let mut props = None;
     for name in &group.variants {
         let each = Build::new(db, project, build.target(db), Some(name.v.clone()));
-        let (Some(root), Some(selected)) = (selected_root(db, each), select(db, each).as_ref())
-        else {
-            return CommonNumbers::default();
-        };
+        let root = selected_root(db, each)?;
+        let selected = select(db, each).as_ref()?;
+        props.get_or_insert(&selected.styled.properties);
         trees.push((root, &selected.styled.root));
     }
-    let (root, styled) = merge(&trees);
+    let props = props?;
+    let mut merger = Merger {
+        props,
+        counter_reset: props.builtin("counter-reset"),
+        differ: Vec::new(),
+    };
+    let (root, styled) = merger.merge(&trees);
+    for span in merger.differ {
+        diag::report(
+            db,
+            Diagnostic::warning(
+                span,
+                eco_format!(
+                    "the variants of numbering group `{}` restart counters differently here, so \
+                     their shared numbers follow one variant's `counter-reset`",
+                    group.name.v
+                ),
+            )
+            .with_hint(
+                "restart shared counters alike in every variant of the group, outside \
+                 `@variant` blocks",
+            ),
+        );
+    }
     let numbers = count_common(db, build, &root, &styled);
-    CommonNumbers {
+    Some(CommonNumbers {
         numbers: numbers
             .into_iter()
             .map(|n| (n.target, n.counter, n.values))
             .collect(),
-    }
+    })
 }
 
 /// Warns at each declaration in a target overlay (`@target` or a target's
@@ -146,86 +167,157 @@ pub fn check_target_overlays(db: &dyn Db, build: Build<'_>, group: &Name) {
 /// styled node.
 type Versions<'a> = Vec<(&'a Element, &'a StyledNode)>;
 
-/// Merges the versions of one instance into one element and styled node:
-/// the first version's, holding in each field of content the union of the
-/// elements each version holds there. Only elements are kept: text is not
-/// counted.
-fn merge(versions: &[(&Element, &StyledNode)]) -> (Element, StyledNode) {
-    let (first, first_node) = versions[0];
-    // The fields of content, in the order the versions give them.
-    let mut keys: Vec<&EcoString> = Vec::new();
-    for (element, _) in versions {
-        for (key, value) in element.fields.iter() {
-            if matches!(value, Value::Content(_)) && !keys.contains(&key) {
-                keys.push(key);
+/// Merges the selected trees of a group's variants.
+struct Merger<'a> {
+    props: &'a Properties,
+    counter_reset: PropId,
+    /// The instances whose versions differ in `counter-reset`.
+    differ: Vec<Span>,
+}
+
+impl Merger<'_> {
+    /// Merges the versions of one instance into one element and styled
+    /// node: the fullest version's, the one with the most fields that
+    /// are not content (a placeholder has fewer), holding in each field of
+    /// content the union of the elements each version holds there. Only
+    /// elements are kept: text is not counted.
+    fn merge(&mut self, versions: &[(&Element, &StyledNode)]) -> (Element, StyledNode) {
+        let plain = |element: &Element| {
+            element
+                .fields
+                .iter()
+                .filter(|(_, v)| !matches!(v, Value::Content(_)))
+                .count()
+        };
+        let mut base = 0;
+        for (i, (element, _)) in versions.iter().enumerate() {
+            if plain(element) > plain(versions[base].0) {
+                base = i;
             }
         }
-    }
-    let mut element = first.clone();
-    let mut body_nodes = Vec::new();
-    let mut part_nodes = Vec::new();
-    for key in keys {
-        if key == BODY {
-            let lists: Vec<Versions<'_>> = versions
-                .iter()
-                .filter_map(|(element, node)| {
-                    let Some(Value::Content(content)) = element.field(BODY) else {
-                        return None;
-                    };
-                    Some(paired(content, &mut StyledChildren::new(node)))
-                })
-                .collect();
-            let (content, nodes) = merge_lists(&lists);
-            element.fields.insert(key.clone(), Value::Content(content));
-            body_nodes = nodes;
-        } else {
-            let Some(name) = Name::new(key) else {
-                continue;
-            };
-            let mut part_node: Option<&StyledNode> = None;
-            let lists: Vec<Versions<'_>> = versions
-                .iter()
-                .filter_map(|(element, node)| {
-                    let Some(Value::Content(content)) = element.field(key) else {
-                        return None;
-                    };
-                    let part = StyledChildren::new(node).part(&name)?;
-                    part_node.get_or_insert(part);
-                    Some(paired(content, &mut StyledChildren::new(part)))
-                })
-                .collect();
-            let Some(part_node) = part_node else {
-                continue;
-            };
-            let (content, nodes) = merge_lists(&lists);
-            element.fields.insert(key.clone(), Value::Content(content));
-            part_nodes.push(StyledNode {
-                children: nodes.into_iter().collect(),
-                ..part_node.clone()
-            });
+        let (first, first_node) = versions[base];
+        let reset = |node: &StyledNode| node.style.value(self.props, self.counter_reset).cloned();
+        if versions
+            .iter()
+            .any(|(_, node)| reset(node) != reset(first_node))
+        {
+            self.differ.push(first.span);
         }
+        // The fields of content, in the order the versions give them.
+        let mut keys: Vec<&EcoString> = Vec::new();
+        for (element, _) in versions {
+            for (key, value) in element.fields.iter() {
+                if matches!(value, Value::Content(_)) && !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        let mut element = first.clone();
+        let mut body_nodes = Vec::new();
+        let mut part_nodes = Vec::new();
+        for key in keys {
+            if key == BODY {
+                let lists: Vec<Versions<'_>> = versions
+                    .iter()
+                    .filter_map(|(element, node)| {
+                        let Some(Value::Content(content)) = element.field(BODY) else {
+                            return None;
+                        };
+                        Some(paired(content, &mut StyledChildren::new(node)))
+                    })
+                    .collect();
+                let (content, nodes) = self.merge_lists(&lists);
+                element.fields.insert(key.clone(), Value::Content(content));
+                body_nodes = nodes;
+            } else {
+                let Some(name) = Name::new(key) else {
+                    continue;
+                };
+                let mut part_node: Option<&StyledNode> = None;
+                let lists: Vec<Versions<'_>> = versions
+                    .iter()
+                    .filter_map(|(element, node)| {
+                        let Some(Value::Content(content)) = element.field(key) else {
+                            return None;
+                        };
+                        let part = StyledChildren::new(node).part(&name)?;
+                        part_node.get_or_insert(part);
+                        Some(paired(content, &mut StyledChildren::new(part)))
+                    })
+                    .collect();
+                let Some(part_node) = part_node else {
+                    continue;
+                };
+                let (content, nodes) = self.merge_lists(&lists);
+                element.fields.insert(key.clone(), Value::Content(content));
+                part_nodes.push(StyledNode {
+                    children: nodes.into_iter().collect(),
+                    ..part_node.clone()
+                });
+            }
+        }
+        // Parts that are not content, such as the style of a formula's
+        // vectors, stay as the base version has them.
+        let others: Vec<StyledNode> = first_node
+            .children
+            .iter()
+            .filter(|child| match &child.name {
+                NodeName::Part(name) => first.field(name.as_str()).is_none(),
+                _ => false,
+            })
+            .cloned()
+            .collect();
+        let children = body_nodes
+            .into_iter()
+            .chain(part_nodes)
+            .chain(others)
+            .collect();
+        let node = StyledNode {
+            children,
+            ..first_node.clone()
+        };
+        (element, node)
     }
-    // Parts that are not content, such as the style of a formula's
-    // vectors, stay as the first version has them.
-    let others: Vec<StyledNode> = first_node
-        .children
-        .iter()
-        .filter(|child| match &child.name {
-            NodeName::Part(name) => first.field(name.as_str()).is_none(),
-            _ => false,
-        })
-        .cloned()
-        .collect();
-    let children = body_nodes
-        .into_iter()
-        .chain(part_nodes)
-        .chain(others)
-        .collect();
-    let node = StyledNode {
-        children,
-        ..first_node.clone()
-    };
-    (element, node)
+
+    /// Merges lists of instances by location: the first list's order, with
+    /// each instance of a later list that the merged list lacks put after
+    /// the instance that list has before it. Each instance is merged from
+    /// the versions of every list that has it. Linear in the lengths of
+    /// the lists.
+    fn merge_lists(&mut self, lists: &[Versions<'_>]) -> (Content, Vec<StyledNode>) {
+        let mut order: Vec<Location> = Vec::new();
+        let mut versions: HashMap<Location, Versions<'_>> = HashMap::new();
+        for list in lists {
+            let at: HashMap<Location, usize> =
+                order.iter().enumerate().map(|(i, l)| (*l, i)).collect();
+            let mut merged = Vec::with_capacity(order.len() + list.len());
+            // The first instance of `order` not yet in `merged`.
+            let mut next = 0;
+            for &(element, node) in list {
+                let location = element.location;
+                match at.get(&location) {
+                    Some(&i) if i >= next => {
+                        merged.extend_from_slice(&order[next..=i]);
+                        next = i + 1;
+                    }
+                    Some(_) => {}
+                    None if !versions.contains_key(&location) => merged.push(location),
+                    None => {}
+                }
+                versions.entry(location).or_default().push((element, node));
+            }
+            merged.extend_from_slice(&order[next..]);
+            order = merged;
+        }
+        let mut content = Vec::with_capacity(order.len());
+        let mut nodes = Vec::with_capacity(order.len());
+        for location in order {
+            let (element, node) = self.merge(&versions[&location]);
+            content.push(Node::Element(element));
+            nodes.push(node);
+        }
+        (content.into_iter().collect(), nodes)
+    }
 }
 
 /// The elements of content with their styled nodes; an element without a
@@ -239,38 +331,4 @@ fn paired<'a>(content: &'a Content, kids: &mut StyledChildren<'a>) -> Versions<'
             _ => None,
         })
         .collect()
-}
-
-/// Merges lists of instances by location: the first list's order, with
-/// each instance of a later list that the merged list lacks put after the
-/// instance that list has before it. Each instance is merged from the
-/// versions of every list that has it.
-fn merge_lists(lists: &[Versions<'_>]) -> (Content, Vec<StyledNode>) {
-    let mut order: Vec<Location> = Vec::new();
-    let mut versions: HashMap<Location, Versions<'_>> = HashMap::new();
-    for list in lists {
-        let mut at = 0;
-        let placed: HashSet<Location> = order.iter().copied().collect();
-        for &(element, node) in list {
-            let location = element.location;
-            if placed.contains(&location) {
-                at = order
-                    .iter()
-                    .position(|l| *l == location)
-                    .map_or(at, |i| i + 1);
-            } else if !versions.contains_key(&location) {
-                order.insert(at, location);
-                at += 1;
-            }
-            versions.entry(location).or_default().push((element, node));
-        }
-    }
-    let mut content = Vec::with_capacity(order.len());
-    let mut nodes = Vec::with_capacity(order.len());
-    for location in order {
-        let (element, node) = merge(&versions[&location]);
-        content.push(Node::Element(element));
-        nodes.push(node);
-    }
-    (content.into_iter().collect(), nodes)
 }
