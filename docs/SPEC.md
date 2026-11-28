@@ -774,12 +774,18 @@ One `grid` primitive serves tables and layout grids:
 
 ```
 #grid(column-tracks: (auto, 1fr, 1fr), header-rows: 1)[
-  [Quantity] [Symbol] [Unit]
-  [Velocity] [$v$] [$"m s"^(-1)$]
-  #cell(colspan: 2)[Spans two columns] [x]
+  | Quantity | Symbol | Unit             |
+  | Velocity | $v$    | $"m s"^(-1)$     |
+  | #cell(colspan: 2)[Spans two columns] | x |
 ]
 ```
 
+- **Syntax.** Cells are written in three ways, which make the same cells.
+  - Everyday tables are rows of pipes inside a grid's body: `| a | b | c |`, with `||` for an empty cell.
+  - A cell that holds blocks or spans tracks is written `#cell(..)[..]`, in a row or on its own; every other block of a grid's body is a cell too.
+  - A table from a data file takes its rows from a value: `#grid(rows: csv("results.csv"), header: auto)`.
+
+  Decision recorded: D-62-3 = B (design record: `docs/design/table-syntax.md`). Pipe rows and `rows:` are not implemented yet (#440); `#cell[..]` and blocks are.
 - **Tracks**: `column-tracks` and `row-tracks` take fixed lengths (a ratio is of the grid's width), fractions (`fr`), `auto`, `minmax(a, b)` and `repeat(n, track)`, as a list or one value; an integer `n` is `n` columns of `auto`. The number of tracks is content; their widths are a hint or come from the stylesheet. `column-tracks` is a layout hint and a property; `row-tracks` is a property, whose lengths are the least heights of rows (rows grow with their content, and `fr` rows are `auto`). Without `column-tracks`, a grid has as many columns as its cells' explicit places and spans ask for, at least one; cells placed past the tracks given add `auto` tracks.
 - **Cells** span rows and columns (`colspan`, `rowspan`) and are placed explicitly (`column`, `row`, counted from 1) or by auto-flow: in the order they are written, each at the first place, row by row, from after the cell before it, where it covers no cell already placed. Each block of a grid's body is a cell: a `cell` element, or any other block standing for a cell of its own. Alignment, padding and strokes come from the stylesheet (`grid.results > cell:nth-col(1) { align: start }`); a cell's box is as tall as the rows it spans.
 - **Measures.** A cell's *min-content* width is the widest piece of its content that no line break divides: a run of text between two break opportunities (UAX #14, §7.2), hyphenation points left out except soft hyphens; an inline object at its width, an image at its natural width (none for a `width` that is a ratio of its lines); a display at its natural width; and the first line's `indent`. Its *max-content* width is that of its widest paragraph set on one line, broken only where it must be. Both add the padding and borders of the cell and of the blocks inside it. A paragraph's measures do not depend on a width, so the line-break cache memoises them with its content and style values, as it does its lines (§2.3).
@@ -1587,7 +1593,6 @@ M0's tested tasks took about an hour each, which calibrates that class; the othe
 - **Comments for Teaching Assistant.** Teaching Assistant (§15) needs comments on rendered documents before Folio Studio: a reader selects text or an element on a page and attaches a remark, which `folio-render` draws over the display list. Open are where comments are stored (beside the source, never in it, as §12.4 keeps source clean), how they stay anchored across edits (node identity is runtime-only and never saved, §12.4, so an anchor needs a span with surrounding text), whether they export as Word comments and PDF annotations, and in which milestone, set by when Teaching Assistant needs them.
 - **Name.** "Folio" stays a working name and is not published, because it conflicts in Folio's own field. In November 2026, on crates.io, `folio` and `folio-cli` were taken, and `folio-core`, `folio-pdf`, `folio-text` and at least nine other `folio-*` crates belonged to an unrelated Rust PDF library. OFDBox published a document engine with layout, PDF and DOCX crates as `ofdbox-folio-*`. On npm, `folio` was taken, and `@stll/folio-*` was a browser editor for Word documents. "Folio Studio" named a web book-layout tool that exports EPUB, PDF and DOCX. Folio is also a 1957 typeface, whose US trademark Bauer Types holds for fonts, and FOLIO is a widely used open-source library platform. The new name, which also replaces "Folio Studio", is chosen before Release 0.1, which publishes the binary and creates the release key; it is checked on crates.io, npm, and the EUIPO and USPTO registers.
 - **Release key.** Folio has published no release, so no release key exists and `folio toolchain install` refuses to install anything. The first release creates the key, compiles its public half into the compiler and records where the private half is kept and who can sign. Several keys may be trusted at once, so a key can be rotated by one release that trusts both.
-- **Table syntax (D-62-1).** How a table's cells are written. `#cell[..]` and every block of a grid's body work today (§7.4). The options are compact pipe rows inside a grid's body, rows as nested lists, and rows as data values. They must keep large cells, large tables, external data, spans and sparse tables easy to write. They are compared in `docs/design/table-syntax.md`.
 - **LaTeX input for a whole project.** LaTeX is written per formula (`$:tex …$`, §8.1). Open is whether a project should be able to read every `$…$` as LaTeX, and where that switch lives: a `folio.toml` key such as `[math] input = "tex"`, with a `$:native …$` mode back to native math, or a directive per file. The switch changes how a file is parsed, so a stylesheet cannot hold it. To revisit if teachers want to migrate whole LaTeX projects.
 - **Licence.** Folio's own licence is not chosen yet, so the workspace crates have no `license` field and are not published. It must allow the Apache-2.0 code derived from Typst (§2.2); `NOTICE` records that attribution.
 
