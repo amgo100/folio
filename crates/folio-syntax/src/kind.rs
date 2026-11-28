@@ -76,6 +76,11 @@ pub enum SyntaxKind {
     TermItem,
     /// Introduces a term item: `/`.
     TermMarker,
+    /// A row of a table in a grid's body: `| a | b |`. Its cells are the
+    /// `Markup` nodes between its pipes.
+    TableRow,
+    /// Separates the cells of a table row: `|`.
+    TablePipe,
 
     /// A mathematical equation: `$x$`, `$ x^2 $`.
     Equation,
@@ -496,6 +501,8 @@ impl SyntaxKind {
             Self::EnumMarker => "enum marker",
             Self::TermItem => "term list item",
             Self::TermMarker => "term marker",
+            Self::TableRow => "table row",
+            Self::TablePipe => "table pipe",
             Self::Equation => "equation",
             Self::TexEquation => "LaTeX equation",
             Self::MathMode => "math input mode",
@@ -730,6 +737,8 @@ impl SyntaxKind {
             Self::EnumMarker => Known(Markup),
             Self::TermItem => Known(Markup),
             Self::TermMarker => Known(Markup),
+            Self::TableRow => Known(Markup),
+            Self::TablePipe => Known(Markup),
 
             Self::Equation => Embeddable,    // code/markup: expr
             Self::TexEquation => Embeddable, // code/markup: expr

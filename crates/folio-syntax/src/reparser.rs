@@ -499,6 +499,7 @@ fn expand(node: &SyntaxNode) -> bool {
         || kind == SyntaxKind::Semicolon
         || node.leaf_text() == "/"
         || node.leaf_text() == ":"
+        || node.leaf_text() == "|"
 }
 
 /// Whether `at_start` would still be true after this node given the
@@ -721,6 +722,32 @@ mod tests {
         test("_a\n\n= b\nc~d~e", Edit::At(9), "x", All);
         // The empty error an embedded expression ends with is made once.
         test("\n#element a}", Edit::At(0), "", All);
+    }
+
+    /// Edits that make, unmake or change table rows parse as a full parse
+    /// does (SPEC §7.4).
+    #[test]
+    fn test_reparse_table_rows() {
+        #[track_caller]
+        fn same(text: &str, edit: Edit, with: &str) {
+            let mut source = Source::detached(text);
+            source.edit(edit.into_range(text), with);
+            let mut reparsed = source.root().clone();
+            let mut fresh = parse(source.text());
+            reparsed.synthesize(Span::detached());
+            fresh.synthesize(Span::detached());
+            assert_eq!(reparsed, fresh, "after an edit of {text:?}");
+        }
+        let grid = "a\n#grid[\n  | a | b |\n  | c | d |\n]\nz";
+        same(grid, Edit::Match("b"), "x | y");
+        same(grid, Edit::Match("| c"), "c");
+        same(grid, Edit::Match("c |"), "|");
+        same(grid, Edit::Match("  | c"), "x | c");
+        same(grid, Edit::Match("d |"), "$|x|$ |");
+        same(grid, Edit::Match("b |"), "[b |");
+        same("x | a | b |\n| c |\n", Edit::Match("x "), "");
+        same("| a | b |\n| c |\n", Edit::At(0), "x ");
+        same("~~\n| a |~~\n~~", Edit::Match("a"), "#f[\n|]");
     }
 
     /// Test incremental reparsing of code and content blocks.

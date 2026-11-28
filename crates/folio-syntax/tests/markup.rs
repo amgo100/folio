@@ -748,3 +748,73 @@ fn latex_math_errors() {
     let equation: ast::TexEquation<'_> = first(&root);
     assert_eq!(equation.mode(), "foo");
 }
+
+/// The text of each cell of each table row in `text`.
+fn rows(text: &str) -> Vec<Vec<String>> {
+    let root = root(text);
+    nodes(&root)
+        .into_iter()
+        .filter_map(SyntaxNode::cast::<ast::TableRow>)
+        .map(|row| {
+            row.cells()
+                .map(|cell| cell.to_untyped().full_text().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn pipe_rows_split_into_trimmed_cells() {
+    let text = "#grid[\n  | a | *b* c |\n  | 1 ||  |\n]\n";
+    ok(text);
+    assert_eq!(
+        rows(text),
+        [vec!["a", "*b* c"], vec!["1", "", ""]]
+            .map(|r| r.into_iter().map(String::from).collect::<Vec<_>>())
+    );
+    // Text after the last pipe is a cell, and a row may close its block.
+    assert_eq!(rows("#grid[| a | b]"), [vec!["a".to_string(), "b".into()]]);
+}
+
+#[test]
+fn a_pipe_in_maths_code_raw_brackets_or_an_escape_splits_no_cell() {
+    let text = "| $|x|$ | `a|b` | #f(\"|\") | #g[x | y] | [p | q] | a \\| b |\n";
+    ok(text);
+    assert_eq!(
+        rows(text),
+        [vec!["$|x|$", "`a|b`", "#f(\"|\")", "#g[x | y]", "[p | q]", "a \\| b"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()]
+    );
+}
+
+#[test]
+fn a_pipe_not_at_a_line_start_is_text() {
+    assert_eq!(count(&root("a | b | c\n"), SyntaxKind::TableRow), 0);
+    assert_eq!(count(&root("a | b\n| c |\n"), SyntaxKind::TableRow), 1);
+    ok("x | y");
+}
+
+#[test]
+fn a_cell_block_may_run_over_lines() {
+    let text = "#grid[\n  | 3(a) | #cell[\n      One.\n\n      Two.\n    ] | 2 |\n  | 3(b) | x | 1 |\n]\n";
+    ok(text);
+    let cells = rows(text);
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0].len(), 3);
+    assert_eq!(cells[0][2], "2");
+    assert_eq!(cells[1], ["3(b)", "x", "1"]);
+}
+
+#[test]
+fn separator_rows() {
+    let root = root("| a | b |\n|---|:--:|\n| - | : |\n| --- x |\n");
+    let rows: Vec<bool> = nodes(&root)
+        .into_iter()
+        .filter_map(SyntaxNode::cast::<ast::TableRow>)
+        .map(ast::TableRow::is_separator)
+        .collect();
+    assert_eq!(rows, [false, true, true, false]);
+    assert!(!first::<ast::TableRow>(&self::root("| :: |\n")).is_separator());
+}

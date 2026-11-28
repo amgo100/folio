@@ -148,6 +148,7 @@ fn markup_expr(p: &mut Parser<'_>, at_start: bool, nesting: &mut usize) {
         SyntaxKind::ListMarker if at_start => list_item(p),
         SyntaxKind::EnumMarker if at_start => enum_item(p),
         SyntaxKind::TermMarker if at_start => term_item(p),
+        SyntaxKind::TablePipe if at_start => table_row(p),
         SyntaxKind::RefMarker => reference(p),
         SyntaxKind::Dollar => equation(p),
 
@@ -155,6 +156,7 @@ fn markup_expr(p: &mut Parser<'_>, at_start: bool, nesting: &mut usize) {
         | SyntaxKind::ListMarker
         | SyntaxKind::EnumMarker
         | SyntaxKind::TermMarker
+        | SyntaxKind::TablePipe
         | SyntaxKind::Colon => p.convert_and_eat(SyntaxKind::Text),
 
         _ => p.unexpected(),
@@ -237,6 +239,37 @@ fn term_item(p: &mut Parser<'_>) {
         markup(p, true, false, syntax_set!(RightBracket, End));
         p.wrap(m, SyntaxKind::TermItem);
     });
+}
+
+/// Parses a table row: `| a | b |` (SPEC §7.4). The row ends at the end of
+/// its line, or at the bracket that closes the content block it is in. Its
+/// cells are the markup between its pipes, trimmed of spaces: `||` holds an
+/// empty cell, and text after the last pipe is a cell too.
+fn table_row(p: &mut Parser<'_>) {
+    p.with_nl_mode(AtNewline::Stop, |p| {
+        let m = p.marker();
+        while p.eat_if(SyntaxKind::TablePipe) {
+            if p.at_set(syntax_set!(RightBracket, End)) {
+                break;
+            }
+            table_cell(p);
+        }
+        p.wrap(m, SyntaxKind::TableRow);
+    });
+}
+
+/// Parses a cell of a table row, up to the next pipe. A pipe inside maths,
+/// raw text, embedded code or a content block belongs to that, and one
+/// inside brackets of the cell's text does not end the cell either.
+fn table_cell(p: &mut Parser<'_>) {
+    let m = p.marker();
+    let mut nesting: usize = 0;
+    while !p.at_set(syntax_set!(TablePipe, RightBracket, End))
+        || (nesting > 0 && p.at_set(syntax_set!(TablePipe, RightBracket)))
+    {
+        markup_expr(p, false, &mut nesting);
+    }
+    p.wrap(m, SyntaxKind::Markup);
 }
 
 /// Parses a reference: `@target`, `@target[..]`.

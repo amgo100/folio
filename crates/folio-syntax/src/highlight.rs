@@ -177,6 +177,8 @@ pub fn highlight(node: &LinkedNode<'_>) -> Option<Tag> {
         SyntaxKind::EnumMarker => Some(Tag::ListMarker),
         SyntaxKind::TermItem => None,
         SyntaxKind::TermMarker => Some(Tag::ListMarker),
+        SyntaxKind::TableRow => None,
+        SyntaxKind::TablePipe => Some(Tag::Punctuation),
         SyntaxKind::Equation => None,
         SyntaxKind::TexEquation => None,
         SyntaxKind::MathMode => Some(Tag::Keyword),
