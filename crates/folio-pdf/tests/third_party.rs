@@ -351,8 +351,7 @@ fn colour_crates_round_the_same_on_every_cpu() {
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
-            if allowed.contains(&rel.as_str()) || MOXCMS_SIMD.iter().any(|d| rel.starts_with(d))
-            {
+            if allowed.contains(&rel.as_str()) || MOXCMS_SIMD.iter().any(|d| rel.starts_with(d)) {
                 continue;
             }
             let text = fs::read_to_string(&file).unwrap();
