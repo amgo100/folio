@@ -1184,10 +1184,7 @@ impl<'a> Run<'a> {
                     }
                 }
             }
-            let boundary = match before.take() {
-                Some(boundary) => boundary,
-                None => Boundary::default(),
-            };
+            let boundary = before.take().unwrap_or_default();
             self.leaves.push(Placed {
                 before: boundary,
                 item: k,
