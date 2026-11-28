@@ -685,6 +685,29 @@ mod tests {
     }
 
     #[test]
+    fn a_spanning_cell_a_little_too_wide_is_no_overflow() {
+        // #453: a cell spanning a fixed and a fractional track needs
+        // 0.08pt more than the width, under the 0.1pt an overflow is
+        // reported from: the tracks take what the cell needs, and none of
+        // the width is left unfilled.
+        let tracks = [
+            Track {
+                min: Some(pt(0.6848285424988378)),
+                max: Grow::Fixed(pt(5.6179747182624045)),
+            },
+            Track {
+                min: Some(pt(0.0)),
+                max: Grow::Fr(4.936978301147857),
+            },
+        ];
+        let cells = [(0, 2, m(27.682682991903516, 27.682682991903516))];
+        let (sizes, overflow) = size_tracks(&tracks, &cells, pt(27.603047595729336));
+        assert_eq!(overflow, Abs::zero());
+        let total: f64 = sizes.iter().map(|s| s.to_pt()).sum();
+        assert!((total - 27.682682991903516).abs() < 1e-6, "{total}");
+    }
+
+    #[test]
     fn fixed_auto_and_fractions() {
         let tracks = [
             Track::fixed(pt(50.0)),
@@ -865,7 +888,7 @@ mod tests {
         /// the min-content of the cells that span only them; spanning
         /// cells get their min-content where they span an `auto` track;
         /// the overflow is what the sizes need beyond the width; and with
-        /// a fraction and room to spare, the sizes fill the width.
+        /// a fraction, the sizes leave none of the width unfilled.
         #[test]
         fn track_sizing((tracks, cells, width) in arb_case()) {
             let width = pt(width);
@@ -901,9 +924,12 @@ mod tests {
             } else {
                 prop_assert_eq!(overflow, Abs::zero());
             }
+            // Fractions leave no room unfilled. The sizes may still need
+            // more than the width, by less than the 0.1pt an overflow is
+            // reported from (#453).
             let fractions = tracks.iter().any(|t| t.fraction().is_some_and(|f| f > 0.0));
-            if fractions && overflow == Abs::zero() {
-                prop_assert!((total - width.to_pt()).abs() < 1e-6);
+            if fractions {
+                prop_assert!(over > -1e-6, "{total} in {}", width.to_pt());
             }
         }
 
