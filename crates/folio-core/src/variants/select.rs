@@ -374,8 +374,16 @@ impl Select<'_> {
             // has nothing to leave out.
             let blocks_in_line =
                 element.kind == ElementKind::Inline && !crate::text::is_inline(content);
+            // A part of a block shown as a space keeps its block whether
+            // or not the template places it (SPEC §6.3), as `part` keeps it.
+            let space = key != BODY
+                && is_block(element)
+                && Name::new(key)
+                    .and_then(|name| part_kids.part(&name))
+                    .is_some_and(|part| matches!(self.shown(None, part), Shown::Space(_)));
             if let Some(placed) = &placed
                 && !content.is_empty()
+                && !space
                 && (blocks_in_line || !placed.iter().any(|name| name.as_str() == key.as_str()))
             {
                 let fields = fields.get_or_insert_with(|| element.fields.clone());

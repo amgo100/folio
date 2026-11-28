@@ -851,17 +851,24 @@ impl Collector<'_> {
         match &expansion.body {
             Some(body) => {
                 self.pieces(element, node, body, &node.style);
-                // A part shown as a space that the template shows only in a
-                // line, with `field`, keeps its space after the body, so
-                // that no answer space is lost (SPEC §6.3).
-                let unplaced: Vec<Name> = self
-                    .spaces
-                    .keys()
-                    .filter(|(location, _)| *location == element.location)
-                    .filter_map(|(_, part)| part.clone())
-                    .filter(|name| !self.placed.contains(name))
-                    .collect();
-                let mut unplaced = unplaced;
+                // A part shown as answer space that the template does not
+                // place as blocks (it shows it only in a line, with `field`,
+                // or a condition leaves it out) keeps its space after the
+                // body, so that no answer space is lost (SPEC §6.3). A
+                // `hidden` part keeps no block there: in the variants that
+                // show it, it is not there either.
+                let mut unplaced: Vec<Name> = if self.spaces.is_empty() {
+                    Vec::new()
+                } else {
+                    self.spaces
+                        .iter()
+                        .filter(|((location, _), space)| {
+                            *location == element.location && space.kind == SpaceKind::Answer
+                        })
+                        .filter_map(|((_, part), _)| part.clone())
+                        .filter(|name| !self.placed.contains(name))
+                        .collect()
+                };
                 unplaced.sort_by_key(|name| {
                     element
                         .fields

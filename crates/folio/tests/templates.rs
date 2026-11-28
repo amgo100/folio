@@ -648,11 +648,13 @@ $ y = 2 $
 }
 
 #[test]
-fn a_part_shown_as_hidden_is_still_placed() {
-    // `if field(solution) { slot(solution) }`: the exam shows the solution
-    // as `hidden`, which keeps its block, so the template still places it
-    // and its space, and counts what the variant counts without a template
-    // (SPEC §6.3).
+fn a_part_shown_as_a_space_is_kept_but_conditions_read_it_unset() {
+    // `if field(solution) { "Worked solution" slot(solution) }`: in the
+    // exam the solution is a space, so the condition fails and the heading
+    // does not tell that a solution exists (SPEC §6.4). Select still keeps
+    // the part's block, so the variant counts what it counts without a
+    // template, and answer space stands after the body; a `hidden` part
+    // keeps no block where the template does not place it.
     let content = r#"#element example() {
   kind: block
   body: slots(statement: blocks, solution: blocks)
@@ -663,15 +665,6 @@ fn a_part_shown_as_hidden_is_still_placed() {
   #solution[$ s = 1/2 g t^2 $]
 ]
 "#;
-    let style = "math { numbering: \"(1)\"; }\n\
-                 render example { body: slot(statement) if field(solution) { slot(solution) }; }\n\
-                 @variant exam { example > solution { display: hidden; } }\n";
-    let templated = world(style, content);
-    let plain = world(
-        "math { numbering: \"(1)\"; }\n\
-         @variant exam { example > solution { display: hidden; } }\n",
-        content,
-    );
     let count = |world: &World, variant: &str| {
         let variant = Name::new(variant);
         folio::resolve(world, Target::Pdf, variant.as_ref())
@@ -682,21 +675,35 @@ fn a_part_shown_as_hidden_is_still_placed() {
             .filter(|n| n.counter == "equation")
             .count()
     };
-    // The template counts what the variant counts without it.
-    for variant in ["exam", "markscheme"] {
-        assert_eq!(
-            count(&templated, variant),
-            count(&plain, variant),
-            "{variant}"
+    for display in ["hidden", "answer-space"] {
+        let overlay = format!("@variant exam {{ example > solution {{ display: {display}; }} }}\n");
+        let templated = world(
+            &format!(
+                "math {{ numbering: \"(1)\"; }}\n\
+                 render example {{ body: slot(statement) \
+                 if field(solution) {{ \"Worked solution\" slot(solution) }}; }}\n{overlay}"
+            ),
+            content,
         );
-    }
-    let world = templated;
-    let text = text(&world);
-    assert!(
-        text.spaces
+        let plain = world(
+            &format!("math {{ numbering: \"(1)\"; }}\n{overlay}"),
+            content,
+        );
+        for variant in ["exam", "markscheme"] {
+            assert_eq!(
+                count(&templated, variant),
+                count(&plain, variant),
+                "{display} {variant}"
+            );
+        }
+        let outline = &example_outlines(&templated)[0];
+        assert!(!outline.contains("Worked solution"), "{display}: {outline}");
+        let spaced = text(&templated)
+            .spaces
             .iter()
-            .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution"))
-    );
+            .any(|s| s.part.as_ref().is_some_and(|p| p.as_str() == "solution"));
+        assert_eq!(spaced, display == "answer-space", "{display}: {outline}");
+    }
 }
 
 #[test]

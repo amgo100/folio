@@ -610,9 +610,11 @@ impl<'a> Walker<'a> {
             return None;
         };
         let chosen = chosen.clone();
+        let (removed, spaces) = hidden_parts(props, style, children, element);
         let fields = template::Fields {
             element,
-            hidden: hidden_parts(props, style, children, element),
+            hidden: removed,
+            spaces,
         };
         // The element as its parts see it.
         let view = self.view(siblings, i, Role::Context, &cascade.needs);
@@ -967,17 +969,17 @@ impl<'a> Restyle for Walker<'a> {
 }
 
 /// The parts of an element that the variant removes, which its template
-/// reads as unset: those with `display: none`, and, where the element has
-/// `show-only`, those it does not keep (SPEC §6.2). A part of a block shown
-/// as `hidden` or `answer-space` keeps its block and is placed where the
-/// template places it, so it reads as set (SPEC §6.3); a part of an
-/// element of another kind is left out, so it reads as unset.
+/// reads as unset, and those it shows as a space with their blocks kept,
+/// which its template places but its conditions read as unset (see
+/// `template::Fields`). Removed: those with `display: none`, those
+/// `show-only` does not keep (SPEC §6.2), and those shown as `hidden` or
+/// `answer-space` of an element that keeps no block for them (§6.3).
 fn hidden_parts(
     props: &Properties,
     style: &ComputedStyle,
     children: &[StyledNode],
     element: &Element,
-) -> Vec<Name> {
+) -> (Vec<Name>, Vec<Name>) {
     use folio_component::Value as V;
     let display = props.builtin("display");
     let kept: Option<Vec<EcoString>> = match style.value(props, props.builtin("show-only")) {
@@ -988,27 +990,34 @@ fn hidden_parts(
     // Only a block keeps the block of a part shown as `hidden` or
     // `answer-space`; elsewhere Select leaves the part out.
     let block = crate::variants::select::is_block(element);
-    children
-        .iter()
-        .filter_map(|child| match &child.name {
-            NodeName::Part(name) => Some((name, child)),
-            _ => None,
-        })
-        .filter(|(name, child)| {
-            let left_out = match child.style.value(props, display) {
-                Some(V::None) => true,
-                Some(V::Keyword(k)) => !block && matches!(k.as_str(), "hidden" | "answer-space"),
-                _ => false,
-            };
-            // `show-only` keeps the children it names and, condensed, those
-            // that hold one.
-            left_out
-                || kept
-                    .as_ref()
-                    .is_some_and(|kept| !holds_kept(name, child, kept))
-        })
-        .map(|(name, _)| name.clone())
-        .collect()
+    let mut removed = Vec::new();
+    let mut spaces = Vec::new();
+    for child in children {
+        let NodeName::Part(name) = &child.name else {
+            continue;
+        };
+        // `show-only` keeps the children it names and, condensed, those
+        // that hold one.
+        if kept
+            .as_ref()
+            .is_some_and(|kept| !holds_kept(name, child, kept))
+        {
+            removed.push(name.clone());
+            continue;
+        }
+        match child.style.value(props, display) {
+            Some(V::None) => removed.push(name.clone()),
+            Some(V::Keyword(k)) if matches!(k.as_str(), "hidden" | "answer-space") => {
+                if block {
+                    spaces.push(name.clone());
+                } else {
+                    removed.push(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    (removed, spaces)
 }
 
 /// Whether a part is named in `kept`, or holds a node that is.
