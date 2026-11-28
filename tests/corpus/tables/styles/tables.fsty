@@ -7,6 +7,6 @@ cell { padding: 2pt 4pt; border-bottom: 0.4pt solid #808080; justify: false; }
 grid.results cell { align: end; }
 grid.results > cell:first { font-weight: bold; }
 grid.errors cell { border: 0.4pt solid #808080; }
-grid.notes { row-breakable: true; }
+grid.notes { row-breakable: true; border-top: none; border-bottom: none; }
 grid.notes cell { padding: 0pt 6pt; border-bottom: none; justify: true; }
 grid.kit paragraph { space-after: 0pt; }
