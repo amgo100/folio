@@ -33,7 +33,7 @@
 //! them read the tree from the stage before, and an edit that leaves the
 //! styled tree equal stops at Style (early cutoff, SPEC §2.3).
 
-use ecow::eco_format;
+use ecow::{EcoVec, eco_format};
 
 use crate::db::{Build, Db};
 use crate::diag::{self, Diagnostic};
@@ -43,6 +43,7 @@ use crate::model::document;
 use crate::resolve::page_refs::{self, EXTRA_PASSES};
 use crate::resolve::{PageNumbers, Resolution, resolve_tree};
 use crate::style::{Styled, styles};
+use crate::variants::select::Space;
 
 /// The styled tree after Select (SPEC §2.1, §6.2, §6.3): the nodes the
 /// variant does not show removed, and placeholders substituted
@@ -55,6 +56,10 @@ pub struct Selected {
     /// out or replaced, or `None` when the variant shows all of the
     /// document tree ([`selected_root`]).
     pub root: Option<Element>,
+    /// The elements and parts whose content `hidden` or `answer-space`
+    /// replaced, which layout sizes
+    /// ([`Selection::spaces`](crate::variants::select::Selection::spaces)).
+    pub spaces: EcoVec<Space>,
 }
 
 /// The selected tree after Sequence (SPEC §2.1, §10.1): split into slides,
@@ -98,7 +103,7 @@ pub fn select(db: &dyn Db, build: Build<'_>) -> Option<Selected> {
     let styled = styles(db, build).as_ref()?;
     let project = build.project(db);
     let variant = build.variant(db).clone();
-    let doc = document(db, project, variant.clone()).as_ref()?;
+    let doc = document(db, project, variant.clone(), build.version(db).clone()).as_ref()?;
     let selection = crate::variants::select::select(
         db,
         project.manifest(db),
@@ -113,6 +118,7 @@ pub fn select(db: &dyn Db, build: Build<'_>) -> Option<Selected> {
             ..styled.clone()
         },
         root: selection.root,
+        spaces: selection.spaces,
     })
 }
 
@@ -124,9 +130,14 @@ pub fn selected_root<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<&'db Ele
     let selected = select(db, build).as_ref()?;
     match &selected.root {
         Some(root) => Some(root),
-        None => document(db, build.project(db), build.variant(db).clone())
-            .as_ref()
-            .map(|doc| &doc.root),
+        None => document(
+            db,
+            build.project(db),
+            build.variant(db).clone(),
+            build.version(db).clone(),
+        )
+        .as_ref()
+        .map(|doc| &doc.root),
     }
 }
 
@@ -215,6 +226,7 @@ pub fn settle(db: &dyn Db, build: Build<'_>) -> PageNumbers {
             project,
             build.target(db),
             variant.clone(),
+            build.version(db).clone(),
             Some(used.clone()),
         );
         let Some(pages) = pages(db, pass).as_ref() else {

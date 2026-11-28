@@ -1,5 +1,9 @@
 #doc(title: [Projectiles], subject: "Year 12 physics")
 
+#outline(heading)
+
+#list-of(figure)
+
 = Horizontal launch
 
 A ball is thrown horizontally at 8.0 m/s from a cliff 20 m high. The motion splits into two independent parts, shown in @fig:parts.

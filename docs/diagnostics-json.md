@@ -30,7 +30,7 @@ Some messages are still plain text, with no document or before it:
     }
   ],
   "builds": [
-    { "variant": null, "target": "pdf", "path": "out/main.pdf", "status": "skipped" }
+    { "variant": null, "version": null, "target": "pdf", "path": "out/main.pdf", "status": "skipped" }
   ]
 }
 ```
@@ -89,6 +89,7 @@ Most diagnostics have no code yet. These have one:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `variant` | string or `null` | The variant; `null` for a project without variants. |
+| `version` | string or `null` | The version of a shuffled paper (`project.versions`); `null` for a project without versions. |
 | `target` | string | The target, as `folio.toml` names it: `"pdf"`, `"docx"`, `"pptx"` or `"live"`. |
 | `path` | string or `null` | The output's path, relative to the project directory, when the build has one; always `null` from `folio check`. |
 | `status` | string | `"written"`: the output was written. `"skipped"`: it was not, because the build has errors. `"none"`: the target writes no file, or has no writer yet. `"failed"`: the build or the write failed, and a diagnostic says why. `"checked"`: `folio check` checked the build, which writes nothing; the path is then `null`. From `folio check`, `"failed"` means the check failed, or the output could not be placed where `[output] path` puts it. |

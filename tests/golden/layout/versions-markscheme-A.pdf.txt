@@ -1,0 +1,82 @@
+# Folio layout golden file (lengths in points): scripts/bless.sh rewrites it.
+master 419.53 × 595.28, 2 page(s)
+page 1 419.53 × 595.28, 16 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 20.82..449.02
+    box (0.00, 0.00) 334.49 × 452.54 main.fol:1:2 baselines 20.82..449.02
+      box (0.00, 0.00) 334.49 × 29.86 main.fol:1:2 baselines 20.82..20.82 keep penalty 10000
+        text (0.00, 20.82) SourceSerif4-Bold 16.80 w 50.75 6 glyph(s) "Forces"
+      box (0.00, 46.66) 334.49 × 126.03 main.fol:29:3 baselines 16.88..119.10
+        box (0.00, 0.00) 334.49 × 24.65 main.fol:29:3 baselines 16.88..16.88 keep penalty 10000
+          text (0.00, 16.88) SourceSerif4-Bold 13.00 w 59.71 10 glyph(s) "1.\u{a0}Springs"
+        box (0.00, 30.65) 334.49 × 42.44 main.fol:23:12 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 331.21 71 glyph(s) "A spring stretches by 6.0 cm under a load of 3.0 N. Find its spring con"
+          text (331.21, 14.29) SourceSerif4-Regular 10.50 w 3.28 1 glyph(s) "-"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 26.13 6 glyph(s) "stant."
+        box (0.00, 78.34) 334.49 × 47.69 main.fol:35:4 baselines 14.29..40.76
+          box (0.00, 0.00) 334.49 × 21.22 main.fol:24:14 baselines 14.29..14.29
+            text (96.32, 14.29) SourceSerif4-Regular 10.50 w 141.85 30 glyph(s) "The spring constant is 50 N/m."
+          box (0.00, 26.47) 334.49 × 21.22 main.fol:35:4 baselines 14.29..14.29
+            text (101.51, 14.29) SourceSerif4-Regular 10.50 w 131.47 28 glyph(s) "Figure\u{a0}1: Answer to Springs."
+      box (0.00, 188.29) 334.49 × 126.03 main.fol:29:3 baselines 16.88..119.10
+        box (0.00, 0.00) 334.49 × 24.65 main.fol:29:3 baselines 16.88..16.88 keep penalty 10000
+          text (0.00, 16.88) SourceSerif4-Bold 13.00 w 61.67 11 glyph(s) "2.\u{a0}Friction"
+        box (0.00, 30.65) 334.49 × 42.44 main.fol:13:12 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 334.49 76 glyph(s) "A box of mass 5.0 kg slides to rest from 4.0 m/s in 2.0 m. Find the friction"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 50.85 12 glyph(s) "force on it."
+        box (0.00, 78.34) 334.49 × 47.69 main.fol:35:4 baselines 14.29..40.76
+          box (0.00, 0.00) 334.49 × 21.22 main.fol:14:14 baselines 14.29..14.29
+            text (54.96, 14.29) SourceSerif4-Regular 10.50 w 224.56 51 glyph(s) "The deceleration is 4.0 m/s², so the force is 20 N."
+          box (0.00, 26.47) 334.49 × 21.22 main.fol:35:4 baselines 14.29..14.29
+            text (100.45, 14.29) SourceSerif4-Regular 10.50 w 133.58 29 glyph(s) "Figure\u{a0}3: Answer to Friction."
+      box (0.00, 329.92) 334.49 × 122.62 main.fol:29:3 baselines 16.88..119.10
+        box (0.00, 0.00) 334.49 × 24.65 main.fol:29:3 baselines 16.88..16.88 keep penalty 10000
+          text (0.00, 16.88) SourceSerif4-Bold 13.00 w 69.54 10 glyph(s) "3.\u{a0}Moments"
+        box (0.00, 30.65) 334.49 × 42.44 main.fol:18:12 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 334.49 72 glyph(s) "A uniform plank 4.0 m long rests on a pivot 1.0 m from one end. Find the"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 278.86 62 glyph(s) "weight that balances it at that end if the plank weighs 200 N."
+        box (0.00, 78.34) 334.49 × 44.28 main.fol:35:4 baselines 14.29..40.76
+          box (0.00, 0.00) 334.49 × 21.22 main.fol:19:14 baselines 14.29..14.29
+            text (43.89, 14.29) SourceSerif4-Regular 10.50 w 246.71 52 glyph(s) "Taking moments about the pivot, the weight is 200 N."
+          box (0.00, 26.47) 334.49 × 17.81 main.fol:35:4 baselines 14.29..14.29
+            text (97.11, 14.29) SourceSerif4-Regular 10.50 w 140.27 28 glyph(s) "Figure\u{a0}5: Answer to Moments."
+page 2 419.53 × 595.28, 9 line(s)
+  box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 13.47..229.90
+    box (0.00, 0.00) 334.49 × 233.42 main.fol:1:2 baselines 13.47..229.90
+      box (0.00, 0.00) 334.49 × 122.72 main.fol:29:3 baselines 13.47..115.79
+        box (0.00, 0.00) 334.49 × 21.24 main.fol:29:3 baselines 13.47..13.47 keep penalty 10000
+          text (0.00, 13.47) SourceSerif4-Bold 13.00 w 62.99 12 glyph(s) "4.\u{a0}Free fall"
+        box (0.00, 27.24) 334.49 × 42.44 main.fol:8:12 baselines 14.29..35.51
+          text (0.00, 14.29) SourceSerif4-Regular 10.50 w 334.49 71 glyph(s) "A stone is dropped from rest from a bridge 45 m above a river. Find the"
+          text (0.00, 35.51) SourceSerif4-Regular 10.50 w 145.89 33 glyph(s) "time it takes to reach the water."
+        box (0.00, 74.93) 334.49 × 47.80 main.fol:35:4 baselines 14.29..40.87
+          box (0.00, 0.00) 334.49 × 21.33 main.fol:9:14 baselines 14.29..14.29
+            text (93.97, 14.29) SourceSerif4-Regular 10.50 w 27.87 5 glyph(s) "From "
+            box (121.84, 9.65) 18.93 × 4.76 main.fol:9:19
+              text (0.00, 4.64) NewCMMath-Regular 10.50 w 4.92 1 glyph(s) "𝑠"
+              text (7.84, 4.64) NewCMMath-Regular 10.50 w 8.17 1 glyph(s) "="
+            box (140.77, 5.26) 19.10 × 12.65 main.fol:9:19
+              text (1.05, 4.90) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "1"
+              text (1.05, 12.65) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
+              shape (1.05, 6.20) M(0.00, 0.00) L(3.67, 0.00) L(3.67, 0.42) L(0.00, 0.42) Z fill #000000ff NonZero main.fol:9:24
+              text (5.78, 9.03) NewCMMath-Regular 10.50 w 5.27 1 glyph(s) "𝑔"
+              text (11.05, 9.03) NewCMMath-Regular 10.50 w 3.79 1 glyph(s) "𝑡"
+              text (14.84, 5.22) NewCMMath-Regular 7.35 w 3.67 1 glyph(s) "2"
+            text (159.87, 14.29) SourceSerif4-Regular 10.50 w 80.65 20 glyph(s) ", the time is 3.0 s."
+          box (0.00, 26.58) 334.49 × 21.22 main.fol:35:4 baselines 14.29..14.29
+            text (99.73, 14.29) SourceSerif4-Regular 10.50 w 135.03 30 glyph(s) "Figure\u{a0}7: Answer to Free fall."
+      box (0.00, 138.32) 334.49 × 95.10 main.fol:38:1 baselines 16.88..91.58
+        box (0.00, 0.00) 334.49 × 24.65 main.fol:38:1 baselines 16.88..16.88 keep penalty 10000
+          text (0.00, 16.88) SourceSerif4-Bold 13.00 w 98.89 16 glyph(s) "5.\u{a0}Short answers"
+        box (0.00, 30.65) 334.49 × 64.45 main.fol:43:3 baselines 14.29..60.93
+          box (15.75, 0.00) 318.74 × 21.22 main.fol:43:3 baselines 14.29..14.29
+            box (0.00, 0.00) 318.74 × 21.22 main.fol:43:5 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "1.\u{a0}"
+              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 209.18 47 glyph(s) "Name the force that keeps a satellite in orbit."
+          box (15.75, 23.32) 318.74 × 21.22 main.fol:42:3 baselines 14.29..14.29
+            box (0.00, 0.00) 318.74 × 21.22 main.fol:42:5 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "2.\u{a0}"
+              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 193.97 40 glyph(s) "Give the unit of momentum in base units."
+          box (15.75, 46.64) 318.74 × 17.81 main.fol:41:3 baselines 14.29..14.29
+            box (0.00, 0.00) 318.74 × 17.81 main.fol:41:5 baselines 14.29..14.29
+              text (0.00, 14.29) SourceSerif4-Regular 10.50 w 10.85 3 glyph(s) "3.\u{a0}"
+              text (10.85, 14.29) SourceSerif4-Regular 10.50 w 158.34 34 glyph(s) "State Newton’s first law of motion."

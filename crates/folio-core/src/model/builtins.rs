@@ -203,6 +203,25 @@ static BUILTINS: LazyLock<Vec<Builtin>> = LazyLock::new(|| {
             ])
             .body(content(Blocks))
             .build(),
+        // Queries (SPEC §4.5): `#outline(heading)` and `#list-of(figure)`
+        // list the instances of an element the variant shows, and
+        // `#total(question, "marks")` sums a field over them, on the
+        // numbering group's common tree.
+        element("outline", Block, true)
+            .fields([FieldDecl::required(name("target"), FieldType::Element)])
+            .positional(["target"])
+            .build(),
+        element("list-of", Block, true)
+            .fields([FieldDecl::required(name("target"), FieldType::Element)])
+            .positional(["target"])
+            .build(),
+        element("total", ElementKind::Inline, true)
+            .fields([
+                FieldDecl::required(name("target"), FieldType::Element),
+                FieldDecl::required(name("field"), FieldType::Str),
+            ])
+            .positional(["target", "field"])
+            .build(),
     ]
 });
 

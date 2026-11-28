@@ -44,18 +44,70 @@ pub struct CommonNumbers {
 
 /// The build that stands for a numbering group and a target: the build of
 /// its first variant, so that every variant of the group asks for one
-/// common count. `None` when the build's variant is in no group or its
-/// group shares no counters.
+/// common tree. `None` when the build's variant is in no group.
 pub fn group_build<'db>(db: &'db dyn Db, build: Build<'db>) -> Option<Build<'db>> {
     let build = build.base(db);
     let project = build.project(db);
     let variant = build.variant(db).as_ref()?;
     let group = project.manifest(db).numbering_group(variant.as_str())?;
-    if group.shared_counters.is_empty() {
-        return None;
-    }
     let first = group.variants.first()?.v.clone();
-    Some(Build::new(db, project, build.target(db), Some(first)))
+    Some(Build::versioned(
+        db,
+        project,
+        build.target(db),
+        Some(first),
+        build.version(db).clone(),
+    ))
+}
+
+/// The common tree of a numbering group: the `doc` element and its styled
+/// node, merged from what each variant shows, and the instances whose
+/// versions restart counters differently.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct CommonTree {
+    /// The `doc` element.
+    pub root: Element,
+    /// Its styled node.
+    pub styled: StyledNode,
+    /// The instances whose versions differ in `counter-reset`.
+    differ: Vec<Span>,
+}
+
+/// The common tree of the numbering group that `build` stands for
+/// ([`group_build`]), or `None` when a variant of the group cannot be
+/// styled.
+#[salsa::tracked(returns(ref))]
+pub fn common_tree(db: &dyn Db, build: Build<'_>) -> Option<CommonTree> {
+    let project = build.project(db);
+    let variant = build.variant(db).as_ref()?;
+    let group = project.manifest(db).numbering_group(variant.as_str())?;
+    let mut trees = Vec::new();
+    let mut props = None;
+    for name in &group.variants {
+        let each = Build::versioned(
+            db,
+            project,
+            build.target(db),
+            Some(name.v.clone()),
+            build.version(db).clone(),
+        );
+        let root = selected_root(db, each)?;
+        let selected = select(db, each).as_ref()?;
+        props.get_or_insert(&selected.styled.properties);
+        trees.push((root, &selected.styled.root));
+    }
+    let props = props?;
+    let mut merger = Merger {
+        props,
+        counter_reset: props.builtin("counter-reset"),
+        differ: Vec::new(),
+    };
+    let (root, styled) = merger.merge(&trees);
+    Some(CommonTree {
+        root,
+        styled,
+        differ: merger.differ,
+    })
 }
 
 /// Counts the common tree of the numbering group that `build` stands for
@@ -69,23 +121,8 @@ pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> Option<CommonNumbers> {
     let project = build.project(db);
     let variant = build.variant(db).as_ref()?;
     let group = project.manifest(db).numbering_group(variant.as_str())?;
-    let mut trees = Vec::new();
-    let mut props = None;
-    for name in &group.variants {
-        let each = Build::new(db, project, build.target(db), Some(name.v.clone()));
-        let root = selected_root(db, each)?;
-        let selected = select(db, each).as_ref()?;
-        props.get_or_insert(&selected.styled.properties);
-        trees.push((root, &selected.styled.root));
-    }
-    let props = props?;
-    let mut merger = Merger {
-        props,
-        counter_reset: props.builtin("counter-reset"),
-        differ: Vec::new(),
-    };
-    let (root, styled) = merger.merge(&trees);
-    for span in merger.differ {
+    let tree = common_tree(db, build).as_ref()?;
+    for &span in &tree.differ {
         diag::report(
             db,
             Diagnostic::warning(
@@ -102,7 +139,7 @@ pub fn common_numbers(db: &dyn Db, build: Build<'_>) -> Option<CommonNumbers> {
             ),
         );
     }
-    let numbers = count_common(db, build, &root, &styled);
+    let numbers = count_common(db, build, &tree.root, &tree.styled);
     Some(CommonNumbers {
         numbers: numbers
             .into_iter()
@@ -128,7 +165,13 @@ pub fn check_target_overlays(db: &dyn Db, build: Build<'_>, group: &Name) {
     };
     let mut seen = HashSet::new();
     for name in &decl.variants {
-        let each = Build::new(db, project, build.target(db), Some(name.v.clone()));
+        let each = Build::versioned(
+            db,
+            project,
+            build.target(db),
+            Some(name.v.clone()),
+            build.version(db).clone(),
+        );
         let cascade = cascade(db, each);
         let props = &cascade.properties;
         let counted = [
