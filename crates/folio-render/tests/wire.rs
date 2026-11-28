@@ -223,6 +223,26 @@ proptest! {
         prop_assert!(same(&other, &list));
     }
 
+    /// A list whose images the receiver has decodes the same without
+    /// their bytes.
+    #[test]
+    fn known_images_round_trip(list in list()) {
+        let mut images = wire::Images::new();
+        let Ok(Message::List(first)) = wire::decode_with(&wire::encode(&list), &mut images) else {
+            panic!("the list does not decode");
+        };
+        prop_assert!(same(&first, &list));
+        let short = wire::encode_with(&list, |_| true);
+        let Ok(Message::List(again)) = wire::decode_with(&short, &mut images) else {
+            panic!("the list without its images does not decode");
+        };
+        prop_assert!(same(&again, &list), "{again:?} != {list:?}");
+        let has_images = list.items.iter().any(|i| matches!(i.command, Command::Image(_)));
+        if has_images {
+            prop_assert_eq!(wire::decode(&short), Err(DecodeError::UnknownImage));
+        }
+    }
+
     /// Damaged messages fail to decode, or decode to something, but never
     /// panic.
     #[test]
@@ -385,4 +405,70 @@ fn spans_must_fit() {
     spans.items.push((Span::DETACHED, vec![]));
     assert!(list.set_spans(spans).is_err());
     assert_eq!(list, sample());
+}
+
+fn with_image(bytes: &[u8]) -> DisplayList {
+    let mut list = sample();
+    list.items.push(Item {
+        command: Command::Image(ImageItem {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            image: Image::new(Arc::from(bytes), ImageFormat::Png),
+        }),
+        span: Span::DETACHED,
+    });
+    list
+}
+
+/// An image is sent whole once; the lists after it name it by its content
+/// hash, which costs a few bytes whatever its size.
+#[test]
+fn images_are_sent_once() {
+    let photo = vec![7u8; 1 << 20];
+    let list = with_image(&photo);
+    let whole = wire::encode(&list);
+    let short = wire::encode_with(&list, |_| true);
+    assert!(whole.len() > photo.len());
+    assert!(short.len() < 100, "{} bytes", short.len());
+    let mut images = wire::Images::new();
+    assert_eq!(
+        wire::decode_with(&whole, &mut images),
+        Ok(Message::List(list.clone()))
+    );
+    assert_eq!(images.len(), 1);
+    assert_eq!(
+        wire::decode_with(&short, &mut images),
+        Ok(Message::List(list.clone()))
+    );
+    assert_eq!(wire::decode(&short), Err(DecodeError::UnknownImage));
+}
+
+/// The content hash must be that of the bytes sent, so that a receiver
+/// never keeps an image under another's name.
+#[test]
+fn an_image_must_match_its_hash() {
+    let mut bytes = wire::encode(&with_image(b"abc"));
+    // The last nine bytes are the hash and the flag.
+    let at = bytes.len() - 9;
+    bytes[at] ^= 1;
+    assert_eq!(wire::decode(&bytes), Err(DecodeError::Invalid));
+}
+
+/// A list from an encoder before the content hash still decodes, its image
+/// whole.
+#[test]
+fn images_without_a_hash_decode() {
+    let list = with_image(b"abc");
+    let bytes = wire::encode(&list);
+    // The image item is the last: drop its hash and flag, and shorten its
+    // body's length (one byte, as it is short).
+    let mut old = bytes[..bytes.len() - 9].to_vec();
+    let item = 16 + 2 + bytes[17] as usize;
+    assert_eq!(old[item], 4, "the image item");
+    old[item + 1] -= 9;
+    assert_eq!(wire::decode(&old), Ok(Message::List(list)));
 }
