@@ -100,3 +100,4 @@ Most diagnostics have no code yet. These have one:
 
 - A program should ignore fields it does not know. New fields, and new values of `status`, may appear without a change of version.
 - Removing or renaming a field, or changing the meaning or type of one, raises `version`.
+- Corrected within version 1 (decision recorded: D-276-1 = A): `bytes` counts from a file's first byte, a byte order mark included. Earlier compilers gave ranges 3 bytes early for a `.fol` or `.fsty` file that starts with one; this was a bug, not a change of meaning.
