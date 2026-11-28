@@ -586,7 +586,7 @@ impl<'s> Parser<'s> {
             )
             .with_hint("the columns of an array can be `l`, `c` or `r`; rules between them are not supported"));
         }
-        Ok(spec
+        let mut align: Vec<ColumnAlign> = spec
             .chars()
             .filter_map(|c| match c {
                 'l' => Some(ColumnAlign::Left),
@@ -594,7 +594,13 @@ impl<'s> Parser<'s> {
                 'r' => Some(ColumnAlign::Right),
                 _ => None,
             })
-            .collect())
+            .collect();
+        // A column past the list is centred, so that an array of centred
+        // columns is the matrix native math builds.
+        while align.last() == Some(&ColumnAlign::Center) {
+            align.pop();
+        }
+        Ok(align)
     }
 
     /// The cells of a matrix, up to `\end{name}`. Short rows are filled
@@ -2085,6 +2091,14 @@ mod tests {
         assert_eq!(
             repr("\\begin{array}{lcr} a & b & c \\end{array}"),
             "[mat(none, [[a], [b], [c]], none, align: lcr)]"
+        );
+        assert_eq!(
+            repr("\\begin{array}{rc} a & b \\end{array}"),
+            "[mat(none, [[a], [b]], none, align: r)]"
+        );
+        assert_eq!(
+            repr("\\begin{array}{cc} a & b \\end{array}"),
+            "[mat(none, [[a], [b]], none)]"
         );
         assert_eq!(
             repr("\\begin{pmatrix} a \\end{pmatrix}"),
