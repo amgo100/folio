@@ -396,3 +396,48 @@ fn a_display_is_centred_and_numbered_in_the_width_of_its_region() {
         "{narrow_formula:?} {formula:?}"
     );
 }
+
+#[test]
+fn numbers_in_formulas_are_written_in_the_number_format_of_their_text() {
+    let polish = "doc { lang: \"pl\"; }\n";
+    let text = |style: &str, main: &str| drawn(&world(style, main)).0.concat();
+    // A number literal takes the decimal marker and digit groups (D-349-1).
+    let pl = text(polish, "$g = 9.81$ i $12345.5$ i $2026$\n");
+    assert!(pl.contains("9,81"), "{pl}");
+    assert!(pl.contains("12\u{202F}345,5"), "{pl}");
+    assert!(pl.contains("2026"), "{pl}");
+    let en = text("", "$g = 9.81$ and $12345.5$\n");
+    assert!(
+        en.contains("9.81") && en.contains("12\u{202F}345.5"),
+        "{en}"
+    );
+    // Where the marker is a comma, `9,81` without spaces is one number,
+    // set as `9.81` is; `9, 81` stays a list, spaced after its comma.
+    let width = |style: &str, formula: &str| {
+        let world = world(style, &format!("{formula}\n"));
+        let (_, messages) = drawn(&world);
+        assert!(messages.is_empty(), "{messages:?}");
+        lines(&world).paragraphs[0].lines[0].width
+    };
+    // The same glyphs, in runs of their own: equal to rounding.
+    let same = |a: Abs, b: Abs| (a - b).to_pt().abs() < 1e-6;
+    assert!(same(width(polish, "$9,81$"), width(polish, "$9.81$")));
+    assert!(width(polish, "$9, 81$") > width(polish, "$9,81$"));
+    assert!(same(width(polish, "$9,81^2$"), width(polish, "$9.81^2$")));
+    // Elsewhere the comma is punctuation, with or without a space.
+    assert!(same(width("", "$9,81$"), width("", "$9, 81$")));
+    assert!(width("", "$9,81$") > width("", "$9.81$"));
+    let comma = "math { decimal-marker: comma; }\n";
+    assert!(same(width(comma, "$9,81$"), width(comma, "$9.81$")));
+    // The reading of the formula follows its text too.
+    let alt = |style: &str, main: &str| {
+        let compiled = folio::compile(&world(style, main), Target::Pdf, None).unwrap();
+        String::from_utf8_lossy(compiled.output.expect("a PDF").as_ref()).into_owned()
+    };
+    let pdf = alt(polish, "$g = 9,81$ i $v = 2.5$ i $(1, 2)$\n");
+    for reading in ["/Alt(g = 9,81)", "/Alt(v = 2,5)", "/Alt((1, 2))"] {
+        assert!(pdf.contains(reading), "{reading}");
+    }
+    let pdf = alt("", "$g = 9,81$\n");
+    assert!(pdf.contains("/Alt(g = 9, 81)"), "English reads a list");
+}

@@ -52,6 +52,7 @@ use unicode_math_class::MathClass;
 use self::alphabet::Alphabet;
 use self::font::{Constant, Features};
 use self::fragment::{Axis, Frame, FrameFragment, FrameItem, GlyphFragment, MathFragment, Stretch};
+use crate::quantity::format_numbers;
 use crate::{Formula, Node, NumberFormat, Row};
 
 pub use self::font::{FontBytes, MathFont};
@@ -97,8 +98,8 @@ pub struct MathOptions {
     pub leading: Abs,
     /// How vectors are set.
     pub vector: VectorStyle,
-    /// How the numbers of quantities are written: their decimal marker and
-    /// digit groups.
+    /// How numbers are written, those of quantities and those written in
+    /// the formula alike: their decimal marker and digit groups.
     pub number: NumberFormat,
 }
 
@@ -182,6 +183,9 @@ pub struct DisplayMath {
 /// more than the places after its top-level relations and binary operators
 /// where a line may break. A formula of several lines, or with alignment
 /// points, does not break.
+///
+/// It needs no number format: a comma between numbers is punctuation in one
+/// and part of a number in another, and neither is a place to break.
 pub fn inline_chunks(formula: &Formula) -> usize {
     match inline_row(formula) {
         Some(row) => 1 + breaks(&prepare(row.nodes(), MathSize::Text, false)).len(),
@@ -213,9 +217,10 @@ pub fn layout_inline(
     let style = Style::new(MathSize::Text);
     let chunks: Vec<(Frame, Option<(i32, f64)>)> = match inline_row(formula) {
         Some(row) => {
-            let prepared = prepare(row.nodes(), MathSize::Text, false);
+            let nodes = format_numbers(row.nodes(), &ctx.number);
+            let prepared = prepare(&nodes, MathSize::Text, false);
             let breaks = breaks(&prepared);
-            let laid = ctx.layout_prepared(row.nodes(), &prepared, style);
+            let laid = ctx.layout_prepared(&nodes, &prepared, style);
             let mut chunks = Vec::new();
             let mut current: Vec<MathFragment> = Vec::new();
             for (i, fragments) in laid.into_iter().enumerate() {
@@ -516,8 +521,9 @@ impl Ctx {
         style: Style,
         closing: bool,
     ) -> Vec<MathFragment> {
-        let prepared = prepare(nodes, style.size, closing);
-        self.layout_prepared(nodes, &prepared, style)
+        let nodes = format_numbers(nodes, &self.number);
+        let prepared = prepare(&nodes, style.size, closing);
+        self.layout_prepared(&nodes, &prepared, style)
             .into_iter()
             .flatten()
             .collect()
@@ -668,7 +674,10 @@ impl Ctx {
                 }
             }
             Node::Quantity(quantity) => {
-                // Written out in the format of its text's language.
+                // Written out in the format of its text's language. Its
+                // numbers are no literals any more where the format groups
+                // them or writes a comma, and are written as they are
+                // elsewhere, so laying them out leaves them as they are.
                 let row = quantity.lower(&self.number);
                 out.extend(self.layout_fragments(row.nodes(), style, false));
             }
@@ -727,6 +736,7 @@ impl Ctx {
             })
             .collect();
         let flat: Vec<Node> = cells.iter().flatten().cloned().collect();
+        let flat = format_numbers(&flat, &self.number);
         let mut prepared = prepare(&flat, style.size, false);
         let size = self.font_size(style);
         let mut moved = vec![0.0; cells.len()];

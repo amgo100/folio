@@ -77,7 +77,9 @@ impl Vm<'_> {
         let mut nodes = Vec::new();
         let mut label: Option<math::Label> = None;
         let mut start: Option<Span> = None;
-        for expr in body.exprs() {
+        let exprs: Vec<ast::Expr<'_>> = body.exprs().collect();
+        let mut last_comma = None;
+        for (k, &expr) in exprs.iter().enumerate() {
             match expr {
                 ast::Expr::Space(_) => continue,
                 ast::Expr::Linebreak(linebreak) => {
@@ -105,6 +107,11 @@ impl Vm<'_> {
                 return Err(label_not_at_end(label.span).into());
             }
             start.get_or_insert(expr.span());
+            if decimal_comma_at(&exprs, k, &mut last_comma) {
+                self.step(expr.span())?;
+                nodes.push(math::Node::decimal_comma(expr.span()));
+                continue;
+            }
             self.math_expr(expr, Level::Line, &mut nodes)?;
         }
         if !nodes.is_empty() || label.is_some() {
@@ -230,7 +237,14 @@ impl Vm<'_> {
             ast::Expr::Space(_) => {}
             // A group: what parentheses held, or a base and its arguments.
             ast::Expr::Math(group) => {
-                for child in group.exprs() {
+                let children: Vec<ast::Expr<'_>> = group.exprs().collect();
+                let mut last = None;
+                for (k, &child) in children.iter().enumerate() {
+                    if decimal_comma_at(&children, k, &mut last) {
+                        self.step(child.span())?;
+                        out.push(math::Node::decimal_comma(child.span()));
+                        continue;
+                    }
                     self.nest(|vm| vm.math_expr(child, level, out))?;
                 }
             }
@@ -1115,7 +1129,8 @@ const MAX_FIGURES: i64 = 100;
 
 /// Builds what `qty`, `unit` and `num` make, in math and in code: checks
 /// the uncertainty, reads the unit, and rounds the value to `digits`
-/// significant figures.
+/// significant figures, or, with an uncertainty, the uncertainty to
+/// `digits` significant figures and the value to the place of its last.
 pub(super) fn quantity(
     value: Option<(Number, Span)>,
     pm: Option<(Number, Span)>,
@@ -1175,13 +1190,21 @@ pub(super) fn quantity(
             .into());
         }
     };
-    let value = value.map(|(number, _)| match figures {
+    // With an uncertainty, `digits` is its significant figures, and the
+    // value is rounded to the place of its last one (D-349-2):
+    // `(1.5 ± 0.3) m`, never `(2 ± 0.3) m`.
+    let pm = pm.map(|(number, _)| match figures {
         Some(figures) => number.round(figures),
         None => number,
     });
+    let value = value.map(|(number, _)| match (figures, &pm) {
+        (Some(figures), Some(pm)) => number.round_to_place(pm.figure_place(figures)),
+        (Some(figures), None) => number.round(figures),
+        (None, _) => number,
+    });
     Ok(math::Quantity {
         value,
-        pm: pm.map(|(number, _)| number),
+        pm,
         unit,
         span,
     })
@@ -1209,6 +1232,52 @@ fn is_math(expr: ast::Expr<'_>) -> bool {
             | ast::Expr::Space(_)
             | ast::Expr::Label(_)
     )
+}
+
+/// Whether the `k`th of a row's expressions is a comma written between two
+/// integers without spaces, `9,81`, which is the decimal marker where the
+/// formula's text writes a decimal comma (SPEC §8.1). The integer after it
+/// may carry scripts (`9,81^2`). `last` is the last such comma of the row,
+/// which this updates: in `1,2,3` the `2` belongs to the number before it,
+/// so the second comma is punctuation.
+fn decimal_comma_at(exprs: &[ast::Expr<'_>], k: usize, last: &mut Option<usize>) -> bool {
+    let chained = k >= 2 && *last == Some(k - 2);
+    let comma = !chained && is_decimal_comma(exprs, k);
+    if comma {
+        *last = Some(k);
+    }
+    comma
+}
+
+/// Whether the `k`th of a row's expressions is a comma between two integers
+/// without spaces (see [`decimal_comma_at`]).
+fn is_decimal_comma(exprs: &[ast::Expr<'_>], k: usize) -> bool {
+    fn integer(expr: ast::Expr<'_>) -> bool {
+        matches!(
+            expr,
+            ast::Expr::MathText(text) if matches!(
+                text.get(),
+                MathTextKind::Number(n) if n.bytes().all(|b| b.is_ascii_digit())
+            )
+        )
+    }
+    fn comma(expr: ast::Expr<'_>) -> bool {
+        matches!(
+            expr,
+            ast::Expr::MathText(text) if matches!(text.get(), MathTextKind::Grapheme(g) if g == ",")
+        )
+    }
+    let (Some(&before), Some(&after)) = (
+        k.checked_sub(1).and_then(|i| exprs.get(i)),
+        exprs.get(k + 1),
+    ) else {
+        return false;
+    };
+    let after = match after {
+        ast::Expr::MathAttach(attach) => attach.base(),
+        other => other,
+    };
+    comma(exprs[k]) && integer(before) && integer(after)
 }
 
 /// A number, with a minus sign before it when it is negative.
