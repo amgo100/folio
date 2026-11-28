@@ -53,7 +53,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{Registry, Target};
 use folio_syntax::ast::{self, AstNode};
-use folio_syntax::{DiagSpan, Source, Span, SyntaxKind, SyntaxNode};
+use folio_syntax::{DiagSpan, FileId, Source, Span, SyntaxKind, SyntaxNode};
 pub use salsa::Durability;
 
 use crate::component::ComponentHost;
@@ -147,6 +147,11 @@ pub struct DataFile {
     /// Where the file is in the project. Never changes.
     #[returns(ref)]
     pub path: ProjectPath,
+    /// The file id that diagnostics point into it by, for a text data file
+    /// (CSV, JSON, TOML, YAML, BibTeX or plain text) while fewer than half
+    /// the world's ids are taken. Never changes.
+    #[returns(copy)]
+    pub id: Option<FileId>,
     /// The file's contents, read on demand when they are on disk.
     /// [`Durability::LOW`].
     #[returns(ref)]

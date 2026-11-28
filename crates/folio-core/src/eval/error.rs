@@ -17,6 +17,9 @@ pub struct EvalError {
     pub message: EcoString,
     /// How to fix it.
     pub hints: EcoVec<EcoString>,
+    /// Other places that explain it, each with a message: the place in a
+    /// data file that a function reading it could not read.
+    pub related: EcoVec<(DiagSpan, EcoString)>,
     /// The calls and imports it happened in, innermost first.
     pub trace: EcoVec<Tracepoint>,
 }
@@ -29,6 +32,7 @@ impl EvalError {
             sub_range: None,
             message: message.into(),
             hints: EcoVec::new(),
+            related: EcoVec::new(),
             trace: EcoVec::new(),
         }
     }
@@ -52,6 +56,12 @@ impl EvalError {
         self
     }
 
+    /// Adds another place that explains the error.
+    pub fn with_related(mut self, span: DiagSpan, message: impl Into<EcoString>) -> Self {
+        self.related.push((span, message.into()));
+        self
+    }
+
     /// Adds a call or import that the error happened in, unless the trace
     /// has it already, as it has for every level of a recursion.
     pub(crate) fn trace_point(&mut self, span: Span, message: EcoString) {
@@ -71,8 +81,8 @@ pub struct Tracepoint {
     pub message: EcoString,
 }
 
-/// The trace becomes related spans, which front ends show next to the
-/// error.
+/// The related places and the trace become related spans, which front
+/// ends show next to the error.
 impl From<EvalError> for Diagnostic {
     fn from(error: EvalError) -> Self {
         let mut diag = Diagnostic::error(
@@ -81,6 +91,9 @@ impl From<EvalError> for Diagnostic {
         );
         for hint in error.hints {
             diag = diag.with_hint(hint);
+        }
+        for (span, message) in error.related {
+            diag = diag.with_related(span, message);
         }
         for point in error.trace {
             diag = diag.with_related(point.span, point.message);

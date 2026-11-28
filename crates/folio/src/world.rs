@@ -36,7 +36,9 @@ use crate::diag::Files;
 /// ever.
 ///
 /// A source's file id is assigned when its path is set, and freed when the
-/// source is removed. Ids are new until about 65,000 have been given out,
+/// source is removed. A text data file (CSV, JSON, TOML, YAML, BibTeX or
+/// plain text) gets one too when it is added, so that errors can point into
+/// it, while fewer than half the ids are taken. Ids are new until about 65,000 have been given out,
 /// and then freed ones are given out again, so a world that sees any number
 /// of paths over its life never runs out of them. The
 /// diagnostics of a compilation therefore stay valid until a source is
@@ -606,9 +608,16 @@ impl World {
                 (source.id(), source.clone())
             })
             .collect();
+        let data = self
+            .project
+            .files(&self.db)
+            .values()
+            .filter_map(|file| Some((file.id(&self.db)?, file.content(&self.db).clone())))
+            .collect();
         Snapshot {
             ids: self.ids.clone(),
             sources: Arc::new(sources),
+            data: Arc::new(data),
             manifest_text: self.manifest_text.clone(),
             lockfile_text: self.lockfile_text.clone(),
         }
@@ -674,7 +683,8 @@ impl World {
         let new: Vec<_> = new
             .into_iter()
             .map(|(path, content)| {
-                let file = DataFile::builder(path.clone(), content)
+                let id = self.data_id(&path);
+                let file = DataFile::builder(path.clone(), id, content)
                     .durability(Durability::LOW)
                     .new(&self.db);
                 (path, file)
@@ -691,11 +701,17 @@ impl World {
         if !self.project.files(&self.db).contains_key(&path) {
             return false;
         }
-        self.edit_files(|files| files.remove(&path));
+        let file = self
+            .edit_files(|files| files.remove(&path))
+            .expect("the file is there");
+        if file.id(&self.db).is_some() {
+            Arc::make_mut(&mut self.ids).release(&path);
+        }
         true
     }
 
-    /// The path of a file id: a source, `folio.toml` or `folio.lock`.
+    /// The path of a file id: a source, a text data file, `folio.toml` or
+    /// `folio.lock`.
     pub fn path(&self, id: FileId) -> Option<&str> {
         match id {
             Self::MANIFEST => Some("folio.toml"),
@@ -704,7 +720,8 @@ impl World {
         }
     }
 
-    /// The file id of a source path, if the world has a source there.
+    /// The file id of a path, if the world has a source there, or a text
+    /// data file with an id.
     pub fn id(&self, path: &str) -> Option<FileId> {
         self.ids.by_path.get(&ProjectPath::new(path)?).copied()
     }
@@ -787,6 +804,27 @@ impl World {
         result
     }
 
+    /// A file id for a new data file, if it is a text data file and fewer
+    /// than [`MAX_DATA_IDS`] ids, half of all, are taken, so that sources
+    /// always get one.
+    fn data_id(&mut self, path: &ProjectPath) -> Option<FileId> {
+        let text = path.extension().is_some_and(|ext| {
+            ["csv", "tsv", "json", "toml", "yaml", "yml", "txt", "bib"]
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        });
+        if !text || self.ids.by_path.len() >= MAX_DATA_IDS {
+            return None;
+        }
+        Arc::make_mut(&mut self.ids).assign(path).ok()
+    }
+
+    /// The text of a data file with an id, as a build read it.
+    fn data_lines(&self, id: FileId) -> Option<Lines<String>> {
+        let file = self.project.files(&self.db).get(self.ids.path(id)?)?;
+        content_lines(file.content(&self.db))
+    }
+
     fn assign_id(&mut self, path: &ProjectPath) -> Result<FileId, WorldError> {
         if let Some(&id) = self.ids.by_path.get(path) {
             return Ok(id);
@@ -811,7 +849,9 @@ impl Files for World {
         match id {
             Self::MANIFEST => Some(self.manifest_text.clone()),
             Self::LOCKFILE => self.lockfile_text.clone(),
-            _ => Files::source(self, id).map(|source| source.lines().clone()),
+            _ => Files::source(self, id)
+                .map(|source| source.lines().clone())
+                .or_else(|| self.data_lines(id)),
         }
     }
 }
@@ -823,6 +863,16 @@ impl Debug for World {
             .field("sources", &self.ids.by_path)
             .finish_non_exhaustive()
     }
+}
+
+/// The most file ids that may be taken when a data file is given one.
+const MAX_DATA_IDS: usize = 32_768;
+
+/// The text of a data file's contents as a build read them, if it read them
+/// and they are UTF-8.
+fn content_lines(content: &FileContent) -> Option<Lines<String>> {
+    let bytes = content.loaded()?.ok()?;
+    Some(Lines::new(String::from_utf8(bytes.to_vec()).ok()?))
 }
 
 /// The raw id of the first source; 1 and 2 are the manifest and lockfile.
@@ -895,12 +945,15 @@ impl FileIds {
 pub struct Snapshot {
     ids: Arc<FileIds>,
     sources: Arc<BTreeMap<FileId, Source>>,
+    /// The data files with ids, which diagnostics can point into.
+    data: Arc<BTreeMap<FileId, FileContent>>,
     manifest_text: Lines<String>,
     lockfile_text: Option<Lines<String>>,
 }
 
 impl Snapshot {
-    /// The path of a file id: a source, `folio.toml` or `folio.lock`.
+    /// The path of a file id: a source, a text data file, `folio.toml` or
+    /// `folio.lock`.
     pub fn path(&self, id: FileId) -> Option<&str> {
         match id {
             World::MANIFEST => Some("folio.toml"),
@@ -928,7 +981,9 @@ impl Files for Snapshot {
         match id {
             World::MANIFEST => Some(self.manifest_text.clone()),
             World::LOCKFILE => self.lockfile_text.clone(),
-            _ => Files::source(self, id).map(|source| source.lines().clone()),
+            _ => Files::source(self, id)
+                .map(|source| source.lines().clone())
+                .or_else(|| content_lines(self.data.get(&id)?)),
         }
     }
 }

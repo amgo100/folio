@@ -854,3 +854,20 @@ fn adds_many_files() {
     }
     assert_eq!(world.file_paths().count(), 0);
 }
+
+/// A text data file gets a file id that errors can point into; an image
+/// does not, and removing the file frees its id.
+#[test]
+fn text_data_files_have_ids() {
+    let mut world = World::new(MANIFEST).unwrap();
+    world
+        .set_file("data/bank.yaml", b"a: 1\n".to_vec())
+        .unwrap();
+    world.set_file("figure.png", b"png".to_vec()).unwrap();
+    let id = world.id("data/bank.yaml").unwrap();
+    assert_eq!(world.path(id), Some("data/bank.yaml"));
+    assert!(world.id("figure.png").is_none());
+    assert!(world.remove_file("data/bank.yaml"));
+    assert!(world.id("data/bank.yaml").is_none());
+    assert_eq!(world.path(id), None);
+}
