@@ -17,7 +17,9 @@
 //!   it changed. `watch-paint` times the same edit to the completed canvas:
 //!   until the preview's viewer, in Chromium, shows the edited page with
 //!   every glyph (SPEC §12.2). It runs when Node.js can load Playwright and
-//!   its Chromium, and is left out with a note otherwise;
+//!   its Chromium, and is left out with a note otherwise. Glyphs drawn
+//!   from another quarter-pixel offset while the right one is fetched
+//!   count as drawn;
 //! - the stages of the reference document's builds: how long each query
 //!   from evaluation to emit takes in a full compile, after a one-word
 //!   edit and after a stylesheet edit, measured by running the public
@@ -176,6 +178,7 @@ impl Painter {
                 .lines
                 .recv_timeout(Duration::from_secs(60))
                 .unwrap_or_else(|_| panic!("no `{word}` from paint.cjs in time"));
+            assert!(!line.starts_with("error "), "the viewer failed: {line}");
             let (w, r) = line.split_once(' ').expect("a word and a revision");
             let r: u64 = r.parse().expect("a revision");
             holes += usize::from(w == "holes");
@@ -189,6 +192,12 @@ impl Painter {
 impl Drop for Painter {
     fn drop(&mut self) {
         drop(self.child.stdin.take());
+        // A browser that hangs as it closes is killed.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }

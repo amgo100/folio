@@ -9,8 +9,12 @@
 // - `ready <revision>` once every visible page shows its current list,
 //   without holes;
 // - `painted <revision>` each time a later revision reaches that state;
+// - `exact <revision>` each time a later revision has every visible page
+//   drawn exactly, after glyphs drawn from another quarter-pixel offset
+//   were replaced (often with `painted`, when none was needed);
 // - `holes <revision>` each time, after `ready`, a visible page shows a
-//   frame with glyphs or images missing.
+//   frame with glyphs or images missing;
+// - `error <message>` when the viewer throws, at once.
 //
 // The viewer reports what it shows through `folioPainted`, which this
 // script defines. It stops when its standard input closes, and exits with
@@ -31,9 +35,13 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1000, height: 1300 } });
     const problems = [];
-    page.on('pageerror', (e) => problems.push(String(e)));
+    page.on('pageerror', (e) => {
+      problems.push(String(e));
+      console.log(`error ${String(e).replace(/\s+/g, ' ')}`);
+    });
     let ready = false;
     let last = 0;
+    let lastExact = 0;
     let readyAt = null;
     const readied = new Promise((resolve) => (readyAt = resolve));
     await page.exposeFunction('folioPainted', (state) => {
@@ -52,6 +60,10 @@ async function main() {
       if (settled && state.revision > last) {
         last = state.revision;
         console.log(`painted ${state.revision}`);
+      }
+      if (settled && state.exact && state.revision > lastExact) {
+        lastExact = state.revision;
+        console.log(`exact ${state.revision}`);
       }
     });
     await page.goto(url);

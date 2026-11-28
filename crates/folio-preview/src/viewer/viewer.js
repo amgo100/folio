@@ -657,8 +657,9 @@ function drawGlyphs(ctx, run, scale, state) {
         failed.delete(key);
         wantGlyph(run.font, size, g.id, sub);
       }
-      // The nearest offset here stands in, a quarter pixel or so off.
-      for (const d of [1, -1, 2, -2, 3, -3]) {
+      // The nearest offset here stands in, a quarter pixel or so off;
+      // stretched glyphs have only the one.
+      for (const d of stretch > 1 ? [] : [1, -1, 2, -2, 3, -3]) {
         const other = sub + d;
         if (other < 0 || other > 3) continue;
         const near = glyphCache.get(`${run.font}|${size}|${g.id}|${other}`);
@@ -721,19 +722,24 @@ function redrawVisible() {
 
 // Tells a test or benchmark that drives the viewer (`folioPainted`, which
 // Playwright defines) what the visible pages show: the revision, whether
-// every one shows its current list (`current`), and whether any shows a
-// frame with holes.
+// every one shows its current list (`current`), whether any shows a frame
+// with holes, and whether every one is exact, with no glyph drawn from
+// another quarter-pixel offset.
 function painted() {
   if (typeof window.folioPainted !== "function") return;
+  const dpr = window.devicePixelRatio || 1;
   let current = true;
   let holes = false;
+  let exact = true;
   for (const i of visible) {
     const page = pages[i];
     if (!page || !page.list) continue;
     if (page.shownList !== page.list) current = false;
     if (page.holes) holes = true;
+    if (page.drawn !== zoom * dpr) exact = false;
   }
-  window.folioPainted({ revision, current, holes, visible: [...visible].sort((a, b) => a - b) });
+  const shown = [...visible].sort((a, b) => a - b);
+  window.folioPainted({ revision, current, holes, exact, visible: shown });
 }
 
 // ---------------------------------------------------------------------
@@ -1018,6 +1024,8 @@ function apply({ update, frames }) {
     const page = pages[i];
     if (decoded.kind === "list") {
       page.list = decoded.list;
+      // A frame with holes waits from now for this list.
+      page.waitingSince = 0;
       if (page.img) {
         page.img.remove();
         page.img = null;

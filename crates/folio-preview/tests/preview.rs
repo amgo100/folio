@@ -1350,6 +1350,7 @@ impl Painter {
                 .lines
                 .recv_deadline(deadline)
                 .unwrap_or_else(|_| panic!("no `{word}` from paint.cjs in time"));
+            assert!(!line.starts_with("error "), "the viewer failed: {line}");
             let (w, r) = line.split_once(' ').expect("a word and a revision");
             let r: u64 = r.parse().unwrap();
             if w == "holes" {

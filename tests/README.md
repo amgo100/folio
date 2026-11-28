@@ -239,8 +239,10 @@ the limits of SPEC §14.1 and §15:
   pages the edit changed; the same edit timed to the completed canvas
   (`watch-paint`, gated: 80 ms), until the viewer in Chromium, driven by
   `crates/folio-preview/tests/paint.cjs`, shows the edited page with every
-  glyph, which fails if a frame with holes was shown, and which runs only
-  when Node.js can load Playwright and its Chromium; the reference document's
+  glyph drawn (some, at worst, from another quarter-pixel offset until the
+  right one arrives); it fails if a frame with holes was shown, and runs
+  only when Node.js can load Playwright and its Chromium, so a machine
+  without them does not check this gate; the reference document's
   full compile, one-word edit to PDF, one-word edit to the pages (the
   preview of the M1 exit check: 80 ms), one-word edit checked without
   emit (reported only), stylesheet edit, and the ratio of
