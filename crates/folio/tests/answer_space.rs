@@ -518,3 +518,52 @@ fn deeply_nested_spaces_are_measured_once_each() {
     assert!(!shown(&exam).contains("Deep"));
     assert!(shown(&exam).contains("After"));
 }
+
+#[test]
+fn hidden_blocks_keep_together_as_shown_ones_do() {
+    // A break inside a hidden block costs what it costs inside the shown
+    // one, not twice that.
+    for keep in ["keep-together: true;", "breakable: false;", ""] {
+        for lead in [10, 12, 13, 14] {
+            let mut text = String::new();
+            for i in 0..lead {
+                text.push_str(&format!("Lead {i}. {}\n\n", prose(20)));
+            }
+            text.push_str(&format!(
+                "#figure(class: \"h\")[SECRET {}\n\n{}]\n\nAfter.\n",
+                prose(40),
+                prose(40)
+            ));
+            let world = world(
+                &format!("figure.h {{ display: hidden; {keep} }}\n"),
+                "figure.h { display: block; }\n",
+                &text,
+            );
+            let exam = pages(&world, "exam");
+            let markscheme = pages(&world, "markscheme");
+            assert_same(
+                find(&exam, "After"),
+                find(&markscheme, "After"),
+                &format!("{keep} {lead}"),
+            );
+        }
+    }
+}
+
+#[test]
+fn a_hidden_caption_is_measured_with_its_marker() {
+    // Captions whose text nearly fills a line, so that the marker before
+    // them decides whether they wrap.
+    for n in 8..16 {
+        let world = world(
+            "figure > caption { display: hidden; }\n",
+            "figure > caption { display: block; }\n",
+            &format!("#figure(caption: [{}])[Body.]\n\nAfter.\n", prose(n)),
+        );
+        assert_same(
+            find(&pages(&world, "exam"), "After"),
+            find(&pages(&world, "markscheme"), "After"),
+            &n.to_string(),
+        );
+    }
+}

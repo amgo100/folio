@@ -765,7 +765,19 @@ impl Collector<'_> {
                     let mut kids = StyledChildren::new(node);
                     self.open(&node.style, element, space.part.clone());
                     let owner = self.own(element);
+                    // The part's marker starts it, as where it is shown.
+                    if let Some(marker) = self.resolution.marker(element.location)
+                        && marker.part == space.part
+                    {
+                        self.markers.push(Pending {
+                            text: marker.text.clone(),
+                            style: node.style.clone(),
+                            span: element.span,
+                            location: element.location,
+                        });
+                    }
                     self.content(content, &node.style, element, &mut kids);
+                    self.markers.clear();
                     self.owner = owner;
                     self.close();
                 }

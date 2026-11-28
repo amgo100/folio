@@ -91,7 +91,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ecow::{EcoVec, eco_format};
-use folio_component::{Abs, Location, Value};
+use folio_component::{Abs, Location, Name, Value};
 use folio_syntax::{DiagSpan, SubRange};
 
 pub use self::cache::{Cache, Stats};
@@ -119,7 +119,7 @@ use crate::diag::{self, Diagnostic};
 use crate::fonts::{Fonts, fonts};
 use crate::pipeline::step_styled;
 use crate::style::{ComputedStyle, Properties};
-use crate::text::{Text, TextBlock, TextFlow, TextParagraph, TextSource, TextSpace, text};
+use crate::text::{Text, TextBlock, TextFlow, TextParagraph, TextSource, text};
 
 /// How long total fit may take for a paragraph on the editor's typing path
 /// before the paragraph is broken greedily instead (SPEC §7.2): pass
@@ -216,15 +216,25 @@ pub fn lines(db: &dyn Db, build: Build<'_>) -> Option<Lines> {
     // Grids are sized from the content that their hidden cells measure,
     // as the variant that shows it sizes them (SPEC §6.3).
     let substituted;
-    let root = if text.spaces.iter().any(|s| s.measure.is_some()) {
-        substituted = with_measured(&text.root, &text.spaces);
-        &substituted
+    let (root, notes) = if text.spaces.iter().any(|s| s.measure.is_some()) {
+        let spaces: HashMap<(Location, Option<Name>), &TextBlock> = text
+            .spaces
+            .iter()
+            .filter_map(|s| Some(((s.location, s.part.clone()), s.measure.as_ref()?)))
+            .collect();
+        let notes: Vec<TextBlock> = text
+            .notes
+            .iter()
+            .map(|n| with_measured(n, &spaces))
+            .collect();
+        substituted = (with_measured(&text.root, &spaces), notes);
+        (&substituted.0, &substituted.1[..])
     } else {
-        &text.root
+        (&text.root, &text.notes[..])
     };
     let (slots, display_widths, grids) = flow::slots_with(
         root,
-        &text.notes,
+        notes,
         props,
         width,
         text.paragraphs.len(),
@@ -374,12 +384,13 @@ fn measured_content(text: &Text) -> (HashSet<usize>, HashSet<Location>) {
 
 /// `block` with each space's block holding the content it measures (SPEC
 /// §6.3): what grids are sized from. It is never drawn.
-fn with_measured(block: &TextBlock, spaces: &[TextSpace]) -> TextBlock {
+fn with_measured(
+    block: &TextBlock,
+    spaces: &HashMap<(Location, Option<Name>), &TextBlock>,
+) -> TextBlock {
     let measure = spaces
-        .iter()
-        .find(|s| s.location == block.location && s.part == block.part)
-        .and_then(|s| s.measure.as_ref())
-        .filter(|m| !std::ptr::eq(*m, block));
+        .get(&(block.location, block.part.clone()))
+        .filter(|m| !std::ptr::eq(**m, block));
     let (children, table) = match measure {
         Some(measure) => (&measure.children, &measure.table),
         None => (&block.children, &block.table),

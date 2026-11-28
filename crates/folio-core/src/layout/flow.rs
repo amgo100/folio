@@ -1198,6 +1198,8 @@ pub(super) struct Blank {
     penalty: f64,
     /// Whether a page break before it is forced.
     forced: bool,
+    /// For a forced break, the parity of the page it starts, if any.
+    parity: Option<bool>,
 }
 
 /// The blank leaves that stand for a measured flow: one per line of each
@@ -1210,9 +1212,12 @@ fn blanks_of(flow: &Flow) -> Blanks {
     let (before, _, after) = extent(flow);
     let mut out: Vec<Blank> = Vec::new();
     for (i, item) in flow.items.iter().enumerate() {
-        let (gap, penalty, forced) = match i {
-            0 => (Abs::zero(), 0.0, false),
-            _ => (item.before.gap(), item.before.penalty, item.before.forced),
+        let (gap, penalty, forced, parity) = match i {
+            0 => (Abs::zero(), 0.0, false, None),
+            _ => {
+                let b = &item.before;
+                (b.gap(), b.penalty, b.forced, b.parity)
+            }
         };
         match &item.leaf {
             Leaf::Paragraph(paragraph) => {
@@ -1224,6 +1229,7 @@ fn blanks_of(flow: &Flow) -> Blanks {
                             gap,
                             penalty,
                             forced,
+                            parity,
                         });
                     } else {
                         let between = item.between(paragraph, l);
@@ -1232,6 +1238,7 @@ fn blanks_of(flow: &Flow) -> Blanks {
                             gap: between.gap(),
                             penalty: between.penalty,
                             forced: false,
+                            parity: None,
                         });
                     }
                 }
@@ -1241,6 +1248,7 @@ fn blanks_of(flow: &Flow) -> Blanks {
                 gap,
                 penalty,
                 forced,
+                parity,
             }),
         }
     }
@@ -1250,6 +1258,7 @@ fn blanks_of(flow: &Flow) -> Blanks {
             gap: Abs::zero(),
             penalty: 0.0,
             forced: false,
+            parity: None,
         });
     }
     // What lies inside the flow's box above its first leaf and below its
@@ -1358,6 +1367,17 @@ struct Builder<'a> {
     /// The spaces of the text, by element instance and part, as indices
     /// into [`Text::spaces`].
     space_at: &'a SpaceIndex,
+}
+
+/// What the box of measured content leaves out (SPEC §6.3).
+#[derive(Copy, Clone)]
+enum Bare {
+    /// Its `min-height`, so that only its content counts, which answer
+    /// space scales.
+    MinHeight,
+    /// What a break inside it costs, which the hidden block that holds the
+    /// blank leaves adds itself.
+    Keeps,
 }
 
 /// The spaces of a text by element instance and part.
@@ -1809,7 +1829,7 @@ impl Builder<'_> {
                 sized.rules = None;
                 sized.min_height = Abs::zero();
                 if let Some(measure) = &space.measure {
-                    let flow = self.measure(measure, boxed.width, false);
+                    let flow = self.measure(measure, boxed.width, Bare::Keeps);
                     if matches!(measure.table, Some(TableRole::Cell(_))) {
                         // As its band sets it: the spaces at its ends
                         // dropped.
@@ -1825,7 +1845,7 @@ impl Builder<'_> {
             }
             SpaceKind::Answer if sized.rules.is_some() => {
                 let rules = sized.rules.as_ref().expect("checked");
-                rules.spacing * rules.count as f64
+                (rules.spacing * rules.count as f64).max(sized.min_height.min(self.height))
             }
             SpaceKind::Answer => {
                 let value = |name: &str| block.style.value(self.props, self.props.builtin(name));
@@ -1838,7 +1858,8 @@ impl Builder<'_> {
                         };
                         let inset = sized.inset();
                         let content = space.measure.as_ref().map_or(Abs::zero(), |m| {
-                            let (_, height, _) = extent(&self.measure(m, boxed.width, true));
+                            let (_, height, _) =
+                                extent(&self.measure(m, boxed.width, Bare::MinHeight));
                             height - inset.top - inset.bottom
                         });
                         content.max(Abs::zero()) * scale
@@ -1858,9 +1879,9 @@ impl Builder<'_> {
     }
 
     /// The flow of `block` as a block `width` wide, built on its own to be
-    /// measured and discarded (SPEC §6.3); `bare` leaves out the
-    /// `min-height` of `block` itself, so that only its content counts.
-    fn measure(&self, block: &TextBlock, width: Abs, bare: bool) -> Flow {
+    /// measured and discarded (SPEC §6.3), with what `bare` leaves out of
+    /// the box of `block` itself.
+    fn measure(&self, block: &TextBlock, width: Abs, bare: Bare) -> Flow {
         let discarded = RefCell::new(Vec::new());
         let builder = Builder {
             sizes: self.sizes,
@@ -1890,8 +1911,12 @@ impl Builder<'_> {
             space_at: self.space_at,
         };
         let mut root = BlockBox::of(&block.style, self.props, block.span, Abs::zero(), width);
-        if bare {
-            root.min_height = Abs::zero();
+        match bare {
+            Bare::MinHeight => root.min_height = Abs::zero(),
+            Bare::Keeps => {
+                root.keep_together = false;
+                root.breakable = true;
+            }
         }
         builder.flow_in(block, root)
     }
@@ -1920,6 +1945,7 @@ impl Builder<'_> {
             before.parts.push(Part::Lead(blank.gap));
             before.penalty += blank.penalty;
             before.forced |= blank.forced;
+            before.parity = before.parity.or(blank.parity);
         }
         if blanks.bottom > Abs::zero() {
             self.pending.push(Event::Lead(blanks.bottom));
