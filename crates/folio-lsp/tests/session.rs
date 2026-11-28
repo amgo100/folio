@@ -571,9 +571,27 @@ fn ws_message(
 
 #[test]
 fn the_preview_follows_the_cursor_and_clicks_open_the_source() {
+    // The cursor in `ball` on the third line.
+    preview_round_trip("", VALID.find("ball").unwrap() + 2, 2, 4);
+}
+
+/// In a file that starts with a byte order mark, which the editor does not
+/// show and the loader leaves out of the text, the cursor and clicks on the
+/// first line land on the same character (#468).
+#[test]
+fn the_preview_round_trip_skips_a_byte_order_mark() {
+    // The cursor in `Forces` on the first line.
+    preview_round_trip("\u{FEFF}", VALID.find("Forces").unwrap() + 2, 0, 4);
+}
+
+/// Opens the preview of a project whose `main.fol` is `VALID` after
+/// `prefix`, reveals the cursor at `line` and `character`, which is at byte
+/// `at` of the text, in it, and clicks the glyph it marks, which must show
+/// the source at the same character.
+fn preview_round_trip(prefix: &str, at: usize, line: u32, character: u32) {
     use tokio_tungstenite::tungstenite::{self, Message as Ws};
 
-    let dir = project(&manifest(folio::VERSION), VALID);
+    let dir = project(&manifest(folio::VERSION), &format!("{prefix}{VALID}"));
     let main = uri(&dir.path().join("main.fol"));
     let mut client = Client::start_with(
         dir.path(),
@@ -625,15 +643,14 @@ fn the_preview_follows_the_cursor_and_clicks_open_the_source() {
         }
     };
 
-    // The cursor in `ball` on the third line: one glyph, marked in the
-    // preview, once the preview has indexed its pages, which follows them.
-    let at = VALID.find("ball").unwrap() + 2;
+    // One glyph, marked in the preview, once the preview has indexed its
+    // pages, which follows them.
     let mut revealed;
     let mut tries = 0;
     loop {
         client.notify(
             "folio/reveal",
-            json!({ "textDocument": { "uri": main }, "position": { "line": 2, "character": 4 } }),
+            json!({ "textDocument": { "uri": main }, "position": { "line": line, "character": character } }),
         );
         revealed = client.event(|e| matches!(e, Event::Revealed { .. }));
         tries += 1;
@@ -659,7 +676,9 @@ fn the_preview_follows_the_cursor_and_clicks_open_the_source() {
         "x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0,
     });
     ws.send(Ws::text(click.to_string())).unwrap();
-    assert!(!ws_message(&mut ws, "source")["location"].is_null());
+    // Its bytes count in the text, without a byte order mark.
+    let source = ws_message(&mut ws, "source");
+    assert_eq!(source["location"]["bytes"]["start"], at, "{source}");
     client.event(|e| matches!(e, Event::ShowSource { .. }));
     while client.shown.is_empty() {
         client.recv();
@@ -669,7 +688,10 @@ fn the_preview_follows_the_cursor_and_clicks_open_the_source() {
     assert_eq!(shown["takeFocus"], true);
     assert_eq!(
         shown["selection"],
-        json!({ "start": { "line": 2, "character": 4 }, "end": { "line": 2, "character": 5 } })
+        json!({
+            "start": { "line": line, "character": character },
+            "end": { "line": line, "character": character + 1 },
+        })
     );
     drop(ws);
     client.shut_down();
