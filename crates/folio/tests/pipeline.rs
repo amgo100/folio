@@ -150,7 +150,7 @@ fn an_edit_to_one_paragraph_reruns_only_what_depends_on_it() {
     logged.take();
 
     // A word of the second question's first paragraph. Its file is
-    // reparsed and checked, and evaluated again, and so is the entry file
+    // reparsed, checked and linted, and evaluated again, and so is the entry file
     // that includes it, but not the first question's file. The reparse
     // renumbered the spans of the file's nodes, which the styled tree
     // records, so every stage from Style to Emit runs once; matching finds
@@ -167,7 +167,9 @@ fn an_edit_to_one_paragraph_reruns_only_what_depends_on_it() {
     assert_eq!(
         logged.take(),
         counts(&[
-            ("dependencies check_source", 1),
+            // The edited file is reparsed, checked, and linted for
+            // `#if variant == ..` (SPEC §6.2).
+            ("dependencies check_source variant_conditions", 1),
             // `questions/q2.fol` and `main.fol`.
             ("eval_file", 2),
             ("evaluate document check_fonts compile_build", 1),

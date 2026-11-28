@@ -727,11 +727,9 @@ fn errors() {
             "unknown pseudo-class `:frist`; the rule is ignored",
             "wrong value for `space-before`: expected length, found int",
             "wrong value for `font-size`: expected length, found a list (length, length)",
-            "wrong value for `display`: expected auto | block | inline | none | hidden | answer-space | placeholder(..), found keyword `blok`",
+            "wrong value for `display`: expected auto | none | block | inline | hidden | answer-space | placeholder(..), found keyword `blok`",
             // Stylesheets write keywords bare.
             "wrong value for `font-style`: expected normal | italic | oblique, found string",
-            // Valid, but nothing reads it yet.
-            "`display` is not implemented yet, so this declaration has no effect",
             "`:nth-col(n)` styles table cells, and there are no tables yet; the rule matches nothing",
         ]
     );

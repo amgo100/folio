@@ -141,7 +141,7 @@ fn early_cutoff_on_a_whitespace_edit() {
     let before = logged.compile("exam");
     assert!(logged.take().contains("build_output"));
 
-    // Whitespace in a paragraph: the file is reparsed and its two
+    // Whitespace in a paragraph: the file is reparsed and its three
     // per-file queries re-run, but return what they returned before, so the
     // file set of the build and the build's checks are not re-run. The file
     // is evaluated again, because its text spans changed, and so are the
@@ -151,7 +151,10 @@ fn early_cutoff_on_a_whitespace_edit() {
     logged.world.set_source("main.fol", &edited).unwrap();
     let after = logged.compile("exam");
     assert_eq!(after, before);
-    assert_eq!(logged.take(), set(&["dependencies", "check_source", EVAL]));
+    assert_eq!(
+        logged.take(),
+        set(&["dependencies", "check_source", "variant_conditions", EVAL])
+    );
 
     // An edit that changes the imports re-runs the file set. The file it
     // adds does not exist, so the set is the same and the build's checks
@@ -169,6 +172,7 @@ fn early_cutoff_on_a_whitespace_edit() {
             "build_files",
             "dependencies",
             "check_source",
+            "variant_conditions",
             "source_file",
             "match_node",
             "compile_build",
@@ -226,6 +230,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         set(&[
             "dependencies",
             "check_source",
+            "variant_conditions",
             "match_node",
             "compile_build",
             EVAL
@@ -243,7 +248,13 @@ fn diagnostics_change_while_the_build_is_cut_off() {
     );
     assert_eq!(
         logged.take(),
-        set(&["dependencies", "check_source", "compile_build", EVAL])
+        set(&[
+            "dependencies",
+            "check_source",
+            "variant_conditions",
+            "compile_build",
+            EVAL
+        ])
     );
 
     // A diagnostic of a file that two builds share is reported by one
