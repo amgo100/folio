@@ -779,7 +779,10 @@ impl Engine {
             }
             // Any file still open for writing, new ones and data files
             // among them, waits for its close.
-            if self.open.contains(path) && path.is_file() {
+            let input = self
+                .loader_path(path)
+                .is_some_and(|rel| !rel.split('/').any(|part| part.starts_with('.')));
+            if input && self.open.contains(path) && path.is_file() {
                 held.push(path.clone());
                 return false;
             }
@@ -788,10 +791,13 @@ impl Engine {
                 read.push(path.clone());
                 return true;
             };
-            // A new file is checked once read.
+            // A new source is checked once read; data files are held only
+            // while open, above.
             let Some(source) = world.source(&rel) else {
                 read.push(path.clone());
-                left.push((path.clone(), rel, None));
+                if rel.ends_with(".fol") || rel.ends_with(".fsty") {
+                    left.push((path.clone(), rel, None));
+                }
                 return true;
             };
             let hold = torn(
@@ -813,6 +819,7 @@ impl Engine {
             for path in self.open.iter().filter(|path| path.starts_with(dir)) {
                 if let Some(rel) = self.loader_path(path)
                     && !left.iter().any(|(p, _, _)| p == path)
+                    && (rel.ends_with(".fol") || rel.ends_with(".fsty"))
                 {
                     let source = world.source(&rel);
                     left.push((path.clone(), rel, source));
