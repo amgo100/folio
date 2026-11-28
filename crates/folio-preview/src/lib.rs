@@ -529,7 +529,8 @@ impl Preview {
     }
 
     /// Shows clients where the pages show the bytes `bytes` of the file at
-    /// `path` (a project path, such as `main.fol`): they scroll to the
+    /// `path` (a project path, such as `main.fol`), counted in its text,
+    /// without the byte order mark a source may start with: they scroll to the
     /// first area and mark them all, as when an editor's cursor moves
     /// (SPEC §12.2). An empty range is a cursor. Returns how many areas
     /// were found; with none, clients are not told. Nothing is found while

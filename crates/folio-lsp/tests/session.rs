@@ -676,7 +676,9 @@ fn preview_round_trip(prefix: &str, at: usize, line: u32, character: u32) {
         "x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0,
     });
     ws.send(Ws::text(click.to_string())).unwrap();
-    assert!(!ws_message(&mut ws, "source")["location"].is_null());
+    // Its bytes count in the text, without a byte order mark.
+    let source = ws_message(&mut ws, "source");
+    assert_eq!(source["location"]["bytes"]["start"], at, "{source}");
     client.event(|e| matches!(e, Event::ShowSource { .. }));
     while client.shown.is_empty() {
         client.recv();
