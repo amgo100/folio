@@ -1,0 +1,109 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	1970-01-01 00:00:01.000000000 +0000
++++ b/Cargo.toml	2026-11-28 09:09:55.720754864 +0000
+@@ -33,9 +33,10 @@
+ resolver = "2"
+ 
+ [features]
++# Folio: without `simd`, whose paths fearless_simd picks by CPU at run time
++# (Folio's SPEC §2.4, #312); src/lib.rs refuses to build them.
+ default = [
+     "std",
+-    "simd",
+     "image",
+ ]
+ image = [
+diff -ruN a/FOLIO.md b/FOLIO.md
+--- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
++++ b/FOLIO.md	2026-11-28 09:09:55.721489177 +0000
+@@ -0,0 +1,28 @@
++# hayro-jpeg2000 0.3.5, patched for Folio
++
++This is the crates.io release of `hayro-jpeg2000` 0.3.5
++(https://crates.io/crates/hayro-jpeg2000/0.3.5), unpacked as published, with
++Folio's patch applied. Folio uses it through `[patch.crates-io]` in its root
++`Cargo.toml`. Its licence is unchanged: Apache-2.0 OR MIT (LICENSE-APACHE,
++LICENSE-MIT).
++
++`hayro-syntax` decodes JPEG 2000 images (`JPXDecode`) with this crate when
++Folio reads a PDF figure, and converts it to SVG where PDF/A or PDF/UA
++forbids embedding it (Folio's SPEC §11.1). The release's irreversible
++wavelet and colour transforms computed in ways that depend on the machine,
++which SPEC §2.4 forbids for output (#312). Folio's changes make them compute
++the same way everywhere. Each changed file carries a comment that starts
++with `Folio:`.
++
++- `src/math.rs`: `mul_add` is always `a * b + c`, a rounded product and a
++  rounded sum. The release fused the two on aarch64 and on x86-64 built
++  with FMA, which rounds once.
++- `src/lib.rs`, `Cargo.toml`: `simd` is no longer a default feature, and
++  the crate refuses to build with it. Its paths, which `fearless_simd`
++  picks by CPU at run time, fuse multiply-adds on some CPUs only. Folio
++  builds only the scalar code.
++
++The whole change is `third_party/patches/hayro-jpeg2000.patch` in Folio's
++repository; `scripts/patch-third-party.sh` rebuilds this directory from the
++release and the patch, and `third_party/README.md` says how to move to a new
++release.
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/lib.rs	2026-11-28 09:09:55.721427576 +0000
+@@ -64,6 +64,15 @@
+ #![cfg_attr(not(feature = "std"), no_std)]
+ #![forbid(unsafe_code)]
+ #![forbid(missing_docs)]
++// Folio: the SIMD paths, which fearless_simd picks by CPU at run time, fuse
++// multiply-adds on some CPUs only, so the same image could decode to other
++// values on another machine (Folio's SPEC §2.4, #312). Folio builds only
++// the scalar code; a dependency that turns `simd` on fails the build.
++#[cfg(feature = "simd")]
++compile_error!(
++    "Folio's patched hayro-jpeg2000 builds no SIMD paths (Folio's SPEC §2.4, #312): \
++     turn its simd feature off"
++);
+ 
+ extern crate alloc;
+ 
+diff -ruN a/src/math.rs b/src/math.rs
+--- a/src/math.rs	2006-07-24 01:21:28.000000000 +0000
++++ b/src/math.rs	2026-11-28 09:09:55.721458068 +0000
+@@ -422,34 +422,13 @@
+ // Note that these polyfills can be very imprecise, but hopefully good enough
+ // for the vast majority of cases.
+ 
++// Folio: always `a * b + c`, a rounded product and a rounded sum, the form
++// baseline x86-64 used. hayro-jpeg2000 fused the two on aarch64 and on
++// x86-64 built with FMA, which rounds once, so the same image decoded to
++// other values on another machine (Folio's SPEC §2.4, #312).
+ #[inline(always)]
+ pub(crate) fn mul_add(a: f32, b: f32, c: f32) -> f32 {
+-    #[cfg(all(
+-        feature = "std",
+-        any(
+-            all(
+-                any(target_arch = "x86", target_arch = "x86_64"),
+-                target_feature = "fma"
+-            ),
+-            all(target_arch = "aarch64", target_feature = "neon")
+-        )
+-    ))]
+-    {
+-        f32::mul_add(a, b, c)
+-    }
+-    #[cfg(not(all(
+-        feature = "std",
+-        any(
+-            all(
+-                any(target_arch = "x86", target_arch = "x86_64"),
+-                target_feature = "fma"
+-            ),
+-            all(target_arch = "aarch64", target_feature = "neon")
+-        )
+-    )))]
+-    {
+-        a * b + c
+-    }
++    a * b + c
+ }
+ 
+ #[inline(always)]

@@ -1,6 +1,6 @@
 diff -ruN a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml	1970-01-01 00:00:01.000000000 +0000
-+++ b/Cargo.toml	2026-11-27 16:02:28.897330530 +0000
++++ b/Cargo.toml	2026-11-28 09:09:55.924325818 +0000
 @@ -51,6 +51,11 @@
  name = "extract_images"
  path = "examples/extract_images.rs"
@@ -13,10 +13,23 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  [dependencies.bitflags]
  version = "2.10"
  
+@@ -74,8 +79,12 @@
+ version = "0.4"
+ optional = true
+ 
++# Folio: moxcms's scalar code only, without the SIMD paths it picks by CPU at
++# run time (Folio's SPEC §2.4, #312; see FOLIO.md).
+ [dependencies.moxcms]
+ version = "0.8.1"
++default-features = false
++features = ["lut"]
+ 
+ [dependencies.phf]
+ version = "0.13.1"
 diff -ruN a/FOLIO.md b/FOLIO.md
 --- a/FOLIO.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/FOLIO.md	2026-11-27 16:02:28.882818748 +0000
-@@ -0,0 +1,65 @@
++++ b/FOLIO.md	2026-11-28 09:09:55.921430718 +0000
+@@ -0,0 +1,67 @@
 +# hayro-interpret 0.7.0, patched for Folio
 +
 +This is the crates.io release of `hayro-interpret` 0.7.0
@@ -41,14 +54,16 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +- `src/color.rs`: CalGray and CalRGB gamma, the sRGB transfer function and
 +  the default range of indexed colour with `libm::powf`; the cubes of the
 +  L* decode in CalRGB's black-point compensation multiplied out instead of
-+  `powi`. Lab and ICC-based colour go through `moxcms`, which this patch
-+  does not change (#312).
++  `powi`. Lab and ICC-based colour, and DeviceCMYK, go through `moxcms`,
++  which Folio patches on its own (#312).
 +- `src/shading.rs`: the Bernstein polynomials of patch meshes multiplied
 +  out, and the largest coordinate and component values of mesh data with
 +  `libm::ldexpf` (exact powers of two) instead of `powi`.
 +- `src/x_object.rs`: the largest component value of image data with
 +  `libm::ldexpf` instead of `powi`.
-+- `Cargo.toml`: depends on `libm`.
++- `Cargo.toml`: depends on `libm`, and on `moxcms` without its default
++  features, which build the SIMD paths moxcms picks by CPU at run time
++  (#312; Folio's own copy of moxcms refuses to build them).
 +
 +Folio also reads PDF figures from untrusted files (Folio's SPEC §14.3,
 +#333). These changes limit the work, nesting and image memory one
@@ -84,7 +99,7 @@ diff -ruN a/FOLIO.md b/FOLIO.md
 +the patch, and `third_party/README.md` says how to move to a new release.
 diff -ruN a/src/cache.rs b/src/cache.rs
 --- a/src/cache.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/cache.rs	2026-11-27 16:02:28.892384996 +0000
++++ b/src/cache.rs	2026-11-28 09:09:55.923375213 +0000
 @@ -4,11 +4,91 @@
  use std::any::Any;
  use std::collections::HashMap;
@@ -189,7 +204,7 @@ diff -ruN a/src/cache.rs b/src/cache.rs
      pub(crate) fn get_or_insert_with<T: Clone + Send + Sync + 'static>(
 diff -ruN a/src/color.rs b/src/color.rs
 --- a/src/color.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/color.rs	2026-11-27 16:02:28.892404789 +0000
++++ b/src/color.rs	2026-11-28 09:09:55.923392097 +0000
 @@ -268,7 +268,8 @@
                  (l.range[0], l.range[1]),
                  (l.range[2], l.range[3]),
@@ -261,7 +276,7 @@ diff -ruN a/src/color.rs b/src/color.rs
              let m = &self.matrix;
 diff -ruN a/src/context.rs b/src/context.rs
 --- a/src/context.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/context.rs	2026-11-27 16:02:28.892430581 +0000
++++ b/src/context.rs	2026-11-28 09:09:55.923414911 +0000
 @@ -59,6 +59,8 @@
      pub(crate) xref: &'a XRef,
      pub(crate) ocg_state: OcgState,
@@ -313,7 +328,7 @@ diff -ruN a/src/context.rs b/src/context.rs
          true
 diff -ruN a/src/function/type2.rs b/src/function/type2.rs
 --- a/src/function/type2.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/function/type2.rs	2026-11-27 16:02:28.895961017 +0000
++++ b/src/function/type2.rs	2026-11-28 09:09:55.923980393 +0000
 @@ -33,7 +33,8 @@
              .c0
              .iter()
@@ -326,7 +341,7 @@ diff -ruN a/src/function/type2.rs b/src/function/type2.rs
          self.clamper.clamp_output(&mut out);
 diff -ruN a/src/function/type4.rs b/src/function/type4.rs
 --- a/src/function/type4.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/function/type4.rs	2026-11-27 16:02:28.896017662 +0000
++++ b/src/function/type4.rs	2026-11-28 09:09:55.924005816 +0000
 @@ -219,7 +219,9 @@
              }
              PostScriptOp::Atan => {
@@ -380,7 +395,7 @@ diff -ruN a/src/function/type4.rs b/src/function/type4.rs
                  one_f!(|n: f32| n.sqrt());
 diff -ruN a/src/interpret/mod.rs b/src/interpret/mod.rs
 --- a/src/interpret/mod.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/interpret/mod.rs	2026-11-27 16:02:28.897038105 +0000
++++ b/src/interpret/mod.rs	2026-11-28 09:09:55.924036228 +0000
 @@ -132,6 +132,16 @@
      UnsupportedFont,
      /// An image failed to decode.
@@ -416,7 +431,7 @@ diff -ruN a/src/interpret/mod.rs b/src/interpret/mod.rs
              TypedInstruction::StrokeColorDeviceRgb(s) => {
 diff -ruN a/src/shading.rs b/src/shading.rs
 --- a/src/shading.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/shading.rs	2026-11-27 16:02:28.897181223 +0000
++++ b/src/shading.rs	2026-11-28 09:09:55.924147955 +0000
 @@ -465,10 +465,11 @@
      /// Evaluate Bernstein polynomial `B_i(t)` for tensor-product patches.
      fn bernstein(i: usize, t: f64) -> f64 {
@@ -448,7 +463,7 @@ diff -ruN a/src/shading.rs b/src/shading.rs
              bp_comp,
 diff -ruN a/src/x_object.rs b/src/x_object.rs
 --- a/src/x_object.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/x_object.rs	2026-11-27 16:02:28.897257629 +0000
++++ b/src/x_object.rs	2026-11-28 09:09:55.924302100 +0000
 @@ -114,6 +114,36 @@
          return;
      }

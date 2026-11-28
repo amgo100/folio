@@ -27,7 +27,7 @@ from the scripts in `scripts/`.
 | On a schedule (nightly or weekly) | `scripts/fuzz.sh [seconds]` | The fuzz smoke job: each target for 60 s by default. Needs nightly Rust and `cargo-fuzz`. |
 | Nightly, on the reference machine | `scripts/bench.sh --wall` | Wall-clock times of the M0 exit check (gated: 200 ms), the M1 exit check through `folio watch` (gated: 80 ms) and of the reference document against the targets of SPEC §14.1 (reported). |
 | After changes to PDF output | `python tests/pdf/corpus.py` | veraPDF's PDF/UA-1 profile and text extraction (`tests/pdf/README.md`). |
-| At each milestone close, and after moving a crate in `third_party/` to a new release | The aarch64 check (below) | The corpus gives the digests of `digests.txt` on aarch64 as on x86-64 (SPEC §2.4). |
+| At each milestone close, and after moving a crate in `third_party/` to a new release | The aarch64 check (below) | The corpus gives the digests of `digests.txt` on aarch64 as on x86-64, and `cargo test -p folio-pdf --test colour` passes there and on x86-64 without AVX2 (SPEC §2.4). |
 
 A schedule is up to the machine that runs it, for example a `cron` entry
 that runs `scripts/fuzz.sh 600` and `scripts/bench.sh --wall` and mails
@@ -78,7 +78,14 @@ They are now patched to call `libm` (`third_party/README.md`), as are the
 crates that read PDF figures converted to SVG (#304; the figure
 `tests/corpus/figures/assets/spectrum.pdf` turns its colours' last bits
 into visible ones), and the corpus gives the same digests on x86-64 and
-aarch64.
+aarch64. The colour conversion and JPEG 2000 decoding of those figures
+(`moxcms`, `hayro-jpeg2000`) also fused multiply-adds on some targets
+only and picked SIMD paths by CPU at run time, so the same figure could
+convert to other colours even on two x86-64 machines (#312); their
+patched copies compute the same everywhere. `cargo test -p folio-pdf --test colour`
+converts `crates/folio-pdf/tests/data/colour.pdf` and compares a digest
+recorded on x86-64 with AVX2; `third_party/README.md` says how to run it
+under QEMU on aarch64 and on x86-64 CPUs without AVX2 or SSE 4.1.
 
 To check it on an aarch64 machine (Linux, or macOS on Apple Silicon), run
 the determinism test there:

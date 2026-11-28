@@ -116,8 +116,10 @@ bench = false
 # the root Cargo.toml), so that the fuzz targets build what Folio ships.
 [patch.crates-io]
 hayro-interpret = { path = "../third_party/hayro-interpret" }
+hayro-jpeg2000 = { path = "../third_party/hayro-jpeg2000" }
 hayro-syntax = { path = "../third_party/hayro-syntax" }
 kurbo = { path = "../third_party/kurbo" }
+moxcms = { path = "../third_party/moxcms" }
 resvg = { path = "../third_party/resvg" }
 svgtypes = { path = "../third_party/svgtypes" }
 tiny-skia = { path = "../third_party/tiny-skia" }
