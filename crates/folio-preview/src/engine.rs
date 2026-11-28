@@ -13,13 +13,13 @@
 //! which lays out the rest, and sends the rest with the diagnostics.
 //!
 //! Two guards keep a stream of saves from showing what no save meant. A
-//! source saved in place is truncated and then written: when it reads
-//! shorter than the world's text while a write is still open, or empty, it
-//! is held until the writer closes it ([`MAX_HOLD`] at most), so that the
-//! preview never shows the empty file between the two. And once the pages have
-//! lagged behind the world for [`MAX_LAG`], changes wait for the running
-//! check to send its first pages, so that saves faster than a check still
-//! update the preview.
+//! source saved in place is truncated and then written: when it is read
+//! while it is still open for writing, or reads empty, it is held until the
+//! writer closes it ([`MAX_HOLD`] at most), so that the preview never shows
+//! the file half saved. And once the pages have lagged behind the world for
+//! [`MAX_LAG`], changes wait for the running check to send its first pages,
+//! or to finish, [`MAX_DEFER`] at most, so that saves faster than a check
+//! still update the preview.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -53,6 +53,12 @@ const MAX_HOLD: Duration = Duration::from_millis(500);
 /// How long the pages may lag behind the world before changes wait for
 /// the running check's first pages.
 const MAX_LAG: Duration = Duration::from_millis(250);
+
+/// The longest changes wait for the running check ([`MAX_LAG`]) before
+/// they are applied, and cancel it, all the same: a check whose first
+/// pages are slow to come, as one that evaluates a long loop, does not
+/// hold back the edit that fixes it.
+const MAX_DEFER: Duration = Duration::from_secs(1);
 
 /// The code of the diagnostic that stands for a panic in a query.
 const INTERNAL_ERROR: &str = "internal-error";
@@ -422,6 +428,7 @@ pub(crate) fn prepare(root: &Path, options: &Options) -> Result<Pending, Error> 
         running: None,
         lagging: None,
         deferred: Vec::new(),
+        deferred_since: None,
         released: BTreeSet::new(),
         rx,
         queue: VecDeque::new(),
@@ -514,6 +521,8 @@ struct Engine {
     lagging: Option<Instant>,
     /// The changes that wait for the running check ([`MAX_LAG`]).
     deferred: Vec<PathBuf>,
+    /// Since when changes have waited ([`MAX_DEFER`]).
+    deferred_since: Option<Instant>,
     /// The held sources whose time ran out, read as they are when next
     /// applied.
     released: BTreeSet<PathBuf>,
@@ -529,21 +538,22 @@ impl Engine {
         loop {
             if !self.deferred.is_empty() && !self.lagging_behind() {
                 let paths = std::mem::take(&mut self.deferred);
+                self.deferred_since = None;
                 self.apply(&paths);
             }
             if self.dirty {
                 self.check();
             }
             let release = self.held.values().min().copied();
-            let deadline = match (self.idle_at, release) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            };
+            let defer = self.deferred_since.map(|since| since + MAX_DEFER);
+            let deadline = [self.idle_at, release, defer].into_iter().flatten().min();
             let input = match self.recv(deadline) {
                 Ok(input) => input,
                 Err(RecvTimeoutError::Timeout) => {
                     if release.is_some() && release == deadline {
                         self.release();
+                    } else if defer.is_some() && defer == deadline {
+                        // Applied at the top of the loop.
                     } else {
                         self.idle_at = None;
                         self.write_outputs();
@@ -561,11 +571,12 @@ impl Engine {
                     if self.lagging_behind() {
                         // Applied once the running check sends its first
                         // pages, which applying them now would cancel.
-                        self.deferred.extend(paths);
+                        self.defer(paths);
                         continue;
                     }
                     let mut paths = paths;
                     paths.append(&mut self.deferred);
+                    self.deferred_since = None;
                     self.apply(&paths);
                 }
                 other => {
@@ -637,7 +648,9 @@ impl Engine {
     /// Records which paths are open for writing after an event.
     fn note(&mut self, paths: &[PathBuf], change: Change) {
         match change {
-            Change::Written => self.open.extend(paths.iter().cloned()),
+            // Without closes, nothing would take them out again.
+            Change::Written if self.closes => self.open.extend(paths.iter().cloned()),
+            Change::Written => {}
             Change::Closed => {
                 self.closes = true;
                 for path in paths {
@@ -646,14 +659,31 @@ impl Engine {
                     self.held.remove(path);
                 }
             }
-            Change::Other => {}
+            // Removed, renamed or created: whatever writes it now has
+            // opened it again.
+            Change::Other => {
+                for path in paths {
+                    self.open.remove(path);
+                }
+            }
         }
     }
 
     /// Whether the pages have lagged behind the world for so long that
-    /// changes wait for the running check ([`MAX_LAG`]).
+    /// changes wait for the running check ([`MAX_LAG`]), and they have not
+    /// waited too long ([`MAX_DEFER`]).
     fn lagging_behind(&self) -> bool {
-        self.running.is_some() && self.lagging.is_some_and(|since| since.elapsed() >= MAX_LAG)
+        self.running.is_some()
+            && self.lagging.is_some_and(|since| since.elapsed() >= MAX_LAG)
+            && self
+                .deferred_since
+                .is_none_or(|since| since.elapsed() < MAX_DEFER)
+    }
+
+    /// Lets changes wait for the running check.
+    fn defer(&mut self, paths: Vec<PathBuf>) {
+        self.deferred_since.get_or_insert_with(Instant::now);
+        self.deferred.extend(paths);
     }
 
     /// Reads the held sources whose writers have not closed them in time.
@@ -672,7 +702,7 @@ impl Engine {
             self.released.insert(path.clone());
         }
         if self.lagging_behind() {
-            self.deferred.extend(due);
+            self.defer(due);
         } else {
             self.apply(&due);
         }
@@ -741,28 +771,43 @@ impl Engine {
         &mut self,
         sources: Vec<(PathBuf, String, Source)>,
         changed: &mut BTreeSet<String>,
+        warned: usize,
     ) -> bool {
         let mut held = Vec::new();
         for (path, rel, old) in sources {
             if !changed.contains(&rel) {
                 continue;
             }
-            let Some(new) = self.world.as_ref().and_then(|world| world.source(&rel)) else {
-                continue;
+            let old_len = old.text().len() as u64;
+            // Removed by the loader: gone, or not UTF-8, as when the read
+            // ends inside a character that a write in chunks splits.
+            let new = self.world.as_ref().and_then(|world| world.source(&rel));
+            let torn = match &new {
+                Some(new) => {
+                    let new_len = new.text().len() as u64;
+                    let writing = self.open.contains(&path) || self.waiting(&path);
+                    torn(old_len, new_len, writing)
+                }
+                None => path.exists() && (self.open.contains(&path) || self.waiting(&path)),
             };
-            let (old_len, new_len) = (old.text().len() as u64, new.text().len() as u64);
-            let writing = new_len < old_len && (self.open.contains(&path) || self.waiting(&path));
-            if torn(old_len, new_len, writing)
+            if torn
                 && let Some(world) = &mut self.world
                 && world.set_source(&rel, old.text()).is_ok()
             {
                 changed.remove(&rel);
-                held.push(path);
+                held.push((path, rel));
             }
         }
         let restored = !held.is_empty();
         let until = Instant::now() + MAX_HOLD;
-        for path in held {
+        for (path, rel) in held {
+            // The loader's warning that the file is not UTF-8 is about a
+            // read that is put back.
+            let mut index = 0;
+            self.warnings.retain(|warning| {
+                index += 1;
+                index <= warned || !warning.message.contains(&format!("`{rel}`"))
+            });
             self.held.entry(path).or_insert(until);
         }
         restored
@@ -838,6 +883,7 @@ impl Engine {
             paths.push(self.root.join(loader::MANIFEST));
             paths.push(self.root.join(loader::LOCKFILE));
         }
+        let warned = self.warnings.len();
         let mut update = match self.loader.update(world, &paths, &mut self.warnings) {
             Ok(update) => update,
             Err(e) => {
@@ -846,7 +892,7 @@ impl Engine {
                 return;
             }
         };
-        let restored = self.recheck(sources, &mut update.changed);
+        let restored = self.recheck(sources, &mut update.changed, warned);
         if project_file {
             // Cleared only here, where the change is a new revision
             // (`edited` below), whose check schedules the writes that the
@@ -1534,13 +1580,14 @@ impl Files for Layered {
 
 /// Whether a source whose world's text is `old` bytes long and which
 /// reads `new` bytes long may have been read between the truncate and the
-/// write of a save in place: it reads shorter while it is `writing` (open
-/// for writing, or with an event about it waiting); or it reads empty
+/// end of the write of a save in place: it is read while it is `writing`
+/// (open for writing, or with an event about it waiting), whatever its
+/// length, as a write in chunks may already be longer; or it reads empty
 /// while the world's text is not, since its truncate may come after the
 /// close that the read follows. A file emptied on purpose is therefore
 /// read [`MAX_HOLD`] late.
 fn torn(old: u64, new: u64, writing: bool) -> bool {
-    (new == 0 && old > 0) || (new < old && writing)
+    writing || (new == 0 && old > 0)
 }
 
 /// An error that points at no source.
@@ -1556,12 +1603,12 @@ mod tests {
     fn reads_that_may_fall_inside_a_save_are_torn() {
         // Empty while the world's text is not: torn, open or not.
         assert!(torn(100, 0, false));
-        // Shorter: torn only while it is written.
+        // Any length while it is written, as a write in chunks may be
+        // longer already; else never.
         assert!(torn(100, 40, true));
+        assert!(torn(100, 140, true));
         assert!(!torn(100, 40, false));
-        // As long or longer, or empty before: never.
-        assert!(!torn(100, 100, true));
-        assert!(!torn(100, 140, true));
-        assert!(!torn(0, 0, true));
+        assert!(!torn(100, 140, false));
+        assert!(!torn(0, 0, false));
     }
 }

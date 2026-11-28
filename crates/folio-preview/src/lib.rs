@@ -9,7 +9,7 @@
 //! ([`folio::check`]) on a thread of its own, and an edit that arrives
 //! meanwhile cancels it through the query database (SPEC §2.3), unless the
 //! pages have lagged behind the world for a quarter of a second, when it
-//! waits for the check's first pages. A source that reads as if caught
+//! waits for the check's first pages or its end, a second at most. A source that reads as if caught
 //! between the truncate and the write of a save in place is held until its
 //! writer closes it. The pages
 //! of a finished check are compared with the last ones sent by their
