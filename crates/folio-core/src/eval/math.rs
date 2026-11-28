@@ -346,11 +346,13 @@ impl Vm<'_> {
             // Code embedded with `#`.
             _ => {
                 let value = self.expr(expr)?;
-                // A float literal keeps its spelling: `#3.00e8`.
+                // A float literal keeps its spelling, as the argument of
+                // `num` does: `#3.00e8`. One that is out of range says so.
                 if let Value::Float(_) = value
                     && let Some(spelling) = float_spelling(expr)
-                    && let Ok(number) = Number::parse(&spelling)
                 {
+                    let number = Number::parse(&spelling)
+                        .map_err(|message| EvalError::new(span, message))?;
                     number_nodes(&number, span, out);
                     return Ok(());
                 }
@@ -1102,10 +1104,27 @@ fn math_spelling(expr: ast::Expr<'_>) -> Option<EcoString> {
 
 /// The spelling of a float literal of code, with its sign, in as many
 /// parentheses as an equation needs to embed a negative one: `#3.00e8`,
-/// `#(-1.60e-19)`.
-fn float_spelling(mut expr: ast::Expr<'_>) -> Option<EcoString> {
-    while let ast::Expr::Parenthesized(inner) = expr {
-        expr = inner.expr();
+/// `#(-1.60e-19)`, `#(-(2.50))`.
+fn float_spelling(expr: ast::Expr<'_>) -> Option<EcoString> {
+    fn unwrap(mut expr: ast::Expr<'_>) -> ast::Expr<'_> {
+        while let ast::Expr::Parenthesized(inner) = expr {
+            expr = inner.expr();
+        }
+        expr
+    }
+    let expr = unwrap(expr);
+    if let ast::Expr::Unary(unary) = expr
+        && let ast::Expr::Parenthesized(_) = unary.expr()
+    {
+        let sign = match unary.op() {
+            ast::UnOp::Neg => "-",
+            ast::UnOp::Pos => "",
+            ast::UnOp::Not => return None,
+        };
+        let ast::Expr::Float(float) = unwrap(unary.expr()) else {
+            return None;
+        };
+        return Some(eco_format!("{sign}{}", float.to_untyped().leaf_text()));
     }
     super::float_spelling(expr)
 }
