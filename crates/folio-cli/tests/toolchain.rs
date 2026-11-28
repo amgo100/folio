@@ -370,15 +370,11 @@ fn refreshes_the_channel_file_of_an_installed_version() {
     assert_eq!(installed.info.as_ref(), Some(&info));
     assert_eq!(toolchains.channel_info(&keys), Some(info.clone()));
 
-    // An older copy is still refused for an installed version.
+    // An older copy is refused, and the version stays installed.
     channel.publish(1, "0.0.0");
-    assert!(matches!(
-        install(&channel, "77.0.0", &toolchains),
-        Err(InstallError::ChannelReplayed {
-            serial: 1,
-            stored: 2
-        })
-    ));
+    let installed = install(&channel, "77.0.0", &toolchains).unwrap();
+    assert!(installed.already);
+    assert_eq!(installed.info, None);
     assert_eq!(toolchains.channel_info(&keys), Some(info.clone()));
 
     // A channel file that cannot be downloaded leaves the installed version

@@ -458,7 +458,8 @@ pub struct Installed {
     pub already: bool,
     /// The channel's `channel.toml`, which was downloaded and verified
     /// first. `None` when it was not: the channel has no keys, or, for a
-    /// version that was installed already, it could not be downloaded.
+    /// version that was installed already, it could not be downloaded or
+    /// was refused.
     pub info: Option<ChannelInfo>,
 }
 
@@ -472,11 +473,10 @@ pub struct Installed {
 /// signature, and installs it only when the signature verifies with one of
 /// the channel's keys. The binary appears in the cache whole or not at all.
 ///
-/// A version that is installed already is left as it is. Its
-/// `channel.toml` is still checked, and an error in it is reported, except
-/// a failed download, after which the stored copy stays as it was.
-/// Without channel keys nothing can be checked, so such a version is
-/// reported as installed and nothing is downloaded.
+/// A version that is installed already is left as it is, and is reported
+/// as installed even when its `channel.toml` cannot be downloaded or is
+/// refused; the stored copy then stays as it was. Without channel keys
+/// nothing can be checked, so nothing is downloaded for such a version.
 ///
 /// Refuses, before downloading the binary, a `channel.toml` whose serial
 /// is lower than that of the one stored in `toolchains`, or the same with
@@ -499,30 +499,19 @@ pub fn install(
             None => Err(InstallError::NoKeys),
         };
     }
-    let fetched = channel.fetch(fetch, &Channel::info_path(), CHANNEL_FILE);
-    let (info_bytes, info_signature) = match (fetched, installed) {
-        (Ok(fetched), _) => fetched,
-        (Err(InstallError::Download { .. }), Some(path)) => {
+    let checked = check_channel(channel, fetch, toolchains);
+    let (info, info_bytes, info_signature) = match (checked, installed) {
+        (Ok(checked), _) => checked,
+        // The version stays installed; the stored copy stays as it was.
+        (Err(_), Some(path)) => {
             return Ok(Installed {
                 path,
                 already: true,
                 info: None,
             });
         }
-        (Err(error), _) => return Err(error),
+        (Err(error), None) => return Err(error),
     };
-    let info = std::str::from_utf8(&info_bytes)
-        .map_err(|e| e.to_string())
-        .and_then(ChannelInfo::parse)
-        .map_err(InstallError::ChannelInfo)?;
-    if let Some((stored, stored_bytes)) = toolchains.stored_serial(&channel.keys)
-        && (info.serial < stored || (info.serial == stored && info_bytes != stored_bytes))
-    {
-        return Err(InstallError::ChannelReplayed {
-            serial: info.serial,
-            stored,
-        });
-    }
     // The channel's word on security fixes, for later builds, which verify
     // it again when they read it. It is stored before the binary is
     // downloaded, so that a failed download does not lose it, and whether
@@ -558,10 +547,14 @@ pub fn install(
     let file_name = path.file_name().expect("the binary has a file name");
     let version_dir = path.parent().expect("the binary is in a directory");
     let result = (|| {
-        fs::create_dir(&staging)?;
+        let at = |path: &Path| {
+            let path = path.to_owned();
+            move |error| (path, error)
+        };
+        fs::create_dir(&staging).map_err(at(&staging))?;
         let file = staging.join(file_name);
-        fs::write(&file, &binary)?;
-        make_executable(&file)?;
+        fs::write(&file, &binary).map_err(at(&file))?;
+        make_executable(&file).map_err(at(&file))?;
         // Another install of the same version may be moving its binary into
         // place: the lock keeps this one from removing that binary's
         // directory between the check and the move.
@@ -572,9 +565,11 @@ pub fn install(
         // What is left of a version whose binary is gone, which would stop
         // the new one from being moved into place.
         if version_dir.exists() {
-            fs::remove_dir_all(version_dir)?;
+            fs::remove_dir_all(version_dir).map_err(at(version_dir))?;
         }
-        fs::rename(&staging, version_dir).map(|()| false)
+        fs::rename(&staging, version_dir)
+            .map(|()| false)
+            .map_err(at(version_dir))
     })();
     match result {
         Ok(false) => Ok(Installed {
@@ -590,7 +585,7 @@ pub fn install(
                 info: Some(info),
             })
         }
-        Err(error) => {
+        Err((failed, error)) => {
             let _ = fs::remove_dir_all(&staging);
             // Another install of the same version finished first, where the
             // file system cannot lock.
@@ -601,9 +596,33 @@ pub fn install(
                     info: Some(info),
                 });
             }
-            Err(io(&path)(error))
+            Err(io(&failed)(error))
         }
     }
+}
+
+/// Downloads the channel's `channel.toml`, verifies its signature, reads
+/// it, and checks that it is not older than the copy stored in
+/// `toolchains`. Returns it, its bytes and its signature.
+fn check_channel(
+    channel: &Channel,
+    fetch: &dyn Fetch,
+    toolchains: &Toolchains,
+) -> Result<(ChannelInfo, Vec<u8>, Vec<u8>), InstallError> {
+    let (bytes, signature) = channel.fetch(fetch, &Channel::info_path(), CHANNEL_FILE)?;
+    let info = std::str::from_utf8(&bytes)
+        .map_err(|e| e.to_string())
+        .and_then(ChannelInfo::parse)
+        .map_err(InstallError::ChannelInfo)?;
+    if let Some((stored, stored_bytes)) = toolchains.stored_serial(&channel.keys)
+        && (info.serial < stored || (info.serial == stored && bytes != stored_bytes))
+    {
+        return Err(InstallError::ChannelReplayed {
+            serial: info.serial,
+            stored,
+        });
+    }
+    Ok((info, bytes, signature))
 }
 
 /// Opens and locks a lock file, which stays locked until the returned file
@@ -648,7 +667,12 @@ fn store_channel(
     };
     let mut contents = format!("{}\n", signature.trim()).into_bytes();
     contents.extend_from_slice(bytes);
-    let temporary = dir.join(format!(".{STORED_CHANNEL_FILE}.{}", std::process::id()));
+    static STORES: AtomicU64 = AtomicU64::new(0);
+    let temporary = dir.join(format!(
+        ".{STORED_CHANNEL_FILE}.{}-{}",
+        std::process::id(),
+        STORES.fetch_add(1, Ordering::Relaxed)
+    ));
     let stored = fs::write(&temporary, &contents)
         .and_then(|()| fs::rename(&temporary, dir.join(STORED_CHANNEL_FILE)));
     if stored.is_err() {
