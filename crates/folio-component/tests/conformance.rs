@@ -287,4 +287,11 @@ fn aggregate_declarations_are_checked() {
         errors(lints),
         ["the lints read `score`, which no element of the component has"]
     );
+    let mut twice = totals([]);
+    twice.lint_reads = LintReads::Fields(EcoVec::from([name("marks"), name("marks")]));
+    assert_eq!(errors(twice), ["the lints read `marks` twice"]);
+    // The universal fields are every element's.
+    let mut ids = totals([AggregateDecl::new(name("total-marks")).reading([name("id")])]);
+    ids.lint_reads = LintReads::Fields(EcoVec::from([name("class")]));
+    Registry::new().register(ids).unwrap();
 }

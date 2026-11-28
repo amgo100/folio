@@ -259,14 +259,13 @@ pub fn format(sum: Sum, marker: char) -> EcoString {
 }
 
 /// An aggregate's value as the text shows it: a number as a total shows
-/// it, a string as it is, a boolean as `true` or `false`; `None` for a
-/// value that has no text, such as a list.
+/// it, a string as it is; `None` for a value that has no text in every
+/// language, such as a boolean or a list.
 pub fn show(value: &Plain, marker: char) -> Option<EcoString> {
     Some(match value {
         Plain::Int(n) => format(Sum::Int(*n), marker),
         Plain::Number(x) => format(Sum::Float(x.get()), marker),
         Plain::Str(text) => text.clone(),
-        Plain::Bool(b) => eco_format!("{b}"),
         _ => return None,
     })
 }
@@ -277,7 +276,7 @@ pub(super) fn no_value(query: Span, name: &QualifiedName) -> Diagnostic {
         query,
         eco_format!("aggregate `{name}` gives no value that can be shown, so it shows ??"),
     )
-    .with_hint("its component gives no number, string or boolean for this document")
+    .with_hint("its component gives no number or string for this document")
 }
 
 /// The warning for a total in a numbering group whose common tree could

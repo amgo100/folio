@@ -537,11 +537,13 @@ fn check_aggregates(cx: &mut Checker, decls: &Declarations) {
     check_unique(cx, &names, |name| {
         eco_format!("aggregate `{name}` is declared twice")
     });
+    // The universal fields (`id`, `class` ..) are fields of every element.
     let fields = |field: &Name| {
-        decls
-            .elements
-            .iter()
-            .any(|e| e.fields.iter().any(|f| f.name == *field))
+        UNIVERSAL_FIELDS.contains(&field.as_str())
+            || decls
+                .elements
+                .iter()
+                .any(|e| e.fields.iter().any(|f| f.name == *field))
     };
     for aggregate in &decls.aggregates {
         if decls.elements.iter().any(|e| e.name == aggregate.name) {
@@ -564,6 +566,10 @@ fn check_aggregates(cx: &mut Checker, decls: &Declarations) {
         }
     }
     if let LintReads::Fields(reads) = &decls.lint_reads {
+        let listed: Vec<&Name> = reads.iter().collect();
+        check_unique(cx, &listed, |field| {
+            eco_format!("the lints read `{field}` twice")
+        });
         for field in reads {
             if !fields(field) {
                 cx.error(eco_format!(
