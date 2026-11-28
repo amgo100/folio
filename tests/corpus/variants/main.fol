@@ -1,0 +1,27 @@
+#doc(title: [Forces and motion: quiz], subject: "Year 12 physics")
+
+= Questions
+
+#except-variant("markscheme")[Answer all questions in the spaces provided. Take $g = 9.8$ m/s².]#in-variant("markscheme")[Mark scheme. M marks are for method, A marks for accuracy.]
+
++ A ball is dropped from rest. Find its speed after 2.0 s. #strong(class: "mark")[[2]]
+
+  #figure(class: "space")[]
+
+  #figure(class: "answer")[$v = u + a t = 0 + 9.8 times 2.0 = 19.6$ m/s. M1 for the equation, A1 for the value.]
+
++ A trolley of mass 2.0 kg accelerates uniformly from rest to 3.0 m/s in 4.0 s. Find the resultant force on it. #strong(class: "mark")[[3]]
+
+  #figure(class: "space")[]
+
+  #figure(class: "answer")[$a = 3.0 / 4.0 = 0.75$ m/s², M1 A1; $F = m a = 1.5$ N, A1. Accept 1.5 N from $F = Delta p / t$.]
+
++ State Newton's third law of motion. #strong(class: "mark")[[2]]
+
+  #figure(class: "space")[]
+
+  #figure(class: "answer")[The forces two bodies exert on each other are equal in size and opposite in direction, B1; they act on different bodies, B1.]
+
+#emph(class: "hint")[Hint: in question 2, find the acceleration first.]
+
+The paper ends here. #in-variant("markscheme")[Total: 7 marks.]

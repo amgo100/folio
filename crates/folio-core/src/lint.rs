@@ -2,17 +2,23 @@
 //! of its own elements through an [`InstanceTree`] made from the document
 //! tree, and the diagnostics its lints return are reported like the core's,
 //! at the instances they point at.
+//!
+//! The core's lint `variant-condition` (SPEC §6.2) reads the syntax of the
+//! content files a build reads: an `#if` that tests only which variant is
+//! built, where content is written rather than generated, would be clearer
+//! as an element the variant's stylesheet hides or as `#in-variant`.
 
 use std::collections::HashMap;
 
-use ecow::{EcoVec, eco_format};
+use ecow::{EcoString, EcoVec, eco_format};
 use folio_component::{
     BODY, Body, ElementSchema, FieldType, Instance, InstanceTree, LintDiagnostic, Location, Name,
     Part, Registered, Severity, Value as Plain,
 };
-use folio_syntax::Span;
+use folio_syntax::ast::{self, AstNode, BinOp, Expr};
+use folio_syntax::{Span, SyntaxKind, SyntaxNode};
 
-use crate::db::{Build, Db, Project, component_host};
+use crate::db::{Build, Db, Project, SourceFile, build_files, component_host};
 use crate::diag::{self, Diagnostic};
 use crate::eval::{Content, Element, Node, Value};
 use crate::model::document;
@@ -23,6 +29,13 @@ use crate::model::document;
 /// build whose components declare no elements has nothing to lint, and
 /// does not read the document tree here.
 pub fn check_lints(db: &dyn Db, build: Build<'_>) {
+    for &file in build_files(db, build) {
+        if file.path(db).extension() == Some("fol") {
+            for diagnostic in variant_conditions(db, file) {
+                diag::report(db, diagnostic.clone());
+            }
+        }
+    }
     let project = build.project(db);
     let linted = component_host(db, project)
         .as_ref()
@@ -30,6 +43,133 @@ pub fn check_lints(db: &dyn Db, build: Build<'_>) {
     if linted {
         lint_variant(db, project, build.variant(db).clone());
     }
+}
+
+/// The lint `variant-condition` over a content file (SPEC §6.2): a warning
+/// at each `if` whose condition only compares `variant` with names and
+/// whose branches are inline markup, which `#in-variant` and
+/// `#except-variant` could hold, written in markup or in code that a loop
+/// or closure does not repeat. Content that a loop or a function generates
+/// is what scripts are for, so `if` there is left alone.
+#[salsa::tracked(returns(ref))]
+fn variant_conditions(db: &dyn Db, file: SourceFile) -> EcoVec<Diagnostic> {
+    let mut out = EcoVec::new();
+    walk_conditions(file.source(db).root(), &mut out);
+    out
+}
+
+fn walk_conditions(node: &SyntaxNode, out: &mut EcoVec<Diagnostic>) {
+    match node.kind() {
+        // Generated content: a loop or a closure repeats its body.
+        SyntaxKind::ForLoop | SyntaxKind::WhileLoop | SyntaxKind::Closure => return,
+        SyntaxKind::Conditional => {
+            if let Some(conditional) = node.cast::<ast::Conditional<'_>>()
+                && let Some(diagnostic) = variant_condition(conditional)
+            {
+                out.push(diagnostic);
+            }
+        }
+        _ => {}
+    }
+    for child in node.children() {
+        walk_conditions(child, out);
+    }
+}
+
+/// The warning for an `if` that tests only the variant: `variant == "a"`,
+/// `variant != "a"`, `variant in ("a", "b")` or `variant not in (..)`,
+/// either way round.
+fn variant_condition(conditional: ast::Conditional<'_>) -> Option<Diagnostic> {
+    // `#in-variant` holds inline content, so only an `if` that chooses
+    // inline markup could be written with it.
+    if !is_inline_markup(conditional.if_body())
+        || conditional
+            .else_body()
+            .is_some_and(|body| !is_inline_markup(body))
+    {
+        return None;
+    }
+    let mut condition = conditional.condition();
+    while let Expr::Parenthesized(inner) = condition {
+        condition = inner.expr();
+    }
+    let Expr::Binary(binary) = condition else {
+        return None;
+    };
+    let is_variant =
+        |expr: Expr<'_>| matches!(expr, Expr::Ident(ident) if ident.as_str() == "variant");
+    let name = |expr: Expr<'_>| match expr {
+        Expr::Str(text) => Some(vec![text.get()]),
+        _ => None,
+    };
+    let names = |expr: Expr<'_>| -> Option<Vec<EcoString>> {
+        match expr {
+            Expr::Array(array) => array
+                .items()
+                .map(|item| match item {
+                    ast::ArrayItem::Pos(Expr::Str(text)) => Some(text.get()),
+                    _ => None,
+                })
+                .collect(),
+            _ => None,
+        }
+    };
+    let (lhs, rhs) = (binary.lhs(), binary.rhs());
+    let op = binary.op();
+    let listed = match op {
+        // `in` a string tests for a substring, so only a list names
+        // variants.
+        BinOp::Eq | BinOp::Neq if is_variant(lhs) => name(rhs)?,
+        BinOp::Eq | BinOp::Neq if is_variant(rhs) => name(lhs)?,
+        BinOp::In | BinOp::NotIn if is_variant(lhs) => names(rhs)?,
+        _ => return None,
+    };
+    let quoted: Vec<String> = listed.iter().map(|n| format!("{n:?}")).collect();
+    let hint = match (op, &listed[..]) {
+        (BinOp::Eq | BinOp::In, [name]) => eco_format!(
+            "write the content as `#in-variant({name:?})[..]`, or give it an element that \
+             `@variant` rules in the stylesheet show or hide"
+        ),
+        (BinOp::Neq | BinOp::NotIn, [name]) => eco_format!(
+            "write the content as `#except-variant({name:?})[..]`, or give it an element that \
+             `@variant` rules in the stylesheet show or hide"
+        ),
+        _ => eco_format!(
+            "give the content an element that `@variant {}` rules in the stylesheet show or \
+             hide",
+            listed.join(", ")
+        ),
+    };
+    Some(
+        Diagnostic::warning(
+            binary.to_untyped().span(),
+            eco_format!(
+                "this `if` only tests whether the variant is {}, which the content can say \
+                 without a script",
+                quoted.join(" or ")
+            ),
+        )
+        .with_code("variant-condition")
+        .with_hint(hint),
+    )
+}
+
+/// Whether an expression is a content block of inline markup: no
+/// paragraph break, heading or list item.
+fn is_inline_markup(expr: Expr<'_>) -> bool {
+    fn inline(node: &SyntaxNode) -> bool {
+        node.children().all(|child| {
+            !matches!(
+                child.kind(),
+                SyntaxKind::Parbreak
+                    | SyntaxKind::Heading
+                    | SyntaxKind::ListItem
+                    | SyntaxKind::EnumItem
+                    | SyntaxKind::TermItem
+            ) && (child.kind() != SyntaxKind::Markup || inline(child))
+        })
+    }
+    matches!(expr, Expr::ContentBlock(_)) && inline(expr.to_untyped())
 }
 
 fn has_elements(component: &Registered) -> bool {

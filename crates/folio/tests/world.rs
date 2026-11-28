@@ -153,7 +153,13 @@ fn early_cutoff_on_a_whitespace_edit() {
     assert_eq!(after, before);
     assert_eq!(
         logged.take(),
-        set(&["dependencies", "check_source", "file_elements", EVAL])
+        set(&[
+            "dependencies",
+            "check_source",
+            "variant_conditions",
+            "file_elements",
+            EVAL
+        ])
     );
 
     // An edit that changes the imports re-runs the file set. The file it
@@ -172,6 +178,7 @@ fn early_cutoff_on_a_whitespace_edit() {
             "build_files",
             "dependencies",
             "check_source",
+            "variant_conditions",
             "file_elements",
             "project_elements",
             "source_file",
@@ -231,6 +238,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         set(&[
             "dependencies",
             "check_source",
+            "variant_conditions",
             "file_elements",
             "match_node",
             "compile_build",
@@ -252,6 +260,7 @@ fn diagnostics_change_while_the_build_is_cut_off() {
         set(&[
             "dependencies",
             "check_source",
+            "variant_conditions",
             "file_elements",
             "compile_build",
             EVAL

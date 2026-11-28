@@ -67,7 +67,6 @@ fn lists_the_warnings_for_what_is_not_supported() {
                  enum-item { marker-position: hanging 8mm; }\n\
                  page:left { margin-top: 1cm; }\n\
                  page.landscape { margin-top: 1cm; }\n\
-                 emph { display: hidden; }\n\
                  paragraph { width: 50%; grid-snap: false; }\n\
                  page { baseline-grid: 12pt; header: \"Exam\"; footer: none; }\n\
                  figure { placement: top; }\n\
@@ -117,7 +116,6 @@ fn lists_the_warnings_for_what_is_not_supported() {
             "marker-position: hanging 8mm;",
         ),
         // The `header` of the ignored `page:first` rule is not reported.
-        warning(&not_implemented("display"), "display: hidden;"),
         // Only images read `width`: at the element, once per kind.
         warning(
             "`width` is not implemented yet for `paragraph`, so it has no effect",
@@ -249,16 +247,16 @@ fn scoped_rules_warn_only_when_they_apply() {
     let world = world(
         "",
         "#rule @target docx heading { marker-position: hanging; }\n\
-         #rule @variant markscheme emph { display: hidden; }\n\
-         #rule strong { display: hidden; }\n\
+         #rule @variant markscheme emph { side: outer; }\n\
+         #rule strong { side: outer; }\n\
          Text.\n",
     );
     let compiled = compile(&world, Target::Pdf);
     assert_eq!(
         located(&world, &compiled),
         [warning(
-            "`display` is not implemented yet, so this declaration has no effect",
-            "display: hidden;"
+            "`side` is not implemented yet, so this declaration has no effect",
+            "side: outer;"
         )]
     );
     // The same rules in a DOCX build: the first applies there.
@@ -272,7 +270,7 @@ fn scoped_rules_warn_only_when_they_apply() {
         docx,
         [
             "`marker-position` is not implemented yet, so this declaration has no effect",
-            "`display` is not implemented yet, so this declaration has no effect",
+            "`side` is not implemented yet, so this declaration has no effect",
         ]
     );
 }

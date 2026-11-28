@@ -1,4 +1,5 @@
-//! Pairing instances across the variants of a numbering group (SPEC §6.1).
+//! Variants (SPEC §6): what each shows ([`select`]), and pairing instances
+//! across the variants of a numbering group (§6.1).
 //!
 //! Each variant evaluates its own document, and the common tree pairs the
 //! element instances of a group's variants by location: by span and the
@@ -9,6 +10,8 @@
 //! counter counts, paired with an instance of another variant of its group
 //! that was made from other items: its numbering cannot be shared, so the
 //! build says so instead of numbering wrongly.
+
+pub mod select;
 
 use std::collections::{HashMap, HashSet};
 

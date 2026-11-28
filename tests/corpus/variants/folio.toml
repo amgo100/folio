@@ -1,0 +1,14 @@
+[project]
+entry = "main.fol"
+edition = "2027"
+compiler = "0.0.0"
+lang = "en-GB"
+styles = ["styles/paper.fsty"]
+
+# SPEC §6.1 and §6.2: one source, a paper and its mark scheme.
+[variants.exam]
+targets = ["pdf"]
+
+[variants.markscheme]
+targets = ["pdf"]
+styles = ["styles/markscheme.fsty"]

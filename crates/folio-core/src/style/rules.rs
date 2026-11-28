@@ -797,6 +797,19 @@ impl<'a> Compiler<'a> {
                     diag::report(self.db, diagnostic);
                     continue;
                 }
+                if let Some(message) = check_placeholder(property, &value) {
+                    diag::report(
+                        self.db,
+                        Diagnostic::error(
+                            span,
+                            eco_format!("wrong value for `{}`: {message}", property.name),
+                        )
+                        .with_hint(
+                            "write the text in quotes: `placeholder(\"See the mark scheme\")`",
+                        ),
+                    );
+                    continue;
+                }
                 DeclValue::Value(value)
             };
             out.push(Decl { prop, value, span });
@@ -1246,6 +1259,27 @@ impl<'a> Compiler<'a> {
 
     fn warn(&self, span: Span, message: impl Into<EcoString>) {
         diag::report(self.db, Diagnostic::warning(span, message));
+    }
+}
+
+/// Why a value of `display` is not a placeholder of one text (SPEC §6.3):
+/// `placeholder(..)` takes exactly one string. `None` for any other
+/// property or value.
+fn check_placeholder(property: &Property, value: &Declared) -> Option<&'static str> {
+    if property.name.namespace.is_some() || property.name.name.as_str() != "display" {
+        return None;
+    }
+    let Declared::Call(name, args) = value else {
+        return None;
+    };
+    if name.as_str() != "placeholder" {
+        return None;
+    }
+    match &args[..] {
+        [Declared::Value(eval::Value::Str(_))] => None,
+        [] => Some("`placeholder` needs the text to show"),
+        [_] => Some("`placeholder` takes a string"),
+        _ => Some("`placeholder` takes one string"),
     }
 }
 
