@@ -310,6 +310,11 @@ impl State {
     }
 }
 
+/// A line on a page as its builder records it: its leaf counted from the
+/// page's first, the line of its paragraph, and for a line of a cell of a
+/// band, the cell and the leaf of the cell's flow.
+type PageLine = (usize, usize, Option<(usize, usize)>);
+
 /// A page as its builder made it: it does not depend on where in the flow
 /// the page is.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -323,7 +328,7 @@ struct PageOut {
     /// The lines on the page: each a leaf counted from the page's first,
     /// the line of its paragraph, and for a line of a cell of a band
     /// (SPEC §7.4), the cell and the leaf of the cell's flow.
-    lines: EcoVec<(usize, usize, Option<(usize, usize)>)>,
+    lines: EcoVec<PageLine>,
     /// The paragraphs that start on the page and were broken at a width
     /// other than the one the flow was built for, or with sized objects,
     /// each a leaf counted from the page's first: their lines' diagnostics

@@ -739,6 +739,10 @@ pub(super) enum Origin {
     Empty,
 }
 
+/// Where the leaves of the cells of each band come from, by the band's
+/// leaf ([`Flow::cells`]).
+pub(super) type CellOrigins = Vec<(usize, Vec<Vec<Origin>>)>;
+
 /// The flow of a build, or of a footnote's note.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(super) struct Flow {
@@ -752,7 +756,7 @@ pub(super) struct Flow {
     /// leaf, for the pages' line lists: kept out of the bands, so that a
     /// band is equal wherever an edit moved it (SPEC §2.3). Empty in the
     /// flows of notes and cells.
-    pub cells: Vec<(usize, Vec<Vec<Origin>>)>,
+    pub cells: CellOrigins,
 }
 
 impl Flow {
@@ -1169,7 +1173,7 @@ struct Builder<'a> {
     /// The grids laid out, by location (SPEC §7.4).
     grids: &'a HashMap<Location, GridLayout>,
     /// Where the leaves of each band's cells come from ([`Flow::cells`]).
-    cells: Vec<(usize, Vec<Vec<Origin>>)>,
+    cells: CellOrigins,
 }
 
 /// A block with a `min-height` (SPEC §6.3): the leaves it holds, and how
