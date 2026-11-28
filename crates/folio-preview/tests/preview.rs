@@ -1558,10 +1558,10 @@ fn raw_frames_revision(read: &[(u64, Vec<Vec<u8>>)]) -> u64 {
 }
 
 // A file reached through a link inside the project is read under both
-// paths, and the watcher names it by one of them: while it is truncated
+// paths, and the watcher names it by one of them (here the link's, which
+// is why the document includes it by the other): while it is truncated
 // and still open, the whole project is read again, as after lost events,
-// and the document, which includes it by the other path, must not show it
-// empty.
+// and the document must not show it empty.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_file_read_through_a_link_while_written_is_not_shown() {
@@ -1596,5 +1596,20 @@ fn a_file_read_through_a_link_while_written_is_not_shown() {
         "{} pages, then {counts:?}",
         first.pages
     );
+    preview.stop();
+}
+
+// A source emptied on purpose is held as if caught mid-save, and shown
+// empty once its hold runs out.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_source_emptied_on_purpose_is_shown_empty() {
+    let dir = long_project(6);
+    let (preview, events) = start(dir.path(), |o| o);
+    let first = updated(&events, |u| u.pages > 0);
+    assert!(first.pages >= 2, "{} pages", first.pages);
+    std::fs::write(dir.path().join("main.fol"), "").unwrap();
+    let emptied = updated(&events, |u| u.pages < first.pages);
+    assert_eq!(emptied.pages, 1);
     preview.stop();
 }

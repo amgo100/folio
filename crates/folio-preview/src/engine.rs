@@ -654,29 +654,6 @@ impl Engine {
         }
     }
 
-    /// Whether `path`, which resolves to `resolved`, is being written: it,
-    /// or a path in `open` (the paths open for writing, resolved), or a
-    /// write of either waits to be handled.
-    fn writing(&mut self, path: &Path, resolved: Option<&Path>, open: &BTreeSet<PathBuf>) -> bool {
-        self.open.contains(path)
-            || resolved.is_some_and(|r| open.contains(r))
-            || self.waiting(path, resolved)
-    }
-
-    /// Whether a write of `path`, or of a path that resolves to
-    /// `resolved`, waits to be handled.
-    fn waiting(&mut self, path: &Path, resolved: Option<&Path>) -> bool {
-        self.queue.extend(self.rx.try_iter());
-        self.queue.iter().any(|input| {
-            let Input::Paths(paths, Change::Written) = input else {
-                return false;
-            };
-            paths.iter().any(|p| {
-                p == path || resolved.is_some_and(|r| p.canonicalize().is_ok_and(|c| c == r))
-            })
-        })
-    }
-
     /// Records which paths are open for writing after an event.
     fn note(&mut self, paths: &[PathBuf], change: Change) {
         match change {
@@ -695,6 +672,16 @@ impl Engine {
                     // Read with the rest of the event's batch, which takes
                     // it out of `held` unless it still reads torn.
                     self.open.remove(path);
+                }
+                // Held under another path that reaches the same file, as
+                // through a link: the loader reads it under every such path
+                // with the batch.
+                if !self.held.is_empty() {
+                    let closed: BTreeSet<PathBuf> =
+                        paths.iter().filter_map(|p| p.canonicalize().ok()).collect();
+                    self.held.retain(|held, _| {
+                        held.canonicalize().map_or(true, |r| !closed.contains(&r))
+                    });
                 }
             }
             // Removed, renamed or created: whatever writes it now has
@@ -779,7 +766,7 @@ impl Engine {
     /// holds them until their writers close them, [`MAX_HOLD`] at most.
     /// Returns the world's sources as they are, by project path, which
     /// [`Self::recheck`] checks the loader's reads against.
-    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Option<HashMap<String, Source>> {
+    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Option<Before> {
         // Released paths are read as they are, once.
         let released: BTreeSet<PathBuf> = paths
             .iter()
@@ -830,13 +817,21 @@ impl Engine {
         // The sources as they are, which the loader's reads may replace,
         // under every path that reaches a file: through links too, and
         // under directories read again.
-        let before = world
+        let sources = world
             .source_paths()
             .filter_map(|path| {
                 let path = path.as_str();
                 Some((path.to_owned(), world.source(path)?))
             })
             .collect();
+        let before = Before {
+            sources,
+            released: released
+                .iter()
+                .filter_map(|path| path.canonicalize().ok())
+                .chain(released.iter().cloned())
+                .collect(),
+        };
         // Read whole, or gone: no longer held.
         for path in read {
             self.held.remove(&path);
@@ -860,18 +855,26 @@ impl Engine {
     /// so its revision must be checked again.
     fn recheck(
         &mut self,
-        before: Option<HashMap<String, Source>>,
+        before: Option<Before>,
         changed: &mut BTreeSet<String>,
         warned: usize,
     ) -> bool {
         let Some(before) = before else {
             return false;
         };
-        // The files open for writing, as the paths they resolve to.
-        let open: BTreeSet<PathBuf> = self
+        // The files being written: open, or with a write waiting to be
+        // handled, by their paths and the paths they resolve to.
+        self.queue.extend(self.rx.try_iter());
+        let queued = self.queue.iter().filter_map(|input| match input {
+            Input::Paths(paths, Change::Written) => Some(paths),
+            _ => None,
+        });
+        let written: BTreeSet<PathBuf> = self
             .open
             .iter()
-            .filter_map(|path| path.canonicalize().ok())
+            .chain(queued.flatten())
+            .flat_map(|path| [Some(path.clone()), path.canonicalize().ok()])
+            .flatten()
             .collect();
         let mut held = Vec::new();
         let sources: Vec<String> = changed
@@ -882,7 +885,17 @@ impl Engine {
         for rel in sources {
             let path = self.root.join(&rel);
             let resolved = path.canonicalize().ok();
-            let old = before.get(&rel);
+            // Read as it is, its hold over.
+            if before.released.contains(&path)
+                || resolved
+                    .as_ref()
+                    .is_some_and(|r| before.released.contains(r))
+            {
+                continue;
+            }
+            let writing =
+                written.contains(&path) || resolved.as_ref().is_some_and(|r| written.contains(r));
+            let old = before.sources.get(&rel);
             let old_len = old.map_or(0, |old| old.text().len() as u64);
             // Removed by the loader: gone, or not UTF-8, as when the read
             // ends inside a character that a write in chunks splits.
@@ -890,14 +903,9 @@ impl Engine {
             let torn = match &new {
                 Some(new) => {
                     let new_len = new.text().len() as u64;
-                    // Only what may hold a hole is asked about writing.
-                    (new_len == 0 && old_len > 0) || self.writing(&path, resolved.as_deref(), &open)
+                    torn(old_len, new_len, writing)
                 }
-                None => {
-                    old.is_some()
-                        && path.exists()
-                        && self.writing(&path, resolved.as_deref(), &open)
-                }
+                None => old.is_some() && path.exists() && writing,
             };
             if !torn {
                 continue;
@@ -1734,6 +1742,14 @@ impl Files for Layered {
             .lines(id)
             .or_else(|| self.world.as_ref()?.lines(id))
     }
+}
+
+/// The world's sources before the loader reads a batch, by project path,
+/// and the paths whose hold ran out, by their paths and the paths they
+/// resolve to, which are read as they are ([`Engine::hold`]).
+struct Before {
+    sources: HashMap<String, Source>,
+    released: BTreeSet<PathBuf>,
 }
 
 /// Sends a check's end as cancelled when it is dropped before the check
