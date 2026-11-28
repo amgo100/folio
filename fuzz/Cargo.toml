@@ -36,6 +36,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fmt"
+path = "fuzz_targets/fmt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "reparse"
 path = "fuzz_targets/reparse.rs"
 test = false
