@@ -131,8 +131,9 @@ enum Item {
     Rule(Option<Declared>, Span),
     /// `space(..)`: a space of a length.
     Space(Declared, Span),
-    /// `image(path)`: an image of the project, with its width if given.
-    Image(EcoString, Option<Declared>, Span),
+    /// `image(path)`: an image of the project, with its width and its
+    /// description if given.
+    Image(EcoString, Option<Declared>, Option<EcoString>, Span),
     /// A graphic primitive of SPEC §9, which draws nothing yet.
     Graphic,
     /// Items shown if a condition holds, else others.
@@ -170,14 +171,11 @@ enum Cond {
 
 impl Cond {
     /// The condition's value for an element.
-    fn eval(&self, element: &Element) -> eval::Value {
+    fn eval(&self, element: &Fields<'_>) -> eval::Value {
         use ast::BinOp::*;
         match self {
             Self::Value(value) => value.clone(),
-            Self::Field(name) => element
-                .field(name.as_str())
-                .cloned()
-                .unwrap_or(eval::Value::None),
+            Self::Field(name) => element.get(name).cloned().unwrap_or(eval::Value::None),
             Self::Not(inner) => eval::Value::Bool(!truthy(&inner.eval(element))),
             Self::Binary(op, lhs, rhs) => {
                 let bool = eval::Value::Bool;
@@ -215,6 +213,27 @@ impl Cond {
                 rhs.reads(out);
             }
         }
+    }
+}
+
+/// The fields of an element as a template reads them: those of a part
+/// that the build's variant hides (`display: none`, `hidden` or
+/// `answer-space`, or left out by the element's `show-only`) are unset, so
+/// that a template shows nothing of what a variant hides (SPEC §6.4).
+pub(super) struct Fields<'e> {
+    /// The element.
+    pub(super) element: &'e Element,
+    /// The parts the variant hides.
+    pub(super) hidden: Vec<Name>,
+}
+
+impl Fields<'_> {
+    /// A field's value, if it is set and not hidden.
+    fn get(&self, name: &Name) -> Option<&eval::Value> {
+        if self.hidden.contains(name) {
+            return None;
+        }
+        self.element.field(name.as_str())
     }
 }
 
@@ -442,7 +461,7 @@ impl Compile<'_> {
         }
         let allowed: &[&str] = match name {
             "grid" => &["columns"],
-            "image" => &["width"],
+            "image" => &["width", "alt"],
             _ => &[],
         };
         for n in &named {
@@ -602,7 +621,18 @@ impl Compile<'_> {
                     }),
                     None => None,
                 };
-                Item::Image(path, width, span)
+                let alt = match named_value("alt") {
+                    Some(expr) => match self.values.single(expr) {
+                        Some(Declared::Value(eval::Value::Str(alt))) => Some(alt),
+                        Some(_) => {
+                            self.error(expr.span(), "`alt` takes a description in quotes", None);
+                            return false;
+                        }
+                        None => return false,
+                    },
+                    None => None,
+                };
+                Item::Image(path, width, alt, span)
             }
             graphic if GRAPHICS.contains(&graphic) => Item::Graphic,
             _ => {
@@ -905,6 +935,8 @@ pub enum Piece {
         path: EcoString,
         /// Its width: `auto`, a length, or a ratio of its lines.
         width: folio_component::Value,
+        /// Its description, which PDF/UA-1 asks for (SPEC §11.1).
+        alt: Option<EcoString>,
         /// Its style.
         style: ComputedStyle,
         /// The primitive.
@@ -991,16 +1023,11 @@ pub(super) trait Restyle {
 
 /// The fields of an element that a template reads, with their values: a
 /// key of the template's expansion.
-pub(super) fn read_fields(template: &Template, element: &Element) -> EcoVec<eval::Value> {
+pub(super) fn read_fields(template: &Template, fields: &Fields<'_>) -> EcoVec<eval::Value> {
     template
         .reads
         .iter()
-        .map(|name| {
-            element
-                .field(name.as_str())
-                .cloned()
-                .unwrap_or(eval::Value::None)
-        })
+        .map(|name| fields.get(name).cloned().unwrap_or(eval::Value::None))
         .collect()
 }
 
@@ -1009,14 +1036,14 @@ pub(super) fn read_fields(template: &Template, element: &Element) -> EcoVec<eval
 pub(super) fn expand<R: Restyle>(
     restyle: &mut R,
     template: &Template,
-    element: &Element,
+    element: &Fields<'_>,
     style: &ComputedStyle,
     cx: R::Cx,
 ) -> Expansion {
     let mut ex = Expander {
         restyle,
         element,
-        name: &element.name,
+        name: &element.element.name,
     };
     let header = template.header.as_ref().map(|items| {
         let part = NodeName::Part(Name::new(HEADER_PART).expect("an identifier"));
@@ -1063,7 +1090,7 @@ fn trim(mut expansion: Expansion) -> Expansion {
 
 struct Expander<'r, 'e, R: Restyle> {
     restyle: &'r mut R,
-    element: &'e Element,
+    element: &'e Fields<'e>,
     name: &'e QualifiedName,
 }
 
@@ -1100,7 +1127,7 @@ impl<R: Restyle> Expander<'_, '_, R> {
                 text: text.clone(),
                 style: at.inline.clone(),
             }),
-            Item::Field(name) => match self.element.field(name.as_str()) {
+            Item::Field(name) => match self.element.get(name) {
                 None | Some(eval::Value::None) => {}
                 Some(eval::Value::Content(content)) if content.is_empty() => {}
                 Some(eval::Value::Content(_)) => out.push(Piece::Field {
@@ -1198,7 +1225,7 @@ impl<R: Restyle> Expander<'_, '_, R> {
                     children: EcoVec::new(),
                 }));
             }
-            Item::Image(path, width, span) => {
+            Item::Image(path, width, alt, span) => {
                 let width = width
                     .as_ref()
                     .and_then(|w| {
@@ -1209,6 +1236,7 @@ impl<R: Restyle> Expander<'_, '_, R> {
                 out.push(Piece::Image {
                     path: path.clone(),
                     width,
+                    alt: alt.clone(),
                     style: at.inline.clone(),
                     span: *span,
                 });
@@ -1341,6 +1369,14 @@ impl<R: Restyle> Expander<'_, '_, R> {
             Some((align, span)) => self.decls(&[("align", Declared::Keyword(name(align)))], span),
             None => EcoVec::new(),
         };
+        // A space in a row is the width of its column, not a height.
+        if let [Item::Space(..)] = inner[..] {
+            return Piece::Block(Block {
+                kind: BlockKind::Cell,
+                style: self.restyle.plain(row, extra),
+                children: EcoVec::new(),
+            });
+        }
         if let [Item::Inline(Inline::Badge, items)] = inner[..] {
             let (style, badge_cx) = self.restyle.restyle(part_name("badge"), cx, row, extra);
             let at = At {
@@ -1395,7 +1431,7 @@ impl<R: Restyle> Expander<'_, '_, R> {
 }
 
 /// The items of a cell with its conditions decided for an element.
-fn flatten<'a>(items: &'a [Item], element: &Element, out: &mut Vec<&'a Item>) {
+fn flatten<'a>(items: &'a [Item], element: &Fields<'_>, out: &mut Vec<&'a Item>) {
     for item in items {
         match item {
             Item::If(cond, then, otherwise) => {

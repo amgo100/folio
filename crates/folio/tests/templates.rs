@@ -479,3 +479,47 @@ fn a_placeholder_replaces_the_template_too() {
     blocks(&text.root, "project.example", &mut found);
     assert!(outline(found[0], &text).starts_with("-[header["));
 }
+
+#[test]
+fn a_part_the_variant_hides_is_unset_for_the_template() {
+    // In the exam the solution is hidden, so the header that tells there
+    // is one is not shown either (SPEC §6.4).
+    let style = "render example { header: \"Has a solution\" if field(solution); body: slot(statement); }\n\
+                 @variant exam { example > solution { display: none; } }\n";
+    let world = world(style, CONTENT);
+    assert_eq!(
+        example_outlines(&world)[0],
+        "-[statement[-[\"A particle is projected up a slope.\"]]]"
+    );
+    let variant = Name::new("markscheme");
+    let text = folio::text(&world, Target::Pdf, variant.as_ref())
+        .unwrap()
+        .unwrap();
+    let mut found = Vec::new();
+    blocks(&text.root, "project.example", &mut found);
+    assert!(outline(found[0], &text).starts_with("-[header[\"Has a solution\"]"));
+}
+
+#[test]
+fn a_space_in_a_row_is_a_width() {
+    let style = "render example { header: row(\"A\", space(3cm), align-end(\"B\")); body: slot(statement); }\n";
+    let world = world(style, CONTENT);
+    let styled = styles(&world);
+    let example = first(&styled, "project.example");
+    let header = example.template.as_ref().unwrap().header.as_ref().unwrap();
+    let folio::style::Piece::Block(row) = &header.items[0] else {
+        panic!("a row");
+    };
+    let folio::style::Piece::Block(space) = &row.children[1] else {
+        panic!("a cell");
+    };
+    assert!(space.children.is_empty());
+    let min_height = styled
+        .properties
+        .find(&folio_component::QualifiedName::new("min-height").unwrap())
+        .unwrap();
+    assert_eq!(
+        space.style.value(&styled.properties, min_height),
+        Some(&folio_component::Value::Length(folio_component::Abs::zero()))
+    );
+}

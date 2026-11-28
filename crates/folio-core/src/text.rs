@@ -525,8 +525,8 @@ struct Collector<'a> {
     /// The paragraph of each footnote's continuation mark, as
     /// [`Text::continued`].
     continued: Vec<Option<usize>>,
-    /// How many grids render templates have made, which tells their
-    /// locations apart.
+    /// How many grids the template of the innermost templated element
+    /// being collected has made, which tells their locations apart.
     template_grids: u64,
 }
 
@@ -697,6 +697,14 @@ impl Collector<'_> {
     /// content where the template has no body, in its own block, which is
     /// open.
     fn templated(&mut self, element: &Element, node: &StyledNode, expansion: &Expansion) {
+        // The grids of this instance are counted from its first, so that
+        // their locations do not depend on what comes before it.
+        let grids = std::mem::replace(&mut self.template_grids, 0);
+        self.templated_content(element, node, expansion);
+        self.template_grids = grids;
+    }
+
+    fn templated_content(&mut self, element: &Element, node: &StyledNode, expansion: &Expansion) {
         if let Some(header) = &expansion.header {
             self.blocks.push(TextBlock {
                 style: header.style.clone(),
@@ -759,10 +767,11 @@ impl Collector<'_> {
                 TemplatePiece::Image {
                     path,
                     width,
+                    alt,
                     style,
                     span,
                 } => {
-                    let image = self.template_image(path, width, *span);
+                    let image = self.template_image(path, width, alt, *span);
                     let b = builder.get_or_insert_with(|| self.builder());
                     b.object_with(style, element, element.location, None, image);
                 }
@@ -822,8 +831,11 @@ impl Collector<'_> {
                     }
                 }
                 TemplatePiece::Field { name, style } => {
+                    // Blocks cannot stand in a line: a content field of
+                    // blocks is left out of an inline element's template.
                     if let (Some(eval::Value::Content(content)), Some(part)) =
                         (element.field(name.as_str()), part_node(node, name))
+                        && is_inline(content)
                     {
                         let mut kids = StyledChildren::new(part);
                         self.inline(content, style, element.span, &mut kids, out, anchored);
@@ -838,7 +850,9 @@ impl Collector<'_> {
                     } else {
                         part_node(node, name)
                     };
-                    if let Some(kids_node) = kids_node {
+                    if let Some(kids_node) = kids_node
+                        && is_inline(content)
+                    {
                         let mut kids = StyledChildren::new(kids_node);
                         self.inline(content, style, element.span, &mut kids, out, anchored);
                     }
@@ -846,10 +860,11 @@ impl Collector<'_> {
                 TemplatePiece::Image {
                     path,
                     width,
+                    alt,
                     style,
                     span,
                 } => {
-                    let image = self.template_image(path, width, *span);
+                    let image = self.template_image(path, width, alt, *span);
                     out.object_with(style, element, element.location, None, image);
                 }
                 TemplatePiece::Block(block) => {
@@ -939,33 +954,56 @@ impl Collector<'_> {
     /// The image a template's `image(..)` names, read; `None`, with an
     /// error at the primitive, for a file that is missing or not an image
     /// Folio reads.
-    fn template_image(&mut self, path: &str, width: &Value, span: Span) -> Option<TextImage> {
-        let report = |db: &dyn Db, message: EcoString| {
-            diag::report(db, Diagnostic::error(span, message));
+    fn template_image(
+        &mut self,
+        path: &str,
+        width: &Value,
+        alt: &Option<EcoString>,
+        span: Span,
+    ) -> Option<TextImage> {
+        // Reported once per primitive, however many elements it shows in,
+        // and only where Folio lays the build out.
+        let report = |this: &mut Self, message: EcoString, error: bool| {
+            if this.laid_out {
+                let diagnostic = if error {
+                    Diagnostic::error(span, message.clone())
+                } else {
+                    Diagnostic::warning(span, message.clone()).with_hint(
+                        "convert the text to paths (outlines) in the program that made the image",
+                    )
+                };
+                this.report_once(eco_format!("template-image:{span:?}:{message}"), diagnostic);
+            }
         };
         let Some(project_path) = crate::project::ProjectPath::new(path) else {
             report(
-                self.db,
+                self,
                 eco_format!("`{path}` is not a path in the project"),
+                true,
             );
             return None;
         };
         let Some(file) = data_file(self.db, self.project, project_path) else {
-            if self.laid_out {
-                report(self.db, eco_format!("the image `{path}` does not exist"));
-            }
+            report(self, eco_format!("the image `{path}` does not exist"), true);
             return None;
         };
         match load_image(self.db, file) {
-            Ok(loaded) => Some(TextImage {
-                loaded: loaded.clone(),
-                width: width.clone(),
-                alt: None,
-            }),
-            Err(message) => {
-                if self.laid_out {
-                    report(self.db, message.clone());
+            Ok(loaded) => {
+                if loaded.text {
+                    report(
+                        self,
+                        "the text of this SVG image is not drawn: Folio does not set text in SVG images yet".into(),
+                        false,
+                    );
                 }
+                Some(TextImage {
+                    loaded: loaded.clone(),
+                    width: width.clone(),
+                    alt: alt.clone(),
+                })
+            }
+            Err(message) => {
+                report(self, message.clone(), true);
                 None
             }
         }
@@ -1083,8 +1121,11 @@ impl Collector<'_> {
                 let mut part_kids = StyledChildren::new(part_node);
                 self.open(&part_node.style, element, Some(field.clone()));
                 let markers = self.markers.len();
+                // An element shown with a template has no marker (SPEC
+                // §5.3): the template places its number.
                 if let Some(marker) = self.resolution.marker(element.location)
                     && marker.part.as_ref() == Some(&field)
+                    && node.template.is_none()
                 {
                     self.markers.push(Pending {
                         text: marker.text.clone(),
@@ -1844,7 +1885,6 @@ impl Builder {
     }
 }
 
-/// The text of a `raw` element without the line breaks it ends with.
 /// The node of an element's part `name`, if it has one.
 fn part_node<'a>(node: &'a StyledNode, name: &Name) -> Option<&'a StyledNode> {
     node.children
@@ -1852,6 +1892,7 @@ fn part_node<'a>(node: &'a StyledNode, name: &Name) -> Option<&'a StyledNode> {
         .find(|child| matches!(&child.name, crate::style::NodeName::Part(n) if n == name))
 }
 
+/// The text of a `raw` element without the line breaks it ends with.
 fn raw_text(element: &Element) -> Option<&str> {
     if !is_builtin(&element.name, "raw") {
         return None;

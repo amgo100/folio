@@ -528,7 +528,9 @@ impl<'a> Walker<'a> {
             });
         }
         let template = match child {
-            Child::Element(element) => self.template(element, siblings, i, context, &style),
+            Child::Element(element) => {
+                self.template(element, siblings, i, context, &style, &children)
+            }
             Child::Part(..) => None,
         };
 
@@ -551,6 +553,7 @@ impl<'a> Walker<'a> {
         i: usize,
         context: Option<ContextKey<'a>>,
         style: &ComputedStyle,
+        children: &[StyledNode],
     ) -> Option<Arc<Expansion>> {
         let cascade = self.cascade;
         let props = &cascade.properties;
@@ -601,6 +604,10 @@ impl<'a> Walker<'a> {
             return None;
         };
         let chosen = chosen.clone();
+        let fields = template::Fields {
+            element,
+            hidden: hidden_parts(props, style, children),
+        };
         // The element as its parts see it.
         let view = self.view(siblings, i, Role::Context, &cascade.needs);
         let cx = Some(ContextKey::new(self.db, view, context));
@@ -608,12 +615,12 @@ impl<'a> Walker<'a> {
             Arc::as_ptr(&chosen),
             cx,
             style.clone(),
-            template::read_fields(&chosen, element),
+            template::read_fields(&chosen, &fields),
         );
         if let Some(expansion) = self.expansions.get(&key) {
             return Some(expansion.clone());
         }
-        let expansion = Arc::new(template::expand(self, &chosen, element, style, cx));
+        let expansion = Arc::new(template::expand(self, &chosen, &fields, style, cx));
         self.expansions.insert(key, expansion.clone());
         Some(expansion)
     }
@@ -950,6 +957,48 @@ impl<'a> Restyle for Walker<'a> {
 
     fn props(&self) -> &Properties {
         &self.cascade.properties
+    }
+}
+
+/// The parts of an element that the variant hides, which its template
+/// reads as unset: those whose `display` leaves their content out (`none`,
+/// `hidden`, `answer-space`), and, where the element has `show-only`, those
+/// it does not name (SPEC §6.2, §6.3).
+fn hidden_parts(props: &Properties, style: &ComputedStyle, children: &[StyledNode]) -> Vec<Name> {
+    use folio_component::Value as V;
+    let display = props.builtin("display");
+    let kept: Option<Vec<EcoString>> = match style.value(props, props.builtin("show-only")) {
+        None | Some(V::None) => None,
+        Some(V::Array(items)) => Some(items.iter().filter_map(word).collect()),
+        Some(other) => Some(word(other).into_iter().collect()),
+    };
+    children
+        .iter()
+        .filter_map(|child| match &child.name {
+            NodeName::Part(name) => Some((name, child)),
+            _ => None,
+        })
+        .filter(|(name, child)| {
+            let left_out = match child.style.value(props, display) {
+                Some(V::None) => true,
+                Some(V::Keyword(k)) => matches!(k.as_str(), "hidden" | "answer-space"),
+                _ => false,
+            };
+            left_out
+                || kept
+                    .as_ref()
+                    .is_some_and(|kept| !kept.iter().any(|k| k == name.as_str()))
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// A name as a list of names holds it: a keyword or a string.
+fn word(value: &folio_component::Value) -> Option<EcoString> {
+    match value {
+        folio_component::Value::Keyword(k) => Some(k.as_str().into()),
+        folio_component::Value::Str(s) => Some(s.clone()),
+        _ => None,
     }
 }
 
