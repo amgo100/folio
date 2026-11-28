@@ -67,6 +67,7 @@ pub(crate) fn evaluate(script: &str, limits: Limits) -> Vec<String> {
         Lockfile::default(),
         BTreeMap::from([(path, file)]),
         BTreeMap::new(),
+        BTreeMap::new(),
         EcoVec::new(),
         EcoVec::new(),
         EcoVec::new(),

@@ -17,7 +17,7 @@ page 1 419.53 × 595.28, 13 line(s)
           shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 43.52) stroke #808080ff 0.50 Butt Miter main.fol:33:4
           shape (0.00, 0.00) M(334.24, 0.00) L(334.24, 43.52) stroke #808080ff 0.50 Butt Miter main.fol:33:4
           box (0.50, 0.50) 333.49 × 21.22 main.fol:33:4 baselines 14.29..14.29
-            text (114.89, 14.29) SourceSerif4-Regular 10.50 w 103.71 22 glyph(s) "Figure\u{a0}2: Your answer."
+            text (114.89, 14.29) SourceSerif4-Regular 10.50 w 103.71 22 glyph(s) "Figure\u{a0}1: Your answer."
       box (0.00, 184.12) 334.49 × 121.86 main.fol:29:3 baselines 16.88..93.13
         box (0.00, 0.00) 334.49 × 24.65 main.fol:29:3 baselines 16.88..16.88 keep penalty 10000
           text (0.00, 16.88) SourceSerif4-Bold 13.00 w 61.67 11 glyph(s) "2.\u{a0}Friction"
@@ -30,7 +30,7 @@ page 1 419.53 × 595.28, 13 line(s)
           shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 43.52) stroke #808080ff 0.50 Butt Miter main.fol:33:4
           shape (0.00, 0.00) M(334.24, 0.00) L(334.24, 43.52) stroke #808080ff 0.50 Butt Miter main.fol:33:4
           box (0.50, 0.50) 333.49 × 21.22 main.fol:33:4 baselines 14.29..14.29
-            text (114.89, 14.29) SourceSerif4-Regular 10.50 w 103.71 22 glyph(s) "Figure\u{a0}4: Your answer."
+            text (114.89, 14.29) SourceSerif4-Regular 10.50 w 103.71 22 glyph(s) "Figure\u{a0}3: Your answer."
       box (0.00, 321.58) 334.49 × 118.45 main.fol:29:3 baselines 16.88..93.13
         box (0.00, 0.00) 334.49 × 24.65 main.fol:29:3 baselines 16.88..16.88 keep penalty 10000
           text (0.00, 16.88) SourceSerif4-Bold 13.00 w 59.71 10 glyph(s) "3.\u{a0}Springs"
@@ -44,7 +44,7 @@ page 1 419.53 × 595.28, 13 line(s)
           shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 40.11) stroke #808080ff 0.50 Butt Miter main.fol:33:4
           shape (0.00, 0.00) M(334.24, 0.00) L(334.24, 40.11) stroke #808080ff 0.50 Butt Miter main.fol:33:4
           box (0.50, 0.50) 333.49 × 17.81 main.fol:33:4 baselines 14.29..14.29
-            text (114.89, 14.29) SourceSerif4-Regular 10.50 w 103.71 22 glyph(s) "Figure\u{a0}6: Your answer."
+            text (114.89, 14.29) SourceSerif4-Regular 10.50 w 103.71 22 glyph(s) "Figure\u{a0}5: Your answer."
 page 2 419.53 × 595.28, 8 line(s)
   box (42.52, 42.52) 334.49 × 510.24 main.fol:1:2 baselines 13.47..225.63
     box (0.00, 0.00) 334.49 × 229.14 main.fol:1:2 baselines 13.47..225.63
@@ -60,7 +60,7 @@ page 2 419.53 × 595.28, 8 line(s)
           shape (0.00, 0.00) M(0.25, 0.00) L(0.25, 43.52) stroke #808080ff 0.50 Butt Miter main.fol:33:4
           shape (0.00, 0.00) M(334.24, 0.00) L(334.24, 43.52) stroke #808080ff 0.50 Butt Miter main.fol:33:4
           box (0.50, 0.50) 333.49 × 21.22 main.fol:33:4 baselines 14.29..14.29
-            text (114.89, 14.29) SourceSerif4-Regular 10.50 w 103.71 22 glyph(s) "Figure\u{a0}8: Your answer."
+            text (114.89, 14.29) SourceSerif4-Regular 10.50 w 103.71 22 glyph(s) "Figure\u{a0}7: Your answer."
       box (0.00, 134.05) 334.49 × 95.10 main.fol:38:1 baselines 16.88..91.58
         box (0.00, 0.00) 334.49 × 24.65 main.fol:38:1 baselines 16.88..16.88 keep penalty 10000
           text (0.00, 16.88) SourceSerif4-Bold 13.00 w 98.89 16 glyph(s) "5.\u{a0}Short answers"

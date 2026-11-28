@@ -91,7 +91,7 @@ fn builds_the_corpus() {
         assert_eq!(actual, digest, "{built} of {project}");
         checked += 1;
     }
-    assert_eq!(checked, 18);
+    assert_eq!(checked, 19);
 }
 
 #[test]
@@ -117,6 +117,130 @@ fn reports_a_missing_entry_file() {
     let text = stderr(&output);
     assert!(text.contains("error: file `main.fol` not found"), "{text}");
     assert!(text.contains("folio.toml:2:9"), "{text}");
+}
+
+/// SPEC §12.1: a reader that stops early, as `head` does, closes the pipe
+/// that standard error writes to. The command stops writing and exits with
+/// the status of the check, 1 for errors, not 101 for a crash (#343).
+#[test]
+fn a_closed_pipe_ends_the_report_quietly() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let entry: Vec<String> = (0..3000).map(|i| format!("#nothing{i}")).collect();
+    let dir = project(&[("folio.toml", MANIFEST), ("main.fol", &entry.join("\n\n"))]);
+    for format in ["human", "json"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_folio"))
+            .args(["check", "--diagnostics", format])
+            .current_dir(dir.path())
+            .env_remove("FOLIO_CACHE_DIR")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut reader = BufReader::new(child.stderr.take().unwrap());
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        assert!(!first.is_empty(), "{format}");
+        // The report is far larger than a pipe holds, so writing the rest
+        // finds the pipe closed.
+        drop(reader);
+        let status = child.wait().unwrap();
+        assert_eq!(status.code(), Some(1), "{format}");
+    }
+}
+
+/// A source that is not UTF-8 is an error where it is used, which says
+/// why it was not read, not that it is missing (#343).
+#[test]
+fn reports_why_a_source_was_not_read() {
+    let dir = project(&[("folio.toml", MANIFEST)]);
+    // Latin-1, as an old editor might save it.
+    fs::write(dir.path().join("main.fol"), b"= Si\xb3y\n").unwrap();
+    let output = folio(dir.path(), &["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains("error: cannot read `main.fol`: it is not UTF-8 text"),
+        "{text}"
+    );
+    assert!(text.contains("folio.toml:2:9"), "{text}");
+    assert!(!text.contains("not found"), "{text}");
+
+    let output = folio(dir.path(), &["check", "--diagnostics", "json"]);
+    let document = json(&output);
+    let diagnostics = document["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{document}");
+    assert_eq!(
+        diagnostics[0]["message"],
+        "cannot read `main.fol`: it is not UTF-8 text"
+    );
+    assert_eq!(diagnostics[0]["location"]["path"], "folio.toml");
+
+    // `folio fmt` builds nothing, so it says itself why it left the file.
+    let output = folio(dir.path(), &["fmt", "--check"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stderr(&output);
+    assert!(
+        text.contains("warning: cannot read `main.fol`: it is not UTF-8 text"),
+        "{text}"
+    );
+}
+
+/// A `.fol` link that leads out of the project is an error where it is
+/// imported, which says so (#343).
+#[cfg(unix)]
+#[test]
+fn reports_a_source_link_out_of_the_project() {
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("q1.fol"), "= Question\n").unwrap();
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "#include \"q1.fol\"\n"),
+    ]);
+    std::os::unix::fs::symlink(outside.path().join("q1.fol"), dir.path().join("q1.fol")).unwrap();
+    let output = folio(dir.path(), &["check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains("error: cannot read `q1.fol`: it is a link that leads out of the project"),
+        "{text}"
+    );
+    assert!(text.contains("main.fol:1:10"), "{text}");
+
+    // So is reading it as text.
+    fs::write(dir.path().join("main.fol"), "#read(\"q1.fol\")\n").unwrap();
+    let text = stderr(&folio(dir.path(), &["check"]));
+    assert!(
+        text.contains("error: cannot read `q1.fol`: it is a link that leads out of the project"),
+        "{text}"
+    );
+    assert!(text.contains("main.fol:1:7"), "{text}");
+}
+
+/// In a file that starts with a byte order mark, which the loader leaves
+/// out of the text, byte ranges in the JSON document count from the file's
+/// first byte, and lines and columns from the text (#276).
+#[test]
+fn json_byte_ranges_count_a_byte_order_mark() {
+    let dir = project(&[
+        ("folio.toml", MANIFEST),
+        ("main.fol", "\u{FEFF}= Forces\n\n#box(\n"),
+    ]);
+    let output = folio(dir.path(), &["check", "--diagnostics", "json"]);
+    let document = json(&output);
+    let location = &document["diagnostics"][0]["location"];
+    assert_eq!(location["path"], "main.fol", "{document:#}");
+    // `(` is at byte 14 of the text and 17 of the file.
+    assert_eq!(location["bytes"]["start"], 17, "{document:#}");
+    assert_eq!(location["start"]["line"], 3);
+    assert_eq!(location["start"]["column"], 5);
+    let file = fs::read(dir.path().join("main.fol")).unwrap();
+    assert_eq!(file[17], b'(');
+
+    // The excerpt still shows the right place.
+    let text = stderr(&folio(dir.path(), &["check", "--color", "never"]));
+    assert!(text.contains("┌─ main.fol:3:5"), "{text}");
 }
 
 #[test]
@@ -532,6 +656,9 @@ fn formats_the_corpus_without_changing_its_outputs() {
         let document = json(&output);
         let diagnostics = document["diagnostics"].as_array().unwrap();
         assert_eq!(diagnostics.len(), files.len(), "{name}: {document:#}");
+        // A check rewrites nothing (#277).
+        assert_eq!(document["formatted"], serde_json::json!([]), "{name}");
+        assert_eq!(document["builds"], serde_json::json!([]), "{name}");
         for diagnostic in diagnostics {
             assert_eq!(diagnostic["code"], "unformatted");
             assert!(
@@ -547,7 +674,27 @@ fn formats_the_corpus_without_changing_its_outputs() {
         }
 
         // Formatting gives what formatting the corpus gives, and the same
-        // outputs.
+        // outputs. The JSON document lists the files it rewrote, in path
+        // order: every untidy one, and on a second run none (#277).
+        let mut untidy_paths: Vec<_> = files.iter().map(|(path, _)| path.clone()).collect();
+        untidy_paths.sort();
+        let output = folio(messy.path(), &["fmt", "--diagnostics", "json"]);
+        assert!(output.status.success(), "{name}: {}", stderr(&output));
+        let document = json(&output);
+        assert_eq!(document["version"], 1);
+        assert_eq!(
+            document["formatted"],
+            serde_json::json!(untidy_paths),
+            "{name}: {document:#}"
+        );
+        let output = folio(messy.path(), &["fmt", "--diagnostics", "json"]);
+        assert_eq!(json(&output)["formatted"], serde_json::json!([]), "{name}");
+        // Without the flag, each rewritten file is a line.
+        let lines = folio(tidy.path(), &["fmt"]);
+        assert!(lines.status.success(), "{name}: {}", stderr(&lines));
+        for line in stderr(&lines).lines() {
+            assert!(line.starts_with("formatted "), "{name}: {line}");
+        }
         for dir in [tidy.path(), messy.path()] {
             let output = folio(dir, &["fmt"]);
             assert!(output.status.success(), "{name}: {}", stderr(&output));
@@ -653,8 +800,9 @@ fn formatting_keeps_byte_order_marks_and_permissions() {
     let read = |name: &str| fs::read_to_string(path(name)).unwrap();
     assert_eq!(read("main.fol"), "\u{FEFF}= Forces\n");
 
-    // A file with a byte order mark gets no fix, whose byte ranges would
-    // not count the mark.
+    // A file with a byte order mark gets a fix whose byte ranges count in
+    // the file, the mark included, so applying it to the file formats it
+    // (#276).
     fs::write(path("main.fol"), "\u{FEFF}= Forces  \n").unwrap();
     let output = folio(dir.path(), &["fmt", "--check", "--diagnostics", "json"]);
     let document = json(&output);
@@ -665,7 +813,23 @@ fn formatting_keeps_byte_order_marks_and_permissions() {
         .filter(|d| d["code"] == "unformatted" && d["location"]["path"] == "main.fol")
         .collect();
     assert_eq!(unformatted.len(), 1, "{document:#}");
-    assert!(unformatted[0]["fixes"].as_array().unwrap().is_empty());
+    let fixes = unformatted[0]["fixes"].as_array().unwrap();
+    assert_eq!(fixes.len(), 1, "{document:#}");
+    let mut bytes = fs::read(path("main.fol")).unwrap();
+    let mut edits: Vec<_> = fixes[0]["edits"].as_array().unwrap().iter().collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e["location"]["bytes"]["start"].as_u64()));
+    for edit in edits {
+        let range = &edit["location"]["bytes"];
+        let start = range["start"].as_u64().unwrap() as usize;
+        let end = range["end"].as_u64().unwrap() as usize;
+        let replacement = edit["replacement"].as_str().unwrap().as_bytes();
+        bytes.splice(start..end, replacement.iter().copied());
+    }
+    assert_eq!(String::from_utf8(bytes).unwrap(), "\u{FEFF}= Forces\n");
+    // The location of the diagnostic counts in the file too; its line and
+    // column count in the text, as an editor shows it.
+    assert_eq!(unformatted[0]["location"]["bytes"]["start"], 11);
+    assert_eq!(unformatted[0]["location"]["start"]["column"], 9);
     assert_eq!(read("style.fsty"), "a {\n  b: c\n}\n");
     assert_eq!(read("locked.fsty"), "a{b:c}");
     #[cfg(unix)]

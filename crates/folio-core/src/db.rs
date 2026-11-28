@@ -106,6 +106,11 @@ pub struct Project {
     /// [`Durability::LOW`].
     #[returns(ref)]
     pub files: BTreeMap<ProjectPath, DataFile>,
+    /// The `.fol` and `.fsty` files the host found in the project but could
+    /// not take as sources, with why, so that a build that names one says
+    /// why rather than that it is not found. [`Durability::LOW`].
+    #[returns(ref)]
+    pub unreadable: BTreeMap<ProjectPath, Unreadable>,
     /// The fonts bundled with the compiler. [`Durability::HIGH`].
     #[returns(ref)]
     pub bundled_fonts: EcoVec<FontFile>,
@@ -460,6 +465,59 @@ pub fn report_read(db: &dyn Db, path: ProjectPath, kind: FileKind) {
     Read(FileRead { path, kind }).accumulate(db);
 }
 
+/// Why the host could not take a `.fol` or `.fsty` file of the project as
+/// a source ([`Project::unreadable`]).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum Unreadable {
+    /// Its bytes are not UTF-8 text.
+    NotUtf8,
+    /// It is a symbolic link that leads out of the project.
+    LinkOutOfProject,
+    /// It could not be read; the system's reason.
+    Io(EcoString),
+}
+
+impl Unreadable {
+    /// How to fix it, if there is a hint.
+    pub fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::NotUtf8 => Some("save the file as UTF-8; Folio reads sources only in UTF-8"),
+            Self::LinkOutOfProject => Some("Folio reads files only inside the project directory"),
+            Self::Io(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for Unreadable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotUtf8 => f.write_str("it is not UTF-8 text"),
+            Self::LinkOutOfProject => f.write_str("it is a link that leads out of the project"),
+            Self::Io(why) => f.write_str(why),
+        }
+    }
+}
+
+/// What to say of a source that a build names but the project does not
+/// have: the message, and a hint if there is one. Says why when the host
+/// found the file but could not take it ([`Project::unreadable`]).
+pub fn missing_source(
+    db: &dyn Db,
+    project: Project,
+    path: &ProjectPath,
+) -> (EcoString, Option<&'static str>) {
+    let Some(why) = project.unreadable(db).get(path) else {
+        return (
+            eco_format!("file `{}` not found", path.as_str()),
+            Some("Folio reads `.fol` and `.fsty` files inside the project"),
+        );
+    };
+    (
+        eco_format!("cannot read `{}`: {why}", path.as_str()),
+        why.hint(),
+    )
+}
+
 /// The source file at a path, if the project has one.
 ///
 /// Re-runs when a file is added or removed, but returns the same file for
@@ -586,11 +644,12 @@ pub fn build_files(db: &dyn Db, build: Build<'_>) -> EcoVec<SourceFile> {
         };
         report_read(db, path.clone(), kind);
         let Some(file) = source_file(db, project, path.clone()) else {
-            diag::report(
-                db,
-                Diagnostic::error(span, eco_format!("file `{}` not found", path.as_str()))
-                    .with_hint("Folio reads `.fol` and `.fsty` files inside the project"),
-            );
+            let (message, hint) = missing_source(db, project, &path);
+            let mut error = Diagnostic::error(span, message);
+            if let Some(hint) = hint {
+                error = error.with_hint(hint);
+            }
+            diag::report(db, error);
             continue;
         };
         out.push(file);

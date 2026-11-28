@@ -111,8 +111,8 @@ pub(crate) fn watch(args: &WatchArgs) -> ExitCode {
         Ok(preview) => preview,
         Err(e) => return fail(e.to_string()),
     };
-    println!("Preview at {}", preview.url());
-    println!("Press Ctrl-C to stop.");
+    outln!("Preview at {}", preview.url());
+    outln!("Press Ctrl-C to stop.");
     match preview.wait() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(e.to_string()),
@@ -209,8 +209,8 @@ fn updated(event: &Event, shown: &Mutex<Option<Shown>>, color: bool) {
     let errors = update.diagnostics.iter().filter(|d| d.is_error()).count();
     let warnings = update.diagnostics.len() - errors;
     match &update.banner {
-        Some(banner) => eprintln!("{banner}"),
-        None => eprintln!(
+        Some(banner) => errln!("{banner}"),
+        None => errln!(
             "{} page(s), {errors} error(s), {warnings} warning(s)",
             update.pages
         ),
@@ -233,7 +233,7 @@ fn write_outputs(root: &Path, outputs: &Outputs, color: bool) {
             continue;
         };
         match write(root, path.as_deref(), compiled, &read) {
-            Ok(Written::File(path)) => eprintln!("wrote {path}"),
+            Ok(Written::File(path)) => errln!("wrote {path}"),
             Ok(Written::Nothing | Written::Skipped(_)) => {}
             Err(message) => print(&*outputs.files, &[error(message)], color),
         }

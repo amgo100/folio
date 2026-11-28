@@ -1,12 +1,14 @@
 # Diagnostics as JSON
 
-`folio build --diagnostics json` writes one JSON document to standard error when the command ends, in place of the source excerpts and the `wrote …` lines it writes by default (SPEC §12, §12.1). `folio check --diagnostics json` writes the same document: the diagnostics that `folio build` would report, and each build it checked with the status `"checked"` and no path, as a check writes nothing. Apart from the cases below, standard error then holds that document and nothing else, so a program can parse all of it. The exit status is the same as without the flag.
+`folio build --diagnostics json` writes one JSON document to standard error when the command ends, in place of the source excerpts and the `wrote …` lines it writes by default (SPEC §12, §12.1). `folio check --diagnostics json` writes the same document: the diagnostics that `folio build` would report, and each build it checked with the status `"checked"` and no path, as a check writes nothing. `folio fmt --diagnostics json` writes it too, in place of the `formatted …` lines: its diagnostics (with `--check`, an error with the code `unformatted` and a fix for each file that is not formatted), no builds, and the files it rewrote in `formatted`. Apart from the cases below, standard error then holds that document and nothing else, so a program can parse all of it. The exit status is the same as without the flag.
 
 Some messages are still plain text, with no document or before it:
 
 - Arguments that do not parse, and commands or flags that are not supported yet, end with a plain message and exit status 2.
 - Handing the build to the compiler version that `folio.toml` pins (SPEC §2.4) happens before the arguments are read. A failure to run that version ends with a plain message and exit status 1. A warning that the pinned version has an unfixed security problem is plain text before the pinned version's own output.
 - A crash of the compiler (exit status 101) writes no document.
+
+A reader that closes standard error before the document ends, as `head` does, gets what it read; the command writes nothing more and exits with the status it would have had.
 
 ## Version 1
 
@@ -41,7 +43,8 @@ Some messages are still plain text, with no document or before it:
 | --- | --- | --- |
 | `version` | integer | The version of this shape: `1`. |
 | `diagnostics` | array of diagnostics | Every diagnostic of the command, in the order the terminal would show them. A diagnostic that several builds report appears once. |
-| `builds` | array of builds | The builds that were compiled or checked, in the manifest's order, each once. It is empty when the command stopped before compiling, for example because the manifest has errors. |
+| `builds` | array of builds | The builds that were compiled or checked, in the manifest's order, each once. It is empty when the command stopped before compiling, for example because the manifest has errors, and always from `folio fmt`, which builds nothing. |
+| `formatted` | array of strings | Only from `folio fmt`: the files it rewrote, relative to the project directory with `/` between directories, in path order. Empty with `--check`, which rewrites nothing, and when every file was formatted already. A file that a link leads to is listed once, under the first path that reaches it. Compilers before the field was added leave it out, so a missing field means the files are not known, not that none was rewritten. |
 
 ### A diagnostic
 
@@ -65,7 +68,7 @@ Most diagnostics have no code yet. These have one:
 | --- | --- | --- |
 | `internal-error` | error | A query panicked in a long-lived process; it has no location. |
 | `namespace-element` | warning | A selector `name.` where `name` is both a component namespace and an element, so it reads as the namespace. |
-| `overfull-line` | warning | A line is wider than its space: no break fits. At the text the line ends with. |
+| `overfull-line` | warning | A line is wider than its space: no break fits. At the text the line ends with, or at the object (an inline formula or image) that makes the line overflow. |
 | `underfull-line` | warning | A justified line's spaces stretch further than its badness allows (TeX's limit), or it has no spaces to stretch. At the text the line ends with. |
 | `widow` | warning | A page break leaves fewer lines of a paragraph at the top of a page than `widows` asks for. At the paragraph. |
 | `orphan` | warning | A page break leaves fewer lines of a paragraph at the foot of a page than `orphans` asks for. At the paragraph. |
@@ -81,8 +84,8 @@ Most diagnostics have no code yet. These have one:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `path` | string | The file, relative to the project directory, with `/` between directories. |
-| `bytes` | `{ "start", "end" }` | The byte range in the file's text, UTF-8, end exclusive. |
-| `start`, `end` | `{ "line", "column" }` | Where the range starts and ends. Lines and columns count from 1; columns count Unicode scalar values, not bytes or UTF-16 code units. The byte range is exact for any other measure. |
+| `bytes` | `{ "start", "end" }` | The byte range in the file, UTF-8, end exclusive, counted from the file's first byte, so an edit of a fix applies to the file as it is on disk. A byte order mark at the start of a `.fol` or `.fsty` file, which Folio leaves out of the source's text, counts (3 bytes). |
+| `start`, `end` | `{ "line", "column" }` | Where the range starts and ends. Lines and columns count from 1; columns count Unicode scalar values, not bytes or UTF-16 code units, and the byte order mark of a `.fol` or `.fsty` file is not counted in the first line, as an editor shows it. The byte range is exact for any other measure. |
 
 ### A build
 
@@ -98,3 +101,4 @@ Most diagnostics have no code yet. These have one:
 
 - A program should ignore fields it does not know. New fields, and new values of `status`, may appear without a change of version.
 - Removing or renaming a field, or changing the meaning or type of one, raises `version`.
+- Corrected within version 1 (decision recorded: D-276-1 = A): `bytes` counts from a file's first byte, a byte order mark included. Earlier compilers gave ranges 3 bytes early for a `.fol` or `.fsty` file that starts with one; this was a bug, not a change of meaning.

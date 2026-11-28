@@ -137,7 +137,8 @@ pub enum Event {
     Revealed {
         /// The source's project path.
         path: String,
-        /// The bytes, in the file on disk.
+        /// The bytes, in the text of the file on disk, without a byte
+        /// order mark, as the preview counts them.
         bytes: std::ops::Range<usize>,
         /// How many areas of the pages show them.
         areas: usize,
