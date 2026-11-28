@@ -49,7 +49,7 @@ use rayon::prelude::*;
 pub use folio_component::{
     Abs, Fragment, FragmentItem, GlyphRun, Name, Point, Ratio, Registry, Size, SourceRef, Target,
 };
-pub use folio_core::db::{BuildMode, Bytes, FileKind, FileRead};
+pub use folio_core::db::{BuildMode, Bytes, FileKind, FileRead, Unreadable};
 pub use folio_core::diag::{Diagnostic, Edit, Fix, Related, Severity};
 pub use folio_core::eval;
 pub use folio_core::eval::Limits;

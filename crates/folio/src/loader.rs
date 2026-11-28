@@ -165,8 +165,11 @@ pub struct ProjectFile {
     /// names it, and for a source that was not taken.
     pub bytes: Option<Vec<u8>>,
     /// Why a source was not taken: it could not be read, or it is a link
-    /// that leads out of the project. A build that names it says why.
-    refused: Option<Unreadable>,
+    /// that leads out of the project, whose target `disk` then names. A
+    /// world records it ([`World::unreadable_sources`]), and a build that
+    /// names it says why. Whether its bytes are UTF-8 is checked when it is
+    /// set in a world.
+    pub refused: Option<Unreadable>,
 }
 
 /// What [`Loader::update`] changed.
@@ -280,8 +283,10 @@ impl Loader {
     }
 
     /// Finds the files of the project, in path order, and reads its
-    /// sources. Warns of sources and directories that cannot be read; fails
-    /// only when the project directory cannot.
+    /// sources. A source that cannot be read, or is a link that leads out
+    /// of the project, comes with why ([`ProjectFile::refused`]). Warns of
+    /// directories that cannot be read; fails only when the project
+    /// directory cannot.
     pub fn read_files(
         &mut self,
         warnings: &mut Vec<Diagnostic>,

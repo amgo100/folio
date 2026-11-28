@@ -454,7 +454,9 @@ impl World {
     }
 
     /// Sets the text of a `.fol` or `.fsty` file, adding the file if it is
-    /// new. A file that exists is reparsed only where its text changed.
+    /// new. A file that exists is reparsed only where its text changed. The
+    /// text replaces a file at the path that the loader could not take
+    /// ([`Self::unreadable_sources`]), as an editor's buffer does.
     pub fn set_source(&mut self, path: &str, text: &str) -> Result<FileId, WorldError> {
         let path = project_path(path)?;
         let stylesheet = match path.extension() {
@@ -487,6 +489,14 @@ impl World {
             .new(&self.db);
         self.edit_sources(|sources| sources.insert(path, file));
         Ok(id)
+    }
+
+    /// The `.fol` and `.fsty` files that the loader found but could not
+    /// take as sources, in path order, with why. A build that names one
+    /// reports why; a host that runs no build, such as `folio fmt`, can
+    /// report them itself.
+    pub fn unreadable_sources(&self) -> impl Iterator<Item = (&ProjectPath, &Unreadable)> {
+        self.project.unreadable(&self.db).iter()
     }
 
     /// Records that the host found a `.fol` or `.fsty` file at `path` but

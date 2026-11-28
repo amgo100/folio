@@ -477,6 +477,27 @@ pub enum Unreadable {
     Io(EcoString),
 }
 
+impl Unreadable {
+    /// How to fix it, if there is a hint.
+    pub fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::NotUtf8 => Some("save the file as UTF-8; Folio reads sources only in UTF-8"),
+            Self::LinkOutOfProject => Some("Folio reads files only inside the project directory"),
+            Self::Io(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for Unreadable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotUtf8 => f.write_str("it is not UTF-8 text"),
+            Self::LinkOutOfProject => f.write_str("it is a link that leads out of the project"),
+            Self::Io(why) => f.write_str(why),
+        }
+    }
+}
+
 /// What to say of a source that a build names but the project does not
 /// have: the message, and a hint if there is one. Says why when the host
 /// found the file but could not take it ([`Project::unreadable`]).
@@ -485,23 +506,16 @@ pub fn missing_source(
     project: Project,
     path: &ProjectPath,
 ) -> (EcoString, Option<&'static str>) {
-    let reason = project.unreadable(db).get(path);
-    let path = path.as_str();
-    match reason {
-        None => (
-            eco_format!("file `{path}` not found"),
+    let Some(why) = project.unreadable(db).get(path) else {
+        return (
+            eco_format!("file `{}` not found", path.as_str()),
             Some("Folio reads `.fol` and `.fsty` files inside the project"),
-        ),
-        Some(Unreadable::NotUtf8) => (
-            eco_format!("cannot read `{path}`: it is not UTF-8 text"),
-            Some("save the file as UTF-8; Folio reads sources only in UTF-8"),
-        ),
-        Some(Unreadable::LinkOutOfProject) => (
-            eco_format!("cannot read `{path}`: it is a link that leads out of the project"),
-            Some("Folio reads files only inside the project directory"),
-        ),
-        Some(Unreadable::Io(why)) => (eco_format!("cannot read `{path}`: {why}"), None),
-    }
+        );
+    };
+    (
+        eco_format!("cannot read `{}`: {why}", path.as_str()),
+        why.hint(),
+    )
 }
 
 /// The source file at a path, if the project has one.

@@ -242,7 +242,8 @@ fn updates_follow_the_disk() {
         }
     }
 
-    // A source that is no longer UTF-8 is removed, with a warning.
+    // A source that is no longer UTF-8 is removed and recorded as
+    // unreadable, which a build that names it reports (#343).
     fs::write(root.join("main.fol"), [0xff, 0xfe]).unwrap();
     let mut warnings = Vec::new();
     let update = loader
@@ -250,7 +251,12 @@ fn updates_follow_the_disk() {
         .unwrap();
     assert_eq!(changed(&update), ["main.fol"]);
     assert!(world.source("main.fol").is_none());
-    assert_eq!(warnings.len(), 1);
+    let unreadable: Vec<_> = world
+        .unreadable_sources()
+        .map(|(path, why)| (path.as_str(), why.clone()))
+        .collect();
+    assert_eq!(unreadable, [("main.fol", folio::Unreadable::NotUtf8)]);
+    assert!(warnings.is_empty());
 }
 
 /// A new manifest replaces the world's, and its outputs are no longer

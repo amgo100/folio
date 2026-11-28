@@ -176,6 +176,15 @@ fn reports_why_a_source_was_not_read() {
         "cannot read `main.fol`: it is not UTF-8 text"
     );
     assert_eq!(diagnostics[0]["location"]["path"], "folio.toml");
+
+    // `folio fmt` builds nothing, so it says itself why it left the file.
+    let output = folio(dir.path(), &["fmt", "--check"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stderr(&output);
+    assert!(
+        text.contains("warning: cannot read `main.fol`: it is not UTF-8 text"),
+        "{text}"
+    );
 }
 
 /// A `.fol` link that leads out of the project is an error where it is
