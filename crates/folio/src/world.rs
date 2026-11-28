@@ -7,7 +7,8 @@ use std::io;
 use std::num::NonZeroU16;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
 use ecow::{EcoString, EcoVec};
 use folio_component::{Name, Registry, Target};
@@ -69,9 +70,18 @@ pub struct World {
 }
 
 /// What a long-lived world keeps of each build ([`WorldBuilder::long_lived`]),
-/// to answer with when compiling it panics.
+/// to answer with when compiling it panics, and what the first panic in a
+/// query of the current revision said.
 #[derive(Debug, Default)]
-pub(crate) struct Kept(Mutex<HashMap<(Option<Name>, Target), Last>>);
+pub(crate) struct Kept {
+    builds: Mutex<HashMap<(Option<Name>, Target), Last>>,
+    /// The revision of the first panic in a query recorded, and what it
+    /// said: salsa tells the builds that waited for the query only that it
+    /// panicked, so they name the cause from here.
+    panic: Mutex<Option<(salsa::Revision, EcoString)>>,
+    /// Notified when a panic is recorded.
+    panicked: Condvar,
+}
 
 /// What the last compilation or check of a build that did not panic gave.
 #[derive(Debug, Clone, Default)]
@@ -117,7 +127,39 @@ impl Kept {
 
     fn lock(&self) -> MutexGuard<'_, HashMap<(Option<Name>, Target), Last>> {
         // Each update is one call that does not panic.
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
+        self.builds.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Records what a panic in a query of a revision said, unless a panic
+    /// of that revision was recorded already.
+    pub(crate) fn record_panic(&self, revision: salsa::Revision, message: &str) {
+        let mut panic = self.panic.lock().unwrap_or_else(|e| e.into_inner());
+        if panic.as_ref().is_none_or(|(r, _)| *r != revision) {
+            *panic = Some((revision, message.into()));
+            self.panicked.notify_all();
+        }
+    }
+
+    /// What the first panic recorded for a revision said, waiting up to
+    /// `timeout` for one to be recorded. A build that waited for a query
+    /// that panicked can get there before the build that ran it, which
+    /// records it once it has unwound.
+    pub(crate) fn panic_of(
+        &self,
+        revision: salsa::Revision,
+        timeout: Duration,
+    ) -> Option<EcoString> {
+        let panic = self.panic.lock().unwrap_or_else(|e| e.into_inner());
+        let (panic, _) = self
+            .panicked
+            .wait_timeout_while(panic, timeout, |p| {
+                p.as_ref().is_none_or(|(r, _)| *r != revision)
+            })
+            .unwrap_or_else(|e| e.into_inner());
+        panic
+            .as_ref()
+            .filter(|(r, _)| *r == revision)
+            .map(|(_, message)| message.clone())
     }
 }
 

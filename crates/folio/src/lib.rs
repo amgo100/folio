@@ -40,6 +40,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::panic::{self, AssertUnwindSafe};
+use std::time::Duration;
 
 use ecow::{EcoString, EcoVec, eco_format};
 use folio_core::db::Read;
@@ -457,9 +458,10 @@ impl Compiled {
 ///
 /// The problems found are the diagnostics that [`compile`] reports for the
 /// variant. Evaluation does not depend on the target, so every target of a
-/// variant shares it. Fails only when an edit to the world cancels it.
-pub fn evaluate(world: &World, variant: Option<&Name>) -> Result<Option<eval::Content>, Cancelled> {
-    catch(world, || {
+/// variant shares it. Fails when an edit to the world cancels it, or a query
+/// panics in a long-lived world ([`Failed`]).
+pub fn evaluate(world: &World, variant: Option<&Name>) -> Result<Option<eval::Content>, Failed> {
+    stage(world, || {
         eval::evaluate(world.db(), world.project(), variant.cloned(), None).clone()
     })
 }
@@ -469,13 +471,11 @@ pub fn evaluate(world: &World, variant: Option<&Name>) -> Result<Option<eval::Co
 /// only for a project that declares no variants.
 ///
 /// The problems found are the diagnostics that [`compile`] reports for the
-/// variant. Like evaluation, it does not depend on the target. Fails only
-/// when an edit to the world cancels it.
-pub fn document(
-    world: &World,
-    variant: Option<&Name>,
-) -> Result<Option<model::Document>, Cancelled> {
-    catch(world, || {
+/// variant. Like evaluation, it does not depend on the target. Fails
+/// when an edit to the world cancels it, or a query
+/// panics in a long-lived world ([`Failed`]).
+pub fn document(world: &World, variant: Option<&Name>) -> Result<Option<model::Document>, Failed> {
+    stage(world, || {
         model::document(world.db(), world.project(), variant.cloned(), None).clone()
     })
 }
@@ -486,13 +486,14 @@ pub fn document(
 /// project that declares no variants.
 ///
 /// The problems found are the diagnostics that [`compile`] reports for the
-/// build. Fails only when an edit to the world cancels it.
+/// build. Fails when an edit to the world cancels it, or a query
+/// panics in a long-lived world ([`Failed`]).
 pub fn styles(
     world: &World,
     target: Target,
     variant: Option<&Name>,
-) -> Result<Option<style::Styled>, Cancelled> {
-    catch(world, || {
+) -> Result<Option<style::Styled>, Failed> {
+    stage(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         style::styles(db, build).clone()
@@ -576,10 +577,11 @@ pub fn resolve(
 /// what pins it.
 ///
 /// The problems found (files that hold no font, locked fonts that are
-/// missing or changed) are diagnostics that [`compile`] reports. Fails only
-/// when an edit to the world cancels it.
-pub fn fonts(world: &World) -> Result<Fonts, Cancelled> {
-    catch(world, || {
+/// missing or changed) are diagnostics that [`compile`] reports. Fails
+/// when an edit to the world cancels it, or a query
+/// panics in a long-lived world ([`Failed`]).
+pub fn fonts(world: &World) -> Result<Fonts, Failed> {
+    stage(world, || {
         folio_core::fonts::fonts(world.db(), world.project()).clone()
     })
 }
@@ -592,14 +594,11 @@ pub fn fonts(world: &World) -> Result<Fonts, Cancelled> {
 ///
 /// Paragraphs equal to ones shaped before in this world share their shaped
 /// form, so after an edit only the changed paragraphs are shaped again. The
-/// problems found are diagnostics that [`compile`] reports. Fails only when
-/// an edit to the world cancels it.
-pub fn text(
-    world: &World,
-    target: Target,
-    variant: Option<&Name>,
-) -> Result<Option<Text>, Cancelled> {
-    catch(world, || {
+/// problems found are diagnostics that [`compile`] reports. Fails when
+/// an edit to the world cancels it, or a query
+/// panics in a long-lived world ([`Failed`]).
+pub fn text(world: &World, target: Target, variant: Option<&Name>) -> Result<Option<Text>, Failed> {
+    stage(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         folio_core::text::text(db, build).clone()
@@ -615,14 +614,15 @@ pub fn text(
 /// Paragraphs whose content, style and widths are equal to ones broken
 /// before in this world share their lines, so after an edit only the
 /// changed paragraphs are broken again. Overfull and underfull lines are
-/// diagnostics that [`compile`] reports. Fails only when an edit to the
-/// world cancels it.
+/// diagnostics that [`compile`] reports. Fails when an edit to the
+/// world cancels it, or a query
+/// panics in a long-lived world ([`Failed`]).
 pub fn lines(
     world: &World,
     target: Target,
     variant: Option<&Name>,
-) -> Result<Option<Lines>, Cancelled> {
-    catch(world, || {
+) -> Result<Option<Lines>, Failed> {
+    stage(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         layout::lines(db, build).clone()
@@ -640,14 +640,15 @@ pub fn lines(
 /// Pages whose content is equal to pages laid out before in this world are
 /// taken from the page cache. Constraints that a page break had to relax
 /// (widows, orphans, keeps) and content that does not fit on a page are
-/// diagnostics that [`compile`] reports. Fails only when an edit to the
-/// world cancels it.
+/// diagnostics that [`compile`] reports. Fails when an edit to the
+/// world cancels it, or a query
+/// panics in a long-lived world ([`Failed`]).
 pub fn pages(
     world: &World,
     target: Target,
     variant: Option<&Name>,
-) -> Result<Option<Pages>, Cancelled> {
-    catch(world, || {
+) -> Result<Option<Pages>, Failed> {
+    stage(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         layout::pages(db, build).clone()
@@ -659,25 +660,20 @@ pub fn pages(
 /// more ([`layout::pages_through`]): what the preview shows first (SPEC
 /// §12.2). Each page is the page [`pages`] gives, and [`pages`] finds the
 /// pages laid out here in the page cache afterwards. `None` when the
-/// document could not be styled, or, in a long-lived world
-/// ([`WorldBuilder::long_lived`]), when a query panicked, which
-/// [`check`] then reports. It reports no diagnostics. Fails only when an
-/// edit to the world cancels it.
+/// document could not be styled. It reports no diagnostics. Fails when an
+/// edit to the world cancels it, or as the other stage functions fail
+/// ([`Failed`]).
 pub fn pages_through(
     world: &World,
     target: Target,
     variant: Option<&Name>,
     last: usize,
-) -> Result<Option<layout::FirstPages>, Cancelled> {
-    let run = || {
+) -> Result<Option<layout::FirstPages>, Failed> {
+    stage(world, || {
         let db = world.db();
         let build = folio_core::db::Build::new(db, world.project(), target, variant.cloned());
         layout::pages_through(db, build, last)
-    };
-    match world.kept() {
-        None => catch(world, run),
-        Some(_) => Ok(isolate(world, run)?.ok().flatten()),
-    }
+    })
 }
 
 /// Compiles every variant and target the manifest declares
@@ -756,6 +752,43 @@ impl Display for Cancelled {
 }
 
 impl std::error::Error for Cancelled {}
+
+/// Why a stage function ([`evaluate`], [`document`], [`styles`],
+/// [`fonts`], [`text`], [`lines`], [`pages`], [`pages_through`]) gave no
+/// result.
+///
+/// A panic in a query, a bug in the compiler, unwinds out of a stage
+/// function, as out of [`compile`]; in a long-lived world
+/// ([`WorldBuilder::long_lived`]) it is [`Failed::Internal`] instead, so
+/// that a language server or a preview that asks for one stage stays up.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Failed {
+    /// An edit to the world cancelled it, as [`Cancelled`] says: run it
+    /// again for a current result.
+    Cancelled,
+    /// In a long-lived world, a query panicked. The diagnostic is the
+    /// `internal-error` that [`compile`] reports for it, naming what the
+    /// panic said, even when the query panicked in another build that this
+    /// one waited for.
+    Internal(Diagnostic),
+}
+
+impl From<Cancelled> for Failed {
+    fn from(Cancelled: Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+
+impl Display for Failed {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cancelled => Display::fmt(&Cancelled, f),
+            Self::Internal(diagnostic) => f.write_str(&diagnostic.message),
+        }
+    }
+}
+
+impl std::error::Error for Failed {}
 
 // ---- Versions of a shuffled paper (SPEC §6.4) ----
 
@@ -980,15 +1013,36 @@ fn version_pairing_reads<'a>(
     )
 }
 
+/// Runs the queries of a stage function: as [`catch`] does, or, in a
+/// long-lived world, as [`isolate`] does, with a panic as
+/// [`Failed::Internal`].
+fn stage<T>(world: &World, f: impl FnOnce() -> T) -> Result<T, Failed> {
+    if world.kept().is_none() {
+        return Ok(catch(world, f)?);
+    }
+    isolate(world, f)?.map_err(|panic| Failed::Internal(internal_error(&panic, None)))
+}
+
 /// Runs queries, turning salsa's cancellation unwind into [`Cancelled`].
-/// A panic in a query unwinds on.
+/// A panic in a query unwinds on, recorded first in a long-lived world
+/// ([`record_panic`]).
 fn catch<T>(world: &World, f: impl FnOnce() -> T) -> Result<T, Cancelled> {
-    salsa::Cancelled::catch(AssertUnwindSafe(f)).map_err(|cancelled| match cancelled {
-        salsa::Cancelled::PropagatedPanic if !cancelled_by_edit(world) => {
-            panic!("a query panicked earlier or on another thread")
-        }
-        _ => Cancelled,
-    })
+    match panic::catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => Ok(value),
+        Err(payload) => match payload.downcast::<salsa::Cancelled>() {
+            Ok(cancelled) => match *cancelled {
+                salsa::Cancelled::PropagatedPanic => {
+                    let message = propagated_panic(world)?;
+                    panic!("{message}")
+                }
+                _ => Err(Cancelled),
+            },
+            Err(payload) => {
+                record_panic(world, &panic_message(&*payload));
+                panic::resume_unwind(payload)
+            }
+        },
+    }
 }
 
 /// Whether an edit has cancelled the world's revision.
@@ -1014,13 +1068,63 @@ fn isolate<T>(world: &World, f: impl FnOnce() -> T) -> Result<Result<T, EcoStrin
         Ok(value) => Ok(Ok(value)),
         Err(payload) => match payload.downcast::<salsa::Cancelled>() {
             Ok(cancelled) => match *cancelled {
-                salsa::Cancelled::PropagatedPanic if !cancelled_by_edit(world) => {
-                    Ok(Err("a query panicked earlier or on another thread".into()))
-                }
+                salsa::Cancelled::PropagatedPanic => Ok(Err(propagated_panic(world)?)),
                 _ => Err(Cancelled),
             },
-            Err(payload) => Ok(Err(panic_message(&*payload))),
+            Err(payload) => {
+                let message = panic_message(&*payload);
+                record_panic(world, &message);
+                Ok(Err(message))
+            }
         },
+    }
+}
+
+/// In a long-lived world, records what a panic in a query of the current
+/// revision said, for the builds that waited for the query
+/// ([`propagated_panic`]).
+fn record_panic(world: &World, message: &str) {
+    if let Some(kept) = world.kept() {
+        kept.record_panic(salsa::plumbing::current_revision(world.db()), message);
+    }
+}
+
+/// How long a build that waited for a query that panicked waits, at most,
+/// for the build that ran it to record what the panic said. That build
+/// records it once it has unwound, which takes no longer than the parallel
+/// work it waits for on the way, such as shaping the paragraphs in hand.
+const PANIC_WAIT: Duration = Duration::from_secs(1);
+
+/// What a query that this thread waited for and that panicked said: salsa
+/// gives the waiting thread no payload, so it is the first panic recorded
+/// in the current revision ([`record_panic`]), when there is one in time,
+/// or else a message that says only that a query panicked. Fails when an
+/// edit has cancelled the revision, since a query that an edit stopped
+/// gives up its claim as a panicking one does ([`cancelled_by_edit`]).
+fn propagated_panic(world: &World) -> Result<EcoString, Cancelled> {
+    const UNKNOWN: &str = "a query panicked earlier or on another thread";
+    let Some(kept) = world.kept() else {
+        return if cancelled_by_edit(world) {
+            Err(Cancelled)
+        } else {
+            Ok(UNKNOWN.into())
+        };
+    };
+    let revision = salsa::plumbing::current_revision(world.db());
+    // In slices, so that an edit that waits for this handle waits little.
+    const SLICE: Duration = Duration::from_millis(10);
+    let mut waited = Duration::ZERO;
+    loop {
+        if cancelled_by_edit(world) {
+            return Err(Cancelled);
+        }
+        if let Some(message) = kept.panic_of(revision, SLICE) {
+            return Ok(message);
+        }
+        waited += SLICE;
+        if waited >= PANIC_WAIT {
+            return Ok(UNKNOWN.into());
+        }
     }
 }
 
