@@ -21,7 +21,7 @@
 //! or to finish, [`MAX_DEFER`] at first, so that saves faster than a check
 //! still update the preview.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -654,12 +654,27 @@ impl Engine {
         }
     }
 
-    /// Whether a write of `path` waits to be handled.
-    fn waiting(&mut self, path: &Path) -> bool {
+    /// Whether `path`, which resolves to `resolved`, is being written: it,
+    /// or a path in `open` (the paths open for writing, resolved), or a
+    /// write of either waits to be handled.
+    fn writing(&mut self, path: &Path, resolved: Option<&Path>, open: &BTreeSet<PathBuf>) -> bool {
+        self.open.contains(path)
+            || resolved.is_some_and(|r| open.contains(r))
+            || self.waiting(path, resolved)
+    }
+
+    /// Whether a write of `path`, or of a path that resolves to
+    /// `resolved`, waits to be handled.
+    fn waiting(&mut self, path: &Path, resolved: Option<&Path>) -> bool {
         self.queue.extend(self.rx.try_iter());
-        self.queue
-            .iter()
-            .any(|input| matches!(input, Input::Paths(paths, change) if *change == Change::Written && paths.iter().any(|p| p == path)))
+        self.queue.iter().any(|input| {
+            let Input::Paths(paths, Change::Written) = input else {
+                return false;
+            };
+            paths.iter().any(|p| {
+                p == path || resolved.is_some_and(|r| p.canonicalize().is_ok_and(|c| c == r))
+            })
+        })
     }
 
     /// Records which paths are open for writing after an event.
@@ -762,22 +777,19 @@ impl Engine {
     /// truncate and the end of the write of a save in place: any file
     /// still open for writing, and the sources that read [`torn`]; and
     /// holds them until their writers close them, [`MAX_HOLD`] at most.
-    /// Returns the sources left in `paths` with the world's text of each,
-    /// which [`Self::recheck`] checks again once they are read.
-    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Vec<(PathBuf, String, Option<Source>)> {
+    /// Returns the world's sources as they are, by project path, which
+    /// [`Self::recheck`] checks the loader's reads against.
+    fn hold(&mut self, paths: &mut Vec<PathBuf>) -> Option<HashMap<String, Source>> {
         // Released paths are read as they are, once.
         let released: BTreeSet<PathBuf> = paths
             .iter()
             .filter(|path| self.released.remove(*path))
             .cloned()
             .collect();
-        let mut left = Vec::new();
         if !self.closes {
-            return left;
+            return None;
         }
-        let Some(world) = &self.world else {
-            return left;
-        };
+        let world = self.world.as_ref()?;
         let mut held = Vec::new();
         let mut read = Vec::new();
         paths.retain(|path| {
@@ -793,18 +805,14 @@ impl Engine {
                 held.push(path.clone());
                 return false;
             }
-            // A file that is gone is removed at once.
-            let Some((rel, meta)) = self.loader_path(path).zip(std::fs::metadata(path).ok()) else {
+            // A file that is gone is removed at once; a new one is checked
+            // once read.
+            let Some((source, meta)) = self
+                .loader_path(path)
+                .and_then(|rel| world.source(&rel))
+                .zip(std::fs::metadata(path).ok())
+            else {
                 read.push(path.clone());
-                return true;
-            };
-            // A new source is checked once read; data files are held only
-            // while open, above.
-            let Some(source) = world.source(&rel) else {
-                read.push(path.clone());
-                if rel.ends_with(".fol") || rel.ends_with(".fsty") {
-                    left.push((path.clone(), rel, None));
-                }
                 return true;
             };
             let hold = torn(
@@ -816,23 +824,19 @@ impl Engine {
                 held.push(path.clone());
             } else {
                 read.push(path.clone());
-                left.push((path.clone(), rel, Some(source)));
             }
             !hold
         });
-        // A directory read again reads the files under it: those still
-        // open for writing are checked once read.
-        for dir in paths.iter().filter(|path| path.is_dir()) {
-            for path in self.open.iter().filter(|path| path.starts_with(dir)) {
-                if let Some(rel) = self.loader_path(path)
-                    && !left.iter().any(|(p, _, _)| p == path)
-                    && (rel.ends_with(".fol") || rel.ends_with(".fsty"))
-                {
-                    let source = world.source(&rel);
-                    left.push((path.clone(), rel, source));
-                }
-            }
-        }
+        // The sources as they are, which the loader's reads may replace,
+        // under every path that reaches a file: through links too, and
+        // under directories read again.
+        let before = world
+            .source_paths()
+            .filter_map(|path| {
+                let path = path.as_str();
+                Some((path.to_owned(), world.source(path)?))
+            })
+            .collect();
         // Read whole, or gone: no longer held.
         for path in read {
             self.held.remove(&path);
@@ -841,48 +845,66 @@ impl Engine {
         for path in held {
             self.held.entry(path).or_insert(until);
         }
-        left
+        Some(before)
     }
 
-    /// Puts back the world's text of the sources that read torn
-    /// ([`torn`]) after the loader read them, or takes out a new one, as their truncate or
+    /// Puts back the world's text of the sources that read [`torn`] after
+    /// the loader read them, or takes out a new one, as their truncate or
     /// write may have come between the check of [`Self::hold`] and the
-    /// read, and holds them; takes them out of `changed`. Returns whether
-    /// it put any back: the world changed twice, which cancelled the check
-    /// running, so its revision must be checked again.
+    /// read, and holds them; takes them out of `changed`. Every source the
+    /// loader changed is checked, by its project path: a file may be read
+    /// under several, through links inside the project, or under a
+    /// directory read again, and whether it is being written is told by
+    /// its path or the path it resolves to. Returns whether it put any
+    /// back: the world changed twice, which cancelled the check running,
+    /// so its revision must be checked again.
     fn recheck(
         &mut self,
-        sources: Vec<(PathBuf, String, Option<Source>)>,
+        before: Option<HashMap<String, Source>>,
         changed: &mut BTreeSet<String>,
         warned: usize,
     ) -> bool {
+        let Some(before) = before else {
+            return false;
+        };
+        // The files open for writing, as the paths they resolve to.
+        let open: BTreeSet<PathBuf> = self
+            .open
+            .iter()
+            .filter_map(|path| path.canonicalize().ok())
+            .collect();
         let mut held = Vec::new();
-        for (path, rel, old) in sources {
-            if !changed.contains(&rel) {
-                continue;
-            }
-            let old_len = old.as_ref().map_or(0, |old| old.text().len() as u64);
+        let sources: Vec<String> = changed
+            .iter()
+            .filter(|rel| rel.ends_with(".fol") || rel.ends_with(".fsty"))
+            .cloned()
+            .collect();
+        for rel in sources {
+            let path = self.root.join(&rel);
+            let resolved = path.canonicalize().ok();
+            let old = before.get(&rel);
+            let old_len = old.map_or(0, |old| old.text().len() as u64);
             // Removed by the loader: gone, or not UTF-8, as when the read
             // ends inside a character that a write in chunks splits.
             let new = self.world.as_ref().and_then(|world| world.source(&rel));
             let torn = match &new {
                 Some(new) => {
                     let new_len = new.text().len() as u64;
-                    let writing = self.open.contains(&path) || self.waiting(&path);
-                    torn(old_len, new_len, writing)
+                    // Only what may hold a hole is asked about writing.
+                    (new_len == 0 && old_len > 0) || self.writing(&path, resolved.as_deref(), &open)
                 }
                 None => {
                     old.is_some()
                         && path.exists()
-                        && (self.open.contains(&path) || self.waiting(&path))
+                        && self.writing(&path, resolved.as_deref(), &open)
                 }
             };
             if !torn {
                 continue;
             }
-            // Read again on its close either way.
-            // A new file is taken out again.
-            let put_back = self.world.as_mut().is_some_and(|world| match &old {
+            // Read again on its close either way. A new file is taken out
+            // again.
+            let put_back = self.world.as_mut().is_some_and(|world| match old {
                 Some(old) => world.set_source(&rel, old.text()).is_ok(),
                 None => world.remove_source(&rel),
             });
@@ -948,7 +970,7 @@ impl Engine {
     /// Brings the world in step with the disk at the paths that changed.
     fn apply(&mut self, paths: &[PathBuf]) {
         let mut paths = paths.to_vec();
-        let sources = self.hold(&mut paths);
+        let before = self.hold(&mut paths);
         if paths.is_empty() {
             return;
         }
@@ -988,7 +1010,7 @@ impl Engine {
                 return;
             }
         };
-        let restored = self.recheck(sources, &mut update.changed, warned);
+        let restored = self.recheck(before, &mut update.changed, warned);
         if project_file {
             // Cleared only here, where the change is a new revision
             // (`edited` below), whose check schedules the writes that the

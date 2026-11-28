@@ -1556,3 +1556,45 @@ fn images_are_sent_once_to_clients_that_keep_them() {
 fn raw_frames_revision(read: &[(u64, Vec<Vec<u8>>)]) -> u64 {
     read.last().map_or(0, |(revision, _)| *revision)
 }
+
+// A file reached through a link inside the project is read under both
+// paths, and the watcher names it by one of them: while it is truncated
+// and still open, the whole project is read again, as after lost events,
+// and the document, which includes it by the other path, must not show it
+// empty.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_read_through_a_link_while_written_is_not_shown() {
+    let dir = long_project(6);
+    let root = dir.path();
+    std::fs::create_dir(root.join("shared")).unwrap();
+    let text = std::fs::read_to_string(root.join("main.fol")).unwrap();
+    std::fs::write(root.join("shared/a.fol"), &text).unwrap();
+    std::os::unix::fs::symlink("shared", root.join("chapters")).unwrap();
+    std::fs::write(root.join("main.fol"), "#include \"shared/a.fol\"\n").unwrap();
+    let (preview, events) = start(root, |o| o);
+    let first = updated(&events, |u| u.pages > 0);
+    assert!(first.pages >= 2, "{} pages", first.pages);
+
+    let file = root.join("shared/a.fol");
+    let mut handle = std::fs::File::create(&file).unwrap();
+    // The truncate's event is handled: the file is held.
+    let mut counts = page_counts(&events, Instant::now() + Duration::from_millis(200));
+    preview.changed([root]);
+    counts.extend(page_counts(
+        &events,
+        Instant::now() + Duration::from_millis(300),
+    ));
+    handle.write_all(text.as_bytes()).unwrap();
+    drop(handle);
+    counts.extend(page_counts(
+        &events,
+        Instant::now() + Duration::from_secs(2),
+    ));
+    assert!(
+        counts.iter().all(|&(_, pages)| pages == first.pages),
+        "{} pages, then {counts:?}",
+        first.pages
+    );
+    preview.stop();
+}
