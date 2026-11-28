@@ -377,13 +377,12 @@ fn photo_png(side: u32) -> Vec<u8> {
     let mut raw = Vec::with_capacity((side * (side * 3 + 1)) as usize);
     let mut state = 0x2545_f491_u32;
     for _ in 0..side {
-        raw.push(0);
-        for _ in 0..side * 3 {
+        raw.extend(std::iter::once(0).chain((0..side * 3).map(|_| {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
-            raw.push(state as u8);
-        }
+            state as u8
+        })));
     }
     // A zlib stream of stored blocks.
     let mut z = vec![0x78, 0x01];
@@ -463,6 +462,15 @@ fn watching_image() -> Prepared {
             r#"{"type":"visible","pages":[0],"images":true}"#,
         ))
         .expect("the client says what it shows");
+    // A click is answered once the server has read that.
+    let click = format!(r#"{{"type":"click","revision":{revision},"page":0,"x":1,"y":1}}"#);
+    client
+        .send(Message::text(click))
+        .expect("the client clicks");
+    while !matches!(
+        client.read().expect("the preview's messages"),
+        Message::Text(text) if text.contains(r#""type":"source""#)
+    ) {}
     let file = dir.path().join("main.fol");
     let text = std::fs::read_to_string(&file).expect("the entry file");
     let edited = text.replacen(IMAGE_EDIT.0, IMAGE_EDIT.1, 1);

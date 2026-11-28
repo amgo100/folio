@@ -839,6 +839,8 @@ function pageElement(i) {
     // shows, whether that has holes, and since when a frame with holes
     // has waited to replace it (`draw`).
     shown: null, shownList: null, holes: false, waitingSince: 0,
+    // The content hashes of the images of the last list sent for the page.
+    imageKeys: [],
   };
   pages[i] = page;
   return page;
@@ -1081,6 +1083,14 @@ function apply({ update, frames }) {
     if (i >= update.pages) continue;
     const page = pages[i];
     if (decoded.kind === "list") {
+      // The images of the list the server sent, which it names alone from
+      // now on, whether or not the page can be drawn from it.
+      page.imageKeys = [];
+      for (const item of decoded.list.items) {
+        if (item.kind !== "image" || item.key === null) continue;
+        page.imageKeys.push(item.key);
+        if (!item.known) knownImages.set(item.key, item.bytes);
+      }
       // An image named alone that the viewer does not have: the page is
       // shown as the server renders it.
       const lacking = decoded.list.items.some((item) => item.kind === "image" && item.known
@@ -1091,9 +1101,7 @@ function apply({ update, frames }) {
       }
       page.list = decoded.list;
       for (const item of page.list.items) {
-        if (item.kind !== "image" || item.key === null) continue;
-        if (item.known) item.bytes = knownImages.get(item.key);
-        else knownImages.set(item.key, item.bytes);
+        if (item.kind === "image" && item.known) item.bytes = knownImages.get(item.key);
       }
       if (page.img) {
         page.img.remove();
@@ -1101,17 +1109,15 @@ function apply({ update, frames }) {
       }
       page.drawn = 0;
     } else if (decoded.kind === "error") {
+      page.imageKeys = [];
       showImage(page, i, update.revision);
     }
     // A span map changes nothing that is drawn.
   }
-  // The images of the pages the viewer has are kept, as the server
-  // expects; the rest are dropped.
+  // The images of the lists the server sent for the pages the viewer has
+  // are kept, as the server expects; the rest are dropped.
   const onPages = new Set();
-  for (const page of pages) {
-    if (!page || !page.list) continue;
-    for (const item of page.list.items) if (item.kind === "image" && item.key) onPages.add(item.key);
-  }
+  for (const page of pages) if (page) for (const key of page.imageKeys) onPages.add(key);
   for (const key of knownImages.keys()) if (!onPages.has(key)) knownImages.delete(key);
   retryFailedImages();
   if (fitting || !zoom) zoom = fitZoom();

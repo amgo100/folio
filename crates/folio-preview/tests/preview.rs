@@ -1470,7 +1470,9 @@ fn images_are_sent_once_to_clients_that_keep_them() {
     while raw_frames(&mut plain).0 < first.revision {}
     assert!(!images.is_empty(), "the figures were sent");
     keeps
-        .send(Message::text(r#"{"type":"visible","pages":[0],"images":true}"#))
+        .send(Message::text(
+            r#"{"type":"visible","pages":[0],"images":true}"#,
+        ))
         .unwrap();
     // A visible message is answered by nothing: a click after it is, once
     // the server has read both.
@@ -1504,11 +1506,18 @@ fn images_are_sent_once_to_clients_that_keep_them() {
     }
     let kept: Vec<Vec<u8>> = kept.into_iter().flat_map(|(_, f)| f).collect();
     let whole: Vec<Vec<u8>> = whole.into_iter().flat_map(|(_, f)| f).collect();
-    assert!(named_alone(&kept) > 0, "the client that keeps images got them again");
+    assert!(
+        named_alone(&kept) > 0,
+        "the client that keeps images got them again"
+    );
     for frame in &kept {
         wire::decode_with(frame, &mut images).expect("named images it has");
     }
-    assert_eq!(named_alone(&whole), 0, "a plain client was sent lists without bytes");
+    assert_eq!(
+        named_alone(&whole),
+        0,
+        "a plain client was sent lists without bytes"
+    );
     preview.stop();
 }
 
