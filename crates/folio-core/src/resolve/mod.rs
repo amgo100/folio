@@ -55,11 +55,10 @@
 //!   ([`Resolution::set_pages`]), in the bounded fixpoint of
 //!   [`page_refs`].
 //!
-//! Counters are resolved per build, on the variant's own tree. Shared
-//! counters of a numbering group (SPEC §6.1) will be resolved on the
-//! group's common tree: the walk takes the tree to count as an argument,
-//! so that pass can run it on another tree and keep the counters it
-//! shares.
+//! Counters are resolved per build, on the variant's own tree, except the
+//! shared counters of a numbering group (SPEC §6.1), whose values come from
+//! the group's common tree ([`crate::variants::common`]), counted by the
+//! same walk without reporting anything ([`count_common`]).
 
 mod numbering;
 pub mod page_refs;
@@ -423,32 +422,11 @@ impl Resolution {
 /// element without a node is not counted, and its label names nothing.
 /// Reports references that do not resolve.
 pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolution {
-    let project = build.project(db);
     let Some(root) = crate::pipeline::selected_root(db, build) else {
         return Resolution::default();
     };
-    let props = &styled.properties;
-    let default_lang =
-        Lang::new(project.manifest(db).project.lang.v.as_str()).unwrap_or_else(Lang::english);
-    let mut walk = Walk {
-        db,
-        build,
-        props,
-        ids: Ids::new(props),
-        default_lang,
-        within: within_decls(db, build),
-        scopes: scope_decls(db, build),
-        counters: HashMap::new(),
-        lists: Vec::new(),
-        seen: HashSet::new(),
-        schemas: HashMap::new(),
-        counter_keys: HashMap::new(),
-        reported: HashSet::new(),
-        out: Resolution::default(),
-        refs: Vec::new(),
-        styles: HashMap::new(),
-        patterns: HashMap::new(),
-    };
+    let mut walk = Walk::new(db, build, &styled.properties);
+    walk.shared = shared(db, build, &mut walk);
     walk.out.footnotes_per_page = page_resets(db, build, styled);
     walk.element(root, &styled.root);
     // Numbers and labels are looked up as references resolve.
@@ -457,6 +435,79 @@ pub fn resolve_tree(db: &dyn Db, build: Build<'_>, styled: &Styled) -> Resolutio
     let mut out = walk.out;
     out.reindex();
     out
+}
+
+/// Counts the common tree of a numbering group (SPEC §6.1;
+/// [`crate::variants::common`]): every counter's values for each counted
+/// instance. It reports nothing: what the tree holds is reported by the
+/// builds of the variants that show it.
+pub fn count_common(
+    db: &dyn Db,
+    build: Build<'_>,
+    root: &Element,
+    styled: &StyledNode,
+) -> Vec<Number> {
+    let Some(selected) = crate::pipeline::select(db, build).as_ref() else {
+        return Vec::new();
+    };
+    let mut walk = Walk::new(db, build, &selected.styled.properties);
+    walk.quiet = true;
+    walk.element(root, styled);
+    walk.out.numbers.into_iter().collect()
+}
+
+/// The counters a build shares with the other variants of its numbering
+/// group, with the values the group's common tree gives them; `None` when
+/// it shares none. Reports a shared counter that names no counter, at its
+/// name in the manifest.
+fn shared(db: &dyn Db, build: Build<'_>, walk: &mut Walk<'_>) -> Option<Shared> {
+    let group_build = crate::variants::common::group_build(db, build)?;
+    let project = build.project(db);
+    let variant = build.variant(db).as_ref()?;
+    let group = project.manifest(db).numbering_group(variant.as_str())?;
+    let mut counters = HashSet::new();
+    for name in &group.shared_counters {
+        let written: EcoString = name.v.to_string().into();
+        match walk.counter_key(&written) {
+            Ok(key) => {
+                counters.insert(key);
+            }
+            Err(_) => diag::report(
+                db,
+                Diagnostic::warning(
+                    name.span,
+                    eco_format!(
+                        "there is no counter `{written}`, so numbering group `{}` cannot share it",
+                        group.name.v
+                    ),
+                )
+                .with_hint(
+                    "counters are named after the elements they number, such as `figure` or a \
+                     component's `question`, and display equations are counted by `equation`",
+                ),
+            ),
+        }
+    }
+    if counters.is_empty() {
+        return None;
+    }
+    crate::variants::common::check_target_overlays(db, build, &group.name.v);
+    let common = crate::variants::common::common_numbers(db, group_build);
+    Some(Shared {
+        counters,
+        values: common
+            .numbers
+            .iter()
+            .map(|(target, counter, values)| (*target, (counter.clone(), values.clone())))
+            .collect(),
+    })
+}
+
+/// The counters a build shares with its numbering group, and the values
+/// the group's common tree gives each counted instance.
+struct Shared {
+    counters: HashSet<EcoString>,
+    values: HashMap<Target, (EcoString, EcoVec<u64>)>,
 }
 
 /// Whether `counter-reset` on `page` restarts the footnotes on every page.
@@ -611,6 +662,11 @@ struct Walk<'a> {
     /// it has one: its own `numbering`, or, for an item, its enum's. A
     /// reference shows the number as the target does.
     patterns: HashMap<Location, Pattern>,
+    /// The counters shared with the build's numbering group, whose values
+    /// come from the group's common tree.
+    shared: Option<Shared>,
+    /// Whether the walk reports nothing: the walk of a common tree.
+    quiet: bool,
 }
 
 /// The counters that components' elements declare `within` another
@@ -677,6 +733,47 @@ fn scope_decls(db: &dyn Db, build: Build<'_>) -> Vec<ScopeDecl> {
         }
     }
     out
+}
+
+impl<'a> Walk<'a> {
+    fn new(db: &'a dyn Db, build: Build<'a>, props: &'a Properties) -> Self {
+        let default_lang = Lang::new(build.project(db).manifest(db).project.lang.v.as_str())
+            .unwrap_or_else(Lang::english);
+        Self {
+            db,
+            build,
+            props,
+            ids: Ids::new(props),
+            default_lang,
+            within: within_decls(db, build),
+            scopes: scope_decls(db, build),
+            counters: HashMap::new(),
+            lists: Vec::new(),
+            seen: HashSet::new(),
+            schemas: HashMap::new(),
+            counter_keys: HashMap::new(),
+            reported: HashSet::new(),
+            out: Resolution::default(),
+            refs: Vec::new(),
+            styles: HashMap::new(),
+            patterns: HashMap::new(),
+            shared: None,
+            quiet: false,
+        }
+    }
+
+    /// The values the common tree gives a target of a shared counter, in
+    /// place of `own`, the values the build's own tree gives it.
+    fn shared_values(&self, counter: &str, target: Target, own: EcoVec<u64>) -> EcoVec<u64> {
+        match &self.shared {
+            Some(shared) if shared.counters.contains(counter) => shared
+                .values
+                .get(&target)
+                .filter(|(name, _)| name == counter)
+                .map_or(own, |(_, values)| values.clone()),
+            _ => own,
+        }
+    }
 }
 
 impl Walk<'_> {
@@ -785,6 +882,7 @@ impl Walk<'_> {
         } else if counted.counter.is_some() {
             let name: EcoString = element.name.to_string().into();
             let values = self.step(&name, element);
+            let values = self.shared_values(&name, Target::element(element.location), values);
             let pattern = self.pattern(style);
             self.number(element, name, values, pattern.as_ref());
             numbered = true;
@@ -883,6 +981,7 @@ impl Walk<'_> {
         let name = EcoString::from("equation");
         if lines.is_empty() {
             let values = self.step(&name, element);
+            let values = self.shared_values(&name, Target::element(element.location), values);
             self.number(element, name, values, pattern.as_ref());
             return true;
         }
@@ -892,6 +991,7 @@ impl Walk<'_> {
                 location: element.location,
                 line: Some(line),
             };
+            let values = self.shared_values(&name, target, values);
             let number = pattern.as_ref().map(|p| p.format(&values));
             if let Some(pattern) = &pattern {
                 self.patterns.insert(element.location, pattern.clone());
@@ -1301,11 +1401,13 @@ impl Walk<'_> {
     }
 
     fn report(&self, diagnostic: Diagnostic) {
-        diag::report(self.db, diagnostic);
+        if !self.quiet {
+            diag::report(self.db, diagnostic);
+        }
     }
 
     fn report_once(&mut self, key: EcoString, diagnostic: Diagnostic) {
-        if self.reported.insert(key) {
+        if !self.quiet && self.reported.insert(key) {
             diag::report(self.db, diagnostic);
         }
     }
