@@ -38,7 +38,7 @@ use crate::diag::Files;
 /// A source's file id is assigned when its path is set, and freed when the
 /// source is removed. A text data file (CSV, JSON, TOML, YAML, BibTeX or
 /// plain text) gets one too when it is added, so that errors can point into
-/// it, while data files hold fewer than half the ids. Ids are new until about 65,000 have been given out,
+/// it, while fewer than half the ids are taken. Ids are new until about 65,000 have been given out,
 /// and then freed ones are given out again, so a world that sees any number
 /// of paths over its life never runs out of them. The
 /// diagnostics of a compilation therefore stay valid until a source is
@@ -804,9 +804,9 @@ impl World {
         result
     }
 
-    /// A file id for a new data file, if it is a text data file and the
-    /// world has ids to spare: data files take at most half of them, so
-    /// that sources always get one.
+    /// A file id for a new data file, if it is a text data file and fewer
+    /// than [`MAX_DATA_IDS`] ids, half of all, are taken, so that sources
+    /// always get one.
     fn data_id(&mut self, path: &ProjectPath) -> Option<FileId> {
         let text = path.extension().is_some_and(|ext| {
             ["csv", "tsv", "json", "toml", "yaml", "yml", "txt", "bib"]

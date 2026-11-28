@@ -472,11 +472,19 @@ fn load_text(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<(EcoString, Span, O
     let (bytes, span, id) = load(vm, args)?;
     match std::str::from_utf8(&bytes) {
         Ok(text) => Ok((text.into(), span, id)),
-        Err(err) => Err(DataError {
-            message: "the file is not valid UTF-8 text".into(),
-            range: Some(err.valid_up_to()..err.valid_up_to() + 1),
+        Err(err) => {
+            // What comes before the first invalid byte is text.
+            let valid = std::str::from_utf8(&bytes[..err.valid_up_to()]).unwrap_or_default();
+            let (line, column) = line_column(valid, valid.len());
+            let message =
+                eco_format!("the file is not valid UTF-8 text (line {line}, column {column})");
+            // A file that is not text has no lines to show.
+            Err(DataError {
+                message,
+                range: None,
+            }
+            .at(span, id))
         }
-        .at(span, id)),
     }
 }
 
@@ -520,7 +528,8 @@ fn read(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
 fn json(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let (bytes, span, id) = load(vm, args)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| {
-        // serde_json counts columns in bytes, from 1.
+        // serde_json counts columns in bytes, from 1, and ends its message
+        // with them; the other readers count characters.
         let text = String::from_utf8_lossy(&bytes);
         let start = text
             .split_inclusive('\n')
@@ -529,10 +538,15 @@ fn json(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
             .sum::<usize>()
             + err.column().saturating_sub(1);
         let start = text.floor_char_boundary(start.min(text.len()));
-        DataError {
-            message: eco_format!("the file is not valid JSON: {err}"),
-            range: Some(start..text.ceil_char_boundary((start + 1).min(text.len()))),
-        }
+        let end = text.ceil_char_boundary((start + 1).min(text.len()));
+        let message = err.to_string();
+        let suffix = format!(" at line {} column {}", err.line(), err.column());
+        let message = message.strip_suffix(&suffix).unwrap_or(&message);
+        DataError::new(
+            &text,
+            eco_format!("the file is not valid JSON: {message}"),
+            start..end,
+        )
         .at(span, id)
     })?;
     Ok(from_json(value))
@@ -703,17 +717,34 @@ fn parse_csv(text: &str, delimiter: char) -> Result<Value, DataError> {
 /// anchor.
 fn yaml(vm: &mut Vm<'_>, args: &mut Args) -> EvalResult<Value> {
     let (text, span, id) = load_text(vm, args)?;
-    parse_yaml(&text).map_err(|err| err.at(span, id))
+    let (value, size) = parse_yaml(&text).map_err(|err| err.at(span, id))?;
+    vm.alloc(size.saturating_mul(ITEM), span)?;
+    Ok(value)
 }
 
-/// A mapping or sequence that is being read, with the anchor it sets.
+/// A mapping or sequence that is being read, with the anchor it sets and
+/// the size of what it holds so far.
 enum YamlNode {
-    Sequence(Array, usize),
+    Sequence(Array, usize, u64),
     /// A mapping, with the key whose value comes next, if one came.
-    Mapping(Dict, Option<EcoString>, usize),
+    Mapping(Dict, Option<EcoString>, usize, u64),
 }
 
-fn parse_yaml(text: &str) -> Result<Value, DataError> {
+/// What an anchor names: its value, or why a scalar could not be read as
+/// one, which is an error only where an alias uses it as a value; its
+/// size; and for a scalar the text it is written as, which an alias used
+/// as a key takes.
+struct YamlAnchor {
+    value: Result<Value, EcoString>,
+    size: u64,
+    text: Option<EcoString>,
+}
+
+/// Reads a YAML file's one document. Returns its value and its size in
+/// items, counting each alias as the items of the value it repeats, so
+/// that a file whose aliases repeat each other cannot stand for more items
+/// than the memory limit allows.
+fn parse_yaml(text: &str) -> Result<(Value, u64), DataError> {
     use saphyr_parser::{Event, Parser, ScalarStyle};
 
     // The parser counts characters; diagnostics count bytes.
@@ -727,109 +758,143 @@ fn parse_yaml(text: &str) -> Result<Value, DataError> {
         let end = byte(span.end.index().max(span.start.index() + 1));
         DataError::new(text, message, start..end)
     };
-    let error_at = |message: EcoString, marker: saphyr_parser::Marker| {
-        error(message, saphyr_parser::Span::new(marker, marker))
-    };
+    let nested = || eco_format!("the data is nested more than {MAX_NESTING} deep");
     let mut stack: Vec<YamlNode> = Vec::new();
-    let mut anchors: BTreeMap<usize, Value> = BTreeMap::new();
-    let mut documents = Vec::new();
+    let mut anchors: BTreeMap<usize, YamlAnchor> = BTreeMap::new();
+    // The documents' values and sizes, and where the second one starts.
+    let mut documents: Vec<(Value, u64)> = Vec::new();
+    let mut second = None;
     for event in Parser::new_from_str(text) {
         let (event, place) = event.map_err(|err| {
-            error_at(
+            let marker = *err.marker();
+            error(
                 eco_format!("the file is not valid YAML: {}", err.info()),
-                *err.marker(),
+                saphyr_parser::Span::new(marker, marker),
             )
         })?;
-        // A value that is complete, with the anchor it sets.
-        let (value, anchor) = match event {
-            Event::Scalar(text, style, anchor, tag) => {
+        let key_next = matches!(stack.last(), Some(YamlNode::Mapping(_, None, ..)));
+        // A value that is complete, with the anchor it sets and its size.
+        let (value, anchor, size) = match event {
+            Event::Scalar(scalar, style, anchor, tag) => {
                 let tag = tag.as_deref().filter(|tag| tag.is_yaml_core_schema());
-                let value =
-                    yaml_scalar(&text, style == ScalarStyle::Plain, tag.map(|t| &*t.suffix))
-                        .map_err(|err| error(err, place))?;
+                let value = yaml_scalar(
+                    &scalar,
+                    style == ScalarStyle::Plain,
+                    tag.map(|t| &*t.suffix),
+                );
+                let written: EcoString = scalar.as_ref().into();
+                if anchor > 0 {
+                    anchors.insert(
+                        anchor,
+                        YamlAnchor {
+                            value: value.clone(),
+                            size: 1,
+                            text: Some(written.clone()),
+                        },
+                    );
+                }
                 // A key keeps the text it is written as.
-                if let Some(YamlNode::Mapping(_, key @ None, _)) = stack.last_mut() {
-                    if anchor > 0 {
-                        anchors.insert(anchor, value);
+                if key_next {
+                    if let Some(YamlNode::Mapping(_, key, ..)) = stack.last_mut() {
+                        *key = Some(written);
                     }
-                    *key = Some(text.as_ref().into());
                     continue;
                 }
-                (value, anchor)
+                (value.map_err(|err| error(err, place))?, 0, 1)
             }
             Event::Alias(id) => {
-                let value = anchors
+                let named = anchors
                     .get(&id)
-                    .cloned()
                     .ok_or_else(|| error("an alias names no anchor".into(), place))?;
-                if let Some(YamlNode::Mapping(_, key @ None, _)) = stack.last_mut() {
-                    *key = Some(match value {
-                        Value::Str(s) => s,
-                        Value::Int(i) => eco_format!("{i}"),
-                        Value::Bool(b) => eco_format!("{b}"),
-                        Value::None => "null".into(),
-                        _ => {
-                            return Err(error("a key must be a scalar".into(), place));
-                        }
-                    });
+                if key_next {
+                    let key = named
+                        .text
+                        .clone()
+                        .ok_or_else(|| error("a key must be a scalar".into(), place))?;
+                    if let Some(YamlNode::Mapping(_, slot, ..)) = stack.last_mut() {
+                        *slot = Some(key);
+                    }
                     continue;
                 }
-                (value, 0)
+                let value = named.value.clone().map_err(|err| error(err, place))?;
+                if stack.len() as u64 + u64::from(value.depth()) > u64::from(MAX_NESTING) {
+                    return Err(error(nested(), place));
+                }
+                (value, 0, named.size)
             }
             Event::SequenceStart(anchor, _) | Event::MappingStart(anchor, _) => {
-                if let Some(YamlNode::Mapping(_, None, _)) = stack.last() {
+                if key_next {
                     return Err(error("a key must be a scalar".into(), place));
                 }
                 if stack.len() >= MAX_NESTING as usize {
-                    return Err(error(
-                        eco_format!("the data is nested more than {MAX_NESTING} deep"),
-                        place,
-                    ));
+                    return Err(error(nested(), place));
                 }
                 stack.push(if matches!(event, Event::SequenceStart(..)) {
-                    YamlNode::Sequence(Array::new(), anchor)
+                    YamlNode::Sequence(Array::new(), anchor, 1)
                 } else {
-                    YamlNode::Mapping(Dict::new(), None, anchor)
+                    YamlNode::Mapping(Dict::new(), None, anchor, 1)
                 });
                 continue;
             }
             Event::SequenceEnd | Event::MappingEnd => match stack.pop() {
-                Some(YamlNode::Sequence(items, anchor)) => (Value::Array(items), anchor),
-                Some(YamlNode::Mapping(map, _, anchor)) => (Value::Dict(map), anchor),
+                Some(YamlNode::Sequence(items, anchor, size)) => {
+                    (Value::Array(items), anchor, size)
+                }
+                Some(YamlNode::Mapping(map, _, anchor, size)) => (Value::Dict(map), anchor, size),
                 None => continue,
             },
             Event::DocumentStart(_) => {
-                documents.push(Value::None);
+                if documents.len() == 1 {
+                    second = Some(place);
+                }
+                documents.push((Value::None, 0));
                 continue;
             }
             Event::Nothing | Event::StreamStart | Event::StreamEnd | Event::DocumentEnd => continue,
         };
         if anchor > 0 {
-            anchors.insert(anchor, value.clone());
+            anchors.insert(
+                anchor,
+                YamlAnchor {
+                    value: Ok(value.clone()),
+                    size,
+                    text: None,
+                },
+            );
         }
         match stack.last_mut() {
-            Some(YamlNode::Sequence(items, _)) => items.push(value),
-            Some(YamlNode::Mapping(map, key, _)) => {
+            Some(YamlNode::Sequence(items, _, total)) => {
+                items.push(value);
+                *total = total.saturating_add(size);
+            }
+            Some(YamlNode::Mapping(map, key, _, total)) => {
                 let key = key.take().expect("a value follows its key");
                 if map.get(&key).is_some() {
                     return Err(error(eco_format!("the key `{key}` is given twice"), place));
                 }
                 map.insert(key, value);
+                *total = total.saturating_add(size);
             }
             None => {
                 if let Some(document) = documents.last_mut() {
-                    *document = value;
+                    *document = (value, size);
                 }
             }
         }
     }
     match documents.len() {
-        0 => Ok(Value::None),
+        0 => Ok((Value::None, 0)),
         1 => Ok(documents.pop().expect("there is one")),
-        n => Err(DataError {
-            message: eco_format!("the file holds {n} YAML documents, and `yaml` reads one"),
-            range: None,
-        }),
+        n => {
+            let message = eco_format!("the file holds {n} YAML documents, and `yaml` reads one");
+            Err(match second {
+                Some(place) => error(message, place),
+                None => DataError {
+                    message,
+                    range: None,
+                },
+            })
+        }
     }
 }
 
@@ -837,11 +902,7 @@ fn parse_yaml(text: &str) -> Result<Value, DataError> {
 /// (`!!int`), a quoted one as a string unless a tag says otherwise.
 fn yaml_scalar(text: &str, plain: bool, tag: Option<&str>) -> StrResult<Value> {
     let int = |text: &str| -> Option<Value> {
-        let (sign, digits) = match text.as_bytes().first() {
-            Some(b'-') => (-1, &text[1..]),
-            Some(b'+') => (1, &text[1..]),
-            _ => (1, text),
-        };
+        let digits = text.strip_prefix(['-', '+']).unwrap_or(text);
         let (radix, digits) = if let Some(hex) = text.strip_prefix("0x") {
             (16, hex)
         } else if let Some(oct) = text.strip_prefix("0o") {
@@ -849,12 +910,18 @@ fn yaml_scalar(text: &str, plain: bool, tag: Option<&str>) -> StrResult<Value> {
         } else {
             (10, digits)
         };
-        let sign = if radix == 10 { sign } else { 1 };
         if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
             return None;
         }
-        Some(match i64::from_str_radix(digits, radix) {
-            Ok(v) => Value::Int(sign * v),
+        // A decimal integer is parsed with its sign, so that the smallest
+        // one fits.
+        let parsed = if radix == 10 {
+            text.parse::<i64>()
+        } else {
+            i64::from_str_radix(digits, radix)
+        };
+        Some(match parsed {
+            Ok(v) => Value::Int(v),
             // Too large for an integer: a float, as in JSON.
             Err(_) if radix == 10 => float_value(text.parse().ok()?),
             Err(_) => return None,
@@ -1767,20 +1834,21 @@ mod tests {
             "z: 1\na: [true, ~, 0x1f, -2.5e3, .inf, 'quoted 1', \"x\"]\n\
              m:\n  y: !!str 12\n  2: plain text\n  b: !!float 3\n",
         )
-        .unwrap();
+        .unwrap()
+        .0;
         assert_eq!(
             value.repr(),
             r#"(z: 1, a: (true, none, 31, -2500.0, inf, "quoted 1", "x"), m: (y: "12", "2": "plain text", b: 3.0))"#
         );
         // Anchors and aliases.
-        let value = parse_yaml("base: &b {k: 1}\ncopy: *b\n").unwrap();
+        let value = parse_yaml("base: &b {k: 1}\ncopy: *b\n").unwrap().0;
         assert_eq!(value.repr(), "(base: (k: 1), copy: (k: 1))");
         // Documents.
-        assert_eq!(parse_yaml("").unwrap().repr(), "none");
-        assert_eq!(parse_yaml("--- 3\n").unwrap().repr(), "3");
+        assert_eq!(parse_yaml("").unwrap().0.repr(), "none");
+        assert_eq!(parse_yaml("--- 3\n").unwrap().0.repr(), "3");
         assert_eq!(
             parse_yaml("--- 1\n--- 2\n").unwrap_err().message,
-            "the file holds 2 YAML documents, and `yaml` reads one"
+            "the file holds 2 YAML documents, and `yaml` reads one (line 2, column 1)"
         );
         // Errors say where.
         assert_eq!(
@@ -1805,6 +1873,43 @@ mod tests {
             parse_yaml("x: !!int abc\n").unwrap_err().message,
             "`abc` is not an integer (line 1, column 4)"
         );
+        // Keys keep the text they are written as, aliases included.
+        let value = parse_yaml("&h 0x1f: a\n.nan: b\n*h : c\n")
+            .unwrap_err()
+            .message;
+        assert_eq!(value, "the key `0x1f` is given twice (line 3, column 6)");
+        let value = parse_yaml("k: &f 1.5\n*f : y\n&n ~: z\n.nan: w\n")
+            .unwrap()
+            .0;
+        assert_eq!(
+            value.repr(),
+            r#"(k: 1.5, "1.5": "y", "~": "z", ".nan": "w")"#
+        );
+        // An alias counts as the items it repeats.
+        let mut laughs = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for i in 1..9 {
+            let refs = vec![format!("*a{}", i - 1); 10].join(", ");
+            laughs.push_str(&format!("a{i}: &a{i} [{refs}]\n"));
+        }
+        let (_, size) = parse_yaml(&laughs).unwrap();
+        assert!(size > 1_000_000_000, "{size}");
+        // An alias cannot nest a value beyond the limit.
+        let deep = |name: &str, inner: &str| {
+            format!(
+                "{name}: &{name} {}{inner}{}\n",
+                "[".repeat(60),
+                "]".repeat(60)
+            )
+        };
+        let file = deep("a", "1") + &deep("b", "*a");
+        assert!(
+            parse_yaml(&file)
+                .unwrap_err()
+                .message
+                .starts_with("the data is nested more than 100 deep")
+        );
+        // The second document is where a file holding two goes wrong.
+        assert_eq!(parse_yaml("1\n---\n2\n").unwrap_err().range, Some(2..5));
         // Nesting stops at the limit, however deep the file goes.
         assert!(parse_yaml(&"[".repeat(100_000)).is_err());
         let block: String = (0..150).map(|i| format!("{}-\n", "  ".repeat(i))).collect();
@@ -1840,6 +1945,7 @@ mod tests {
         assert_eq!(repr("99999999999999999999"), "1e20");
         assert_eq!(repr("-.INF"), "-inf");
         assert_eq!(repr("1_000"), r#""1_000""#);
+        assert_eq!(repr("-9223372036854775808"), "-9223372036854775808");
         assert_eq!(repr("yes"), r#""yes""#);
         assert_eq!(repr("."), r#"".""#);
         assert_eq!(repr("e3"), r#""e3""#);

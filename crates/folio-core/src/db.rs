@@ -148,8 +148,8 @@ pub struct DataFile {
     #[returns(ref)]
     pub path: ProjectPath,
     /// The file id that diagnostics point into it by, for a text data file
-    /// (CSV, JSON, TOML, YAML, BibTeX or plain text) while the world has ids
-    /// to spare. Never changes.
+    /// (CSV, JSON, TOML, YAML, BibTeX or plain text) while fewer than half
+    /// the world's ids are taken. Never changes.
     #[returns(copy)]
     pub id: Option<FileId>,
     /// The file's contents, read on demand when they are on disk.

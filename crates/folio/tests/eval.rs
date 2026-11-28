@@ -991,7 +991,7 @@ fn data_files() {
     assert_eq!(logged.text(None), "Mechanics 3 2026 2 7, of 8");
     assert_eq!(
         messages("#json(\"main.fol\")")[0],
-        "error: the file is not valid JSON: expected value at line 1 column 1"
+        "error: the file is not valid JSON: expected value (line 1, column 1)"
     );
     // Errors in a data file say where in it they are.
     let logged = Logged::new(
@@ -1037,6 +1037,33 @@ fn data_files() {
     assert!(text.contains("here in the file"), "{text}");
     let snapshot = logged.world.snapshot();
     assert_eq!(diag::render(&snapshot, &errors, false), text);
+}
+
+/// A YAML file whose aliases repeat each other counts as the items it
+/// stands for against the memory limit.
+#[test]
+fn yaml_aliases_count_against_the_memory_limit() {
+    let mut laughs = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
+    for i in 1..9 {
+        let refs = vec![format!("*a{}", i - 1); 10].join(", ");
+        laughs.push_str(&format!("a{i}: &a{i} [{refs}]\n"));
+    }
+    let logged = Logged::new(
+        MANIFEST,
+        &[
+            ("main.fol", "#yaml(\"l.yaml\").len()\n"),
+            ("l.yaml", &laughs),
+        ],
+    );
+    let compiled = folio::compile(&logged.world, Target::Pdf, None).unwrap();
+    assert!(
+        compiled
+            .diagnostics
+            .iter()
+            .any(|d| d.is_error() && d.message.contains("memory")),
+        "{:?}",
+        compiled.diagnostics
+    );
 }
 
 /// A question bank in a data file drives generated content; an edit to
