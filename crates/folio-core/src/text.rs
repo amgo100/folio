@@ -866,8 +866,7 @@ impl Collector<'_> {
                         .filter_map(|(key, _)| Name::new(key))
                         .filter(|name| {
                             self.spaces
-                                .get(&(element.location, Some(name.clone())))
-                                .is_some()
+                                .contains_key(&(element.location, Some(name.clone())))
                         })
                         .filter(|name| !self.placed.contains(name))
                         .collect()
