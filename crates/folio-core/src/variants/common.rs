@@ -5,7 +5,10 @@
 //! the common tree merges the selected trees by location: an instance that
 //! several variants show is one node, holding the union of what each shows
 //! inside it, and an instance that only some show stands where they show
-//! it, after the instance they show before it. The common tree is counted
+//! it, after the instance they show before it. Instances that different
+//! variants show alone at one place go in document order: their order in
+//! a variant's document before Select, which holds what its stylesheets
+//! hide too (#448). The common tree is counted
 //! once per group and target, like a variant's own tree but without
 //! reporting anything ([`crate::resolve::count_common`]), and each variant
 //! of the group takes the values of its shared counters from it, so that
@@ -380,12 +383,21 @@ impl Merger<'_> {
                         // the same place, stand before it if they come
                         // before it in the document (#448): ties go by
                         // document order, not by which variant shows them.
-                        while let Some(&waiting) = order.get(next)
-                            && !here.contains(&waiting)
-                            && self.precedes(waiting, location)
+                        // The waiting run: the instances from `next` on that
+                        // this list does not have. Up to the last of them
+                        // that comes before this one, they all go first, in
+                        // their order, so that one whose place no document
+                        // tells does not hold back those after it.
+                        let run = order[next..]
+                            .iter()
+                            .take_while(|waiting| !here.contains(waiting))
+                            .count();
+                        if let Some(last) = order[next..next + run]
+                            .iter()
+                            .rposition(|&waiting| self.precedes(waiting, location))
                         {
-                            merged.push(waiting);
-                            next += 1;
+                            merged.extend_from_slice(&order[next..=next + last]);
+                            next += last + 1;
                         }
                         merged.push(location);
                     }
