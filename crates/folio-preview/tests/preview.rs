@@ -1586,21 +1586,18 @@ fn a_file_read_through_a_link_while_written_is_not_shown() {
         &events,
         Instant::now() + Duration::from_millis(150),
     ));
-    handle.write_all(text.as_bytes()).unwrap();
-    drop(handle);
-    counts.extend(page_counts(
-        &events,
-        Instant::now() + Duration::from_secs(2),
-    ));
-    assert!(
-        counts.iter().any(|&(r, _)| r > first.revision),
-        "no revision sent: {counts:?}"
-    );
     assert!(
         counts.iter().all(|&(_, pages)| pages == first.pages),
-        "{} pages, then {counts:?}",
+        "{} pages, then {counts:?} while the file was written",
         first.pages
     );
+    // The save, twice as long, is shown once it is closed.
+    handle
+        .write_all(format!("{text}{text}").as_bytes())
+        .unwrap();
+    drop(handle);
+    let saved = updated(&events, |u| u.pages > first.pages);
+    assert!(saved.pages > first.pages);
     preview.stop();
 }
 
