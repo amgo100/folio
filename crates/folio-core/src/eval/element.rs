@@ -19,7 +19,7 @@ use folio_syntax::{Span, is_valid_label_literal_id};
 use super::content::{Content, Element, Node, Slot};
 use super::error::{EvalError, EvalResult, StrResult, bail};
 use super::ops::a_type;
-use super::value::{Angle, Arg, Args, Array, Dict, Duration, Fraction, Length, Value};
+use super::value::{Angle, Arg, Args, Array, Dict, Duration, Fraction, Func, Length, Value};
 use super::vm::Vm;
 use crate::db::{FileKind, data_file, report_read};
 use crate::model::{self, schema};
@@ -517,6 +517,17 @@ fn coerce(ty: &FieldType, value: Value, span: Span) -> StrResult<Value> {
             }
             value
         }
+        // An element named by its bare name is stored as its qualified
+        // name, which the stages that read the field look elements up by.
+        (FieldType::Element, Value::Func(Func::Element(name))) => {
+            Value::Str(name.to_string().into())
+        }
+        (FieldType::Element, Value::Str(text)) => {
+            return Err(eco_format!(
+                "expected an element, found a string; write the element's name without quotes: \
+                 `{text}`"
+            ));
+        }
         (FieldType::Ref, Value::Str(text)) => {
             return Err(eco_format!("a reference is a label; write `<{text}>`"));
         }
@@ -555,6 +566,7 @@ fn describe(ty: &FieldType) -> EcoString {
         FieldType::Dict(item) => eco_format!("a dictionary of {}", plural(item)),
         FieldType::Length => "a length".into(),
         FieldType::Color => "a colour".into(),
+        FieldType::Element => "an element".into(),
     }
 }
 
@@ -570,6 +582,7 @@ fn plural(ty: &FieldType) -> EcoString {
         FieldType::Dict(_) => "dictionaries".into(),
         FieldType::Length => "lengths".into(),
         FieldType::Color => "colours".into(),
+        FieldType::Element => "elements".into(),
     }
 }
 

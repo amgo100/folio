@@ -102,6 +102,10 @@ pub enum FieldType {
     Length,
     /// A colour. Allowed only on fields marked `layout-data` (SPEC §5.5).
     Color,
+    /// An element, named in content as a bare name (`heading`,
+    /// `exam.question`): what a query such as `#outline(heading)` reads
+    /// (SPEC §4.5). It is stored as the element's qualified name.
+    Element,
 }
 
 impl FieldType {
@@ -157,6 +161,7 @@ impl Display for FieldType {
             Self::Dict(item) => write!(f, "dict({item})"),
             Self::Length => f.write_str("length"),
             Self::Color => f.write_str("color"),
+            Self::Element => f.write_str("element"),
         }
     }
 }

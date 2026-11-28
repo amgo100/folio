@@ -293,7 +293,7 @@ fn document_span(db: &dyn Db, build: Build<'_>, root: Span) -> DiagSpan {
 /// Every page is labelled with its plain number, for which the writer
 /// writes no labels.
 fn navigation(resolution: &Resolution) -> Navigation {
-    let destinations = resolution
+    let mut destinations: Vec<Destination> = resolution
         .labels
         .iter()
         .map(|labelled| Destination {
@@ -301,7 +301,7 @@ fn navigation(resolution: &Resolution) -> Navigation {
             location: labelled.target.location,
         })
         .collect();
-    let links = resolution
+    let mut links: Vec<Link> = resolution
         .references
         .iter()
         .map(|reference| Link {
@@ -310,10 +310,52 @@ fn navigation(resolution: &Resolution) -> Navigation {
             text: reference.text.clone(),
         })
         .collect();
+    entry_links(resolution, &mut destinations, &mut links);
     Navigation {
         destinations,
         links,
         page_labels: Vec::new(),
+    }
+}
+
+/// The links of the entries of outlines and figure lists (SPEC §4.5): each
+/// entry goes to the instance it lists, by its label, or else by a name
+/// made for it, which no label can be, as a label has no spaces. The
+/// entries of a list are glyphs of the list's source, one link after
+/// another in order, each as long as its entry's text.
+fn entry_links(
+    resolution: &Resolution,
+    destinations: &mut Vec<Destination>,
+    links: &mut Vec<Link>,
+) {
+    let mut named: std::collections::HashMap<Location, EcoString> = resolution
+        .labels
+        .iter()
+        .filter(|l| l.target.line.is_none())
+        .map(|l| (l.target.location, l.label.clone()))
+        .collect();
+    for query in &resolution.queries {
+        let folio_core::resolve::QueryResult::List(entries) = &query.result else {
+            continue;
+        };
+        for entry in entries {
+            let name = named
+                .entry(entry.target)
+                .or_insert_with(|| {
+                    let name = eco_format!("entry {}", destinations.len());
+                    destinations.push(Destination {
+                        name: name.clone(),
+                        location: entry.target,
+                    });
+                    name
+                })
+                .clone();
+            links.push(Link {
+                source: query.location.source,
+                destination: Some(name),
+                text: entry.text(),
+            });
+        }
     }
 }
 
